@@ -12,6 +12,7 @@ mod probes;
 mod random;
 mod real_sh;
 mod safetensors;
+mod server;
 
 pub use exchange::exchange_bytes;
 pub use fixtures::fixtures_dir;
@@ -20,3 +21,4 @@ pub use probes::{probe, reference_render};
 pub use random::random_model;
 pub use real_sh::real_sh;
 pub use safetensors::SafetensorsBuilder;
+pub use server::{LocalServer, RequestRecord, ServedListing, serve_fixtures};
