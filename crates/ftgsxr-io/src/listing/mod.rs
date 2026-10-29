@@ -12,6 +12,7 @@ use crate::IoError;
 
 mod html;
 mod index;
+mod local;
 mod nginx;
 
 /// What a listed entry is (§1.5's kinds, and a directory to list on demand).
@@ -98,10 +99,15 @@ pub fn parse_html_listing(body: &str, base: &Url) -> Result<Vec<Entry>, IoError>
     html::parse(body, base)
 }
 
-/// Lists a local directory one level deep (§1.5).
+/// Lists a local directory one level deep (§1.5): the `*.safetensors` files whose header
+/// `read_info` accepts (`Exchange`), the directories whose `manifest.json` has `format`
+/// `ftgs-checkpoint` (`Checkpoint`) and the `*.ply` files (`Ply`), sorted by file name,
+/// dot-names skipped. `location` is the entry's path, `size` the file's size (a checkpoint's
+/// `manifest.json` and `params.safetensors` together). An entry that cannot be read is
+/// skipped; a `path` that cannot be listed is E-IO (Q-T17.3).
+// Q-T17.3
 pub fn list_dir(path: &Path) -> Result<Vec<Entry>, IoError> {
-    let _ = path;
-    todo!()
+    local::list(path)
 }
 
 /// The kind a name says: a trailing `/` is a directory, a `.safetensors` suffix an exchange
