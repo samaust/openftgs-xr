@@ -122,7 +122,7 @@ pub struct SavedPose {
 /// Reads a scene file (`ftgsxr-scene` v1, §1.11) from its bytes. E-JSON when they are not
 /// JSON, E-SCENE-FORMAT when the document breaks the schema (Q-53). The files it names
 /// are not opened: whether they exist is the library's question (§1.5).
-// Q-3, Q-52, Q-53
+// Q-3, Q-52, Q-53, Q-TF.1
 pub fn read_scene(json: &[u8]) -> Result<SceneFile, IoError> {
     let doc = parse(json, SCENE_FORMAT)?;
     scene_of(&doc)
