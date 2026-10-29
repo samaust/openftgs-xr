@@ -109,6 +109,14 @@ impl HttpClient {
     /// The body of a 2xx answer to a GET of `url`, as text (§1.5's listings): uncached,
     /// with invalid UTF-8 replaced (Q-44). E-NET-FETCH on any other answer.
     pub fn get_text(&self, url: &Url) -> Result<String, IoError> {
+        self.get_text_or_status(url)?
+            .map_err(|status| status_error(url, status))
+    }
+
+    /// `get_text`, with a status other than 2xx returned as `Ok(Err(status))` rather than
+    /// E-NET-FETCH, so a caller can tell "the server answered no" from "the server could
+    /// not be reached" (`ListingFlavor::Auto`'s detection, Q-T19.3).
+    pub(crate) fn get_text_or_status(&self, url: &Url) -> Result<Result<String, u16>, IoError> {
         let mut response = self
             .agent
             .get(url.as_str())
@@ -116,7 +124,7 @@ impl HttpClient {
             .map_err(|e| fetch_error(url, &e))?;
         let status = response.status().as_u16();
         if !(200..300).contains(&status) {
-            return Err(status_error(url, status));
+            return Ok(Err(status));
         }
         response
             .body_mut()
@@ -124,6 +132,7 @@ impl HttpClient {
             .limit(TEXT_LIMIT)
             .lossy_utf8(true)
             .read_to_string()
+            .map(Ok)
             .map_err(|e| fetch_error(url, &e))
     }
 
@@ -132,8 +141,22 @@ impl HttpClient {
     /// whole file). Fewer bytes when the file ends first; a server that ignores `Range` is
     /// read only up to `start + len` bytes (Q-44). E-NET-FETCH on any other answer.
     pub fn get_range(&self, url: &Url, start: u64, len: u64) -> Result<Vec<u8>, IoError> {
+        self.get_range_sized(url, start, len)
+            .map(|(bytes, _)| bytes)
+    }
+
+    /// `get_range`, with the whole file's size when the answer states it: a 206's
+    /// `Content-Range` total, a 200's `Content-Length` (the header-only information's
+    /// file size for a listing that gives none, Q-T19.2). `len` 0 sends no request and
+    /// knows no size.
+    pub(crate) fn get_range_sized(
+        &self,
+        url: &Url,
+        start: u64,
+        len: u64,
+    ) -> Result<(Vec<u8>, Option<u64>), IoError> {
         if len == 0 {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
         let last = start.saturating_add(len - 1);
         let response = self
@@ -142,13 +165,16 @@ impl HttpClient {
             .header("Range", format!("bytes={start}-{last}"))
             .call()
             .map_err(|e| fetch_error(url, &e))?;
-        let skip = match response.status().as_u16() {
+        let (skip, size) = match response.status().as_u16() {
             206 => match content_range(&response) {
-                Some((first, _)) if first == start => 0,
+                Some((first, size)) if first == start => (0, size),
                 _ => return Err(IoError::Fetch(format!("{url} (unexpected Content-Range)"))),
             },
             // Q-44: a server without ranges; read only the prefix that holds the slice.
-            200 => start,
+            200 => (
+                start,
+                header(&response, "Content-Length").and_then(|v| v.trim().parse().ok()),
+            ),
             status => return Err(status_error(url, status)),
         };
         let mut body = Vec::new();
@@ -158,7 +184,7 @@ impl HttpClient {
             .take(skip.saturating_add(len))
             .read_to_end(&mut body)
             .map_err(|e| IoError::Fetch(format!("{url} ({e})")))?;
-        Ok(body.split_off((skip as usize).min(body.len())))
+        Ok((body.split_off((skip as usize).min(body.len())), size))
     }
 }
 

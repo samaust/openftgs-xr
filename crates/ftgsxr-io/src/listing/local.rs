@@ -6,7 +6,7 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
-use ftgsxr_core::{SAFETENSORS_PREFIX, header_len, read_info};
+use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, header_len, read_info};
 use serde_json::Value;
 
 use super::{Entry, EntryKind, classify_name, is_hidden, stem};
@@ -18,8 +18,8 @@ const MANIFEST: &str = "manifest.json";
 const PARAMS: &str = "params.safetensors";
 /// The checkpoint's `format`.
 const CHECKPOINT_FORMAT: &str = "ftgs-checkpoint";
-/// The largest safetensors header read: the `safetensors` crate's own limit (source log 39).
-const MAX_HEADER: u64 = 100_000_000;
+/// The largest safetensors header read (here and by `header_info`): the `safetensors` crate's own limit (source log 39).
+pub(crate) const MAX_HEADER: u64 = 100_000_000;
 /// The largest `manifest.json` read; openftgs's are a few kilobytes.
 const MAX_MANIFEST: u64 = 16 << 20;
 
@@ -85,19 +85,26 @@ pub(super) fn list(path: &Path) -> Result<Vec<Entry>, IoError> {
 /// Whether the safetensors file `path` of `len` bytes has a header `read_info` accepts:
 /// the 8-byte prefix, then the header alone (Q-33).
 fn is_exchange(path: &Path, len: u64) -> bool {
-    let read = || -> std::io::Result<Option<Vec<u8>>> {
-        let mut file = File::open(path)?;
-        let mut prefix = [0u8; SAFETENSORS_PREFIX];
-        file.read_exact(&mut prefix)?;
-        let n = header_len(&prefix);
-        if n > MAX_HEADER || n > len.saturating_sub(SAFETENSORS_PREFIX as u64) {
-            return Ok(None);
-        }
-        let mut header = vec![0u8; n as usize];
-        file.read_exact(&mut header)?;
-        Ok(Some(header))
-    };
-    matches!(read(), Ok(Some(header)) if read_info(&header, len).is_ok())
+    File::open(path).is_ok_and(|mut file| header_info(&mut file, len).is_ok())
+}
+
+/// The header-only information of the exchange model `reader` starts, a file of `len`
+/// bytes: its 8-byte prefix, then the header alone, read and given to `read_info` (§1.5,
+/// Q-33); nothing past the header is read. A header longer than the file or than
+/// `MAX_HEADER` is E-FILE-FORMAT, a failed read E-IO.
+// Q-33
+pub(crate) fn header_info(reader: &mut impl Read, len: u64) -> Result<ModelInfo, IoError> {
+    let mut prefix = [0u8; SAFETENSORS_PREFIX];
+    reader.read_exact(&mut prefix)?;
+    let n = header_len(&prefix);
+    if n > MAX_HEADER || n > len.saturating_sub(SAFETENSORS_PREFIX as u64) {
+        return Err(
+            CoreError::Format(format!("a header of {n} bytes in a file of {len} bytes")).into(),
+        );
+    }
+    let mut header = vec![0u8; n as usize];
+    reader.read_exact(&mut header)?;
+    Ok(read_info(&header, len)?)
 }
 
 /// The size of the checkpoint directory `dir` (its manifest and parameters files, Q-34),
