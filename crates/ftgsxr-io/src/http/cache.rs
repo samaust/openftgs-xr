@@ -9,11 +9,11 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::IoError;
-use crate::util::{is_rfc3339, write_atomic};
+use crate::util::{is_rfc3339, version_is_1, write_atomic};
 
 /// The `format` of an entry's record (Q-42).
 const FORMAT: &str = "ftgsxr-cache-entry";
-/// The record's major version (Q-42).
+/// The version the writer writes (Q-42); the reader takes major version 1, any minor.
 const VERSION: u64 = 1;
 
 /// The files of one URL's cache entry, `<cache dir>/http/<sha256 of the URL>/` (§1.11).
@@ -87,11 +87,12 @@ pub(crate) struct Record {
 }
 
 impl Record {
-    /// The record at `path`, when it parses, is of this format and major version, has a
-    /// well-formed `fetched_at` and belongs to `url` (any URL when `None`) (Q-42).
+    /// The record at `path`, when it parses, is of this format and major version (a minor
+    /// version ignored, §1.11's versioning rule), has a well-formed `fetched_at` and belongs
+    /// to `url` (any URL when `None`) (Q-42).
     pub(crate) fn read(path: &Path, url: Option<&Url>) -> Option<Record> {
         let value: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-        if value.get("format")?.as_str()? != FORMAT || value.get("version")?.as_u64()? != VERSION {
+        if value.get("format")?.as_str()? != FORMAT || !version_is_1(value.get("version")?) {
             return None;
         }
         let text = |key: &str| match value.get(key) {
@@ -171,6 +172,39 @@ mod tests {
         assert_eq!(Record::read(&path, Some(&other)), None);
         std::fs::write(&path, br#"{"format": "ftgsxr-cache-entry", "version": 2}"#).unwrap();
         assert_eq!(Record::read(&path, None), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §1.11's versioning rule: a reader ignores a minor version and rejects a major
+    /// version it does not know.
+    #[test]
+    fn record_read_ignores_a_minor_version() {
+        let dir = std::env::temp_dir().join("ftgsxr-http-record-version");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("meta.json");
+        let record = |version: &str| {
+            format!(
+                r#"{{"format": "ftgsxr-cache-entry", "version": {version},
+                "url": "http://example.org/a", "etag": null, "last_modified": null,
+                "size": null, "sha256": null, "fetched_at": "2026-10-29T12:00:00.000000000Z"}}"#
+            )
+        };
+        for (version, read) in [
+            ("1", true),
+            ("\"1\"", true),
+            ("\"1.0\"", true),
+            ("\"1.7\"", true),
+            ("2", false),
+            ("\"2.0\"", false),
+            ("1.5", false),
+        ] {
+            std::fs::write(&path, record(version)).unwrap();
+            assert_eq!(
+                Record::read(&path, None).is_some(),
+                read,
+                "version {version}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
