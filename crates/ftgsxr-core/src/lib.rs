@@ -7,8 +7,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod clock;
 pub mod types;
 
+pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
     TimeSpan,
