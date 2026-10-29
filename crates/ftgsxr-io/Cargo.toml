@@ -13,4 +13,11 @@ publish.workspace = true
 [dependencies]
 ftgsxr-core.workspace = true
 directories.workspace = true
+# The player's `index.json` and nginx's JSON listing (§1.5, §1.11).
+serde_json.workspace = true
 thiserror.workspace = true
+# The listings' URLs (§1.5).
+url.workspace = true
+
+[dev-dependencies]
+ftgsxr-testkit.workspace = true
