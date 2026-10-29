@@ -13,6 +13,7 @@ pub mod formats;
 pub mod layout;
 pub mod motion;
 pub mod pose;
+pub mod sh;
 pub mod types;
 
 pub use formats::{
@@ -24,6 +25,8 @@ pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
     TimeSpan,
 };
+
+pub use sh::{SH_C0, sh_basis, sh_color};
 
 pub use covariance::{
     Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
