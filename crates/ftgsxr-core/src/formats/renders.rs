@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use safetensors::tensor::{Dtype, SafeTensors, View};
 
-use super::json::check_version;
+use crate::loader::{check_version, hex};
 use crate::types::CoreError;
 
 /// The renders' `format`.
@@ -59,11 +59,6 @@ impl View for &F32Tensor {
     fn data_len(&self) -> usize {
         self.bytes.len()
     }
-}
-
-/// The 64 lowercase hex digits of a digest.
-fn hex(digest: &[u8; 32]) -> String {
-    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Checks one image before it is written: its buffers hold H·W·3 and H·W values, all

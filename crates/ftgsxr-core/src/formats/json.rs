@@ -10,10 +10,8 @@
 use glam::{DMat3, DMat4, DVec3, DVec4};
 use serde_json::{Map, Value};
 
+use crate::loader::check_version;
 use crate::types::{Camera, CoreError};
-
-/// The major version openftgs's formats are read at (openftgs §2.2).
-const MAJOR: u64 = 1;
 
 /// The largest |RᵀR − I| entry a camera rotation may have (openftgs `io`, its Q-56).
 const ORTHONORMAL_TOLERANCE: f64 = 1e-5;
@@ -82,25 +80,6 @@ pub(crate) fn check_header(map: &Map<String, Value>, expected: &str) -> Result<(
         other => return Err(CoreError::Version(other.to_string())),
     };
     check_version(&text)
-}
-
-/// A version string, `major[.minor]` in decimal without leading zeros, of major 1
-/// (openftgs `io._check_header`).
-pub(crate) fn check_version(text: &str) -> Result<(), CoreError> {
-    fn decimal(part: &str) -> Option<u64> {
-        let digits = !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
-        let leading_zero = part.len() > 1 && part.starts_with('0');
-        (digits && !leading_zero)
-            .then(|| part.parse().ok())
-            .flatten()
-    }
-    let mut parts = text.splitn(2, '.');
-    let major = parts.next().and_then(decimal);
-    let minor_ok = parts.next().is_none_or(|m| decimal(m).is_some());
-    match major {
-        Some(MAJOR) if minor_ok => Ok(()),
-        _ => Err(CoreError::Version(format!("{text:?}"))),
-    }
 }
 
 /// `time_unit`: a non-empty string (openftgs `io._time_unit`).

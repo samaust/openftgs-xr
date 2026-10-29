@@ -154,7 +154,8 @@ pub(crate) fn normalize_rotations(model: &mut Model) {
 
 /// A `version` text `major[.minor]` in decimal without leading zeros, of major 1
 /// (§1.2: another major is rejected, a minor part ignored); anything else is
-/// E-FILE-VERSION (Q-31).
+/// E-FILE-VERSION (Q-31). The model readers and `formats`' readers (openftgs
+/// `io._check_header`, openftgs §2.2) share it.
 // Q-31
 pub(crate) fn check_version(text: &str) -> Result<(), CoreError> {
     fn decimal(part: &str) -> Option<u64> {
