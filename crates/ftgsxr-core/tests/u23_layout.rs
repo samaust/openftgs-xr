@@ -5,7 +5,9 @@
 //! rounded to nearest even; position and time unchanged; `memory_estimate` against
 //! §1.12's table; `reduce_to_budget` keeps the top scores in file order, deterministic.
 
-use ftgsxr_core::layout::{GpuArrays, GpuLayoutOptions, HalfFields, pack_for_gpu};
+use ftgsxr_core::layout::{
+    GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, memory_estimate, pack_for_gpu,
+};
 use ftgsxr_core::{Model, ModelKind, RenderConventions, TimeSpan};
 
 /// A valid degree-1 model of `n` rows whose every value names its row, so a permuted row
@@ -334,5 +336,148 @@ fn u23_sh_cap_applied() {
         );
         assert_eq!(a.sh_degree, 1, "{cap:?}");
         assert_eq!(f32s(&a.sh).len(), 3 * 12, "{cap:?}");
+    }
+}
+
+/// U-23: `memory_estimate` equals §1.12's table of static bytes per primitive for
+/// L = 0 … 3: float32 storage 76, 112, 172, 256; half-precision storage 48, 66, 96, 138.
+#[test]
+fn u23_memory_estimate_static_bytes_match_table() {
+    let float32 = GpuLayoutOptions::default();
+    let half = GpuLayoutOptions {
+        half: ALL_HALF,
+        sh_cap: None,
+    };
+    for (l, f32_bytes, half_bytes) in [
+        (0u8, 76u64, 48u64),
+        (1, 112, 66),
+        (2, 172, 96),
+        (3, 256, 138),
+    ] {
+        for n in [1u64, 1000, 3_000_001] {
+            assert_eq!(
+                memory_estimate(n, l, &float32, false).static_bytes,
+                n * f32_bytes,
+                "L = {l}"
+            );
+            assert_eq!(
+                memory_estimate(n, l, &half, true).static_bytes,
+                n * half_bytes,
+                "L = {l}"
+            );
+        }
+    }
+    // §1.12's examples: 1.5 M primitives of degree 2 in `quest-high` take 144 MB static;
+    // 3 M of degree 3 in `desktop` take 768 MB.
+    assert_eq!(
+        memory_estimate(1_500_000, 2, &half, true).static_bytes,
+        144_000_000
+    );
+    assert_eq!(
+        memory_estimate(3_000_000, 3, &float32, false).static_bytes,
+        768_000_000
+    );
+}
+
+/// §1.2 orders the SH cap (option 1) before the memory check (option 4): the estimate
+/// counts the capped degree, and each half flag halves its own field.
+#[test]
+fn u23_memory_estimate_counts_capped_degree_and_each_flag() {
+    let capped = GpuLayoutOptions {
+        half: ALL_HALF,
+        sh_cap: Some(2),
+    };
+    assert_eq!(memory_estimate(10, 3, &capped, true).static_bytes, 10 * 96);
+    let above = GpuLayoutOptions {
+        sh_cap: Some(3),
+        ..Default::default()
+    };
+    assert_eq!(memory_estimate(10, 1, &above, false).static_bytes, 10 * 112);
+    // float32 degree 0 is 76 bytes; velocity 12 → 6, scale 12 → 6, rotation 16 → 8,
+    // opacity 4 → 2, sh 12 → 6.
+    let only = |f: fn(&mut HalfFields)| {
+        let mut half = HalfFields::default();
+        f(&mut half);
+        memory_estimate(1, 0, &GpuLayoutOptions { half, sh_cap: None }, false).static_bytes
+    };
+    assert_eq!(only(|h| h.velocity = true), 70);
+    assert_eq!(only(|h| h.scale = true), 70);
+    assert_eq!(only(|h| h.rotation = true), 68);
+    assert_eq!(only(|h| h.opacity = true), 74);
+    assert_eq!(only(|h| h.sh = true), 70);
+}
+
+/// U-23 and Q-T13.2: §1.12's frame buffers per unit of capacity C for one set (one view,
+/// or the shared set): records 48 C per view or 64 C shared-center, sort keys and payloads
+/// 16 C, histograms 1 C; and the layer's 8 bytes per pixel. §1.12's examples: C = 4 M per
+/// view about 260 MB; C = 1.5 M shared about 122 MB; two 1680 × 1760 eye layers about
+/// 47 MB.
+#[test]
+fn u23_memory_estimate_frame_buffers_and_layer() {
+    for opts in [
+        GpuLayoutOptions::default(),
+        GpuLayoutOptions {
+            half: ALL_HALF,
+            sh_cap: Some(1),
+        },
+    ] {
+        let per_view = memory_estimate(1, 3, &opts, false);
+        let shared = memory_estimate(1, 3, &opts, true);
+        assert_eq!(per_view.per_capacity_bytes, 48 + 16 + 1);
+        assert_eq!(shared.per_capacity_bytes, 64 + 16 + 1);
+        assert_eq!(per_view.layer_bytes_per_pixel, 8);
+        assert_eq!(shared.layer_bytes_per_pixel, 8);
+    }
+    let MemoryEstimate {
+        per_capacity_bytes,
+        layer_bytes_per_pixel,
+        ..
+    } = memory_estimate(1, 3, &GpuLayoutOptions::default(), false);
+    assert_eq!(u64::from(per_capacity_bytes) * 4_000_000, 260_000_000);
+    let shared = memory_estimate(
+        1,
+        2,
+        &GpuLayoutOptions {
+            half: ALL_HALF,
+            sh_cap: None,
+        },
+        true,
+    );
+    assert_eq!(
+        u64::from(shared.per_capacity_bytes) * 1_500_000,
+        121_500_000
+    );
+    assert_eq!(
+        u64::from(layer_bytes_per_pixel) * 1680 * 1760 * 2,
+        47_308_800
+    );
+}
+
+/// The static estimate counts exactly what `pack_for_gpu` writes (Q-T13.1, Q-T13.2), for
+/// an odd N and mixed flags too.
+#[test]
+fn u23_static_bytes_equal_packed_bytes() {
+    let m = model(7, 0.0, 8.0);
+    let order: Vec<u32> = (0..7).collect();
+    let mixed = HalfFields {
+        velocity: true,
+        scale: false,
+        rotation: true,
+        opacity: true,
+        sh: false,
+    };
+    for half in [HalfFields::default(), ALL_HALF, mixed] {
+        for sh_cap in [None, Some(0)] {
+            let opts = GpuLayoutOptions { half, sh_cap };
+            let a = pack_for_gpu(&m, &order, &opts);
+            let packed = 4 * (a.position.len() + a.time_center.len() + a.duration.len())
+                + a.velocity.len()
+                + a.scale.len()
+                + a.rotation.len()
+                + a.opacity.len()
+                + a.sh.len();
+            let estimate = memory_estimate(7, m.sh_degree, &opts, false).static_bytes;
+            assert_eq!(estimate, packed as u64, "{half:?} cap {sh_cap:?}");
+        }
     }
 }

@@ -126,6 +126,72 @@ pub fn pack_for_gpu(model: &Model, order: &[u32], opts: &GpuLayoutOptions) -> Gp
     }
 }
 
+/// The GPU memory a model and its frame buffers take (§1.12 Memory, D-13).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemoryEstimate {
+    /// The model's static buffers: N times §1.12's bytes per primitive under the options
+    /// (the bytes of `pack_for_gpu`'s arrays).
+    pub static_bytes: u64,
+    /// The frame buffers' bytes per unit of capacity C for one set: records, sort keys and
+    /// payloads, histograms. Per-view mode holds one set per view, shared-center mode one.
+    pub per_capacity_bytes: u32,
+    /// The layer's bytes per pixel of one view.
+    pub layer_bytes_per_pixel: u32,
+}
+
+/// §1.12's memory table for `n` primitives of degree `sh_degree` loaded with `opts`.
+///
+/// Static bytes per primitive: position 12, rebased time center 4 and duration 4 always in
+/// float32; velocity 12, scale 12, rotation 16, opacity 4 and SH 12 (L′+1)² in float32, half
+/// of each for a field `opts.half` names, at the capped degree L′ = min(L, `opts.sh_cap`)
+/// (load option 1 comes before the memory check): 64 + 12 (L+1)² in float32 and
+/// 42 + 6 (L+1)² in half precision.
+///
+/// Per unit of capacity, one set of frame buffers: the records, 48 bytes per view or 64
+/// bytes when `shared_sort` (shared-center mode, §1.4); the sort keys and payloads, 16
+/// bytes (two ping-pong pairs of 32-bit keys and payloads); the histograms, 1 byte. The
+/// arguments and statistics, under 1 KiB in all, are not counted. A tier with
+/// half-precision shared-center records (`quest-low`'s 48 bytes) takes 16 bytes per unit
+/// of capacity less than this estimate, which has no flag for them. The layer: 8 bytes per
+/// pixel per view (a 16-bit float RGBA target).
+// Q-T13.2
+pub fn memory_estimate(
+    n: u64,
+    sh_degree: u8,
+    opts: &GpuLayoutOptions,
+    shared_sort: bool,
+) -> MemoryEstimate {
+    let half = opts.half;
+    let bytes = |values: usize, is_half: bool| (values * if is_half { 2 } else { 4 }) as u64;
+    let per_primitive = bytes(3 + 1 + 1, false)
+        + bytes(3, half.velocity)
+        + bytes(3, half.scale)
+        + bytes(4, half.rotation)
+        + bytes(1, half.opacity)
+        + bytes(sh_values(loaded_degree(sh_degree, opts.sh_cap)), half.sh);
+    let record = if shared_sort {
+        SHARED_RECORD_BYTES
+    } else {
+        VIEW_RECORD_BYTES
+    };
+    MemoryEstimate {
+        static_bytes: n * per_primitive,
+        per_capacity_bytes: record + SORT_BYTES + HISTOGRAM_BYTES,
+        layer_bytes_per_pixel: LAYER_BYTES_PER_PIXEL,
+    }
+}
+
+/// A per-view record's bytes (§1.4 stage 2).
+const VIEW_RECORD_BYTES: u32 = 48;
+/// A shared-center record's bytes with Σ^S in float32 (§1.4 stage 2).
+const SHARED_RECORD_BYTES: u32 = 64;
+/// The sort keys and payloads per unit of capacity (§1.12).
+const SORT_BYTES: u32 = 16;
+/// The histograms per unit of capacity: §1.12's "about C", pinned by its examples (Q-T13.2).
+const HISTOGRAM_BYTES: u32 = 1;
+/// The layer's bytes per pixel (§1.12).
+const LAYER_BYTES_PER_PIXEL: u32 = 8;
+
 /// L′ = min(L, cap), the degree the GPU holds (§1.2 load option 1).
 fn loaded_degree(sh_degree: u8, sh_cap: Option<u8>) -> u8 {
     sh_cap.map_or(sh_degree, |cap| cap.min(sh_degree))
