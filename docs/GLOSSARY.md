@@ -14,7 +14,7 @@ Conventions: the spec's symbols (μx, μt, s, v, σ, σt, ρ, g, τ, t, u, S, Δ
 
 **Primitive**:
 One 4D Gaussian of the model, identified by its row index i, the same across all nine stored tensors; row order is deterministic, kept rows staying in order and new rows going last. openftgs §1.1, §1.3 Growth
-_Avoid_: Gaussian, 4D Gaussian, splat, point, particle
+_Avoid_: Gaussian, 4D Gaussian, splat (reserved for a primitive's projected quad in the player), point, particle
 
 **Quantity**:
 One of a primitive's eight learnable properties from the paper: position, time, duration, velocity, scale, orientation, opacity and SH coefficients. openftgs §1.1
@@ -101,6 +101,14 @@ _Avoid_: step (reserved for Adam's per-tensor step counter), epoch, tick
 **Training progress u**:
 The schedule variable u = (it − 1)/(T_it − 1), 0 at the first iteration and 1 at the last. openftgs D-41, E12
 _Avoid_: the paper's t for this quantity, progress fraction, normalized iteration
+
+**Playback clock T**:
+The player's single time source, in seconds since its zero, from which every model instance's model time is derived. E9, §1.6
+_Avoid_: timeline, global time, animation time
+
+**Model time τ_m**:
+The raw timestamp at which a model instance is evaluated, τ₀,m + r_m·(T − o_m) under its end rule. E9
+_Avoid_: current time, frame (a count), t (openftgs's normalized time)
 
 ### Training
 
@@ -412,6 +420,38 @@ _Avoid_: bg, background randomization, clear color
 A ftgs-render-request file: items, each a camera and a raw timestamp, that `ftgs render` and the harness answer with a ftgs-renders file of rgb and alpha per item. openftgs §2.2
 _Avoid_: view list, render job, query (reserved for the harness's forward queries)
 
+**Splat**:
+The screen-aligned quad the player draws for one visible primitive in one view, carrying its projected mean, conic, color and alpha. E6, E7, §1.4
+_Avoid_: primitive (the model's row, which the splat depicts), quad, billboard, point sprite
+
+**Splatting mode**:
+The render mode that draws every active primitive as its splat. §1.4
+_Avoid_: splat view, Gaussian mode, full render
+
+**Centers mode**:
+The render mode that draws each active primitive as a fixed-size disc at its moved position, colored by a colormap. §1.4
+_Avoid_: point cloud mode, debug points, dots
+
+**Active set**:
+The primitives whose effective opacity can reach the model's alpha skip threshold at the model time, the only ones that enter sorting and drawing. E3, D-10
+_Avoid_: visible set (after the frustum cull and the radii), live set (openftgs's training term), bucket (openftgs's temporal index)
+
+**Sort key k**:
+The per-view 32-bit integer derived from a primitive's camera-space depth that orders the splats far to near. E8, D-33, D-48
+_Avoid_: depth key, z-order, distance
+
+**View v**:
+One eye's camera in XR, or the single camera on the desktop or in a headless render; projection and sorting are per view. E6, E8, D-4
+_Avoid_: eye, camera (the engine's component), viewport
+
+**Environment depth**:
+The per-view depth image the headset's Depth API provides, against which the player's occlusion weight is computed. E13, §1.9
+_Avoid_: scene depth, real depth, depth map (ambiguous with the player's own depth output)
+
+**Light estimate**:
+The exposure and white-balance gains derived from the passthrough camera's thumbnail, globally or over a depth band, applied to the colors in linear light. E14, §1.9, D-38
+_Avoid_: lighting, ambient light, color correction (the manual controls)
+
 ### Data
 
 **Scene manifest**:
@@ -485,6 +525,52 @@ _Avoid_: foreground mask, matte, alpha matte, segmentation
 **Fastest-10 frames**:
 The 10 consecutive frames of dance1's window whose consecutive test-view ground-truth frames differ most, stored in the manifest for the ablations' "fastest motion" column. openftgs D-69
 _Avoid_: fast segment, high-motion frames, motion window
+
+### Player
+
+**Model instance m**:
+One loaded model placed in the stage with its own pose, visibility, render mode and time mapping; two instances may share one file. §1.5
+_Avoid_: model (unqualified, where the file is meant), object, asset, splat cloud
+
+**Pose P_m**:
+A model instance's placement in stage space, a translation, a rotation and a uniform scale, saved per model identity. E5, §1.5, D-11
+_Avoid_: transform (the engine's component), placement, anchor (reserved for spatial anchors)
+
+**Stage space**:
+The player's world frame, right-handed, y up, metres, the ground at y = 0: the OpenXR STAGE space or its fallback on a headset, a fixed frame on the desktop. §1.14, D-24
+_Avoid_: world space (ambiguous with openftgs's world frame), room, tracking space
+
+**Content group**:
+Every model instance together, under one transform that recentering and spatial anchors move. §1.8, §1.9, §1.14
+_Avoid_: scene (the saved file), world, root
+
+**Model identity**:
+The SHA-256 of a model file's bytes, as 64 lowercase hexadecimal digits, which keys the saved pose, the thumbnail and the library entry. §1.2, D-40
+_Avoid_: hash (unqualified), id, fingerprint
+
+**Model source**:
+A place the library lists models from: a local directory, an HTTP index, the Quest's app directory or a picked file or folder. §1.5, D-31, D-49
+_Avoid_: repository, server, location, path
+
+**Library**:
+The list of models every model source offers, with their header information, thumbnails and states. §1.5
+_Avoid_: catalog, browser, file list
+
+**Scene file**:
+The player's saved set of model instances, poses, playback, environment settings and anchor, a `ftgsxr-scene` file. §1.11, D-23
+_Avoid_: scene manifest (openftgs's `ftgs-scene`), project, save file
+
+**Environment mode**:
+Whether the content stands in the real room (passthrough mode) or in front of an opaque background (VR mode). §1.9, D-14
+_Avoid_: AR mode, MR mode, immersive mode
+
+**Quality tier**:
+One named record of every number that changes outputs or speed: storage precision, SH cap, sort key and mode, capacity, occlusion, render scale and foveation. §1.12, D-37
+_Avoid_: preset, graphics setting, level
+
+**Shim**:
+The minimal Kotlin code of the Android build that calls the platform APIs with no native path and returns their results to Rust over JNI. §2.5, D-15, D-49
+_Avoid_: wrapper, bridge, Java layer, plugin
 
 ### Files
 
@@ -675,8 +761,8 @@ One of the bottom-up build steps in `docs/prd/milestones.md`, each run as one PR
 _Avoid_: phase, sprint, epic, stage
 
 **Unit test U-n**:
-One of the §3 tests. §3
-_Avoid_: equation test, regression test
+One of the §3.1 tests, run on the CPU under plain `cargo test`. §3.1
+_Avoid_: equation test, regression test, cpu test (the lane)
 
 **openftgs-synth**:
 The owner's CC0-1.0 rendered multi-view video dataset, with exact ground truth, on which openftgs validates in place of the paper's non-commercial datasets; an allowed source here. openftgs §1.4 Validation data, D-79, CLAUDE.md
@@ -697,6 +783,30 @@ _Avoid_: lossless, safe path, free speed-up
 **Approximate optimization**:
 A performance change that alters results beyond rounding: off by default, logged as a D-n, and required to pass L2 and L3 before it can become a default; TF32 in training-time convolutions is the one approximate default. openftgs §2.4, D-49
 _Avoid_: lossy, fast path, mixed precision (one instance of it)
+
+**Conformance test R-n**:
+A §3.2 test that renders a probe or trained model headless on the GPU and compares it with openftgs's reference render at the different-rasterizers tier. §3.2, E15
+_Avoid_: GPU test (the lane), golden test, snapshot test
+
+**Integration test I-n**:
+A §3.3 test of the running application, headless on the CPU or on Monado for the XR ones. §3.3
+_Avoid_: end-to-end test, app test, system test
+
+**Device test Dv-n**:
+A §3.4 test driven over adb on the Quest 3, read back from logcat. §3.4
+_Avoid_: on-device test, hardware test, X-n
+
+**Acceptance check A-n**:
+A §3.6 check a person performs on the headset, with a pass statement they judge. §3.6
+_Avoid_: manual test, UX test, QA
+
+**Probe model**:
+A small hand-built exchange model committed as a fixture, each isolating one behaviour, as openftgs's L1 probes P1–P10 do. §3.2, D-29
+_Avoid_: test model, synthetic scene (openftgs S-n), sample
+
+**Reference render**:
+An image openftgs's reference backend rendered for a request item, committed with its checksum, which a conformance test compares against. §3.2, D-29
+_Avoid_: ground truth (the dataset's), golden image, baseline (reserved for a benchmark's stored result)
 
 ### Workflow
 
