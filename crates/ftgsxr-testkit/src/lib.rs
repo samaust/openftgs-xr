@@ -4,3 +4,7 @@
 //! tiny models and the in-process fixture server (§2.7, Q-1). A dev-dependency only.
 
 #![warn(missing_docs)]
+
+mod fixtures;
+
+pub use fixtures::fixtures_dir;
