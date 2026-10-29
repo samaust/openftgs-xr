@@ -7,7 +7,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod clock;
+pub mod covariance;
 pub mod formats;
+pub mod layout;
 pub mod motion;
 pub mod pose;
 pub mod types;
@@ -22,7 +25,17 @@ pub use types::{
     TimeSpan,
 };
 
+pub use covariance::{
+    Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
+    sort_key, sort_key16,
+};
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
+
+pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
+pub use layout::{
+    GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, memory_estimate, pack_for_gpu,
+    reduce_to_budget,
+};
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).
 pub use glam::{DMat3, DMat4, DVec3, Mat3, Mat4, Quat, UVec2, Vec2, Vec3};
