@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ftgsxr-io"
+description = "openftgs-xr foundation: paths, settings, scene and pose files, listings, HTTP and model sources (§2.1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
