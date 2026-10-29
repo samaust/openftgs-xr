@@ -9,6 +9,16 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-# M-1: `ftgsxr-core` only; `ftgsxr-render` and image join with `gpu_context` in M-2 (Q-1, Q-6).
+# M-1: of the workspace crates, `ftgsxr-core` only; `ftgsxr-render` and image join with
+# `gpu_context` in M-2 (Q-1, Q-6). sha2 (the fixtures' checksums), serde_json (the
+# safetensors headers the builder writes) and bytemuck (tensor bytes) are §2.3 crates.
 [dependencies]
+bytemuck.workspace = true
 ftgsxr-core.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+# The independent reader the builder's output is checked against (§2.3's `ftgs-if` reader crate).
+safetensors.workspace = true
