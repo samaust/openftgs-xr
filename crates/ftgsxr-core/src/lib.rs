@@ -10,6 +10,7 @@
 pub mod clock;
 pub mod covariance;
 pub mod layout;
+pub mod loader;
 pub mod motion;
 pub mod pose;
 pub mod types;
@@ -30,6 +31,10 @@ pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 pub use layout::{
     GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, memory_estimate, pack_for_gpu,
     reduce_to_budget,
+};
+pub use loader::{
+    SAFETENSORS_PREFIX, header_len, hex, open_model, read_checkpoint, read_exchange, read_info,
+    read_ply, sha256,
 };
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).
