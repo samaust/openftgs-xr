@@ -295,3 +295,26 @@ proptest! {
         }
     }
 }
+
+/// E3's index margins (D-10): the transient run reaches past the widest unwidened
+/// window by the time margin, so the widest row is still visited 0.5·10⁻⁶·T′ beyond its
+/// E3 edge, where the float64 oracle alone cannot tell the margins from none.
+#[test]
+fn u08_index_widened_by_the_margins() {
+    let model = random_model(41, 10_000, 0);
+    let (index, order) = TemporalIndex::build(&model);
+    let (w, i) = (0..model.len())
+        .filter(|&i| !covers_span(&model, i))
+        .filter_map(|i| unwidened(&model, i).map(|w| (w, i)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap();
+    let new = order.iter().position(|&f| f as usize == i).unwrap() as u32;
+    let t_prime = model.time.span();
+    for tau in [
+        model.time_center[i] + w + 0.5e-6 * t_prime,
+        model.time_center[i] - w - 0.5e-6 * t_prime,
+    ] {
+        let range = index.range(tau);
+        assert!(range.transient.contains(&new), "τ = {tau}: {range:?}");
+    }
+}
