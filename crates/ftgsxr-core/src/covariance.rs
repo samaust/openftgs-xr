@@ -41,7 +41,8 @@ pub fn posed_covariance(cov: Mat3, pose: &Pose) -> Mat3 {
 pub struct Projected {
     /// μ′ in pixels, continuous pixel convention.
     pub mean: Vec2,
-    /// The conic Σ′⁻¹ as (a, b, c): the entries (0, 0), (0, 1) and (1, 1). // Q-T8.1
+    /// The conic Σ′⁻¹ as (a, b, c): its entries (0, 0), (0, 1) and (1, 1) (Q-T8.1).
+    // Q-T8.1
     pub conic: [f32; 3],
     /// (r_x, r_y) in whole pixels, both positive; the box is μ′ ± r.
     pub radii: [u32; 2],
@@ -50,6 +51,11 @@ pub struct Projected {
 }
 
 /// E6 for one primitive given its stage-space mean and covariance and σ_eff; None when culled.
+///
+/// Computed in float64 from the camera's K and world-to-camera, every constant from `conv`
+/// (D-39). `None` for every cull of E6 and for a primitive that is not visible, either
+/// radius 0 (Q-T8.1).
+// Q-T8.1
 pub fn project(
     mean: Vec3,
     cov: Mat3,
@@ -149,6 +155,21 @@ pub fn alpha_at(p: Vec2, projected: &Projected, sigma_eff: f32, conv: &RenderCon
     }
     let alpha = raw.min(f64::from(conv.alpha_max)) as f32;
     if alpha < conv.alpha_skip { 0.0 } else { alpha }
+}
+
+/// E8's key k̄ = 2³² − 1 − bits(z) for a finite depth z > 0, `None` otherwise: the CPU
+/// oracle of the cull shader's key (Q-2).
+// Q-2
+pub fn sort_key(depth: f32) -> Option<u32> {
+    // A positive finite float32's bit pattern orders as an unsigned integer, so ascending k̄
+    // is far to near.
+    (depth.is_finite() && depth > 0.0).then(|| u32::MAX - depth.to_bits())
+}
+
+/// The `Depth16` tier's key: the top 16 bits of k̄ (E8, Q-2).
+// Q-2
+pub fn sort_key16(key: u32) -> u16 {
+    (key >> 16) as u16
 }
 
 /// R(q/‖q‖) in float64: glam's matrix of a unit quaternion is openftgs E5's R(w, x, y, z).

@@ -17,6 +17,7 @@ pub use types::{
 
 pub use covariance::{
     Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
+    sort_key, sort_key16,
 };
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).
