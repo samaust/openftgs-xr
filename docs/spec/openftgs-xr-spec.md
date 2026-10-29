@@ -402,7 +402,51 @@ ftgsxr bench NAME [--out BENCH.json] [--model MODEL]
 
 `play` starts the player with the given models, URLs or scene file loaded (`--xr` runs the XR session on the system's OpenXR runtime, §1.1). `render` answers a `ftgs-render-request` headless, without a window: MODEL is any §1.2 input; the tier defaults to `conformance` (§1.12: float32 storage, the model's full degree, `Depth32`, per-view sort, C = N, occlusion off); the request's `time_unit` must equal the model's, else exit 2; each item renders at its timestamp from its camera (E6) with the request's background and SH degree (E7, §1.2), and the file is written as `ftgs-renders` with `rgb/<id>` unclamped, `alpha/<id>`, `producer` = `openftgs-xr <version> (<GPU adapter name>)` and `request_sha256` = the SHA-256 of the request file's bytes \[O: openftgs §2.2, `io.write_renders`\]. `info` prints the adapter reply of openftgs §3.3's contract (§2.1): `name` `openftgs-xr`, `version`, `query_kinds` `[]`, `rasterizer` {`name`: `openftgs-xr wgpu-blend`, `version`}, and `render_conventions` with openftgs's values except `transmittance_stop`: null, since E7 applies none (D-7). `validate` reads and validates each model and prints its header information, exit 2 on the first invalid file. `import` and `export` validate their input and write a `ftgs-if` file (a byte copy for a `ftgs-if` input; the activated exchange form for a checkpoint or a PLY), so openftgs's harness can run its L0 and L1 levels with openftgs-xr as implementation B. `bench` runs a §3.5 benchmark. Exit codes: 0 success; 2 invalid input or environment (a file that fails validation, a request whose unit differs, no GPU adapter, no OpenXR runtime for `--xr`); 3 a numerical failure (a non-finite render, which writes no file) \[O: openftgs §2.1 CLI\].
 
-<!-- §1.8 -->
+### 1.8 XR interaction
+
+**Session and spaces** \[X: OpenXR 1.1; D-24\]. The XR build runs one OpenXR session with the stereo view configuration. The primary reference space is STAGE; when the runtime offers none, LOCAL\_FLOOR (XR\_EXT\_local\_floor) is used, then LOCAL with the floor assumed 1.5 m below the session's origin and a warning in the HUD. Stage space is the player's world (§1.14). A reference-space change event (the user recentered the headset) re-places the content group so the models keep their stage-space poses. "Recenter" in the player moves the content group so that the selected instance, or the scene's center, stands 1.5 m in front of the user at its saved height. The runtime's boundary is left to the runtime; the player draws no boundary of its own.
+
+**Controllers** \[R: controller support; X: XR\_META\_touch\_controller\_plus; A: no localized haptics on Touch Plus\]. One action set, `player`, with the actions of Appendix D.2 and suggested bindings for `/interaction_profiles/meta/touch_controller_plus`, for `/interaction_profiles/oculus/touch_controller` (the same paths, for runtimes that expose the Touch Plus as the older profile) and for `/interaction_profiles/khr/simple_controller` (select and menu clicks, aim and grip poses: Monado's simulated controllers and any other runtime). Analog thresholds: `grab` begins when the squeeze value rises above 0.6 and ends when it falls below 0.4; `select` is the trigger's click; sticks pass through E12's dead zone. Haptic feedback is a short amplitude pulse on the hand that acted: 10 ms at 0.3 on hover enter, 20 ms at 0.6 at the start and the end of a grab, 15 ms at 0.5 on a snap turn and on a UI click (D-44). In VR mode the controllers are drawn as the player's own low-polygon meshes at the grip pose; in passthrough mode only the ray's origin dot is drawn, since the real controllers are visible.
+
+**Hands** \[R: hand tracking; X: XR\_EXT\_hand\_tracking, XR\_FB\_hand\_tracking\_aim, XR\_META\_simultaneous\_hands\_and\_controllers, XR\_META\_hand\_tracking\_frequency\_hint; A: `com.oculus.permission.HAND_TRACKING`; D-25\]. With hand tracking available, each hand provides an aim pose and pinch strengths from the aim state and 26 joint poses. The index pinch is the hand's `select` and `grab` (strength ≥ 0.7 begins, < 0.4 ends); the middle-finger pinch is `play_pause`; the runtime's system gesture (the aim state's MENU\_PRESSED flag) toggles the main panel; the aim pose is the ray. When both a controller and a hand are tracked for the same side, the device that last produced input owns that hand; the frequency hint asks for high-frequency tracking while hands are the active input. In VR mode the hands are drawn as capsules between the joints with the joint radii, in a neutral material; in passthrough mode they are not drawn (the real hands are visible, and the environment depth lets them occlude the content, §1.9).
+
+**Rays, selection and grabbing** \[R: grab with a ray and move; two hands resize; E10, E11; D-42, D-43\]. Each active hand casts a ray from its aim pose, drawn as a thin line to the first hit, or 10 m long, with a dot at the hit point; hovering an instance highlights it (§1.4). `select` on a hovered instance selects it; `select` on nothing deselects. `grab` on a hovered instance starts a one-hand grab: the instance follows the hand (E11) until release; while grabbing, the same hand's stick pushes and pulls the instance along the ray at 0.5 m/s times the current distance in metres (so far models move faster). A `grab` by the second hand on the same instance turns the grab into a two-hand grab: the instance scales with the hands' distance, follows their midpoint and turns with their yaw (E11), with "keep upright" on by default (yaw only) and "free rotation" as an option; releasing either hand returns to a one-hand grab by the other. Grabbing a UI panel by its title bar moves it the same way (two hands resize it). "Snap to floor" and "fit" are quick actions on the wrist menu and the panel.
+
+**Locomotion** \[R: move by walking; sticks move, strafe and turn; E12; D-17, D-44\]. Walking is natural: the tracked head moves in stage space. In VR mode the left stick moves the rig (E12: forward, back, strafe in the head's yaw frame at v\_max) and the right stick turns it, snap turn by default (45°, a flick of the stick past 0.7 with a return below 0.3 between flicks) or smooth turn (60°/s), always about the head. A teleport option replaces the smooth move: holding the left stick forward shows an arc to the floor, releasing teleports the rig there and fades the view for 150 ms. In passthrough mode the real room cannot move, so the same inputs move and turn the content group about the user instead (D-17); a setting disables stick locomotion in passthrough mode altogether. Comfort options: a vignette during smooth motion (on by default), a height offset of ±0.5 m for seated use, a reduced-motion setting that removes the animated transitions.
+
+**User interface** \[R: easy to use AR/XR UI; D-21\]. Two surfaces:
+
+- The *main panel*: the desktop's tabs (§1.7) without the mouse-only items, plus Environment (§1.9) and Comfort (the settings above), rendered to a 1024 × 768 texture on a quad 0.56 m × 0.42 m (resizable 0.3–1.2 m wide by a two-hand grab, the texture resolution following the width), world-locked, and movable by its title bar. The menu button, the system gesture or the wrist menu's panel button summon it: it appears 1 m in front of the head, 0.2 m below eye height, facing the user, and stays where it is until summoned again; summoning while it is visible hides it. Interaction: the ray's hit point on the quad is the pointer; `select` clicks, holding `select` drags (sliders, scroll bars); the pointing hand's stick scrolls the focused list. Touch targets are at least 1.2 cm at the default size (28 px at 1024 × 768), text at least 24 px, one Back button at the top of every sub-page, no hover tooltips, and a toast line at the bottom for messages (errors, "pose saved", "extrapolating").
+- The *wrist menu*: five large buttons on a small panel attached to the left hand's grip pose (the right hand's in left-handed mode), 8 cm above the wrist, visible when the palm faces the user: play or pause, passthrough on or off, main panel, reset pose of the selected instance, fit the selected instance. It uses the same pointer.
+
+The desktop's keyboard-free actions are reachable from these two surfaces; nothing needs a controller button to be discovered. Appendix D.2 and D.3 give the bindings.
+
+**Comfort and accessibility** \[+\]. Left-handed mode swaps the sticks' roles and the wrist menu's hand; UI scale from 0.8 to 1.5; the turn mode, vignette and seated options above; every sound can be muted (§1.10); the ray and highlight colors have a high-contrast alternative.
+
+### 1.9 Passthrough and environment
+
+**Environment modes** \[R: passthrough enabled or disabled; X: XR\_FB\_passthrough; A: `com.oculus.feature.PASSTHROUGH`; D-14\]. Two modes, switched from the Environment tab or the wrist menu and remembered in the settings:
+
+- *VR mode*: the projection layer alone, opaque, with §1.4's background (a solid color and the optional floor grid).
+- *Passthrough mode*: a passthrough layer (XR\_FB\_passthrough, reconstruction purpose) submitted before the projection layer, the projection layer flagged to blend with its texture's alpha, its contents premultiplied (E7, §1.4 resolve). The environment blend mode stays OPAQUE, as Meta documents for its runtime; ALPHA\_BLEND, which the runtime also lists, is not relied on (D-14).
+
+The passthrough's appearance has three controls, brightness, contrast and saturation in \[−1, 1\], applied through the passthrough style's color map \[X: XR\_FB\_passthrough\] \[+\]; they are the "match the room to the model" direction and persist in the settings. On the desktop the Environment tab shows the VR-mode controls only and reports passthrough as unavailable.
+
+**Depth occlusion** \[R: passthrough with occlusion using depth; X: XR\_META\_environment\_depth; A: Quest 3 and 3S only, `com.oculus.permission.USE_SCENE`; D-16, D-45\]. In passthrough mode, "occlusion" starts one environment-depth provider (created once per session, started when occlusion turns on and stopped when it turns off, after the permission is granted on first use), acquires one depth image per frame between the frame's begin and end, and gives the renderer the depth textures, their poses and fields of view and their near and far planes for E13. Soft occlusion is the default with δ = 5 cm (slider 0–20 cm); hard occlusion is an option. Hand removal (the provider's option) is off by default, so the user's real hands occlude the content they reach into; turning it on makes the content draw over the hands. The HUD shows the depth image's resolution and age. Where the runtime offers no environment depth (other headsets, the desktop) the control is absent.
+
+**Light estimation and color matching** \[R: color matching using light estimation, and with depth estimation; A: Passthrough Camera API, Horizon OS v74 or later (v76 for Camera2), `horizonos.permission.HEADSET_CAMERA` and `android.permission.CAMERA`; E14; D-15, D-38\]. Four lighting modes for the content, in the Environment tab: off (default), manual (exposure in EV, white-balance temperature and tint sliders), auto global (E14 over the whole frame) and auto local (E14 over the pixels within the selected instance's depth band, which needs occlusion's depth provider). The auto modes open the headset's passthrough camera at its lowest resolution (1280 × 960) and 60 Hz after the permissions are granted on first use; the shim computes the frame statistics E14 needs (Ȳ, r̄, ḡ, b̄, globally and for the depth band when the renderer supplies the band's mask) and hands them over as a few floats per frame (D-15, §2.5). Enabling an auto mode captures the reference E\_ref from the next smoothed estimate; "re-capture reference" is a button; the current gains are shown, and the strength γ is a slider (0–1, 0.5 by default). The transform applies to every instance, or to the selected one when "per instance" is set, and is saved with the scene. Where the camera API is unavailable (an older OS, a denied permission, the desktop) only manual mode is offered and the UI says why.
+
+**Floor, shadows and anchors** \[+; X: XR\_FB\_spatial\_entity, XR\_META\_spatial\_entity\_persistence; A: `com.oculus.permission.USE_ANCHOR_API`; D-26\]. The floor is stage space's y = 0 (§1.8). In passthrough mode each instance may cast a contact shadow: a soft dark disc on the floor under B\_m's footprint (opacity 0.3, feathered over 10 cm), on by default, which grounds the model visually without lighting. When a scene is saved in passthrough mode on the headset, a spatial anchor is created at the content group's origin and persisted; the scene file keeps its UUID (§1.11). Loading the scene locates the anchor and places the content group on it, so the models return to the same place in the room; when the anchor cannot be located (another headset, a forgotten anchor) the file's rig-relative pose is used and a toast says so. Anchors are forgotten when their scene file is deleted from the player.
+
+### 1.10 Audio
+
+**Sounds and volumes** \[R: sound on and off, volume; D-22\]. The player has a master mute ("sound") and three volumes in \[0, 100\] %: master, UI and soundtrack, in the Settings tab and the wrist menu's panel. UI sounds are short synthesized clips shipped with the player (the player's own assets, CC0): hover (a soft tick), select, grab start and end, snap turn, UI click, error (two tones) and confirmation ("pose saved"). Each sound can be turned off individually.
+
+**Soundtracks** \[+\]. An instance plays a soundtrack when one is found: a file with the model's stem and the extension `.ogg`, `.wav`, `.flac` or `.mp3` beside the model (local sources), the index entry's `audio` for HTTP sources (downloaded with the model), or the `audio` field of the scene file. Synchronization follows §1.6: soundtrack time 0 is τ₀,m, audio plays at speed 1 forward and is silent otherwise. On the headset the soundtrack is spatialized at B\_m's center (volume and panning, attenuation 1/d beyond 1 m) when "spatial" is on, else stereo; the desktop plays stereo. Several instances with soundtracks play together.
+
+**Output.** The system's audio output; the player records nothing and opens no microphone.
+
+<!-- §1.11 -->
 
 ## 2. Package architecture
 
@@ -478,6 +522,39 @@ The bindings below are the defaults; `settings.toml` (§1.11) may rebind every d
 | Help, hide UI, HUD | F1, F2, F3 | |
 | Fullscreen, screenshot | F11, F12 | |
 | Quit | Ctrl+Q | |
+
+### D.2 Touch Plus controllers (§1.8)
+
+Action set `player`; the paths are the OpenXR input paths under `/user/hand/left` and `/user/hand/right` for `/interaction_profiles/meta/touch_controller_plus` and `/interaction_profiles/oculus/touch_controller`; the `khr/simple_controller` column is the fallback for other runtimes.
+
+| Action | Left hand | Right hand | Touch Plus path | simple\_controller |
+| --- | --- | --- | --- | --- |
+| `select` (click, UI click, select instance) | trigger | trigger | `input/trigger/value` (click at 0.6/0.4) | `input/select/click` |
+| `grab` (hold to move; both hands to resize) | squeeze | squeeze | `input/squeeze/value` (0.6/0.4) | — |
+| `move` (E12 move and strafe) | stick | — | `input/thumbstick` | — |
+| `turn` (E12 snap or smooth turn) | — | stick x | `input/thumbstick/x` | — |
+| `push_pull` (while grabbing) | stick y | stick y | `input/thumbstick/y` | — |
+| `menu` (toggle the main panel) | menu | — | `input/menu/click` | `input/menu/click` |
+| `play_pause` | — | A | `input/a/click` | — |
+| `reset_pose` (selected instance) | — | B | `input/b/click` | — |
+| `fit` (selected instance) | X | — | `input/x/click` | — |
+| `mode` (cycle the render mode) | Y | — | `input/y/click` | — |
+| `aim` (ray) | aim pose | aim pose | `input/aim/pose` | `input/aim/pose` |
+| `grip` (hand and wrist menu) | grip pose | grip pose | `input/grip/pose` | `input/grip/pose` |
+| `haptic` | output | output | `output/haptic` | `output/haptic` |
+
+Left-handed mode swaps the two hands' columns. The system button is the runtime's.
+
+### D.3 Hands (§1.8)
+
+| Action | Gesture | Source |
+| --- | --- | --- |
+| `select`, `grab` | index pinch (strength ≥ 0.7 begins, < 0.4 ends) | XR\_FB\_hand\_tracking\_aim pinch strength |
+| `play_pause` | middle-finger pinch | aim state |
+| `menu` | system gesture (palm up, pinch) | aim state MENU\_PRESSED |
+| `aim` | aim pose | aim state |
+| `grip` | wrist joint pose | XR\_EXT\_hand\_tracking |
+| `move`, `turn` | none: locomotion by walking, or the controllers | — |
 
 <!-- D -->
 
