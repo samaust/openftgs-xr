@@ -10,6 +10,7 @@ mod error;
 pub mod http;
 pub mod listing;
 pub mod paths;
+pub mod settings;
 pub mod sources;
 
 pub use error::IoError;
@@ -19,6 +20,11 @@ pub use listing::{
     parse_index_manifest, parse_nginx_json,
 };
 pub use paths::AppPaths;
+pub use settings::{
+    AudioSettings, CacheSettings, DesktopSettings, DisplaySettings, EnvironmentSettings,
+    GeneralSettings, LocomotionSettings, ManualLighting, OverlaySettings, PlaybackSettings,
+    Settings, SoundSwitches, XrSettings, load_settings, save_settings,
+};
 pub use sources::{
     DocumentProvider, DocumentSource, HttpIndex, LocalDir, ModelBytes, ModelRef, ModelSource,
     SourceSpec, open_ref, open_source,
