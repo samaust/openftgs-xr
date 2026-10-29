@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod clock;
+pub mod covariance;
 pub mod motion;
 pub mod pose;
 pub mod types;
@@ -18,6 +19,10 @@ pub use types::{
     TimeSpan,
 };
 
+pub use covariance::{
+    Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
+    sort_key, sort_key16,
+};
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
 
 pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
