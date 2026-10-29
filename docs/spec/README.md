@@ -9,3 +9,4 @@
 | --- | --- | --- |
 | 0 | 2026-10-29 | Skeleton: §0 with openftgs's notation and the document map; §1, §2, §3, Appendix A and Appendix B empty. |
 | 1 | 2026-10-29 | §0: the package is a Rust workspace on Bevy and OpenXR with two builds, the Linux desktop player and the Meta Quest 3 app, and the language rule (Rust, WGSL, a minimal Android shim, Python only in dev tooling) is recorded; the rest unchanged. |
+| 2 | 2026-10-29 | The full specification: §0 (source rules, tags, notation, map), §1.1–§1.15 with E1–E16, §2.1–§2.7 (workspace, API, dependencies, performance, platform, standards, tests), §3.1–§3.6 (U-1 to U-35, R-1 to R-17, I-1 to I-17, Dv-1 to Dv-13, B-1 to B-9, A-1 to A-10), Appendices A (36 source rows), B (D-1 to D-49, with the owner's decisions of the 2026-10-29 grilling round), C (F-1 to F-34), D (bindings) and E (platform facts). Written from `docs/prd/spec-revision-2-plan.md`. |
