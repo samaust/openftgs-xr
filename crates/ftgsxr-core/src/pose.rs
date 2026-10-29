@@ -180,7 +180,7 @@ pub fn fit_pose(bounds: &Aabb, preset: Preset, size_m: f32, head: Pose, ahead_m:
     };
     let placed = Pose {
         translation: Vec3::ZERO,
-        rotation: preset.rotation(),
+        rotation: preset.rotation(), // Q-T11.2: the preset's rotation alone, no head yaw
         scale,
     };
     let center = placed.transform_point(bounds.center());
