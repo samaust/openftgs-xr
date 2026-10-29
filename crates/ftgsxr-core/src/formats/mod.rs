@@ -7,9 +7,11 @@
 //! The readers apply openftgs's own checks (its `io.read_render_request`, `io.read_renders`
 //! and `io.read_scene_manifest`), each refusal under the §1.15 code of Q-T14.1.
 
+mod info;
 mod json;
 mod renders;
 mod request;
 
+pub use info::{InfoReply, info_json};
 pub use renders::{RenderImage, read_renders, write_renders};
 pub use request::{RenderItem, RenderRequest, read_request};
