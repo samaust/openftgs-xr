@@ -276,7 +276,7 @@ proptest::proptest! {
     #[test]
     fn u14_prop_tau_at(
         tau0 in -1.0e3f64..1.0e3,
-        width in 0.0f64..100.0,
+        width in 1.0e-3f64..100.0, // a temporal span; D-9's single timestamp is pinned above
         ms in proptest::bool::ANY,
         offset in -10.0f64..10.0,
         t in 0.0f64..200.0,
