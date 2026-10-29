@@ -31,3 +31,37 @@ pub fn temporal_opacity(tau: f64, time_center: f64, duration: f64, single: bool)
 pub fn effective_opacity(opacity: f32, sigma_t: f64) -> f32 {
     (f64::from(opacity) * sigma_t) as f32
 }
+
+/// E3's half-width w = duration·√(2 ln(opacity/α_skip)): a primitive is active at τ
+/// only when |τ − time_center| ≤ w. `None` when opacity ≤ `alpha_skip` (255·opacity ≤ 1
+/// for openftgs's α_skip), since such a primitive is never active. Computed in float64,
+/// with `alpha_skip` promoted exactly from the model's float32 (D-39).
+///
+/// `widened` applies the temporal index's margins, as openftgs widens its buckets
+/// (D-10): the opacity multiplied by 1 + 10⁻⁴ inside the logarithm and 10⁻⁶·T′ added to
+/// w, where T′ is `span` (T_τ = τ₁ − τ₀), or 1 when `span` is not positive (a single
+/// timestamp).
+// Q-T7.1: None exactly when opacity ≤ alpha_skip; alpha_skip promoted from f32; T′ from span.
+pub fn temporal_window(
+    opacity: f32,
+    duration: f64,
+    alpha_skip: f32,
+    span: f64,
+    widened: bool,
+) -> Option<f64> {
+    if opacity <= alpha_skip {
+        return None;
+    }
+    let ratio = f64::from(opacity) / f64::from(alpha_skip);
+    if !widened {
+        return Some(duration * (2.0 * ratio.ln()).sqrt());
+    }
+    let t_prime = if span > 0.0 { span } else { 1.0 };
+    Some(duration * (2.0 * (ratio * OPACITY_MARGIN).ln()).sqrt() + TIME_MARGIN * t_prime)
+}
+
+/// The index's opacity margin, the factor inside E3's logarithm (D-10, openftgs D-55).
+const OPACITY_MARGIN: f64 = 1.0 + 1e-4;
+
+/// The index's time margin in units of T′, added to E3's half-width (D-10, openftgs D-55).
+const TIME_MARGIN: f64 = 1e-6;
