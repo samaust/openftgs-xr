@@ -618,3 +618,17 @@ fn u29_the_write_is_atomic() {
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(s, non_default());
 }
+
+/// §2.7 Fixtures: the committed sample `settings/v1.toml` (hand-written, every key away
+/// from its default) loads with no warning, as `non_default`; `fixtures_dir` checks its
+/// SHA-256 against `SHA256SUMS` first.
+#[test]
+fn u29_the_sample_settings_fixture_loads() {
+    let path = ftgsxr_testkit::fixtures_dir()
+        .join("settings")
+        .join("v1.toml");
+    let (s, warnings) = load_settings(&path).expect("load the sample");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(s, non_default());
+    assert!(path.exists(), "a readable file is never set aside");
+}

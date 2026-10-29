@@ -1,0 +1,121 @@
+# A sample openftgs-xr settings file, ftgsxr-settings v1 (spec §1.11), written by hand.
+# Every key is set away from its default; the shapes and spellings follow Q-T20.1 and
+# Q-T20.2 of docs/prd/questions.md.
+format = "ftgsxr-settings"
+version = 1
+
+[general]
+tier = "quest-low"
+governor = false
+ui_scale = 1.25
+log_level = "debug"
+
+[[sources]]
+kind = "dir"
+location = "/data/models"
+name = "Local"
+
+[[sources]]
+kind = "http"
+location = "https://example.org/models/"
+name = "Server"
+flavor = "nginx-json"
+
+[[sources]]
+kind = "http"
+location = "http://192.168.1.2:8000/"
+name = "Laptop"
+flavor = "auto"
+
+[[sources]]
+kind = "http"
+location = "http://nas.local/a/"
+name = "NAS"
+flavor = "html"
+
+[[sources]]
+kind = "http"
+location = "http://nas.local/b/"
+name = "NAS index"
+flavor = "index"
+
+[[sources]]
+kind = "documents"
+location = "content://com.android.externalstorage.documents/tree/primary%3AModels"
+name = "Picked"
+
+[playback]
+speed = -0.25
+loop = "ping-pong"
+
+[display]
+mode = "both"
+centers_radius = 5.5
+colormap = "time"
+background = [0.2, 0.3, 0.4]   # VR mode's background (the environment's, Q-T20.1)
+grid = false
+
+[display.overlays]
+boxes = true
+velocity = true
+velocity_every = 16
+time_slice = true
+
+[environment]
+mode = "passthrough"
+passthrough_brightness = -0.1
+passthrough_contrast = 0.3
+passthrough_saturation = 0.7
+occlusion = false
+occlusion_soft = false
+occlusion_delta_m = 0.12
+hand_removal = true
+lighting_mode = "auto-local"
+lighting_manual = { exposure_ev = -1.5, temperature = 0.25, tint = -0.75 }
+lighting_gamma = 0.8
+lighting_reference = [0.4, 0.5, 0.45, 0.3]
+contact_shadows = false
+
+[locomotion]
+speed_mps = 3.5
+snap_turn = false
+snap_deg = 90
+smooth_dps = 90
+vignette = false
+teleport = true
+height_offset_m = -0.3
+left_handed = true
+reduced_motion = true
+
+[audio]
+muted = true
+master = 80
+ui = 35.5
+soundtrack = 0
+spatial = false
+
+[audio.sounds]
+hover = false
+select = false
+grab = false
+snap_turn = false
+click = false
+error = false
+confirm = false
+
+[desktop]
+fov_deg = 75
+fly_speed_mps = 0.1
+
+[desktop.keys]
+play_pause = "P"
+screenshot = "Ctrl+F12"
+
+[xr]
+refresh_rate = 90
+foveation = "dynamic"
+render_scale = 0.8
+reference_space = ["local-floor", "local"]
+
+[cache]
+max_bytes = 5_000_000_123

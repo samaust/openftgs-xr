@@ -162,6 +162,9 @@ package versions, a rerun changes none.
   and `params.safetensors`; its index size is their sum) and `notes.txt` (not a model). The nginx
   and Apache bodies also list `.hidden.safetensors`, which does not exist; the Apache body has
   the parent link `/listing/` and the column-sort links.
+- `settings/v1.toml`: a sample `settings.toml` (`ftgsxr-settings` v1, §1.11, the only version
+  so far), **written by hand** with every key away from its default (U-29; the shapes and
+  spellings of Q-T20.1 and Q-T20.2); no script writes or removes it.
 
 No trained dataset model is committed (§2.7): `train_tiny.sh` (M-2) writes those under
 `$OPENFTGS_DATASETS/xr-fixtures/`.
