@@ -15,7 +15,9 @@ pub use types::{
     TimeSpan,
 };
 
-pub use covariance::{covariance, posed_covariance, quat_from_wxyz, quat_to_wxyz};
+pub use covariance::{
+    Projected, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
+};
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).
 pub use glam::{DMat3, DMat4, DVec3, Mat3, Mat4, Quat, UVec2, Vec2, Vec3};
