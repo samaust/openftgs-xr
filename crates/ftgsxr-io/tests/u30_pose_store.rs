@@ -224,3 +224,23 @@ fn u30_pose_store_save_refuses_what_load_would() {
     store.set(&identity('a'), saved(Preset::YUp, 1.0));
     assert_eq!(store.save(&path).expect_err("E-IO").code(), "E-IO");
 }
+
+/// §2.7 Fixtures: the committed sample `poses/v1.json` (hand-written, one entry per
+/// preset) loads as the store `u30_pose_store_round_trips` saves; `fixtures_dir` checks
+/// its SHA-256 first.
+#[test]
+fn u30_the_sample_pose_fixture_loads() {
+    let path = ftgsxr_testkit::fixtures_dir().join("poses").join("v1.json");
+    let store = PoseStore::load(&path).expect("the sample");
+    let custom = Preset::Custom(Quat::from_xyzw(0.6, 0.0, 0.0, 0.8));
+    let mut expected = PoseStore::default();
+    for (digit, preset, size) in [
+        ('0', Preset::YUp, 0.25),
+        ('1', Preset::ZUp, 1.25),
+        ('2', Preset::NegYUp, 2.25),
+        ('3', custom, 3.25),
+    ] {
+        expected.set(&identity(digit), saved(preset, size));
+    }
+    assert_eq!(store, expected);
+}

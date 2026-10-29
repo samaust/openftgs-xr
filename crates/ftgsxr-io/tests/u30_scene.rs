@@ -413,3 +413,22 @@ fn u30_write_scene_replaces_the_file_atomically() {
     let back = read_scene(&std::fs::read(&path).expect("read")).expect("the new scene");
     assert_eq!(back, scene);
 }
+
+/// §2.7 Fixtures: the committed sample `scene/v1.ftgsxr-scene.json` (hand-written, every
+/// key away from its default, one relative location) reads as `full_scene` with its second
+/// source in the model directory; `fixtures_dir` checks its SHA-256 first.
+#[test]
+fn u30_the_sample_scene_fixture_reads() {
+    let path = ftgsxr_testkit::fixtures_dir()
+        .join("scene")
+        .join("v1.ftgsxr-scene.json");
+    let scene = read_scene(&std::fs::read(path).expect("read the sample")).expect("the sample");
+    let mut expected = full_scene();
+    expected.models[1].source = SourceSpec {
+        kind: "dir".into(),
+        location: "captures".into(),
+        name: "my captures".into(),
+        flavor: None,
+    };
+    assert_eq!(scene, expected);
+}
