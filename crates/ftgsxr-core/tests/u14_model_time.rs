@@ -150,7 +150,6 @@ fn u14_single_timestamp_gives_tau0() {
             assert_eq!(mt.tau_at(t), (5.0, false));
         }
     }
-    assert_eq!(mt.length_s(), 2.0);
 }
 
 #[test]

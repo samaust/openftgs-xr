@@ -110,6 +110,18 @@ _Avoid_: timeline, global time, animation time
 The raw timestamp at which a model instance is evaluated, τ₀,m + r_m·(T − o_m) under its end rule. E9
 _Avoid_: current time, frame (a count), t (openftgs's normalized time)
 
+**End rule**:
+What a model instance shows when its model time falls outside its training time span: hold, which stops at the nearer end, or extrapolate, which continues the linear motion and marks the instance as extrapolating. E9, §1.6
+_Avoid_: clamp mode, out-of-range behaviour, loop mode (the clock's, not an instance's)
+
+**Frame step Δ_frame**:
+The playback clock's step while paused and the unit of the displayed frame number, in seconds, taken from the selected model instance. §1.6, D-32
+_Avoid_: frame interval (openftgs's Δt_f, in normalized time, one of the frame step's sources), frame rate, time step
+
+**Single-timestamp model**:
+A model whose training time span is zero (τ₀ = τ₁): static, with a temporal opacity of one at every τ, unaffected by the playback clock. §1.2, D-9; openftgs D-70, D-71
+_Avoid_: static model (also any model paused), still, one-frame model
+
 ### Training
 
 **Training iteration**:
