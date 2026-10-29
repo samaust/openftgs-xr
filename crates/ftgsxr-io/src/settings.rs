@@ -475,8 +475,7 @@ pub fn load_settings(path: &Path) -> Result<(Settings, Vec<String>), IoError> {
 /// directory is created when missing (Q-T20.3). E-IO when it cannot be written.
 // Q-T20.1, Q-T20.3
 pub fn save_settings(path: &Path, s: &Settings) -> Result<(), IoError> {
-    let text = toml::to_string(&document(s))
-        .map_err(|e| IoError::Settings(format!("{}: {e}", path.display())))?;
+    let text = toml::to_string(&document(s)).map_err(std::io::Error::other)?;
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
@@ -486,7 +485,8 @@ pub fn save_settings(path: &Path, s: &Settings) -> Result<(), IoError> {
 /// Renames the file at `path` to `<file name>.unknown-<YYYY-MM-DD>` (UTC), with `-2`,
 /// `-3`, … appended when that name is taken; returns the new path (Q-T20.3).
 fn set_aside(path: &Path) -> Result<PathBuf, IoError> {
-    let date = &now_rfc3339()[..10];
+    let now = now_rfc3339();
+    let date = now.get(..10).unwrap_or(&now);
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -558,7 +558,7 @@ fn choice(values: &'static [&'static str]) -> Check<String> {
 /// `N` finite numbers in \[lo, hi\].
 fn numbers<const N: usize>(lo: f64, hi: f64) -> Check<[f32; N]> {
     (
-        format!("{N} numbers in [{lo}, {hi}]"),
+        format!("{N} numbers in [{lo}, {}]", upper(hi)),
         Box::new(move |v| {
             let items = v.as_array().filter(|a| a.len() == N)?;
             let mut out = [0.0; N];
@@ -913,7 +913,7 @@ impl Reader {
                 t,
                 p,
                 "lighting_reference",
-                numbers::<4>(0.0, f32::MAX as f64),
+                numbers::<4>(0.0, f64::from(f32::MAX)),
             ),
             contact_shadows: self
                 .take(t, p, "contact_shadows", flag())
@@ -1062,7 +1062,7 @@ impl Reader {
         );
         let d = XrSettings::default();
         XrSettings {
-            refresh_rate: self.take(t, p, "refresh_rate", positive(f32::MAX as f64)),
+            refresh_rate: self.take(t, p, "refresh_rate", positive(f64::from(f32::MAX))),
             foveation: self.take(t, p, "foveation", choice(FOVEATION)),
             render_scale: self.take(t, p, "render_scale", positive(2.0)),
             reference_space: self
@@ -1099,10 +1099,19 @@ fn text() -> Check<String> {
     )
 }
 
+/// An interval's upper bound as the warning shows it.
+fn upper(hi: f64) -> String {
+    if hi >= f64::from(f32::MAX) {
+        "the float32 maximum".into()
+    } else {
+        hi.to_string()
+    }
+}
+
 /// A finite number in (0, hi\], as f32.
 fn positive(hi: f64) -> Check<f32> {
     (
-        format!("a number in (0, {hi}]"),
+        format!("a number in (0, {}]", upper(hi)),
         Box::new(move |v| number(v).filter(|x| *x > 0.0 && *x <= hi).map(|x| x as f32)),
     )
 }
