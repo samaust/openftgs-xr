@@ -7,10 +7,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod motion;
+pub mod pose;
 pub mod types;
 
-pub mod motion;
-
+pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
     TimeSpan,
