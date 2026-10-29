@@ -44,17 +44,17 @@ const TIERS: &[&str] = &[
 /// §1.13's log levels.
 const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 /// §1.6's loop modes.
-const LOOP_MODES: &[&str] = &["loop", "ping-pong", "once"];
+pub(crate) const LOOP_MODES: &[&str] = &["loop", "ping-pong", "once"];
 /// §1.6's speed presets, in either direction.
 const SPEED_PRESETS: &[f64] = &[0.1, 0.25, 0.5, 1.0, 2.0, 4.0];
 /// §1.5's render modes.
-const RENDER_MODES: &[&str] = &["splats", "centers", "both", "hidden"];
+pub(crate) const RENDER_MODES: &[&str] = &["splats", "centers", "both", "hidden"];
 /// §1.4's colormaps (Q-50).
 const COLORMAPS: &[&str] = &["dc", "time", "speed", "opacity"];
 /// §1.9's environment modes (Q-50).
-const ENVIRONMENT_MODES: &[&str] = &["vr", "passthrough"];
+pub(crate) const ENVIRONMENT_MODES: &[&str] = &["vr", "passthrough"];
 /// §1.9's lighting modes (Q-50).
-const LIGHTING_MODES: &[&str] = &["off", "manual", "auto-global", "auto-local"];
+pub(crate) const LIGHTING_MODES: &[&str] = &["off", "manual", "auto-global", "auto-local"];
 /// E12's snap angles in degrees.
 const SNAP_ANGLES: &[f64] = &[30.0, 45.0, 90.0];
 /// §1.12's foveation levels (D-27).
@@ -62,7 +62,7 @@ const FOVEATION: &[&str] = &["off", "low", "medium", "high", "dynamic"];
 /// D-24's reference spaces.
 const SPACES: &[&str] = &["stage", "local-floor", "local"];
 /// §1.11's source kinds.
-const SOURCE_KINDS: &[&str] = &["dir", "http", "documents"];
+pub(crate) const SOURCE_KINDS: &[&str] = &["dir", "http", "documents"];
 
 /// E14's manual mode (§1.9): exposure in EV in \[−4, 4\], white-balance temperature and
 /// tint in \[−1, 1\]; zero is the identity transform (Q-50).
@@ -1120,7 +1120,7 @@ fn positive(hi: f64) -> Check<f32> {
 const FLAVORS: &[&str] = &["auto", "index", "nginx-json", "html"];
 
 /// The flavor a §1.11 spelling names.
-fn flavor_of(name: &str) -> Option<ListingFlavor> {
+pub(crate) fn flavor_of(name: &str) -> Option<ListingFlavor> {
     match name {
         "auto" => Some(ListingFlavor::Auto),
         "index" => Some(ListingFlavor::Index),
@@ -1131,7 +1131,7 @@ fn flavor_of(name: &str) -> Option<ListingFlavor> {
 }
 
 /// The §1.11 spelling of `flavor`.
-fn flavor_name(flavor: ListingFlavor) -> &'static str {
+pub(crate) fn flavor_name(flavor: ListingFlavor) -> &'static str {
     match flavor {
         ListingFlavor::Auto => "auto",
         ListingFlavor::Index => "index",

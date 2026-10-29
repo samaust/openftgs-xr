@@ -10,6 +10,7 @@ mod error;
 pub mod http;
 pub mod listing;
 pub mod paths;
+pub mod scene;
 pub mod settings;
 pub mod sources;
 
@@ -20,6 +21,9 @@ pub use listing::{
     parse_index_manifest, parse_nginx_json,
 };
 pub use paths::AppPaths;
+pub use scene::{
+    CameraState, ClockState, PoseStore, SavedPose, SceneFile, SceneModel, read_scene, write_scene,
+};
 pub use settings::{
     AudioSettings, CacheSettings, DesktopSettings, DisplaySettings, EnvironmentSettings,
     GeneralSettings, LocomotionSettings, ManualLighting, OverlaySettings, PlaybackSettings,

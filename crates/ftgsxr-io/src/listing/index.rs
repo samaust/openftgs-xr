@@ -19,7 +19,7 @@ fn schema(base: &Url, detail: impl std::fmt::Display) -> IoError {
 
 /// Whether `version` names major version 1: a JSON integer, or a `"major[.minor]"` string
 /// of decimal parts (§1.11's versioning rule ignores the minor version).
-fn version_is_1(version: &Value) -> bool {
+pub(crate) fn version_is_1(version: &Value) -> bool {
     fn decimal(part: &str) -> Option<u64> {
         let digits = !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
         let leading_zero = part.len() > 1 && part.starts_with('0');
