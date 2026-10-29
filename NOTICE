@@ -1,2 +1,22 @@
 openftgs-xr
 Copyright 2026 Samuel Austin
+
+
+Adapted code
+------------
+
+tools/fixtures/make_probes.py (dev tooling, not part of the player) adapts the probe camera and
+item helpers of openftgs's harness, as its comments say.
+
+openftgs (https://github.com/samaust/openftgs), commit 9362202,
+harness/src/ftgs_harness/probes.py
+Copyright 2026 Samuel Austin
+Licensed under the Apache License, Version 2.0.
+
+crates/ftgsxr-testkit/src/real_sh.rs (a test helper, not part of the player) adapts openftgs's
+independent real spherical-harmonics evaluation, as its comments say.
+
+openftgs (https://github.com/samaust/openftgs), commit 9362202,
+tests/real_sh.py
+Copyright 2026 Samuel Austin
+Licensed under the Apache License, Version 2.0.

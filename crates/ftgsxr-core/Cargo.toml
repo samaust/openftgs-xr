@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ftgsxr-core"
+description = "openftgs-xr foundation: the model and its loaders, the CPU mathematics, the clock, the GPU layout and the openftgs formats (§2.1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+half.workspace = true
+rayon.workspace = true
+safetensors.workspace = true
+serde.workspace = true
+# Correctly rounded number parsing, as openftgs's Python reader parses (#14).
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+ftgsxr-testkit.workspace = true
+proptest.workspace = true

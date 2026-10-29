@@ -110,6 +110,18 @@ _Avoid_: timeline, global time, animation time
 The raw timestamp at which a model instance is evaluated, τ₀,m + r_m·(T − o_m) under its end rule. E9
 _Avoid_: current time, frame (a count), t (openftgs's normalized time)
 
+**End rule**:
+What a model instance shows when its model time falls outside its training time span: hold, which stops at the nearer end, or extrapolate, which continues the linear motion and marks the instance as extrapolating. E9, §1.6
+_Avoid_: clamp mode, out-of-range behaviour, loop mode (the clock's, not an instance's)
+
+**Frame step Δ_frame**:
+The playback clock's step while paused and the unit of the displayed frame number, in seconds, taken from the selected model instance. §1.6, D-32
+_Avoid_: frame interval (openftgs's Δt_f, in normalized time, one of the frame step's sources), frame rate, time step
+
+**Single-timestamp model**:
+A model whose training time span is zero (τ₀ = τ₁): static, with a temporal opacity of one at every τ, unaffected by the playback clock. §1.2, D-9; openftgs D-70, D-71
+_Avoid_: static model (also any model paused), still, one-frame model
+
 ### Training
 
 **Training iteration**:
@@ -373,7 +385,7 @@ The derived arrays `means_t`, `opacities_t`, `quats_n`, `scales` and `sh` that t
 _Avoid_: deformed Gaussians, time-sliced parameters, instantaneous parameters
 
 **Temporal index**:
-The rendering-only structure that assigns primitives to buckets so a render at time t passes only its bucket to gsplat; images are unchanged because gsplat's own test still decides. openftgs D-55
+The rendering-only structure that limits which primitives a render at one time examines, without changing the image, since the exact opacity test still decides: in openftgs, buckets passed to gsplat; in the player, the row order persistent-first then by time center and the dispatch range a cull pass visits at τ, a superset of the active set. openftgs D-55; E3, D-10
 _Avoid_: time index, temporal culling, bucket cache
 
 **Bucket**:
@@ -435,6 +447,14 @@ _Avoid_: point cloud mode, debug points, dots
 **Active set**:
 The primitives whose effective opacity can reach the model's alpha skip threshold at the model time, the only ones that enter sorting and drawing. E3, D-10
 _Avoid_: visible set (after the frustum cull and the radii), live set (openftgs's training term), bucket (openftgs's temporal index)
+
+**Persistent primitive**:
+A primitive whose temporal window covers the model's whole span, so it is active at every τ and the temporal index lists it first. E3, D-10
+_Avoid_: static primitive (ambiguous with a single-timestamp model's), always-on primitive, background primitive
+
+**Dispatch range**:
+The rows of a model the cull pass visits at a model time: every persistent primitive and the contiguous run of transient rows whose time centers lie within the widest window of τ. E3, D-10, §2.1 `DispatchRange`
+_Avoid_: bucket (openftgs's structure), active range (the active set is smaller), slice
 
 **Sort key k**:
 The per-view 32-bit integer derived from a primitive's camera-space depth that orders the splats far to near. E8, D-33, D-48
@@ -606,6 +626,10 @@ _Avoid_: kept set (the live set's synonym), checkpoint history, snapshots, backu
 A save that `ftgs train --checkpoint-every N` makes after every iteration that is a multiple of N below T_it, beside the saves at T_it and on a signal; it changes nothing in the run. openftgs D-83, §2.2
 _Avoid_: autosave, intermediate checkpoint
 
+**Download cache**:
+The player's per-URL store of fetched model files with their validators (ETag, Last-Modified), size, digest and fetch time, resumed with range requests and pruned least recently used, never of a loaded model's file. §1.5, §1.11
+_Avoid_: HTTP cache (the browser's sense), temp files, downloads folder
+
 ### Evaluation
 
 **SSIM_k**:
@@ -759,6 +783,10 @@ _Avoid_: violation, leak, contamination
 **Milestone M-n**:
 One of the bottom-up build steps in `docs/prd/milestones.md`, each run as one PRD; the order is a suggestion, not part of the spec. CLAUDE.md
 _Avoid_: phase, sprint, epic, stage
+
+**Test lane**:
+One of the six classes a test belongs to by what it needs (`cpu`, `gpu`, `xr`, `dv`, `net`, `ds`), gated by an ignore reason and a name prefix, so plain `cargo test` runs the `cpu` lane alone. §2.7, D-28
+_Avoid_: marker (pytest's mechanism in openftgs), test class, tier (reserved for quality tiers)
 
 **Unit test U-n**:
 One of the §3.1 tests, run on the CPU under plain `cargo test`. §3.1
