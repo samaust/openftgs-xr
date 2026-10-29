@@ -7,5 +7,7 @@
 #![warn(missing_docs)]
 
 mod error;
+pub mod paths;
 
 pub use error::IoError;
+pub use paths::AppPaths;
