@@ -1,0 +1,93 @@
+{
+ "means": {
+  "lr": [
+   0.00021429399914792694,
+   2.142939991479269e-06
+  ],
+  "schedule": "exponential",
+  "iterations": 20,
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-15
+ },
+ "log_durations": {
+  "lr": [
+   0.005,
+   0.005
+  ],
+  "schedule": "constant",
+  "iterations": 20,
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-15
+ },
+ "log_scales": {
+  "lr": [
+   0.005,
+   0.005
+  ],
+  "schedule": "constant",
+  "iterations": 20,
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-15
+ },
+ "quats": {
+  "lr": [
+   0.001,
+   0.001
+  ],
+  "schedule": "constant",
+  "iterations": 20,
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-15
+ },
+ "opacity_logits": {
+  "lr": [
+   0.05,
+   0.05
+  ],
+  "schedule": "constant",
+  "iterations": 20,
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-15
+ },
+ "sh0": {
+  "lr": [
+   0.0025,
+   0.0025
+  ],
+  "schedule": "constant",
+  "iterations": 20,
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-15
+ },
+ "shN": {
+  "lr": [
+   0.000125,
+   0.000125
+  ],
+  "schedule": "constant",
+  "iterations": 20,
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "eps": 1e-15
+ }
+}
