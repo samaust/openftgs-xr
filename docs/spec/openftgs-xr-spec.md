@@ -369,7 +369,40 @@ When no instance's τ\_m, pose, mode or transform changed since the last frame a
 
 **Cost.** τ\_m changes every frame while playing, so the active set and the sort are recomputed every frame (§1.4); the temporal index keeps the cull dispatch proportional to the active set (E3). While paused with a still view the frame redraws without preparing (§1.4).
 
-<!-- §1.7 -->
+### 1.7 Desktop interaction
+
+**Window.** One resizable window, fullscreen on F11, vertical sync on by default, DPI-aware UI. The render scale of the quality tier applies to the splat layer only; the UI renders at the window's resolution.
+
+**Cameras** \[R: keyboard and mouse\]. Two camera modes, toggled with O:
+
+- *Fly* (default): W, A, S, D move forward, left, back, right in the camera's horizontal frame; E and Q move up and down; Shift multiplies the speed by 4 and Ctrl by 0.25; the mouse looks while the right button is held (the cursor is captured for the hold and released after it, so the UI stays usable); the wheel adjusts the base speed (0.1–20 m/s, 2 m/s by default, logarithmic steps).
+- *Orbit*: the camera orbits the selected instance's box center (E10's B\_m), or the stage origin when nothing is selected; the left button drags the orbit, the middle button pans, the wheel zooms (distance 0.1–100 m).
+
+Both modes share the vertical field of view (40°–110°, 60° by default), the near and far planes (0.01 m, 1000 m), "frame selected" (F: the camera moves to see B\_m whole from its current direction), "reset view" (Home: 1.6 m above the origin, 2 m back, looking at the origin) and nine bookmarks (Ctrl+1 … Ctrl+9 save the camera, Alt+1 … Alt+9 recall it; bookmarks belong to the scene file).
+
+**Selection and manipulation** \[R: move, resize, save and reset pose\]. A left click selects the instance E10's mouse ray hits (the ray through the cursor on the camera's image plane); Esc deselects; a double click frames the instance. The selected instance shows a gizmo with translate, rotate and scale handles (G, R and T choose the handle set; the handles follow the usual conventions: axis arrows, rotation rings, a uniform-scale cube) and the Scene panel shows its pose as editable numbers (translation in metres, rotation as yaw, pitch, roll in degrees, scale as a factor). Arrow keys nudge the selected instance by 1 cm in the ground plane (10 cm with Shift), PageUp and PageDown along y; \[ and \] turn it by 5° about y. Ctrl+F fits it (§1.5), Ctrl+P saves its pose, Ctrl+Backspace resets it, Delete unloads it after confirmation. Dropping model files on the window loads them; Ctrl+O opens the file dialog.
+
+**Panels** \[D-21\]. A dock on the left with the tabs Library (sources, entries, load and refresh, filters by kind and name), Scene (instances with visibility, mode, pose, time offset, end rule, color transform, audio; save and load scene), Playback (the controls of §1.6), Display (render mode, centers radius and colormap, overlays, background, quality tier and the governor, render scale), Environment (desktop: background and grid only), Settings (§1.11) and Help (shortcuts, version, licenses). A bar above the viewport holds the play controls and the time readout. F1 opens Help, F2 hides and shows the whole UI, F3 the HUD (§1.13). The dock can be collapsed; its width is remembered.
+
+**Screenshots** \[+\]. F12 writes a PNG of the viewport at its resolution to `<pictures dir>/openftgs-xr/<date>-<time>.png`, with a text chunk naming the player's version, the loaded models' identities, their poses, the clock time and the camera; the HUD and the UI are excluded.
+
+**Training cameras and requests** \[+\]. When a `ftgs-scene` manifest sits beside a model (the same directory, any `*.json` whose `format` is `ftgs-scene`) or an index entry names one, the Scene panel offers its cameras: frustums drawn in the instance's frame (toggle), "jump to camera" (the fly camera takes the camera's pose and field of view, the clock the image's timestamp) and the camera list filtered by split. A `ftgs-render-request` file opened from the Library panel is replayed item by item the same way, for visual comparison with openftgs's renders of it; the numeric comparison is the headless command's.
+
+**Command line** \[+; O: openftgs CLI exit codes\]. The binary is `ftgsxr` (D-36):
+
+```
+ftgsxr play [MODEL|URL|SCENE ...] [--tier TIER] [--xr] [--settings FILE] [--log-level LEVEL]
+ftgsxr render MODEL REQUEST.json OUT.safetensors [--tier TIER]
+ftgsxr info [--json]
+ftgsxr validate MODEL ...
+ftgsxr import IF OUT
+ftgsxr export MODEL OUT
+ftgsxr bench NAME [--out BENCH.json] [--model MODEL]
+```
+
+`play` starts the player with the given models, URLs or scene file loaded (`--xr` runs the XR session on the system's OpenXR runtime, §1.1). `render` answers a `ftgs-render-request` headless, without a window: MODEL is any §1.2 input; the tier defaults to `conformance` (§1.12: float32 storage, the model's full degree, `Depth32`, per-view sort, C = N, occlusion off); the request's `time_unit` must equal the model's, else exit 2; each item renders at its timestamp from its camera (E6) with the request's background and SH degree (E7, §1.2), and the file is written as `ftgs-renders` with `rgb/<id>` unclamped, `alpha/<id>`, `producer` = `openftgs-xr <version> (<GPU adapter name>)` and `request_sha256` = the SHA-256 of the request file's bytes \[O: openftgs §2.2, `io.write_renders`\]. `info` prints the adapter reply of openftgs §3.3's contract (§2.1): `name` `openftgs-xr`, `version`, `query_kinds` `[]`, `rasterizer` {`name`: `openftgs-xr wgpu-blend`, `version`}, and `render_conventions` with openftgs's values except `transmittance_stop`: null, since E7 applies none (D-7). `validate` reads and validates each model and prints its header information, exit 2 on the first invalid file. `import` and `export` validate their input and write a `ftgs-if` file (a byte copy for a `ftgs-if` input; the activated exchange form for a checkpoint or a PLY), so openftgs's harness can run its L0 and L1 levels with openftgs-xr as implementation B. `bench` runs a §3.5 benchmark. Exit codes: 0 success; 2 invalid input or environment (a file that fails validation, a request whose unit differs, no GPU adapter, no OpenXR runtime for `--xr`); 3 a numerical failure (a non-finite render, which writes no file) \[O: openftgs §2.1 CLI\].
+
+<!-- §1.8 -->
 
 ## 2. Package architecture
 
@@ -411,6 +444,40 @@ Every source consulted while writing this specification is listed below with wha
 <!-- C -->
 
 ## Appendix D — Input bindings
+
+The bindings below are the defaults; `settings.toml` (§1.11) may rebind every desktop key and every XR action (D-23). A binding in this appendix is normative for the tests that name it (U-n, I-n).
+
+### D.1 Desktop keyboard and mouse (§1.7)
+
+| Action | Default | Notes |
+| --- | --- | --- |
+| Move forward, left, back, right | W, A, S, D | fly mode; speed × 4 with Shift, × 0.25 with Ctrl |
+| Move up, down | E, Q | fly mode |
+| Look | right mouse button held + mouse motion | cursor captured for the hold only |
+| Base speed | mouse wheel (fly), zoom (orbit) | logarithmic steps |
+| Toggle fly and orbit | O | |
+| Orbit, pan | left drag, middle drag | orbit mode |
+| Frame selected | F | |
+| Reset view | Home | |
+| Save, recall bookmark n | Ctrl+n, Alt+n (n = 1 … 9) | stored in the scene file |
+| Select, deselect, frame | left click, Esc, double click | |
+| Gizmo: translate, rotate, scale | G, R, T | |
+| Nudge in the ground plane | arrow keys (1 cm; 10 cm with Shift) | |
+| Nudge up and down | PageUp, PageDown | |
+| Turn about y | \[, \] (5°) | |
+| Fit, save pose, reset pose | Ctrl+F, Ctrl+P, Ctrl+Backspace | |
+| Unload selected | Delete | after confirmation |
+| Open files, save scene, load scene | Ctrl+O, Ctrl+Shift+S, Ctrl+L | |
+| Play and pause | Space | |
+| Step one frame back, forward | , and . | while paused |
+| Speed down, up | Shift+, and Shift+. | through the presets of §1.6 |
+| Cycle loop mode | L | loop, ping-pong, once |
+| Clock start, end | Ctrl+Home, Ctrl+End | |
+| Cycle render mode of the selected instance | M | splats, centers, both |
+| Toggle boxes, velocity vectors | B, V | |
+| Help, hide UI, HUD | F1, F2, F3 | |
+| Fullscreen, screenshot | F11, F12 | |
+| Quit | Ctrl+Q | |
 
 <!-- D -->
 
