@@ -35,6 +35,7 @@ and over a copy of the committed fixtures with one byte changed.
 | `checkpoint/single/`, `single.safetensors`: the same on one frame, a single-timestamp checkpoint | `make_checkpoint.py` | U-5's single-timestamp clause | none |
 | `checkpoint/scene/`: the scene manifest of the tiny training scene and its images | `make_checkpoint.py` | U-36; the input of the two training runs | none |
 | `listing/`: the three listing bodies and the files they list | written by hand from the documented formats; `make_listings.py` fills in sizes and digests | U-27; U-28 and U-31 through the fixture server | Q-6 |
+| `scene/v1.ftgsxr-scene.json`, `poses/v1.json`: a sample scene file and pose store, every key away from its default | written by hand from §1.11's shapes | U-30 | Q-52 |
 | `README.md` | `make_all.py`, from its template | provenance: the openftgs commit, the package versions, the commands, the adapter reply | Q-13 |
 
 The sample settings, scene and pose files of every version that §2.7 lists (U-29, U-30) are

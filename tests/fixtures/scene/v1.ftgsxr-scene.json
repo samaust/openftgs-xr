@@ -1,0 +1,54 @@
+{
+  "format": "ftgsxr-scene",
+  "version": 1,
+  "models": [
+    {
+      "source": {"kind": "http", "location": "https://example.org/models/a.safetensors", "name": "my server", "flavor": "nginx-json"},
+      "identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "dancer take 2",
+      "pose": {"translation": [0.25, -1.5, 3.0], "rotation": [0.0, 0.6, 0.0, 0.8], "scale": 1.75},
+      "visible": false,
+      "mode": "both",
+      "time_offset_s": -0.125,
+      "end_rule": "extrapolate",
+      "lighting": {"exposure_ev": 1.5, "temperature": -0.25, "tint": 0.1},
+      "audio": "dancer.ogg"
+    },
+    {
+      "source": {"kind": "dir", "location": "captures", "name": "my captures"},
+      "identity": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "name": "dancer take 2",
+      "pose": {"translation": [0.25, -1.5, 3.0], "rotation": [0.0, 0.6, 0.0, 0.8], "scale": 1.75},
+      "visible": false,
+      "mode": "both",
+      "time_offset_s": -0.125,
+      "end_rule": "hold",
+      "lighting": null,
+      "audio": null
+    }
+  ],
+  "clock": {"t": 12.375, "speed": -0.25, "loop": "ping-pong", "range": [1.5, 9.25]},
+  "environment": {
+    "mode": "passthrough",
+    "background": [0.2, 0.3, 0.4],
+    "passthrough_brightness": 0.1,
+    "passthrough_contrast": -0.2,
+    "passthrough_saturation": 0.3,
+    "occlusion": false,
+    "occlusion_soft": false,
+    "occlusion_delta_m": 0.08,
+    "hand_removal": true,
+    "lighting_mode": "auto-local",
+    "lighting_manual": {"exposure_ev": -1.0, "temperature": 0.5, "tint": -0.5},
+    "lighting_gamma": 0.75,
+    "lighting_reference": [0.45, 0.31, 0.33, 0.36],
+    "contact_shadows": false
+  },
+  "anchor": {"uuid": "4f1c2a9e-0b7d-4c3e-9a51-7d2e8f6b1c04"},
+  "rig": {"pose": {"translation": [1.25, -1.5, 3.0], "rotation": [0.0, 0.6, 0.0, 0.8], "scale": 1.75}},
+  "camera": {"pose": {"translation": [2.25, -1.5, 3.0], "rotation": [0.0, 0.6, 0.0, 0.8], "scale": 1.0}, "fov_deg": 75.0, "mode": "orbit"},
+  "bookmarks": [
+    {"pose": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": 1.0}, "fov_deg": 60.0, "mode": "fly"},
+    {"pose": {"translation": [3.25, -1.5, 3.0], "rotation": [0.0, 0.6, 0.0, 0.8], "scale": 1.75}, "fov_deg": 90.5, "mode": "orbit"}
+  ]
+}

@@ -165,6 +165,10 @@ package versions, a rerun changes none.
 - `settings/v1.toml`: a sample `settings.toml` (`ftgsxr-settings` v1, §1.11, the only version
   so far), **written by hand** with every key away from its default (U-29; the shapes and
   spellings of Q-49 and Q-50); no script writes or removes it.
+- `scene/v1.ftgsxr-scene.json`: a sample scene file (`ftgsxr-scene` v1, §1.11), and
+  `poses/v1.json`: a sample pose store (`ftgsxr-poses` v1, §1.11), the only versions so far,
+  **written by hand** with every key away from its default, one location relative and one
+  pose per preset (U-30; the shapes of Q-52); no script writes or removes them.
 
 No trained dataset model is committed (§2.7): `train_tiny.sh` (M-2) writes those under
 `$OPENFTGS_DATASETS/xr-fixtures/`.
