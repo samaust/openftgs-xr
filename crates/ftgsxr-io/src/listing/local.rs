@@ -18,8 +18,8 @@ const MANIFEST: &str = "manifest.json";
 const PARAMS: &str = "params.safetensors";
 /// The checkpoint's `format`.
 const CHECKPOINT_FORMAT: &str = "ftgs-checkpoint";
-/// The largest safetensors header read (here and by `header_info`): the `safetensors` crate's own limit (source log 39).
-pub(crate) const MAX_HEADER: u64 = 100_000_000;
+/// The largest safetensors header read (`checked_header_len`): the `safetensors` crate's own limit (source log 39).
+const MAX_HEADER: u64 = 100_000_000;
 /// The largest `manifest.json` read; openftgs's are a few kilobytes.
 const MAX_MANIFEST: u64 = 16 << 20;
 
@@ -82,6 +82,21 @@ pub(super) fn list(path: &Path) -> Result<Vec<Entry>, IoError> {
     Ok(found.into_iter().map(|(_, e)| e).collect())
 }
 
+/// The header length `prefix` gives for a safetensors file of `len` bytes; a header longer
+/// than the file or than `MAX_HEADER` is E-FILE-FORMAT.
+pub(crate) fn checked_header_len(
+    prefix: &[u8; SAFETENSORS_PREFIX],
+    len: u64,
+) -> Result<u64, IoError> {
+    let n = header_len(prefix);
+    if n > MAX_HEADER || n > len.saturating_sub(SAFETENSORS_PREFIX as u64) {
+        return Err(
+            CoreError::Format(format!("a header of {n} bytes in a file of {len} bytes")).into(),
+        );
+    }
+    Ok(n)
+}
+
 /// Whether the safetensors file `path` of `len` bytes has a header `read_info` accepts:
 /// the 8-byte prefix, then the header alone (Q-33).
 fn is_exchange(path: &Path, len: u64) -> bool {
@@ -96,12 +111,7 @@ fn is_exchange(path: &Path, len: u64) -> bool {
 pub(crate) fn header_info(reader: &mut impl Read, len: u64) -> Result<ModelInfo, IoError> {
     let mut prefix = [0u8; SAFETENSORS_PREFIX];
     reader.read_exact(&mut prefix)?;
-    let n = header_len(&prefix);
-    if n > MAX_HEADER || n > len.saturating_sub(SAFETENSORS_PREFIX as u64) {
-        return Err(
-            CoreError::Format(format!("a header of {n} bytes in a file of {len} bytes")).into(),
-        );
-    }
+    let n = checked_header_len(&prefix, len)?;
     let mut header = vec![0u8; n as usize];
     reader.read_exact(&mut header)?;
     Ok(read_info(&header, len)?)
