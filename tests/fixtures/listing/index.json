@@ -1,0 +1,26 @@
+{
+  "format": "ftgsxr-index",
+  "version": 1,
+  "entries": [
+    {
+      "name": "probe p1",
+      "path": "probe%20p1.safetensors",
+      "kind": "ftgs-if",
+      "size": 1092,
+      "sha256": "ffa856e1f1647386714f84d06bd7b82aadd3a30de74509d87bd68985388f636c"
+    },
+    {
+      "name": "snapshot",
+      "path": "snapshot.ply",
+      "kind": "ply",
+      "size": 2022,
+      "sha256": "8529f07a3f7ce303e1130a7961d1aef1b9fbb4a32fa2e46aa91abc7c9fed7f37"
+    },
+    {
+      "name": "tiny",
+      "path": "tiny/",
+      "kind": "ftgs-checkpoint",
+      "size": 19677
+    }
+  ]
+}
