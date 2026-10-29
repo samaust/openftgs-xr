@@ -13,9 +13,10 @@ use ureq::Body;
 use ureq::http::Response;
 use url::Url;
 
-use super::cache::{Entry, Record, now_rfc3339, remove_if_present};
+use super::cache::{Entry, Record, remove_if_present};
 use super::{HttpClient, Progress, content_range, fetch_error, header, lock, status_error};
 use crate::IoError;
+use crate::util::now_rfc3339;
 
 /// The bytes read from the body between two cancel checks and progress reports: "one
 /// chunk" of U-28's cancel clause.

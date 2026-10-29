@@ -10,12 +10,11 @@ use std::path::Path;
 use ftgsxr_core::{CoreError, EndRule, LoopMode, Pose, Preset, Quat, Vec3};
 use serde_json::{Map, Number, Value};
 
-use crate::http::write_atomic;
-use crate::listing::version_is_1;
 use crate::settings::{
     ENVIRONMENT_MODES, LIGHTING_MODES, LOOP_MODES, RENDER_MODES, SOURCE_KINDS, flavor_name,
     flavor_of,
 };
+use crate::util::{version_is_1, write_atomic};
 use crate::{EnvironmentSettings, IoError, ManualLighting, SourceSpec};
 
 /// A scene file's `format` (§1.11).

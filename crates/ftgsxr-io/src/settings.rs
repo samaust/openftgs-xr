@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use toml::{Table, Value};
 
-use crate::http::{now_rfc3339, write_atomic};
+use crate::util::{now_rfc3339, write_atomic};
 use crate::{IoError, ListingFlavor, SourceSpec};
 
 /// The file's `format` (§1.11).
