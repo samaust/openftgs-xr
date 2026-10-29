@@ -8,8 +8,11 @@
 #![warn(missing_docs)]
 
 pub mod covariance;
+pub mod motion;
+pub mod pose;
 pub mod types;
 
+pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
     TimeSpan,
@@ -19,6 +22,7 @@ pub use covariance::{
     Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
     sort_key, sort_key16,
 };
+pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).
 pub use glam::{DMat3, DMat4, DVec3, Mat3, Mat4, Quat, UVec2, Vec2, Vec3};
