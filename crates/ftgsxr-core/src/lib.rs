@@ -10,7 +10,7 @@
 pub mod pose;
 pub mod types;
 
-pub use pose::ray_hit;
+pub use pose::{Grab, ScaleLimits, TwoHandGrab, ray_hit};
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
     TimeSpan,
