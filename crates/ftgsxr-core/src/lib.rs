@@ -7,8 +7,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod pose;
 pub mod types;
 
+pub use pose::ray_hit;
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
     TimeSpan,
