@@ -9,9 +9,11 @@
 
 mod info;
 mod json;
+mod manifest;
 mod renders;
 mod request;
 
 pub use info::{InfoReply, info_json};
+pub use manifest::{ManifestImage, SceneManifest, read_scene_manifest};
 pub use renders::{RenderImage, read_renders, write_renders};
 pub use request::{RenderItem, RenderRequest, read_request};

@@ -13,8 +13,8 @@ pub mod pose;
 pub mod types;
 
 pub use formats::{
-    InfoReply, RenderImage, RenderItem, RenderRequest, info_json, read_renders, read_request,
-    write_renders,
+    InfoReply, ManifestImage, RenderImage, RenderItem, RenderRequest, SceneManifest, info_json,
+    read_renders, read_request, read_scene_manifest, write_renders,
 };
 pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
