@@ -12,7 +12,9 @@ pub mod motion;
 pub mod pose;
 pub mod types;
 
-pub use formats::{RenderItem, RenderRequest, read_request};
+pub use formats::{
+    RenderImage, RenderItem, RenderRequest, read_renders, read_request, write_renders,
+};
 pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,

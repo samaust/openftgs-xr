@@ -8,6 +8,8 @@
 //! and `io.read_scene_manifest`), each refusal under the §1.15 code of Q-T14.1.
 
 mod json;
+mod renders;
 mod request;
 
+pub use renders::{RenderImage, read_renders, write_renders};
 pub use request::{RenderItem, RenderRequest, read_request};
