@@ -192,7 +192,7 @@ fn u09_degree_2_cap_equals_degree_2_model() {
 /// vector, so the basis is E4's table at (0, 0, 0): C₀, the l = 2, m = 0 entry −C₂,₀, the
 /// rest 0; the color is finite.
 #[test]
-fn q_t6_1_zero_direction_gives_the_table_at_the_origin() {
+fn sh_zero_direction_gives_the_table_at_the_origin() {
     let y = sh_basis(3, Vec3::ZERO);
     for (j, v) in y.iter().enumerate() {
         match j {
@@ -208,13 +208,13 @@ fn q_t6_1_zero_direction_gives_the_table_at_the_origin() {
 /// Q-T6.1: a degree above 3 panics.
 #[test]
 #[should_panic(expected = "degree 4")]
-fn q_t6_1_degree_above_3_panics() {
+fn sh_degree_above_3_panics() {
     let _ = sh_basis(4, Vec3::X);
 }
 
 /// Q-T6.1: a coefficient count other than (degree + 1)²·3 panics.
 #[test]
 #[should_panic(expected = "takes 27 coefficients")]
-fn q_t6_1_wrong_coefficient_count_panics() {
+fn sh_wrong_coefficient_count_panics() {
     let _ = sh_color(2, &[0.0; 48], Vec3::X);
 }
