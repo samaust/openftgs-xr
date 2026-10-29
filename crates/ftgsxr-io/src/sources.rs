@@ -1,0 +1,510 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Model sources (§1.5 Sources, D-31, D-49): the references a model is loaded from, the
+//! `ModelSource` port the library lists, reads headers from and fetches through, its three
+//! adapters (a local directory, an HTTP index, a picked document tree) and the
+//! document-provider port the Android shim implements (§2.5).
+
+use std::fs::File;
+use std::io::Read;
+use std::ops::Deref;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, header_len, read_info};
+use url::Url;
+
+use crate::listing::{MAX_HEADER, header_info};
+use crate::{
+    Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
+    parse_nginx_json,
+};
+
+/// §2.1 shows these two in this module's block; their homes are the crate root and
+/// `listing`.
+pub use crate::{IoError, listing::ListingFlavor};
+
+/// Where a model comes from (§1.5): a local path, a URL, or an Android content URI.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ModelRef {
+    /// A file (or a checkpoint directory) on a local file system.
+    File(PathBuf),
+    /// A model file on an HTTP server, fetched through the download cache.
+    Http(Url),
+    /// An Android content URI, read through the `DocumentProvider` (D-49).
+    Document(String),
+}
+
+/// A model file's bytes, read into memory (Q-30): what the readers of §1.2 take. Where they
+/// came from is the `ModelRef` beside them. Deref gives the bytes (Q-T19.1).
+// Q-T19.1
+#[derive(Clone, PartialEq, Eq)]
+pub enum ModelBytes {
+    /// The whole file, owned.
+    Owned(Vec<u8>),
+}
+
+impl Deref for ModelBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            ModelBytes::Owned(bytes) => bytes,
+        }
+    }
+}
+
+impl std::fmt::Debug for ModelBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModelBytes({} bytes)", self.len())
+    }
+}
+
+/// A place models are listed and fetched from (§1.5): the library's port to its sources.
+pub trait ModelSource: Send + Sync {
+    /// The source's location as text: the root path, the base URL, the tree URI (Q-T19.2).
+    fn name(&self) -> &str;
+    /// The entries of the source's root (`subdir` empty) or of one of its subdirectories,
+    /// listed on demand (§1.5, D-31; Q-T19.2).
+    fn list(&self, subdir: &str) -> Result<Vec<Entry>, IoError>;
+    /// The header-only information of an `Exchange` entry (§1.5, Q-33), reading the
+    /// 8-byte prefix and the header and nothing else; other kinds are E-IO (Q-T19.2).
+    fn info(&self, entry: &Entry) -> Result<ModelInfo, IoError>;
+    /// The entry's file, read into memory, with the reference it was read from; `progress`
+    /// hears as it arrives and `cancel` stops it (§1.5, Q-T19.2). A checkpoint is refused
+    /// (Q-T19.1).
+    fn fetch(
+        &self,
+        entry: &Entry,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<(ModelRef, ModelBytes), IoError>;
+}
+
+/// A local directory scanned one level deep (§1.5): its listing is `list_dir`'s (Q-38).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalDir {
+    /// The directory listed.
+    pub root: PathBuf,
+}
+
+/// An HTTP index (§1.5, D-31): a base URL listed in one of the three listing flavors,
+/// fetched through the shared `HttpClient`.
+pub struct HttpIndex {
+    /// The directory URL listed; `index.json` resolves against it, so it ends in `/`.
+    pub base: Url,
+    /// The listing read, or `Auto` to detect it on every listing (Q-T19.3).
+    pub flavor: ListingFlavor,
+    client: Arc<HttpClient>,
+}
+
+/// The port Android's document provider implements (§2.5); the desktop has none.
+pub trait DocumentProvider: Send + Sync {
+    /// The documents of a tree, as entries with §1.5's kinds; `location` is each one's
+    /// content URI.
+    fn list_tree(&self, tree_uri: &str) -> Result<Vec<Entry>, IoError>;
+    /// The document at `uri`, opened for reading.
+    fn open(&self, uri: &str) -> Result<std::fs::File, IoError>;
+}
+
+/// A picked document tree (§1.5 Picked files, D-49), read through a `DocumentProvider`.
+pub struct DocumentSource {
+    /// The tree's content URI.
+    pub tree_uri: String,
+    provider: Arc<dyn DocumentProvider>,
+}
+
+/// A configured source as `settings.toml` and scene files record it (§1.11 `[[sources]]`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceSpec {
+    /// `dir`, `http` or `documents` (§1.11).
+    pub kind: String,
+    /// The directory path, base URL or tree URI.
+    pub location: String,
+    /// The label the user gave it.
+    pub name: String,
+    /// The HTTP listing flavor; `None` is `Auto` (§1.11).
+    pub flavor: Option<ListingFlavor>,
+}
+
+/// The player's own listing under an HTTP index's base (§1.5, §1.11).
+const INDEX: &str = "index.json";
+/// The bytes a local or document file is read in between two cancel checks (Q-T19.2).
+const CHUNK: usize = 1 << 20;
+
+impl HttpIndex {
+    /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-T19.2).
+    // Q-T19.2
+    pub fn new(base: Url, flavor: ListingFlavor, client: Arc<HttpClient>) -> HttpIndex {
+        HttpIndex {
+            base,
+            flavor,
+            client,
+        }
+    }
+}
+
+impl DocumentSource {
+    /// A document tree `tree_uri` read through `provider` (Q-T19.2).
+    // Q-T19.2
+    pub fn new(tree_uri: String, provider: Arc<dyn DocumentProvider>) -> DocumentSource {
+        DocumentSource { tree_uri, provider }
+    }
+}
+
+// Q-T19.2
+impl ModelSource for LocalDir {
+    fn name(&self) -> &str {
+        self.root.to_str().unwrap_or("")
+    }
+
+    fn list(&self, subdir: &str) -> Result<Vec<Entry>, IoError> {
+        if subdir.is_empty() {
+            return list_dir(&self.root);
+        }
+        let relative = Path::new(subdir);
+        if !relative
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+        {
+            return Err(invalid(format!(
+                "{subdir} is not a subdirectory of {}",
+                self.root.display()
+            )));
+        }
+        list_dir(&self.root.join(relative))
+    }
+
+    fn info(&self, entry: &Entry) -> Result<ModelInfo, IoError> {
+        header_only(entry)?;
+        let path = Path::new(&entry.location);
+        let mut file = open_file(path)?;
+        let len = file.metadata()?.len();
+        header_info(&mut file, len)
+    }
+
+    fn fetch(
+        &self,
+        entry: &Entry,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<(ModelRef, ModelBytes), IoError> {
+        fetchable(entry)?;
+        let path = PathBuf::from(&entry.location);
+        let bytes = read_local(&path, progress, cancel)?;
+        Ok((ModelRef::File(path), bytes))
+    }
+}
+
+// Q-T19.2, Q-T19.3
+impl ModelSource for HttpIndex {
+    fn name(&self) -> &str {
+        self.base.as_str()
+    }
+
+    fn list(&self, subdir: &str) -> Result<Vec<Entry>, IoError> {
+        let dir = if subdir.is_empty() {
+            self.base.clone()
+        } else {
+            self.base
+                .join(subdir)
+                .ok()
+                .filter(|d| d.as_str().starts_with(self.base.as_str()))
+                .ok_or_else(|| invalid(format!("{subdir} is not under {}", self.base)))?
+        };
+        let index = || {
+            dir.join(INDEX)
+                .map_err(|e| IoError::Fetch(format!("{dir} ({e})")))
+        };
+        match self.flavor {
+            ListingFlavor::Index => parse_index_manifest(&self.client.get_text(&index()?)?, &dir),
+            ListingFlavor::NginxJson => parse_nginx_json(&self.client.get_text(&dir)?, &dir),
+            ListingFlavor::Html => parse_html_listing(&self.client.get_text(&dir)?, &dir),
+            ListingFlavor::Auto => self.detect(&dir, &index()?),
+        }
+    }
+
+    fn info(&self, entry: &Entry) -> Result<ModelInfo, IoError> {
+        header_only(entry)?;
+        let url = self.entry_url(entry)?;
+        // Q-T19.2: the prefix, then the header: 8 + header-length bytes on the wire.
+        let (prefix, size) = self
+            .client
+            .get_range_sized(&url, 0, SAFETENSORS_PREFIX as u64)?;
+        let prefix: [u8; SAFETENSORS_PREFIX] = prefix
+            .try_into()
+            .map_err(|_| CoreError::Format(format!("{url}: shorter than its length prefix")))?;
+        let len = size
+            .or(entry.size)
+            .ok_or_else(|| IoError::Fetch(format!("{url} (no file size)")))?;
+        let n = header_len(&prefix);
+        if n > MAX_HEADER || n > len.saturating_sub(SAFETENSORS_PREFIX as u64) {
+            return Err(CoreError::Format(format!(
+                "a header of {n} bytes in a file of {len} bytes"
+            ))
+            .into());
+        }
+        let header = self.client.get_range(&url, SAFETENSORS_PREFIX as u64, n)?;
+        if header.len() as u64 != n {
+            return Err(CoreError::Format(format!("{url}: shorter than its header")).into());
+        }
+        Ok(read_info(&header, len)?)
+    }
+
+    fn fetch(
+        &self,
+        entry: &Entry,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<(ModelRef, ModelBytes), IoError> {
+        fetchable(entry)?;
+        let url = self.entry_url(entry)?;
+        let path = self
+            .client
+            .download(&url, entry.sha256.as_deref(), progress, cancel)?;
+        let bytes = read_local(&path, &mut |_| {}, &AtomicBool::new(false))?;
+        Ok((ModelRef::Http(url), bytes))
+    }
+}
+
+impl HttpIndex {
+    /// `Auto`'s detection at the directory URL `dir` (D-31, Q-T19.3): `index` when it
+    /// answers 2xx, then `dir` once, as nginx JSON, then as HTML anchors.
+    // Q-T19.3
+    fn detect(&self, dir: &Url, index: &Url) -> Result<Vec<Entry>, IoError> {
+        if let Ok(body) = self.client.get_text_or_status(index)? {
+            return parse_index_manifest(&body, dir);
+        }
+        let Ok(body) = self.client.get_text_or_status(dir)? else {
+            return Err(IoError::Listing(dir.to_string()));
+        };
+        parse_nginx_json(&body, dir)
+            .or_else(|_| parse_html_listing(&body, dir))
+            .map_err(|_| IoError::Listing(dir.to_string()))
+    }
+
+    /// The URL of an entry this index listed: its absolute `location` (Q-36), or one
+    /// relative to the base.
+    fn entry_url(&self, entry: &Entry) -> Result<Url, IoError> {
+        self.base
+            .join(&entry.location)
+            .map_err(|e| IoError::Fetch(format!("{} (not a URL: {e})", entry.location)))
+    }
+}
+
+// Q-T19.2
+impl ModelSource for DocumentSource {
+    fn name(&self) -> &str {
+        &self.tree_uri
+    }
+
+    fn list(&self, subdir: &str) -> Result<Vec<Entry>, IoError> {
+        let tree = if subdir.is_empty() {
+            self.tree_uri.as_str()
+        } else {
+            subdir
+        };
+        self.provider.list_tree(tree)
+    }
+
+    fn info(&self, entry: &Entry) -> Result<ModelInfo, IoError> {
+        header_only(entry)?;
+        let mut file = self.provider.open(&entry.location)?;
+        let len = file.metadata()?.len();
+        header_info(&mut file, len)
+    }
+
+    fn fetch(
+        &self,
+        entry: &Entry,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<(ModelRef, ModelBytes), IoError> {
+        fetchable(entry)?;
+        let bytes = read_document(self.provider.as_ref(), &entry.location, progress, cancel)?;
+        Ok((ModelRef::Document(entry.location.clone()), bytes))
+    }
+}
+
+/// Opens `source` as `spec` describes it (§1.11 `[[sources]]`; Q-T19.2): `dir` a
+/// `LocalDir`, `http` an `HttpIndex` through `client`, `documents` a `DocumentSource`
+/// through `provider`. Nothing is read until the source is listed.
+// Q-T19.2
+pub fn open_source(
+    spec: &SourceSpec,
+    client: Option<Arc<HttpClient>>,
+    provider: Option<Arc<dyn DocumentProvider>>,
+) -> Result<Arc<dyn ModelSource>, IoError> {
+    match spec.kind.as_str() {
+        "dir" => Ok(Arc::new(LocalDir {
+            root: PathBuf::from(&spec.location),
+        })),
+        "http" => {
+            let client = client.ok_or_else(|| unsupported("an HTTP source without a client"))?;
+            let base = Url::parse(&spec.location)
+                .map_err(|e| IoError::Fetch(format!("{} (not a URL: {e})", spec.location)))?;
+            let flavor = spec.flavor.unwrap_or(ListingFlavor::Auto);
+            Ok(Arc::new(HttpIndex::new(base, flavor, client)))
+        }
+        "documents" => {
+            let provider =
+                provider.ok_or_else(|| unsupported("a document source without a provider"))?;
+            Ok(Arc::new(DocumentSource::new(
+                spec.location.clone(),
+                provider,
+            )))
+        }
+        other => Err(invalid(format!("unknown source kind {other:?}"))),
+    }
+}
+
+/// The bytes `r` names (§1.5), read into memory: a local file, a download through `client`
+/// with no expected digest, or a document through `provider` (Q-T19.2). A checkpoint
+/// directory is refused (Q-T19.1).
+// Q-T19.1, Q-T19.2
+pub fn open_ref(
+    r: &ModelRef,
+    client: Option<&HttpClient>,
+    provider: Option<&dyn DocumentProvider>,
+) -> Result<ModelBytes, IoError> {
+    let cancel = AtomicBool::new(false);
+    match r {
+        ModelRef::File(path) => {
+            if path.is_dir() {
+                return Err(checkpoint_refused(&path.display().to_string()));
+            }
+            read_local(path, &mut |_| {}, &cancel)
+        }
+        ModelRef::Http(url) => {
+            let client = client.ok_or_else(|| unsupported("an HTTP reference without a client"))?;
+            let path = client.download(url, None, &mut |_| {}, &cancel)?;
+            read_local(&path, &mut |_| {}, &cancel)
+        }
+        ModelRef::Document(uri) => {
+            let provider =
+                provider.ok_or_else(|| unsupported("a document reference without a provider"))?;
+            read_document(provider, uri, &mut |_| {}, &cancel)
+        }
+    }
+}
+
+/// Refuses an entry of a kind `info` has no header-only read for (Q-33, Q-T19.2).
+fn header_only(entry: &Entry) -> Result<(), IoError> {
+    if entry.kind == EntryKind::Exchange {
+        Ok(())
+    } else {
+        Err(unsupported(&format!(
+            "{}: no header-only information for a {:?} entry",
+            entry.location, entry.kind
+        )))
+    }
+}
+
+/// Refuses an entry `fetch` cannot read into one buffer: a checkpoint (Q-T19.1), a
+/// directory or a file that is not a model.
+fn fetchable(entry: &Entry) -> Result<(), IoError> {
+    match entry.kind {
+        EntryKind::Exchange | EntryKind::Ply => Ok(()),
+        EntryKind::Checkpoint => Err(checkpoint_refused(&entry.location)),
+        EntryKind::Dir | EntryKind::Other => Err(invalid(format!(
+            "{}: a {:?} entry is not a model file",
+            entry.location, entry.kind
+        ))),
+    }
+}
+
+/// E-IO for a checkpoint asked for as bytes (Q-T19.1).
+// Q-T19.1
+fn checkpoint_refused(location: &str) -> IoError {
+    unsupported(&format!(
+        "{location}: a checkpoint directory cannot be fetched as one file yet"
+    ))
+}
+
+/// The local file `path`, read in chunks with progress and cancel (Q-T19.2).
+fn read_local(
+    path: &Path,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<ModelBytes, IoError> {
+    let file = open_file(path)?;
+    let len = file.metadata()?.len();
+    read_chunked(
+        file,
+        Some(len),
+        &path.display().to_string(),
+        progress,
+        cancel,
+    )
+}
+
+/// The document `uri`, read through `provider` in chunks with progress and cancel.
+fn read_document(
+    provider: &dyn DocumentProvider,
+    uri: &str,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<ModelBytes, IoError> {
+    let file = provider.open(uri)?;
+    let len = file.metadata()?.len();
+    read_chunked(file, Some(len), uri, progress, cancel)
+}
+
+/// Everything `reader` holds, read `CHUNK` bytes at a time: `cancel` is read before each
+/// chunk (a cancel is E-IO `Interrupted`) and `progress` hears after each (Q-T19.2).
+fn read_chunked(
+    mut reader: impl Read,
+    total: Option<u64>,
+    what: &str,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<ModelBytes, IoError> {
+    let mut bytes = Vec::with_capacity(total.map_or(0, |t| t as usize));
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(IoError::Io(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                format!("{what}: cancelled"),
+            )));
+        }
+        let read = (&mut reader).take(CHUNK as u64).read_to_end(&mut bytes)?;
+        if read == 0 {
+            break;
+        }
+        progress(Progress {
+            done: bytes.len() as u64,
+            total,
+        });
+    }
+    if bytes.is_empty() {
+        progress(Progress { done: 0, total });
+    }
+    Ok(ModelBytes::Owned(bytes))
+}
+
+/// Opens `path` for reading, or E-IO naming it.
+fn open_file(path: &Path) -> Result<File, IoError> {
+    File::open(path).map_err(|e| {
+        IoError::Io(std::io::Error::new(
+            e.kind(),
+            format!("{}: {e}", path.display()),
+        ))
+    })
+}
+
+/// E-IO `Unsupported` with `message` (Q-T19.2).
+fn unsupported(message: &str) -> IoError {
+    IoError::Io(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        message.to_owned(),
+    ))
+}
+
+/// E-IO `InvalidInput` with `message` (Q-T19.2).
+fn invalid(message: String) -> IoError {
+    IoError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        message,
+    ))
+}
