@@ -7,19 +7,26 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod clock;
+pub mod covariance;
+pub mod layout;
+pub mod motion;
+pub mod pose;
 pub mod types;
 
-pub mod motion;
-
-pub mod layout;
-
+pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
     TimeSpan,
 };
 
+pub use covariance::{
+    Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
+    sort_key, sort_key16,
+};
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
 
+pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 pub use layout::{
     GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, memory_estimate, pack_for_gpu,
     reduce_to_budget,
