@@ -261,6 +261,7 @@ name = "ftgsxr-core"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "ftgsxr-testkit",
  "glam",
  "half",
  "proptest",
