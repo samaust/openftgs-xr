@@ -8,7 +8,7 @@
 mod camera;
 mod conventions;
 mod error;
-mod model;
+pub(crate) mod model;
 mod pose;
 mod time;
 
