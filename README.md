@@ -4,7 +4,7 @@ An Apache-2.0 Rust workspace that implements a player for openftgs models genera
 
 ## Status
 
-Early planning: there is no code yet, so nothing can be built or run. The specification, `docs/spec/openftgs-xr-spec.md`, is being written; the milestones of `docs/prd/milestones.md` will follow from it, and the implementation from them. The spec's §2 fixes the toolchain: cargo for the desktop build, cargo-ndk and a Gradle project for the Quest build.
+There is no code yet, so nothing can be built or run. The specification, `docs/spec/openftgs-xr-spec.md`, is written (revision 2, 2026-10-29); the milestones of `docs/prd/milestones.md` follow from it, and the implementation from them. The spec's §2 fixes the toolchain: cargo for the desktop build, cargo-ndk and a Gradle project for the Quest build.
 
 ## Languages
 
