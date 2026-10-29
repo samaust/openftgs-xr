@@ -1,0 +1,116 @@
+{
+ "format": "ftgs-checkpoint",
+ "version": 1,
+ "iteration": 20,
+ "config": {
+  "sh_degree": 3,
+  "background": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "scene_scale_factor": 1.1,
+  "seed": 0,
+  "init": {
+   "points_per_frame": 1000,
+   "init_opacity": 0.1,
+   "scale_knn": 3,
+   "scale_floor": 1e-07
+  },
+  "loss": {
+   "lambda_img": 0.8,
+   "lambda_ssim": 0.2,
+   "lambda_perc": null,
+   "lambda_reg": 0.01,
+   "reg_until": null,
+   "ssim_window": 11,
+   "ssim_sigma": 1.5,
+   "ssim_padding": "valid",
+   "perc_net": "flip"
+  },
+  "growth": {
+   "mode": "gradient",
+   "start": 500,
+   "stop": 15000,
+   "grad_threshold": 0.0002,
+   "split_scale": 0.01,
+   "n_max": 3000000,
+   "score_rate": 0.05
+  },
+  "reloc": {
+   "enabled": true,
+   "every": 100,
+   "start": 500,
+   "stop": 25000,
+   "lambda_g": 0.5,
+   "lambda_o": 0.5,
+   "grad_quantile": 0.99,
+   "dead_opacity": 0.005,
+   "reset_moved_moments": true,
+   "copy_position": "sample",
+   "prune_opacity": null
+  },
+  "optim": {
+   "iterations": 20,
+   "betas": [
+    0.9,
+    0.999
+   ],
+   "eps": 1e-15,
+   "means_lr": [
+    0.00016,
+    1.6e-06
+   ],
+   "velocities_lr": [
+    0.00016,
+    1.6e-06
+   ],
+   "times_lr": [
+    0.00016,
+    1.6e-06
+   ],
+   "log_durations_lr": 0.005,
+   "log_scales_lr": 0.005,
+   "quats_lr": 0.001,
+   "opacity_logits_lr": 0.05,
+   "sh0_lr": 0.0025,
+   "shN_lr": 0.000125,
+   "sh_interval": 5
+  },
+  "perf": {
+   "slice_impl": "auto",
+   "packed": true,
+   "precull": "internal",
+   "frame_cache": "auto",
+   "prefetch": 8,
+   "log_every": 100,
+   "perc_precision": "tf32",
+   "adam": "fused",
+   "images_per_step": 1,
+   "deterministic": true
+  }
+ },
+ "tau0": 0.0,
+ "tau1": 0.0,
+ "spatial_scale": 1.3393374946745433,
+ "frame_dt": 1.0,
+ "sh_degree": 3,
+ "seed": 0,
+ "scene_sha256": "38e4c956c3fa77ee3f322de7d99195e5681d531d24c0f3ee19bb0a1935d59423",
+ "time_unit": "s",
+ "versions": {
+  "openftgs": "0.1.0",
+  "torch": "2.14.1+cu130",
+  "gsplat": "1.5.3",
+  "cuda": "13.0"
+ },
+ "files": {
+  "params.safetensors": "496dee5008c000483b3a639ec81002b00e1f8919686b65bfa9332cb85e99cb14",
+  "optim.safetensors": "be2785eba5e4d42b7768a844d641969415ba309a1e248dd32ad3b292b6afb547",
+  "optim.json": "b077f04bd645ff65ec252bb2d75266630c6a6bea0c4a59d5dc435f9389561738",
+  "stats.safetensors": "fff7fa23b3cc1a01faf664a00aaab0b13c904519416ea8a6daebeeb8ec4e1174",
+  "rng.safetensors": "11d1f32687cde774cfab8a94b0c39fce399b526cc3dca0eb8428cf294991b8b8",
+  "rng.json": "0a3b1e041ba7ecb7e0ba7c53885d4d7b65c14eef9dc947099cf14631d6b1242d",
+  "sampler.json": "c901b566b11a5d3371e0660b4707ff95d6bcf0c08db685db35d1c237549c5714"
+ }
+}

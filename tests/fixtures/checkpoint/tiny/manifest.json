@@ -1,0 +1,116 @@
+{
+ "format": "ftgs-checkpoint",
+ "version": 1,
+ "iteration": 20,
+ "config": {
+  "sh_degree": 3,
+  "background": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "scene_scale_factor": 1.1,
+  "seed": 0,
+  "init": {
+   "points_per_frame": 1000,
+   "init_opacity": 0.1,
+   "scale_knn": 3,
+   "scale_floor": 1e-07
+  },
+  "loss": {
+   "lambda_img": 0.8,
+   "lambda_ssim": 0.2,
+   "lambda_perc": null,
+   "lambda_reg": 0.01,
+   "reg_until": null,
+   "ssim_window": 11,
+   "ssim_sigma": 1.5,
+   "ssim_padding": "valid",
+   "perc_net": "flip"
+  },
+  "growth": {
+   "mode": "gradient",
+   "start": 500,
+   "stop": 15000,
+   "grad_threshold": 0.0002,
+   "split_scale": 0.01,
+   "n_max": 3000000,
+   "score_rate": 0.05
+  },
+  "reloc": {
+   "enabled": true,
+   "every": 100,
+   "start": 500,
+   "stop": 25000,
+   "lambda_g": 0.5,
+   "lambda_o": 0.5,
+   "grad_quantile": 0.99,
+   "dead_opacity": 0.005,
+   "reset_moved_moments": true,
+   "copy_position": "sample",
+   "prune_opacity": null
+  },
+  "optim": {
+   "iterations": 20,
+   "betas": [
+    0.9,
+    0.999
+   ],
+   "eps": 1e-15,
+   "means_lr": [
+    0.00016,
+    1.6e-06
+   ],
+   "velocities_lr": [
+    0.00016,
+    1.6e-06
+   ],
+   "times_lr": [
+    0.00016,
+    1.6e-06
+   ],
+   "log_durations_lr": 0.005,
+   "log_scales_lr": 0.005,
+   "quats_lr": 0.001,
+   "opacity_logits_lr": 0.05,
+   "sh0_lr": 0.0025,
+   "shN_lr": 0.000125,
+   "sh_interval": 5
+  },
+  "perf": {
+   "slice_impl": "auto",
+   "packed": true,
+   "precull": "internal",
+   "frame_cache": "auto",
+   "prefetch": 8,
+   "log_every": 100,
+   "perc_precision": "tf32",
+   "adam": "fused",
+   "images_per_step": 1,
+   "deterministic": true
+  }
+ },
+ "tau0": 0.0,
+ "tau1": 0.03333333333333333,
+ "spatial_scale": 1.3393374946745433,
+ "frame_dt": 1.0,
+ "sh_degree": 3,
+ "seed": 0,
+ "scene_sha256": "3a3b30d9056e43e45aa6b30c5a3f9350724a35a48048d548e93d5cca61883664",
+ "time_unit": "s",
+ "versions": {
+  "openftgs": "0.1.0",
+  "torch": "2.14.1+cu130",
+  "gsplat": "1.5.3",
+  "cuda": "13.0"
+ },
+ "files": {
+  "params.safetensors": "5456b847ca9238c2c9f915e0ab034014ffe052842f0581c4e9c6e103ada2ed87",
+  "optim.safetensors": "af5222e1c9232e76d9c59b30ccb31d13c54a0d94c5b85a6061d0fd664f74dff2",
+  "optim.json": "e88160688f8a9e62e59769a4b1fb1c8eec31c00c5964c2caced4ee392f72191d",
+  "stats.safetensors": "6f20faf3da8c8da33728f7394f6c52311e92ff1efecf9998e0ad948de0846379",
+  "rng.safetensors": "6e56e7533ee28dcc6211d20548c712f8c2dbbd6d1ed933beb39551cbe56f8194",
+  "rng.json": "7075d00b8f206130c7f279a4c1476b01e255de23925399119d32ec1b8757068a",
+  "sampler.json": "3a6cf94a9146d9578c61740ca768be8215b72e84d343c8cc1d3e7f67bb5139a0"
+ }
+}

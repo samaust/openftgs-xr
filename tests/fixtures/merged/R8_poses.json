@@ -1,0 +1,24 @@
+{
+ "format": "openftgs-xr-fixture-poses",
+ "version": 1,
+ "producer": "openftgs-xr tools/fixtures",
+ "convention": "x_merged = translation + scale * R(rotation) * x_instance; rotation is a unit quaternion (x, y, z, w); paths are relative to this file",
+ "merged": "../probes/R8_merged.safetensors",
+ "instances": [
+  {
+   "model": "../probes/R2_overlap_deg3.safetensors",
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.7071067811865475,
+    0.0,
+    0.7071067811865476
+   ],
+   "scale": 2.0
+  }
+ ]
+}
