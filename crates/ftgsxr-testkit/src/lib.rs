@@ -6,5 +6,7 @@
 #![warn(missing_docs)]
 
 mod fixtures;
+mod real_sh;
 
 pub use fixtures::fixtures_dir;
+pub use real_sh::real_sh;
