@@ -116,6 +116,134 @@ impl TwoHandGrab {
     }
 }
 
+/// §1.5's orientation presets: the rotation that takes the model's frame into stage space
+/// before the rest of the pose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Preset {
+    /// Y-up: the identity, the default.
+    YUp,
+    /// Z-up: −90° about x, so the model's z becomes up (openftgs-synth's scenes).
+    ZUp,
+    /// −Y-up: 180° about x.
+    NegYUp,
+    /// A custom rotation, model frame → stage frame.
+    Custom(Quat),
+}
+
+impl Preset {
+    /// The preset's rotation, normalized.
+    pub fn rotation(&self) -> Quat {
+        match self {
+            Preset::YUp => Quat::IDENTITY,
+            Preset::ZUp => Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            Preset::NegYUp => Quat::from_rotation_x(std::f32::consts::PI),
+            Preset::Custom(q) => q.normalize(),
+        }
+    }
+
+    /// §1.5's hint from a `ftgs-scene` manifest or a checkpoint: given each camera's up
+    /// vector in model space, −R_wᵀ (0, 1, 0), the fixed preset whose model-space up
+    /// (the vector its rotation takes to stage +y) lies nearest the mean of `ups`.
+    /// No cameras, or a mean shorter than 1 µm, give Y-up; ties go to the first of Y-up,
+    /// Z-up, −Y-up (Q-T11.1).
+    pub fn from_camera_ups(ups: &[Vec3]) -> Preset {
+        let mean = ups.iter().copied().sum::<Vec3>() / ups.len().max(1) as f32;
+        if mean.length() < DEGENERATE_M {
+            return Preset::YUp; // Q-T11.1
+        }
+        let mut best = (Preset::YUp, f32::NEG_INFINITY);
+        for preset in [Preset::YUp, Preset::ZUp, Preset::NegYUp] {
+            let model_up = preset.rotation().inverse() * Vec3::Y;
+            let score = model_up.dot(mean);
+            if score > best.1 {
+                best = (preset, score); // Q-T11.1: strict, so the earlier preset wins ties
+            }
+        }
+        best.0
+    }
+}
+
+/// §1.5's fit: the box's longest side scaled to `size_m`, centered `ahead_m` along the
+/// head's yaw, bottom on the floor.
+///
+/// The pose's rotation is the preset's (Q-T11.2) and its scale `size_m` over B_m's
+/// longest side. Its translation puts the posed box's center `ahead_m` from the head's
+/// position along the head's horizontal forward, the horizontal part of its −z axis
+/// (Q-T11.1 when the head looks straight up or down), at the height where the posed
+/// box's lowest corner lies on the floor y = 0.
+pub fn fit_pose(bounds: &Aabb, preset: Preset, size_m: f32, head: Pose, ahead_m: f32) -> Pose {
+    let longest = bounds.longest_side();
+    let scale = if longest > 0.0 && longest.is_finite() {
+        size_m / longest
+    } else {
+        1.0 // Q-T11.1
+    };
+    let placed = Pose {
+        translation: Vec3::ZERO,
+        rotation: preset.rotation(),
+        scale,
+    };
+    let center = placed.transform_point(bounds.center());
+    let target = head.translation + ahead_m * yaw_forward(&head);
+    Pose {
+        translation: Vec3::new(
+            target.x - center.x,
+            -lowest_y(bounds, &placed),
+            target.z - center.z,
+        ),
+        ..placed
+    }
+}
+
+/// §1.5's snap to floor: `pose` moved along y until the posed box's lowest corner lies on
+/// `floor_y`; rotation, scale and the horizontal position are kept.
+pub fn snap_to_floor(bounds: &Aabb, pose: Pose, floor_y: f32) -> Pose {
+    let mut snapped = pose;
+    snapped.translation.y += floor_y - lowest_y(bounds, &pose);
+    snapped
+}
+
+/// The lowest stage y over the eight corners of the posed box.
+fn lowest_y(bounds: &Aabb, pose: &Pose) -> f32 {
+    (0..8)
+        .map(|k| {
+            let corner = Vec3::new(
+                if k & 1 == 0 {
+                    bounds.min.x
+                } else {
+                    bounds.max.x
+                },
+                if k & 2 == 0 {
+                    bounds.min.y
+                } else {
+                    bounds.max.y
+                },
+                if k & 4 == 0 {
+                    bounds.min.z
+                } else {
+                    bounds.max.z
+                },
+            );
+            pose.transform_point(corner).y
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// The head's horizontal forward, a unit vector: the horizontal part of its −z axis, or,
+/// when the head looks straight up or down, of the direction its top points (negated
+/// when it looks up) (Q-T11.1).
+fn yaw_forward(head: &Pose) -> Vec3 {
+    let horizontal = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
+    let look = head.rotation * Vec3::NEG_Z;
+    let mut forward = horizontal(look);
+    if forward.length() < DEGENERATE_M {
+        // Q-T11.1
+        let top = horizontal(head.rotation * Vec3::Y);
+        forward = if look.y > 0.0 { -top } else { top };
+    }
+    forward.try_normalize().unwrap_or(Vec3::NEG_Z)
+}
+
 /// E10: the entry distance of a stage-space ray into the posed box, None when it misses
 /// or lies beyond `max_m`.
 ///
