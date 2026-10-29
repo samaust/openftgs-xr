@@ -10,6 +10,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+bytemuck.workspace = true
 glam.workspace = true
 half.workspace = true
 rayon.workspace = true
