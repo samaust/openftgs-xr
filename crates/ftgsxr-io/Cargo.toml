@@ -9,3 +9,8 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+
+[dependencies]
+ftgsxr-core.workspace = true
+directories.workspace = true
+thiserror.workspace = true
