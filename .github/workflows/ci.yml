@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# Continuous integration on every push (§2.7): formatting, clippy, cargo-deny, the
+# `cpu` lane and the skeleton test. The other lanes (`gpu`, `xr`, `dv`, `net`, `ds`)
+# are `#[ignore]`d (D-28) and run on the owner's machine, not here.
+name: ci
+
+on:
+  push:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  cpu:
+    name: cpu lane
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo deny check
+        run: |
+          command -v cargo-deny || cargo install --locked cargo-deny
+          cargo deny check
+
+      - name: cpu lane
+        run: cargo test --workspace
+
+      - name: skeleton test
+        run: cargo test -p ftgsxr-core skeleton
+
+  # The Quest build (`cargo ndk` with the Android NDK, without Gradle, §2.7) joins in
+  # M-3, with `android/` and `ftgsxr-quest`'s entry point:
+  #
+  # quest:
+  #   name: quest build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - run: rustup target add aarch64-linux-android
+  #     - run: cargo install --locked cargo-ndk
+  #     - run: cargo ndk -t arm64-v8a build --release -p ftgsxr-quest

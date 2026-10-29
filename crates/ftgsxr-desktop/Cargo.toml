@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ftgsxr-desktop"
+description = "openftgs-xr Linux player and command line, the binary ftgsxr (§2.1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ftgsxr"
+path = "src/main.rs"

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# cargo-deny's configuration: the license and advisory scan of §2.3 and §2.6, run in CI
+# (§2.7). Written from `cargo deny init`'s template for cargo-deny 0.20.2.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+ignore = []
+
+[licenses]
+# §2.3's allowlist. Anything else (GPL, AGPL, LGPL, an unknown or missing license)
+# fails the check. MPL-2.0 is allowed for unmodified dependencies only (`option-ext`
+# under `directories`), whose source is never read (CLAUDE.md).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.93
+# The allowlist names licenses the milestones' dependencies bring before they arrive.
+unused-allowed-license = "allow"
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own path dependencies (publish = false).
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
