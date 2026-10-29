@@ -266,7 +266,10 @@ dependencies = [
  "half",
  "proptest",
  "rayon",
+ "safetensors",
+ "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tracing",
 ]
