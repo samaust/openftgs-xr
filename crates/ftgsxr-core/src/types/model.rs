@@ -4,6 +4,7 @@
 //! (§1.5) and the box of E10.
 
 use glam::{DVec3, Vec3};
+use rayon::prelude::*;
 
 use super::{CoreError, RenderConventions, TimeSpan};
 
@@ -116,22 +117,44 @@ pub(crate) fn moved_position_f64(
     (p + v * dt).as_vec3()
 }
 
-/// The first non-finite value of a slice, as an E-FILE-VALUE error naming the key and row.
-fn check_finite<T: Copy + Into<f64>>(
-    key: &str,
-    values: impl IntoIterator<Item = T>,
-) -> Result<(), CoreError> {
-    for (i, x) in values.into_iter().enumerate() {
-        let x: f64 = x.into();
-        if !x.is_finite() {
-            return Err(CoreError::Value(format!("{key}[{i}] = {x}")));
-        }
+/// Rows from which the model's per-row work runs in parallel with rayon: `validate`'s
+/// checks here, the readers' conversions in `loader` (PRD #1, "Reader internals").
+pub(crate) const PARALLEL_ROWS: usize = 1 << 16;
+
+/// The lowest index of `values` whose element is `broken`, searched in parallel when
+/// `parallel`; either way the same index.
+fn first_broken<T: Sync>(
+    values: &[T],
+    parallel: bool,
+    broken: impl Fn(&T) -> bool + Sync + Send,
+) -> Option<usize> {
+    if parallel {
+        values.par_iter().position_first(broken)
+    } else {
+        values.iter().position(broken)
     }
-    Ok(())
 }
 
-// §2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1).
-#[allow(clippy::len_without_is_empty)]
+/// The first non-finite value of a slice, as an E-FILE-VALUE error naming the key and its
+/// index in the flat slice.
+fn check_finite<T: Copy + Into<f64> + Sync>(
+    key: &str,
+    values: &[T],
+    parallel: bool,
+) -> Result<(), CoreError> {
+    match first_broken(values, parallel, |&x| !x.into().is_finite()) {
+        Some(i) => Err(CoreError::Value(format!(
+            "{key}[{i}] = {}",
+            values[i].into()
+        ))),
+        None => Ok(()),
+    }
+}
+
+#[expect(
+    clippy::len_without_is_empty,
+    reason = "§2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1)"
+)]
 impl Model {
     /// N, the number of primitives.
     pub fn len(&self) -> usize {
@@ -196,6 +219,13 @@ impl Model {
     /// conventions' numbers finite and the background in \[0, 1\] (E-FILE-VALUE, Q-8).
     /// The container rules (format, version, keys, dtypes) are the readers'.
     pub fn validate(&self) -> Result<(), CoreError> {
+        self.validate_rows(self.len() >= PARALLEL_ROWS)
+    }
+
+    /// `validate`, with the per-row checks in parallel when `parallel`. Each rule is
+    /// checked over every row before the next, and a rule's search reports its lowest
+    /// broken row, so both paths give the same error.
+    fn validate_rows(&self, parallel: bool) -> Result<(), CoreError> {
         let l = self.sh_degree;
         if l > 3 {
             return Err(CoreError::Sh(format!("sh_degree {l}")));
@@ -235,38 +265,36 @@ impl Model {
             )));
         }
 
-        check_finite("position", self.position.iter().flatten().copied())?;
-        check_finite("time_center", self.time_center.iter().copied())?;
-        check_finite("duration", self.duration.iter().copied())?;
-        check_finite("velocity", self.velocity.iter().flatten().copied())?;
-        check_finite("scale", self.scale.iter().flatten().copied())?;
-        check_finite("rotation", self.rotation.iter().flatten().copied())?;
-        check_finite("opacity", self.opacity.iter().copied())?;
-        check_finite("sh", self.sh.iter().copied())?;
+        check_finite("position", self.position.as_flattened(), parallel)?;
+        check_finite("time_center", &self.time_center, parallel)?;
+        check_finite("duration", &self.duration, parallel)?;
+        check_finite("velocity", self.velocity.as_flattened(), parallel)?;
+        check_finite("scale", self.scale.as_flattened(), parallel)?;
+        check_finite("rotation", self.rotation.as_flattened(), parallel)?;
+        check_finite("opacity", &self.opacity, parallel)?;
+        check_finite("sh", &self.sh, parallel)?;
 
-        if let Some(i) = self.duration.iter().position(|&d| d <= 0.0) {
+        if let Some(i) = first_broken(&self.duration, parallel, |&d| d <= 0.0) {
             return Err(CoreError::Value(format!(
                 "duration[{i}] = {}",
                 self.duration[i]
             )));
         }
-        if let Some(i) = self.scale.iter().position(|s| s.iter().any(|&x| x <= 0.0)) {
+        if let Some(i) = first_broken(&self.scale, parallel, |s| s.iter().any(|&x| x <= 0.0)) {
             return Err(CoreError::Value(format!(
                 "scale[{i}] = {:?}",
                 self.scale[i]
             )));
         }
-        if let Some(i) = self
-            .rotation
-            .iter()
-            .position(|q| q.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>().sqrt() <= 1e-8)
-        {
+        if let Some(i) = first_broken(&self.rotation, parallel, |q| {
+            q.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>().sqrt() <= 1e-8
+        }) {
             return Err(CoreError::Value(format!(
                 "rotation[{i}] = {:?}",
                 self.rotation[i]
             )));
         }
-        if let Some(i) = self.opacity.iter().position(|&o| o <= 0.0 || o >= 1.0) {
+        if let Some(i) = first_broken(&self.opacity, parallel, |&o| o <= 0.0 || o >= 1.0) {
             return Err(CoreError::Value(format!(
                 "opacity[{i}] = {}",
                 self.opacity[i]
@@ -275,16 +303,13 @@ impl Model {
 
         // openftgs D-71
         if self.is_single_timestamp() {
-            if let Some(i) = self.time_center.iter().position(|&t| t != tau0) {
+            if let Some(i) = first_broken(&self.time_center, parallel, |&t| t != tau0) {
                 return Err(CoreError::SingleTimestamp(format!(
                     "time_center[{i}] = {} ≠ tau0 = {tau0}",
                     self.time_center[i]
                 )));
             }
-            if let Some(i) = self
-                .velocity
-                .iter()
-                .position(|v| v.iter().any(|&x| x != 0.0))
+            if let Some(i) = first_broken(&self.velocity, parallel, |v| v.iter().any(|&x| x != 0.0))
             {
                 return Err(CoreError::SingleTimestamp(format!(
                     "velocity[{i}] = {:?}",
@@ -344,5 +369,86 @@ impl Model {
     /// Whether τ₀ = τ₁ (D-9).
     pub fn is_single_timestamp(&self) -> bool {
         self.time.is_single()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A valid model of `n` rows, degree 0, over τ ∈ [0, 1].
+    fn model(n: usize) -> Model {
+        Model {
+            position: vec![[0.0; 3]; n],
+            time_center: vec![0.5; n],
+            duration: vec![1.0; n],
+            velocity: vec![[0.0; 3]; n],
+            scale: vec![[1.0; 3]; n],
+            rotation: vec![[1.0, 0.0, 0.0, 0.0]; n],
+            opacity: vec![0.5; n],
+            sh: vec![0.0; n * 3],
+            sh_degree: 0,
+            time: TimeSpan {
+                tau0: 0.0,
+                tau1: 1.0,
+                time_unit: "s".to_owned(),
+            },
+            conventions: RenderConventions::default(),
+            producer: String::new(),
+            identity: [0; 32],
+            kind: ModelKind::ExchangeFile,
+        }
+    }
+
+    /// Above the threshold, so `validate` takes the parallel path.
+    const N: usize = PARALLEL_ROWS + 5_000;
+
+    /// The parallel and sequential paths both give `expected` (§1.2's rule order first,
+    /// then the lowest row), and `validate` gives it too.
+    fn assert_both(m: &Model, expected: &str) {
+        let parallel = format!("{:?}", m.validate_rows(true));
+        let sequential = format!("{:?}", m.validate_rows(false));
+        assert_eq!(parallel, expected, "parallel");
+        assert_eq!(sequential, expected, "sequential");
+        assert_eq!(format!("{:?}", m.validate()), expected, "validate");
+    }
+
+    #[test]
+    fn validate_rows_in_parallel_reports_the_sequential_error() {
+        assert_both(&model(N), "Ok(())");
+
+        // Two rows break `duration`, later rows break `scale`, an earlier row breaks
+        // `opacity`: the first rule broken is `duration`, at its lowest row.
+        let mut m = model(N);
+        m.opacity[1_000] = 2.0;
+        m.scale[N - 10][1] = 0.0;
+        m.duration[N - 20] = -1.0;
+        m.duration[N - 30] = -2.0;
+        assert_both(&m, &format!("Err(Value(\"duration[{}] = -2\"))", N - 30));
+
+        // Non-finite values report the flat index: row r, component c is 3r + c.
+        let mut m = model(N);
+        m.time_center[100] = f64::NAN;
+        m.position[N - 1][2] = f32::NAN;
+        m.position[N - 2][0] = f32::INFINITY;
+        assert_both(
+            &m,
+            &format!("Err(Value(\"position[{}] = inf\"))", 3 * (N - 2)),
+        );
+
+        // A single timestamp: `time_center` before `velocity`.
+        let mut m = model(N);
+        m.time.tau1 = 0.0;
+        m.time_center.fill(0.0);
+        m.velocity[N - 50] = [0.0, 1.0, 0.0];
+        m.time_center[N - 40] = 0.5;
+        m.time_center[N - 45] = 0.25;
+        assert_both(
+            &m,
+            &format!(
+                "Err(SingleTimestamp(\"time_center[{}] = 0.25 ≠ tau0 = 0\"))",
+                N - 45
+            ),
+        );
     }
 }

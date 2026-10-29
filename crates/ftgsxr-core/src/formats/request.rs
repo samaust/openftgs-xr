@@ -13,7 +13,8 @@ use crate::types::{Camera, CoreError};
 /// The request's `format`.
 const FORMAT: &str = "ftgs-render-request";
 
-/// One item of a render request: render `camera` at `timestamp`.
+/// One item of a `ftgs-render-request` file (openftgs §2.2, §1.7): render `camera` at
+/// `timestamp`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderItem {
     /// The item's id, the suffix of its `rgb/<id>` and `alpha/<id>` renders.

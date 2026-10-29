@@ -7,9 +7,6 @@ mod cache;
 mod download;
 mod prune;
 
-/// The atomic write and the clock the player's other files share (§1.11).
-pub(crate) use cache::{now_rfc3339, write_atomic};
-
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::PathBuf;

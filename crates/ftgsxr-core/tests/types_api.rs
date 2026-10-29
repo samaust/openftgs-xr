@@ -99,7 +99,8 @@ fn cap_sh_keeps_the_low_bands_of_every_row() {
         .flat_map(|r| (0..12).map(move |i| (100 * r + i) as f32))
         .collect();
     assert_eq!(m.sh, expected);
-    m.validate().expect("a capped model stays valid");
+    m.validate()
+        .expect("a model with its SH degree capped stays valid");
     m.cap_sh(0);
     assert_eq!(m.sh, vec![0.0, 1.0, 2.0, 100.0, 101.0, 102.0]);
 }

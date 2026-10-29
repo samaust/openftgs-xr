@@ -10,12 +10,11 @@ use std::path::Path;
 use ftgsxr_core::{CoreError, EndRule, LoopMode, Pose, Preset, Quat, Vec3};
 use serde_json::{Map, Number, Value};
 
-use crate::http::write_atomic;
-use crate::listing::version_is_1;
 use crate::settings::{
     ENVIRONMENT_MODES, LIGHTING_MODES, LOOP_MODES, RENDER_MODES, SOURCE_KINDS, flavor_name,
     flavor_of,
 };
+use crate::util::{version_is_1, write_atomic};
 use crate::{EnvironmentSettings, IoError, ManualLighting, SourceSpec};
 
 /// A scene file's `format` (§1.11).
@@ -123,7 +122,7 @@ pub struct SavedPose {
 /// Reads a scene file (`ftgsxr-scene` v1, §1.11) from its bytes. E-JSON when they are not
 /// JSON, E-SCENE-FORMAT when the document breaks the schema (Q-53). The files it names
 /// are not opened: whether they exist is the library's question (§1.5).
-// Q-3, Q-52, Q-53
+// Q-3, Q-52, Q-53, Q-54
 pub fn read_scene(json: &[u8]) -> Result<SceneFile, IoError> {
     let doc = parse(json, SCENE_FORMAT)?;
     scene_of(&doc)

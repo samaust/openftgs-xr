@@ -59,14 +59,7 @@ fn u06_snapshot_against_the_probe_at_tau() {
             "opacity[{i}]: {} vs {expected}",
             ply.opacity[i]
         );
-        for c in 0..4 {
-            assert!(
-                (ply.rotation[i][c] - probe.rotation[i][c]).abs() <= f32::EPSILON,
-                "rotation[{i}]: {:?} vs {:?}",
-                ply.rotation[i],
-                probe.rotation[i]
-            );
-        }
+        assert_eq!(ply.rotation[i], probe.rotation[i], "rotation[{i}]: equal");
     }
     assert_eq!(ply.sh, probe.sh, "SH reordered exactly");
 }

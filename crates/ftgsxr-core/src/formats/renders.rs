@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use safetensors::tensor::{Dtype, SafeTensors, View};
 
-use super::json::check_version;
+use crate::loader::{check_version, hex};
 use crate::types::CoreError;
 
 /// The renders' `format`.
@@ -18,14 +18,15 @@ const RGB: &str = "rgb/";
 /// The prefix of an opacity render's key.
 const ALPHA: &str = "alpha/";
 
-/// One render as `ftgs-renders` stores it.
+/// One render as `ftgs-renders` stores it (openftgs §2.2, §1.7).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderImage {
     /// W in pixels.
     pub width: u32,
     /// H in pixels.
     pub height: u32,
-    /// Row-major \[H, W, 3\] linear RGB, not clamped to 1.
+    /// Row-major \[H, W, 3\] RGB as the file holds it: display-referred sRGB-encoded
+    /// values (§1.14 Color, D-6), not clamped to 1.
     pub rgb: Vec<f32>,
     /// Row-major \[H, W, 1\] accumulated opacity.
     pub alpha: Vec<f32>,
@@ -59,11 +60,6 @@ impl View for &F32Tensor {
     fn data_len(&self) -> usize {
         self.bytes.len()
     }
-}
-
-/// The 64 lowercase hex digits of a digest.
-fn hex(digest: &[u8; 32]) -> String {
-    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Checks one image before it is written: its buffers hold H·W·3 and H·W values, all

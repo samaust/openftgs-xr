@@ -8,6 +8,7 @@ use url::Url;
 
 use super::{Entry, EntryKind};
 use crate::IoError;
+use crate::util::version_is_1;
 
 /// The manifest's `format`.
 const FORMAT: &str = "ftgsxr-index";
@@ -15,28 +16,6 @@ const FORMAT: &str = "ftgsxr-index";
 /// An E-SCENE-FORMAT error naming the index fetched from `base`.
 fn schema(base: &Url, detail: impl std::fmt::Display) -> IoError {
     IoError::Scene(format!("index at {base}: {detail}"))
-}
-
-/// Whether `version` names major version 1: a JSON integer, or a `"major[.minor]"` string
-/// of decimal parts (§1.11's versioning rule ignores the minor version).
-pub(crate) fn version_is_1(version: &Value) -> bool {
-    fn decimal(part: &str) -> Option<u64> {
-        let digits = !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
-        let leading_zero = part.len() > 1 && part.starts_with('0');
-        (digits && !leading_zero)
-            .then(|| part.parse().ok())
-            .flatten()
-    }
-    match version {
-        Value::Number(n) => n.as_u64() == Some(1),
-        Value::String(text) => {
-            let mut parts = text.splitn(2, '.');
-            let major = parts.next().and_then(decimal);
-            let minor_ok = parts.next().is_none_or(|m| decimal(m).is_some());
-            major == Some(1) && minor_ok
-        }
-        _ => false,
-    }
 }
 
 /// The string entry `key` of `map`, `None` when absent or null.

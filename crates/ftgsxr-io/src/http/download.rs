@@ -13,9 +13,10 @@ use ureq::Body;
 use ureq::http::Response;
 use url::Url;
 
-use super::cache::{Entry, Record, now_rfc3339, remove_if_present};
+use super::cache::{Entry, Record, remove_if_present};
 use super::{HttpClient, Progress, content_range, fetch_error, header, lock, status_error};
 use crate::IoError;
+use crate::util::now_rfc3339;
 
 /// The bytes read from the body between two cancel checks and progress reports: "one
 /// chunk" of U-28's cancel clause.
@@ -93,10 +94,14 @@ impl HttpClient {
                 }
                 (206, Ask::Resume(record, held)) => match content_range(&response) {
                     Some((first, total)) if first == held => {
-                        let total = total.or(record.size);
-                        return self.receive(
-                            url, &entry, record, held, total, response, expected, progress, cancel,
-                        );
+                        let transfer = Transfer {
+                            url,
+                            entry: &entry,
+                            total: total.or(record.size),
+                            record,
+                            held,
+                        };
+                        return receive(transfer, response, expected, progress, cancel);
                     }
                     _ => {
                         entry.discard_partial()?;
@@ -118,10 +123,14 @@ impl HttpClient {
                     };
                     entry.discard_partial()?;
                     record.write(&entry.part_meta)?;
-                    let total = record.size;
-                    return self.receive(
-                        url, &entry, record, 0, total, response, expected, progress, cancel,
-                    );
+                    let transfer = Transfer {
+                        url,
+                        entry: &entry,
+                        total: record.size,
+                        record,
+                        held: 0,
+                    };
+                    return receive(transfer, response, expected, progress, cancel);
                 }
                 (status, _) => return Err(status_error(url, status)),
             }
@@ -154,84 +163,97 @@ impl HttpClient {
         }
         request.call().map_err(|e| fetch_error(url, &e))
     }
+}
 
-    /// Streams the body into `file.part` after its first `held` bytes, then checks it and
-    /// completes the entry (§1.5, §1.11, Q-43).
-    #[allow(clippy::too_many_arguments)]
-    fn receive(
-        &self,
-        url: &Url,
-        entry: &Entry,
-        mut record: Record,
-        held: u64,
-        total: Option<u64>,
-        response: Response<Body>,
-        expected: Option<String>,
-        progress: &mut dyn FnMut(Progress),
-        cancel: &AtomicBool,
-    ) -> Result<PathBuf, IoError> {
-        let mut hasher = Sha256::new();
-        let mut file = if held == 0 {
-            File::create(&entry.part)?
-        } else {
-            // The digest covers the bytes already held (a hasher cannot outlive a process).
-            let mut part = File::open(&entry.part)?;
-            let copied = std::io::copy(&mut (&mut part).take(held), &mut hasher)?;
-            if copied != held {
-                entry.discard_partial()?;
-                return Err(IoError::Fetch(format!(
-                    "{url} (the partial download shrank)"
-                )));
-            }
-            let mut file = OpenOptions::new().write(true).open(&entry.part)?;
-            file.set_len(held)?;
-            std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(held))?;
-            file
-        };
-        let mut reader = response.into_body().into_reader();
-        let mut buf = vec![0u8; CHUNK];
-        let mut done = held;
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                file.flush()?;
-                return Err(cancelled(url));
-            }
-            let n = match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    // Q-43: keep every byte received; the next call resumes.
-                    file.flush()?;
-                    return Err(IoError::Fetch(format!("{url} ({e})")));
-                }
-            };
-            file.write_all(&buf[..n])?;
-            hasher.update(&buf[..n]);
-            done += n as u64;
-            progress(Progress { done, total });
-        }
-        file.sync_all()?;
-        drop(file);
-        if total.is_some_and(|total| total != done) {
-            return Err(IoError::Fetch(format!("{url} (the body ended early)")));
-        }
-        let digest = ftgsxr_core::hex(&hasher.finalize().into());
-        if expected
-            .as_ref()
-            .is_some_and(|expected| *expected != digest)
-        {
+/// A download under way: what travels from the answered request to the completed entry.
+struct Transfer<'a> {
+    url: &'a Url,
+    entry: &'a Entry,
+    /// The record of the download in progress, completed once the file is.
+    record: Record,
+    /// The bytes `file.part` already holds; 0 for a fresh download.
+    held: u64,
+    /// The file's whole size, when known.
+    total: Option<u64>,
+}
+
+/// Streams the body into `file.part` after its first `held` bytes, then checks it and
+/// completes the entry (§1.5, §1.11, Q-43).
+fn receive(
+    transfer: Transfer<'_>,
+    response: Response<Body>,
+    expected: Option<String>,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<PathBuf, IoError> {
+    let Transfer {
+        url,
+        entry,
+        mut record,
+        held,
+        total,
+    } = transfer;
+    let mut hasher = Sha256::new();
+    let mut file = if held == 0 {
+        File::create(&entry.part)?
+    } else {
+        // The digest covers the bytes already held (a hasher cannot outlive a process).
+        let mut part = File::open(&entry.part)?;
+        let copied = std::io::copy(&mut (&mut part).take(held), &mut hasher)?;
+        if copied != held {
             entry.discard_partial()?;
-            return Err(IoError::Checksum(url.to_string()));
+            return Err(IoError::Fetch(format!(
+                "{url} (the partial download shrank)"
+            )));
         }
-        std::fs::rename(&entry.part, &entry.file)?;
-        record.size = Some(done);
-        record.sha256 = Some(digest);
-        record.fetched_at = now_rfc3339();
-        record.write(&entry.meta)?;
-        remove_if_present(&entry.part_meta)?;
-        Ok(entry.file.clone())
+        let mut file = OpenOptions::new().write(true).open(&entry.part)?;
+        file.set_len(held)?;
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(held))?;
+        file
+    };
+    let mut reader = response.into_body().into_reader();
+    let mut buf = vec![0u8; CHUNK];
+    let mut done = held;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            file.flush()?;
+            return Err(cancelled(url));
+        }
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                // Q-43: keep every byte received; the next call resumes.
+                file.flush()?;
+                return Err(IoError::Fetch(format!("{url} ({e})")));
+            }
+        };
+        file.write_all(&buf[..n])?;
+        hasher.update(&buf[..n]);
+        done += n as u64;
+        progress(Progress { done, total });
     }
+    file.sync_all()?;
+    drop(file);
+    if total.is_some_and(|total| total != done) {
+        return Err(IoError::Fetch(format!("{url} (the body ended early)")));
+    }
+    let digest = ftgsxr_core::hex(&hasher.finalize().into());
+    if expected
+        .as_ref()
+        .is_some_and(|expected| *expected != digest)
+    {
+        entry.discard_partial()?;
+        return Err(IoError::Checksum(url.to_string()));
+    }
+    std::fs::rename(&entry.part, &entry.file)?;
+    record.size = Some(done);
+    record.sha256 = Some(digest);
+    record.fetched_at = now_rfc3339();
+    record.write(&entry.meta)?;
+    remove_if_present(&entry.part_meta)?;
+    Ok(entry.file.clone())
 }
 
 /// The cancel error (Q-43).
@@ -244,42 +266,4 @@ fn parse_digest(digest: &str) -> Option<String> {
     let digest = digest.trim();
     (digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
         .then(|| digest.to_ascii_lowercase())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::http::TlsRoots;
-
-    /// §1.5: "resumed with a `Range` request when the validators still match, else
-    /// restarted". The partial's validator is made stale, so the fixture server ignores the
-    /// range (`If-Range`, Q-39) and the client restarts from the first byte.
-    #[test]
-    fn download_restarts_when_the_validators_changed() {
-        let server = ftgsxr_testkit::serve_fixtures();
-        let cache = std::env::temp_dir().join("ftgsxr-http-restart");
-        let _ = std::fs::remove_dir_all(&cache);
-        let http = HttpClient::new(cache.clone(), TlsRoots::WebPki, u64::MAX).unwrap();
-        let name = "probes/P8.renders.safetensors";
-        let url = Url::parse(&server.url_of(name)).unwrap();
-        let whole = std::fs::read(ftgsxr_testkit::fixtures_dir().join(name)).unwrap();
-        let cancel = AtomicBool::new(false);
-
-        server.truncate_next(100_000);
-        assert!(http.download(&url, None, &mut |_| {}, &cancel).is_err());
-        let entry = Entry::of(&http.entries, &url);
-        let (mut record, held) = entry.partial(Some(&url)).expect("a partial download");
-        assert_eq!(held, 100_000);
-        record.etag = Some("\"stale\"".into());
-        record.last_modified = None;
-        record.write(&entry.part_meta).unwrap();
-
-        let path = http.download(&url, None, &mut |_| {}, &cancel).unwrap();
-        assert_eq!(std::fs::read(path).unwrap(), whole);
-        let last = server.requests().pop().unwrap();
-        assert_eq!(last.header("If-Range"), Some("\"stale\""));
-        assert_eq!((last.status, last.body_bytes), (200, whole.len() as u64));
-        assert!(!entry.part.exists() && !entry.part_meta.exists());
-        let _ = std::fs::remove_dir_all(&cache);
-    }
 }

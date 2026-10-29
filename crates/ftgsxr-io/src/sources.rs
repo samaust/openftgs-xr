@@ -12,10 +12,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, header_len, read_info};
+use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
 use url::Url;
 
-use crate::listing::{MAX_HEADER, header_info};
+use crate::listing::{checked_header_len, header_info};
 use crate::{
     Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
     parse_nginx_json,
@@ -238,13 +238,7 @@ impl ModelSource for HttpIndex {
         let len = size
             .or(entry.size)
             .ok_or_else(|| IoError::Fetch(format!("{url} (no file size)")))?;
-        let n = header_len(&prefix);
-        if n > MAX_HEADER || n > len.saturating_sub(SAFETENSORS_PREFIX as u64) {
-            return Err(CoreError::Format(format!(
-                "a header of {n} bytes in a file of {len} bytes"
-            ))
-            .into());
-        }
+        let n = checked_header_len(&prefix, len)?;
         let header = self.client.get_range(&url, SAFETENSORS_PREFIX as u64, n)?;
         if header.len() as u64 != n {
             return Err(CoreError::Format(format!("{url}: shorter than its header")).into());

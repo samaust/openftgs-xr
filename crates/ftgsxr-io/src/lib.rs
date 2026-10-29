@@ -13,6 +13,7 @@ pub mod paths;
 pub mod scene;
 pub mod settings;
 pub mod sources;
+mod util;
 
 pub use error::IoError;
 pub use http::{HttpClient, Progress, TlsRoots};

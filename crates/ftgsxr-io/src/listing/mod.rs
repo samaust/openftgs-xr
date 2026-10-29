@@ -15,8 +15,7 @@ mod index;
 mod local;
 mod nginx;
 
-pub(crate) use index::version_is_1;
-pub(crate) use local::{MAX_HEADER, header_info};
+pub(crate) use local::{checked_header_len, header_info};
 
 /// What a listed entry is (§1.5's kinds, and a directory to list on demand).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

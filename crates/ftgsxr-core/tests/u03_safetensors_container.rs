@@ -71,10 +71,36 @@ fn file(m: &Model, shape: impl FnOnce(SafetensorsBuilder) -> SafetensorsBuilder)
 }
 
 /// The model read from `bytes`, without its identity (the bytes differ by construction).
+/// The bytes are first copied to an 8-byte-aligned address, so each tensor is aligned in
+/// memory exactly when it is aligned in the file.
 fn read(bytes: &[u8]) -> Model {
-    let mut m = read_exchange(bytes).unwrap();
+    let mut words = vec![0u64; bytes.len().div_ceil(8)];
+    let buffer = &mut bytemuck::cast_slice_mut::<u64, u8>(&mut words)[..bytes.len()];
+    buffer.copy_from_slice(bytes);
+    let mut m = read_exchange(buffer).unwrap();
     m.identity = [0; 32];
     m
+}
+
+/// Each tensor of the file `bytes` as (name, dtype size in bytes, offset of its data from
+/// the file's first byte), from the header's `dtype` and `data_offsets` (§1.2).
+fn tensor_offsets(bytes: &[u8]) -> Vec<(String, usize, usize)> {
+    let n = header_len(bytes[..SAFETENSORS_PREFIX].try_into().unwrap()) as usize;
+    let header: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&bytes[SAFETENSORS_PREFIX..SAFETENSORS_PREFIX + n]).unwrap();
+    header
+        .iter()
+        .filter(|(name, _)| *name != "__metadata__")
+        .map(|(name, entry)| {
+            let size = match entry["dtype"].as_str().unwrap() {
+                "F32" => 4,
+                "F64" => 8,
+                other => panic!("{name}: dtype {other}"),
+            };
+            let begin = entry["data_offsets"][0].as_u64().unwrap() as usize;
+            (name.clone(), size, SAFETENSORS_PREFIX + n + begin)
+        })
+        .collect()
 }
 
 fn expected(m: &Model) -> Model {
@@ -101,14 +127,25 @@ fn u03_padded_header() {
 fn u03_unaligned_data_against_aligned() {
     let m = random_model(4, 51, 3);
     let aligned = file(&m, |b| b);
-    let n = header_len(aligned[..SAFETENSORS_PREFIX].try_into().unwrap()) as usize;
-    assert_eq!((SAFETENSORS_PREFIX + n) % 8, 0);
+    let offsets = tensor_offsets(&aligned);
+    assert_eq!(offsets.len(), 8);
+    for (name, size, offset) in &offsets {
+        assert_eq!(
+            offset % size,
+            0,
+            "{name} aligned for its dtype in the reference"
+        );
+    }
     let reference = read(&aligned);
     assert_eq!(reference, expected(&m));
     for shift in 1..8 {
         let unaligned = file(&m, |b| b.misalign_data(shift));
-        let n = header_len(unaligned[..SAFETENSORS_PREFIX].try_into().unwrap()) as usize;
-        assert_eq!((SAFETENSORS_PREFIX + n) % 8, shift);
+        for (name, size, offset) in tensor_offsets(&unaligned) {
+            // Every float64 tensor is misaligned; every float32 one too unless the shift
+            // is 4.
+            let misaligned = offset % size != 0;
+            assert_eq!(misaligned, size == 8 || shift != 4, "{name}, shift {shift}");
+        }
         assert_eq!(read(&unaligned), reference, "data shifted by {shift}");
     }
 }

@@ -30,7 +30,7 @@ pub struct SceneManifest {
     pub images: Vec<ManifestImage>,
 }
 
-/// One image entry of a `ftgs-scene` manifest.
+/// One image entry of a `ftgs-scene` manifest (openftgs §2.2; §1.5, §1.7).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ManifestImage {
     /// The name of its camera, a key of `SceneManifest::cameras`.

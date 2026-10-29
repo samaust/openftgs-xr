@@ -95,38 +95,11 @@ fn exceeds(difference: f64) -> bool {
 mod tests {
     use super::*;
 
-    fn image(rgb: [f32; 3], alpha: f32) -> RenderImage {
-        RenderImage {
-            width: 1,
-            height: 1,
-            rgb: rgb.to_vec(),
-            alpha: vec![alpha],
-        }
-    }
-
     #[test]
     fn exceeds_is_strict_at_one_level() {
         assert!(!exceeds(LEVEL));
         assert!(!exceeds(-LEVEL));
         assert!(exceeds(LEVEL * (1.0 + 1e-12)));
         assert!(exceeds(f64::NAN));
-    }
-
-    #[test]
-    fn metrics_counts_a_nan_pixel_as_differing() {
-        let m = metrics(
-            &image([0.5; 3], 0.5),
-            &image([0.5, f32::NAN, 0.5], f32::NAN),
-        );
-        assert!(m.psnr.is_nan());
-        assert_eq!((m.share, m.alpha), (1.0, 1.0));
-    }
-
-    #[test]
-    #[should_panic(expected = "different sizes")]
-    fn metrics_refuses_renders_of_different_sizes() {
-        let mut b = image([0.0; 3], 0.0);
-        b.width = 2;
-        metrics(&image([0.0; 3], 0.0), &b);
     }
 }

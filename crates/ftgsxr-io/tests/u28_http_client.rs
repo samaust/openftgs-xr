@@ -219,6 +219,51 @@ fn u28_a_resume_after_a_truncated_download_gives_the_whole_file() {
     );
 }
 
+/// §1.5: a partial download is "resumed with a `Range` request when the validators still
+/// match, else restarted". The partial's record (`meta.part.json`, Q-42) is given a stale
+/// ETag, so the fixture server answers its `If-Range` with the whole file (Q-39) and the
+/// client restarts from the first byte.
+#[test]
+fn u28_a_partial_with_stale_validators_restarts_from_the_first_byte() {
+    let server = serve_fixtures();
+    let cache = cache_dir("restart");
+    let http = HttpClient::new(cache.clone(), TlsRoots::WebPki, 1 << 40).unwrap();
+    let url = url_of(&server, "probes/P8.renders.safetensors");
+    let whole = std::fs::read(fixtures_dir().join("probes/P8.renders.safetensors")).unwrap();
+    let keep = 100_000u64;
+
+    server.truncate_next(keep);
+    let (cut, _) = fetch(&http, &url);
+    assert_eq!(cut.map_err(|e| e.code()), Err("E-NET-FETCH"));
+    let entry = entry_dir(&cache, &url);
+    assert_eq!(
+        std::fs::metadata(entry.join("file.part")).unwrap().len(),
+        keep
+    );
+    let part_meta = entry.join("meta.part.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&part_meta).unwrap()).unwrap();
+    record["etag"] = "\"stale\"".into();
+    record["last_modified"] = serde_json::Value::Null;
+    std::fs::write(&part_meta, serde_json::to_vec(&record).unwrap()).unwrap();
+
+    let (restarted, _) = fetch(&http, &url);
+    let path = restarted.expect("the restarted download");
+    assert_eq!(std::fs::read(&path).unwrap(), whole);
+    let last = server.requests().pop().unwrap();
+    assert_eq!(
+        last.header("Range"),
+        Some(format!("bytes={keep}-").as_str())
+    );
+    assert_eq!(last.header("If-Range"), Some("\"stale\""));
+    assert_eq!(
+        (last.status, last.body_bytes),
+        (200, whole.len() as u64),
+        "the whole file, from the first byte"
+    );
+    assert!(!entry.join("file.part").exists() && !part_meta.exists());
+}
+
 #[test]
 fn u28_a_checksum_mismatch_discards_the_download() {
     let server = serve_fixtures();

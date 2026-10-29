@@ -19,6 +19,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+pub(crate) use crate::types::model::PARALLEL_ROWS;
 use crate::types::{CoreError, Model};
 
 pub use checkpoint::read_checkpoint;
@@ -90,9 +91,6 @@ pub(crate) fn read_file(path: &Path) -> Result<Vec<u8>, CoreError> {
     })
 }
 
-/// Rows above which the readers convert arrays in parallel (PRD #1, "Reader internals").
-pub(crate) const PARALLEL_ROWS: usize = 1 << 16;
-
 /// `f` over every element, in parallel when `parallel` (the caller compares the row count
 /// with `PARALLEL_ROWS`).
 pub(crate) fn map_rows<T: Sync, U: Send>(
@@ -154,7 +152,8 @@ pub(crate) fn normalize_rotations(model: &mut Model) {
 
 /// A `version` text `major[.minor]` in decimal without leading zeros, of major 1
 /// (§1.2: another major is rejected, a minor part ignored); anything else is
-/// E-FILE-VERSION (Q-31).
+/// E-FILE-VERSION (Q-31). The model readers and `formats`' readers (openftgs
+/// `io._check_header`, openftgs §2.2) share it.
 // Q-31
 pub(crate) fn check_version(text: &str) -> Result<(), CoreError> {
     fn decimal(part: &str) -> Option<u64> {

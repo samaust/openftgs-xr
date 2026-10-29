@@ -23,8 +23,8 @@ pub struct TemporalIndex {
     w_max: f64,
 }
 
-/// The rows a cull pass visits at one τ, as new-row indices (positions in the order
-/// `TemporalIndex::build` returns): every persistent row, then the contiguous run of
+/// The rows a cull pass visits at one τ (E3, D-10), as new-row indices (positions in the
+/// order `TemporalIndex::build` returns): every persistent row, then the contiguous run of
 /// transient rows whose time centers lie within w_max of τ.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DispatchRange {
@@ -34,8 +34,10 @@ pub struct DispatchRange {
     pub transient: Range<u32>,
 }
 
-// §2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1).
-#[allow(clippy::len_without_is_empty)]
+#[expect(
+    clippy::len_without_is_empty,
+    reason = "§2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1)"
+)]
 impl TemporalIndex {
     /// Builds the index and returns the row permutation (new row → file row).
     ///
