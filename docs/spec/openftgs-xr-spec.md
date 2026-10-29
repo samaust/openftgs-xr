@@ -446,7 +446,102 @@ The passthrough's appearance has three controls, brightness, contrast and satura
 
 **Output.** The system's audio output; the player records nothing and opens no microphone.
 
-<!-- §1.11 -->
+### 1.11 Settings and the player's own files
+
+**Locations** \[D-23\]. The desktop follows the XDG base directories: settings, the pose store and scenes under `$XDG_CONFIG_HOME/openftgs-xr/` (`settings.toml`, `poses.json`, `scenes/`), the HTTP cache, thumbnails and logs under `$XDG_CACHE_HOME/openftgs-xr/` (`http/`, `thumbnails/`, `logs/`), the default model directory `$XDG_DATA_HOME/openftgs-xr/models/`, screenshots under `$XDG_PICTURES_DIR/openftgs-xr/`. The Quest keeps settings, the pose store and scenes in the app's internal files directory, the models and screenshots in the app-external files directory `Android/data/<application id>/files/` (`models/`, `screenshots/`, reachable over adb and MTP), and the HTTP cache, thumbnails and logs in the app's cache directory. Every file the player writes is written to a temporary sibling and renamed over the target, so a crash leaves the old file intact.
+
+**Versioning rule** \[O: openftgs §2.2\]. Every file the player owns carries `format` and `version`; a reader rejects a major version it does not know, ignores a minor version, and ignores unknown keys. A settings file of an unknown major version is set aside as `settings.toml.unknown-<date>` and replaced by the defaults, with a warning in the HUD and the log.
+
+**`settings.toml`** (`ftgsxr-settings` v1; saved at most once a second after a change and at exit) holds these tables, each key with the default §1 gives: `[general]` (`tier`, `governor`, `ui_scale`, `log_level`); `[[sources]]` (`kind` ∈ {`dir`, `http`, `documents`}, `location`, `name`, `flavor` for HTTP listings: `auto`, `index`, `nginx-json`, `html`); `[playback]` (`speed`, `loop`); `[display]` (`mode`, `centers_radius`, `colormap`, `background`, `grid`, `overlays`); `[environment]` (`mode`, `passthrough_brightness`, `passthrough_contrast`, `passthrough_saturation`, `occlusion`, `occlusion_soft`, `occlusion_delta_m`, `hand_removal`, `lighting_mode`, `lighting_gamma`, `contact_shadows`); `[locomotion]` (`speed_mps`, `snap_turn`, `snap_deg`, `smooth_dps`, `vignette`, `teleport`, `height_offset_m`, `sticks_in_passthrough`, `left_handed`, `reduced_motion`); `[audio]` (`muted`, `master`, `ui`, `soundtrack`, `spatial`, per-sound switches); `[desktop]` (`fov_deg`, `fly_speed_mps`, `keys` as a table of action = key); `[xr]` (`refresh_rate`, `foveation`, `render_scale`, `reference_space`); `[cache]` (`max_bytes`, default 20 GiB). A missing key takes its default; a key of the wrong type is reported and takes its default.
+
+**`poses.json`** (`ftgsxr-poses` v1): an object mapping each model identity (64 lowercase hex digits) to `{"translation": [x, y, z], "rotation": [x, y, z, w], "scale": s, "preset": "y-up" | "z-up" | "neg-y-up" | "custom", "fit_size_m": L, "saved_at": "<RFC 3339>"}`.
+
+**Scene files** (`ftgsxr-scene` v1, `scenes/<name>.ftgsxr-scene.json`): `models`, an array of `{"source": {"kind", "location"}, "identity", "name", "pose": {translation, rotation, scale}, "visible", "mode", "time_offset_s", "end_rule", "lighting": {"exposure_ev", "temperature", "tint"} | null, "audio": <path or URL> | null}`; `clock`: `{"t", "speed", "loop", "range": [a, b] | null}`; `environment`: the `[environment]` keys above; `anchor`: `{"uuid"}` or null; `rig`: `{"pose"}` for XR and `camera`: `{"pose", "fov_deg", "mode"}` for the desktop; `bookmarks`: up to nine cameras. Paths under the model directory are stored relative to it, others absolute or as URLs.
+
+**`index.json`** (`ftgsxr-index` v1, served by the user's HTTP server): `{"format": "ftgsxr-index", "version": 1, "entries": [{"name", "path", "kind": "ftgs-if" | "ftgs-checkpoint" | "ply", "size", "sha256"?, "thumbnail"?, "audio"?, "scene"?}]}`, every path relative to the index's URL. `kind` `ftgs-checkpoint` points at the directory, whose `manifest.json` and `params.safetensors` are fetched.
+
+**Cache entries**: `http/<sha256 of the URL>/file` and `meta.json` (`url`, `etag`, `last_modified`, `size`, `sha256`, `fetched_at`); `thumbnails/<identity>.png` (256 × 256); `logs/ftgsxr.log` rotated at 10 MB, five files kept. The cache is pruned to `max_bytes` by least recent use, never removing a loaded model's file.
+
+### 1.12 Performance budgets and quality tiers
+
+**Quality tiers** \[D-37, D-12\]. A tier is one record of every number that changes outputs or speed; the governor (E16) adjusts a copy of the active tier's render scale, foveation, SH cap and sort mode, never its storage or capacity (those need a reload).
+
+| Tier | Half-precision fields | SH cap | Sort key | Sort mode | Capacity C | Occlusion | Render scale | Foveation | Use |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `conformance` | none | the model's L | `Depth32` | per view | the loaded models' total N | off | 1.0 | — | `ftgsxr render`, R-n |
+| `desktop` | none | 3 | `Depth32` | per view | 4,000,000 | off | 1.0 | — | default on the desktop |
+| `quest-high` | velocity, duration, scale, rotation, opacity, sh | 3 | `Depth32` | shared center | 1,500,000 | on | 1.0 | low | |
+| `quest-balanced` | as above | 2 | `Depth32` | shared center | 1,000,000 | on | 1.0 | medium | default on the Quest |
+| `quest-low` | as above | 1 | `Depth16` | shared center | 600,000 | on | 0.8 | high | |
+
+Position and the rebased time center are always float32. The capacities and the two Quest defaults below are calibrated: set once from the first measurements of B-2 and B-3 on the reference hardware, then frozen; changing them needs a logged reason (Appendix B).
+
+**Memory** \[D-13\]. Static GPU bytes per primitive: float32 storage 64 + 12 (L+1)², that is 76, 112, 172 and 256 bytes for L = 0 … 3; half-precision storage 40 + 6 (L+1)², that is 46, 64, 94 and 136 bytes. Frame buffers per view (shared-center mode: once): records 48 C bytes (64 C in shared-center mode, 48 C with half-precision Σ in `quest-low`), sort keys and payloads 16 C, histograms about C, arguments and statistics under 1 KiB; the layer 8 bytes per pixel per view. Examples: a 1.5 M-primitive degree-2 model in `quest-high` takes 141 MB static plus 81 MB of frame buffers for C = 1 M and about 50 MB for two eye layers at the default eye-buffer size; a 3 M-primitive degree-3 model in `desktop` takes 768 MB static plus 192 MB of frame buffers at 1920 × 1080. The memory budget of a tier is 1.5 GiB of model buffers on the Quest and 75 % of the adapter's reported memory on the desktop; a load that would exceed it is refused (§1.2).
+
+**Frame-time budgets** (calibrated by §3.5; the reference hardware of §1.1):
+
+| ID | Budget |
+| --- | --- |
+| P-1 | Quest 3, `quest-balanced`, a trained `kitchen`-size model (1 M primitives at degree 2) in passthrough mode with occlusion: GPU frame time ≤ 12.4 ms (72 Hz with 1.5 ms margin) at every τ, and ≤ 9.6 ms (90 Hz) when the user selects 90 Hz |
+| P-2 | Desktop, `desktop`, the same model at 1920 × 1080: ≥ 90 frames per second at every τ on the RTX 4090 |
+| P-3 | Load time: ≤ 1 s per 100 MB of file from local storage (parse, validate, pack, upload), on both machines |
+| P-4 | Sort: ≤ 2.5 ms for C = 1 M on the Quest, ≤ 0.4 ms on the RTX 4090 |
+| P-5 | The frame loop never blocks on a GPU readback (§1.4 stage 8) |
+
+**Half-precision bounds** \[D-12\]. Rounding a field to half precision changes it by at most 2⁻¹¹ relative (about 4.9 × 10⁻⁴) for velocity, scale, rotation and SH values of order 1, flushes scales below 6 × 10⁻⁸ world units, and rounds opacities near 1 to 1.0 (E7 clamps α at α\_max anyway). Each is below 1/255, so a half-precision tier passes R-n's tier bounds against the float32 tier (§3.2).
+
+**Bounded deviations from openftgs's reference** \[D-7, D-35\]: the transmittance stop at 10⁻⁴ is not applied (the omitted terms contribute at most 10⁻⁴ per channel); accumulation in 16-bit floats (about 5 × 10⁻⁴ relative); the order of primitives at equal depth keys; float32 operation order. The rules that match exactly by construction: the pixel box with the opacity-aware extent and its cap, the Jacobian clamp, Σ′ + ε I, the determinant guard, the negative-form guard, the α skip, α\_max, the pixel centers, the near and far culls and the σ\_eff cull.
+
+**Headset display** \[X: XR\_FB\_display\_refresh\_rate, XR\_FB\_foveation, XR\_META\_recommended\_layer\_resolution; A: Quest 3 rates 72, 80, 90, 96, 100, 120 Hz, default 72; default eye buffer 1680 × 1760; D-27\]. The refresh rate is selectable among the runtime's list (default: the runtime's); the swapchain size is the runtime's recommended size times the render scale, re-created when the scale changes by 0.1 or more; fixed foveation uses the runtime's levels (off, low, medium, high, dynamic allowed); Application SpaceWarp is not used (it needs motion vectors the splats do not produce).
+
+### 1.13 Diagnostics
+
+**HUD** \[+\]. Toggled with F3 or from the panel; drawn as a small overlay on the desktop and as a head-locked strip below the main panel in XR. It shows: frames per second and the display's refresh rate; CPU and GPU frame times (GPU from timestamp queries around the pipeline's stages; on the Quest also the runtime's metrics through XR\_META\_performance\_metrics when present); the loaded, active and visible primitive counts against C, with an overflow warning; the sort and cull times; GPU memory used against the budget; the clock T and each instance's τ\_m with its badges; the tier and the governor's current knobs; in XR, the tracking state of the head and hands, the depth image's resolution and age, the light estimate's gains, and the anchor state.
+
+**Logs.** Structured logging with the levels error, warn, info, debug, trace (`--log-level`, default info): on the desktop to standard error and to the rotated log file of §1.11; on Android to logcat under the tag `ftgsxr`. Per-frame messages are rate-limited to one per second per site. Logs never contain a model file's contents, only identities, names, counts and timings. A warning is logged, and a toast shown, for every condition §1.15 lists as recoverable.
+
+**GPU validation.** Debug builds enable the graphics API's validation layers and the shader validator; release builds do not. A validation error in a debug run of the test suite is a test failure (R-n).
+
+### 1.14 Conventions
+
+- **Frames.** Model space is openftgs's world: right-handed, no up axis assumed, units of the camera poses \[O: openftgs §1.4\]. Stage space is the player's world: right-handed, y up, metres, the ground at y = 0; on a headset it is the OpenXR STAGE space (or its fallback, §1.8); the engine's world frame is stage space. The pose P\_m maps model space into stage space (E5); the content group is a transform applied to every instance's pose in passthrough mode (E12). Cameras in openftgs's conventions (OpenCV axes, world-to-camera, continuous pixels) are built per view as E6 says; the OpenXR-to-OpenCV camera rotation is diag(1, −1, −1) applied to the transposed view rotation.
+- **Quaternions.** Files hold (w, x, y, z) \[O: openftgs §1.1\]; the engine's quaternion type stores (x, y, z, w); the conversion happens once, at load, and poses in the player's files are written (x, y, z, w) (§1.11).
+- **Time.** τ in the model's `time_unit`; T in seconds; E9 converts; displays follow §1.6.
+- **Color.** The SH coefficients produce display-referred sRGB-encoded values: openftgs trains against 8-bit frames read without gamma conversion \[O: openftgs §1.4 Images\], and openftgs-synth's frames are 8-bit sRGB (Appendix A, row 10). Blending happens in that space (E7, D-6); the resolve pass decodes for the engine's linear pipeline; the light transform multiplies in linear light (E14).
+- **Units in the interface.** Metres, seconds, degrees; radians and metres in code; percentages for volumes.
+- **Identifiers.** Model identities are 64 lowercase hexadecimal digits (D-40); file names of the player's files are ASCII.
+- **Determinism.** The same inputs give the same images except at equal depth keys and through float32 operation order; the sort is stable; nothing depends on the frame rate except the clock.
+
+### 1.15 Errors
+
+The player never crashes on a bad input; every error below has a code, a user text shown as a toast or dialog, a log line, and a CLI exit code (0 success, 2 invalid input or environment, 3 numerical failure, \[O: openftgs §2.1 CLI\]).
+
+| Code | Condition | User text (abridged) | Recovery |
+| --- | --- | --- | --- |
+| E-FILE-FORMAT | `format` is not the expected one, or the container is not safetensors, JSON or PLY | "Not a ftgs-if file (format X)" | the file is skipped |
+| E-FILE-VERSION | an unknown major version | "Version X is newer than this player supports" | skipped |
+| E-FILE-KEYS | a required tensor or metadata key is missing | "Missing key K" | skipped |
+| E-FILE-SHAPE | a dtype or shape disagrees with §1.2 | "K has shape S, expected T" | skipped |
+| E-FILE-VALUE | a non-finite value, a non-positive duration or scale, an opacity outside (0, 1), a rotation of norm ≤ 10⁻⁸, τ₁ < τ₀, a background outside \[0, 1\] | "K has an invalid value" | skipped |
+| E-FILE-SINGLE | τ₀ = τ₁ with a time center ≠ τ₀ or a velocity ≠ 0 | "Single-timestamp model with moving primitives" | skipped |
+| E-FILE-SH | `sh_degree` not in 0–3 or disagreeing with the `sh` shape | "Unsupported SH degree" | skipped |
+| E-FILE-CHECKSUM | a checkpoint's `files` digest or a `SHA256SUMS` entry disagrees | "Checksum mismatch" | the file is not loaded (downloads are discarded) |
+| E-REQ-UNIT | a request's `time_unit` differs from the model's | "Request time unit X, model Y" | `render` exits 2 |
+| E-MEM-BUDGET | the model's bytes exceed the tier's budget | "Needs X MB, budget Y MB; reduce to budget or choose a tier" | not loaded; the reduce option offered |
+| E-NET-FETCH | a listing or a download fails (DNS, TLS, HTTP status, timeout) | "Could not reach URL (status)" | retry button; cached file kept if complete |
+| E-NET-LISTING | no listing format recognized | "No index found at URL" | the source stays, empty |
+| E-GPU-ADAPTER | no suitable graphics adapter | "No Vulkan adapter found" | exit 2 |
+| E-GPU-LOST | the graphics device is lost | "Graphics device lost; reloading" | one recovery attempt: device re-created, instances re-uploaded; then exit 2 |
+| E-XR-RUNTIME | no OpenXR runtime, or the session cannot be created | "No OpenXR runtime" | desktop: continue without XR; Quest: exit 2 |
+| E-XR-LOST | the session is lost | "XR session lost" | return to idle and retry |
+| E-XR-PERMISSION | a permission was denied (scene, camera, anchors, hands) | "Permission X denied; feature Y unavailable" | the feature stays off; a button to ask again |
+| E-XR-UNSUPPORTED | an extension the feature needs is absent | "Not available on this runtime" | the control is hidden |
+| E-AUDIO | a soundtrack fails to decode or the device is unavailable | "Could not play audio file" | the instance plays no sound |
+| E-SCENE-MISSING | a scene names a model that no source offers | "Model X not found; locate it" | the instance is listed as missing |
+| E-SETTINGS | a settings file of an unknown major version or an unreadable one | "Settings reset (old file kept)" | defaults, file set aside |
+| E-NUMERIC | a non-finite value in a render | "Render produced invalid values" | `render` exits 3 and writes no file; the player drops the frame and logs |
+
+<!-- §2 -->
 
 ## 2. Package architecture
 
