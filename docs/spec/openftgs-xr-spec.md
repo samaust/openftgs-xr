@@ -1302,9 +1302,152 @@ Rust wraps them as `QuestPlatform` (the `Platform`, `DocumentProvider` and `Came
 
 **Continuous integration.** On every push: `cargo fmt --check`, `cargo clippy`, `cargo deny check`, the `cpu` lane, the skeleton test, and a Quest build (`cargo ndk` with the Android NDK, without Gradle) to catch compile breaks. The `gpu` lane runs on the owner's machine through the ledger before a merge; the `xr` lane there under Monado; the `dv` lane by hand with the headset connected; `net` and `ds` on demand.
 
-<!-- §3b -->
-
 ## 3. Test plan
+
+Six classes of tests pin the specification, each with a numeric pass criterion: unit tests U-n on the CPU, render conformance tests R-n on a GPU, integration tests I-n of the application (headless on the CPU, and on Monado for the XR ones), device tests Dv-n on the Quest 3, benchmarks B-n, and acceptance checks A-n a person performs on the headset. Each test is written from its row, through the public interface of §2.1, and its expected values come from a literal worked by hand, a property the row states, or an independent oracle the row names (`tdd` skill). A threshold marked "calibrated" is set once from analytic expectations or the first run on the reference hardware (§1.1), then frozen; changing it needs a logged reason. The lanes are §2.7's: U-n and the CPU I-n run under `cargo test`; R-n in the `gpu` lane; the XR I-n in the `xr` lane; Dv-n in the `dv` lane; the trained-model rows in the `ds` lane; the network rows of U-n use the in-process server and need no network.
+
+### 3.1 Unit tests (CPU)
+
+| ID | Target | Test | Pass criterion |
+| --- | --- | --- | --- |
+| U-1 | `ftgs-if` reader (§1.2) | the committed probe files load: every field, dtype, shape and N; `sh_degree`, `tau0`, `tau1`, `time_unit`, `producer` parsed; `render_conventions` recovered with openftgs's values; an extra tensor and an extra metadata key are ignored | exact |
+| U-2 | reader rejections (§1.2, §1.15) | one synthesized file per rule: another `format`; major version 2; a missing key; a wrong dtype; a wrong shape; a NaN; duration ≤ 0; scale ≤ 0; a rotation of norm 10⁻⁹; opacity 0 and 1; τ₁ < τ₀; a single-timestamp file with a velocity; `render_conventions` that is not an object; a background of 1.5; version `1.3` accepted | each rejected with its E-FILE code; `1.3` loads |
+| U-3 | safetensors container (§1.2) | a padded header; an unaligned data offset (the copy path) against an aligned one; a header length above 100 MB | identical models; the oversize header refused |
+| U-4 | model identity (D-40) | the SHA-256 of a fixture against `sha256sum`; two byte-identical copies; one byte changed | equal hex; equal identities; different identities |
+| U-5 | checkpoint activation (§1.2, D-8) | an openftgs checkpoint fixture against its `ftgs export` file: positions exact, `time_center` and `duration` within 10⁻⁹ relative, velocities 10⁻⁶ relative, scales 10⁻⁶ relative, rotations equal after normalization and the canonical sign, opacities within 10⁻⁷, SH exact; a single-timestamp checkpoint uses the unit 1; a `files` digest mismatch | tolerances as stated; E-FILE-CHECKSUM |
+| U-6 | PLY snapshot (§1.2, D-41) | openftgs's `write_ply` output of a probe at τ against the probe's own per-time arrays at τ: positions 10⁻⁶, scales 10⁻⁶ relative (log round trip), opacity 10⁻⁶ (logit round trip), SH reordered exactly, quaternions equal; an ASCII PLY; an unknown property name | tolerances; both refused |
+| U-7 | E1, E2 | μx(time\_center) = position; μx(τ₂) − μx(τ₁) = velocity (τ₂ − τ₁); σt at time\_center ± duration and ± 2 duration; σt ≡ 1 for a single timestamp at any τ; the rebased float32 argument against float64 for τ₀ = 10⁹ s and T\_τ = 10 s | exact; e^−0.5 and e^−2 within 10⁻¹² (f64); float32 path within 10⁻⁶ T\_τ |
+| U-8 | E3 and the temporal index (D-10) | the window's closed form against the σ\_eff < 1/255 test on 10⁵ random (opacity, duration, τ) in float64; `None` for 255·opacity ≤ 1; on random models with N up to 10⁵, `range(τ)` at 200 random τ (τ₀, τ₁ and outside included) is a superset of the active rows; the permutation is a bijection; persistent rows first | agreement except within 10⁻⁹ of the bound; superset holds; exact |
+| U-9 | E4 | degree 0 gives C₀c₀₀ + 0.5; degrees 1–3 against an independent evaluation written from the published real-SH table (in `ftgsxr-testkit`, sharing no code) at 1,000 random directions; the l = 1 response changes sign when the eye passes the primitive; negative sums clamp to 0; a degree-2 cap equals a degree-2 model | 10⁻⁶; exact |
+| U-10 | E5 | (w, x, y, z) ↔ engine order round trip with the canonical sign; Σ symmetric positive definite with eigenvalues scale²; q, 3q and −q give one Σ; `posed_covariance` = s² R Σ Rᵀ; R(q) equals openftgs E5's matrix on random q | 10⁻⁶ |
+| U-11 | E6 mirror (`project`) | a primitive at camera depth 4 with scale 0.08 through a 64 × 48 camera of focal 60: μ′ = (32, 24), Σ′ = 1.44 + 0.3 on the diagonal, radii 5 at σ\_eff = 1; the J clamp engaged beyond the margin against the unclamped value; det Σ′ ≤ 0 → `None`; z = 0.005 → `None`; a box wholly off-image → `None`; the desktop camera at 60° and 1920 × 1080 gives f\_y = 935.31; the XR camera from angles (−40°, +50°, +45°, −45°) at 1000 × 1000 gives f\_x = 492.4, c\_x = 413.2 | 10⁻⁴ px, 10⁻⁶ relative |
+| U-12 | E7 (`alpha_at`) | α at μ′ equals min(α\_max, σ\_eff); α at the quadratic form 2 ln 255 is 1/255 and below it 0; a negative form gives 0; the occlusion weight multiplies | 10⁻⁶ |
+| U-13 | E8 | on 10⁵ random positive depths, ascending k̄ is descending depth, strictly except at equal depths; `Depth16` keeps the order up to 16-bit ties; a depth ≤ 0 is never keyed | exact |
+| U-14 | E9 and §1.6 (`Clock`, `ModelTime`) | length 2 s at speed 2: T wraps in loop, reflects in ping-pong, pauses at the end in once; a range \[0.5, 1.5\]; speed 0 refused; speed −1 runs backwards and wraps to the end; τ\_m for offsets and rates (`s`, `ms`, an unknown unit → 1 with a warning); hold clamps, extrapolate flags; a single timestamp gives τ₀; the frame step from a median spacing, from a checkpoint's Δt\_f and the 1/30 s default, with the \[1/480 s, T\_τ\] bounds | 10⁻¹²; exact |
+| U-15 | E10 (`ray_hit`) | hand-worked hits and misses on the unit box; an origin inside gives 0; a zero direction component; a box posed by a 90° rotation and scale 2; the nearer of two instances wins; the 10 m limit | 10⁻⁶ |
+| U-16 | E11 | one hand: the model's pose relative to the hand is invariant under 1,000 random hand motions; two hands: scale = distance ratio, clamped at 0.01 and 100; the midpoint is followed; a 30° horizontal rotation of the hands yaws the model 30° and nothing else in upright mode; free rotation takes d₀ to d | 10⁻⁵ |
+| U-17 | E12 (`apply_locomotion`) | stick (0, 1) moves v\_max Δt along the head's yaw; 0.1 lies in the dead zone; the squared response at 0.5; one snap per crossing of 0.7 with the return below 0.3; the smooth rate; a turn leaves the head's position fixed; `enabled = false` returns the input pose | 10⁻⁶ |
+| U-18 | presets, fit, floor (§1.5) | Z-up maps (0, 0, 1) to (0, 1, 0); `from_camera_ups` picks the nearest preset for openftgs-synth's z-up cameras; `fit_pose` puts the longest side at the size, the bottom on y = 0 and the center 1.5 m along the yaw; `snap_to_floor` | 10⁻⁶ |
+| U-19 | E13 weight | hard: 1 up to z\_e + δ and 0 beyond; soft: 1, 0.5 and 0 at z\_e − δ, z\_e and z\_e + δ; an invalid sample gives 1 | 10⁻⁶ |
+| U-20 | E14 | reference = estimate → gains 1; luma doubled at γ = 0.5 → g = √2; a chroma shift → w of mean 1; the clamps at 0.25 and 4; manual EV 1 → g = 2; grey world on a reddish thumbnail lowers red; thumbnail statistics globally and over a band mask covering half the pixels | 10⁻⁶ |
+| U-21 | E15 (`metrics`) | identical images → PSNR ∞, share 0, Δ\_α 0; one channel off by 2/255 in 1 % of the pixels → share 1 % and the hand-computed PSNR; a value 1.5 against 1.0 counts as no difference after clamping | 10⁻⁹ |
+| U-22 | E16 | a frame-time sequence drives the knobs down in the stated order after 10 frames over and up after 120 under; a manual tier disables the governor | exact |
+| U-23 | layout (§1.2 options, §1.12) | the permutation applied; time rebased; half fields within 2⁻¹¹ relative; position and time unchanged; `memory_estimate` equals §1.12's table for L = 0 … 3 in both precisions; `reduce_to_budget` keeps the top scores in file order, deterministic | exact; 2⁻¹¹ |
+| U-24 | `ftgs-render-request` reader (§1.7) | the committed probe requests parse; a non-orthonormal rotation, a skewed K, a duplicate id, an empty item list and a bad version are refused; black background and null degree by default | exact |
+| U-25 | `ftgs-renders` writer and reader | a two-item round trip: keys `rgb/<id>`, `alpha/<id>`, the metadata fields, ids sorted on read; an openftgs-written renders fixture reads; a `request_sha256` mismatch | exact; refused |
+| U-26 | `info_json` (§1.7) | the keys and values of the reply; `transmittance_stop` null | exact |
+| U-27 | listings (D-31) | the committed `index.json`, nginx JSON and Apache HTML bodies: entries, kinds, sizes; dot-names skipped; the parent link skipped; percent-decoding; `classify_name` | exact |
+| U-28 | HTTP client against the in-process server | a 304 on `If-None-Match` reuses the cached file; a resume after a truncated download gives bytes identical to the whole file; a checksum mismatch discards the download with E-NET-CHECKSUM; cancel stops within one chunk; a header-only read fetches 8 + header-length bytes; `prune` evicts least-recently-used files below `max_bytes` and never a loaded one | exact |
+| U-29 | settings (§1.11) | defaults; a TOML round trip; unknown keys ignored with a warning; a wrong-type key takes its default with a warning; major version 2 is set aside and defaults load; the write is atomic (a temporary file renamed) | exact |
+| U-30 | scene and pose files (§1.11) | round trips; paths under the model directory stored relative; a missing model listed as missing; `PoseStore` get, set, forget; the version rules | exact |
+| U-31 | sources (§1.5) | `LocalDir` lists one level with kinds; `info` reads the header only; `HttpIndex` with the three flavors over the local server; `DocumentSource` over a stub provider; `open_ref` for every `ModelRef` | exact |
+| U-32 | pure application functions | `pick_instance` returns the nearest; `panel_hit` maps the quad's corners to (0, 0) and (W, H) and misses outside; `hands_to_intents`: pinch and squeeze thresholds with hysteresis, grab begin and end, the one-to-two-hand transitions, the menu toggle on the MENU\_PRESSED edge, no locomotion intents when disabled | exact |
+| U-33 | headless commands without a GPU (§1.7) | `cmd_validate` on the fixtures (exit 0) and on an invalid file (exit 2); `cmd_import` and `cmd_export` copy a `ftgs-if` byte for byte and write the activated form of a checkpoint, which reads back equal to U-5's; `cmd_info`'s text | exact |
+| U-34 | error catalog (§1.15) | every `CoreError`, `IoError`, `RenderError`, `XrError` and `HeadlessError` variant has a §1.15 code and a non-empty user text; `exit_code` maps Input and Environment to 2 and Numeric to 3 | exact |
+| U-35 | skeleton (§2.7) | every source file's SPDX header; `cargo metadata` lists §2.1's crates; every shader file is referenced | exact |
+
+Property-based variants (proptest) of U-7, U-8, U-10, U-13 and U-14 draw values within the rows' domains.
+
+### 3.2 Render conformance tests (GPU)
+
+Unless a row says otherwise, renders use the `conformance` tier and the headless renderer, and "the tier" means E15's criterion: PSNR ≥ 45 dB, share ≤ 0.5 %, Δ\_α ≤ 2/255 per item, against the committed reference renders made by openftgs's reference backend (§2.7). The probe models are those of openftgs's L1 probes (Appendix A, row 8), rebuilt by `tools/fixtures/make_probes.py`: a 64 × 48 camera of focal 60 at (0, −4, 0) looking along +y, τ₀ = 0, τ₁ = 1.9, time center 0.95, 32 items per probe.
+
+| ID | Target | Test | Pass criterion |
+| --- | --- | --- | --- |
+| R-1 | E6, E7 on P1–P10 | P1 a static isotropic primitive swept by sub-pixel shifts; P2 a moving primitive over τ; P3 a short duration over τ; P4 a near-opaque primitive swept to α\_max; P5 degree-3 SH seen from a 360° ring; P6 a primitive crossing the near plane; P7 two primitives swapping depth; P8 σ\_eff around 1/255; P9 a 0.8-scale primitive swept off-screen; P10 times outside the span | the tier on every item; the per-probe minimum PSNR reported |
+| R-2 | additional probes | two overlapping degree-3 primitives; a model whose `render_conventions` background is white rendered with the request's black background; a single-timestamp model at τ ≠ τ₀; a model with τ₀ = 10⁹ s; a random model of N = 50,000 at 640 × 480 and three times | the tier |
+| R-3 | trained models (`ds` lane) | the `tiny` and `tiny_unsync` models at 20 items each (training cameras, interpolated cameras, times on and between frames, at τ₀ and τ₁, outside the span) | the tier |
+| R-4 | the sort (D-33) | 10⁶ random keys with payloads sorted on the GPU against a stable CPU sort; stability on repeated keys; `Depth16` agrees on the top 16 bits; the sizing pass's dispatch arguments equal ⌈count / block⌉ | exact |
+| R-5 | the cull pass against `project` | 10⁴ random primitives and 20 random views: the visible set equal; μ′ within 10⁻³ px, conics 10⁻⁴ relative, radii exact, depths 10⁻⁵; at the 1/255 bound both sides of the margin agree with E3 | as stated |
+| R-6 | visible count and overflow (D-34) | the count equals the CPU count; C below the visible count sets the overflow flag and clamps; the statistics arrive two frames later; no blocking map in the frame loop (the frame loop runs under a watchdog that fails on a wait longer than 1 ms) | exact |
+| R-7 | several models (D-5) | two posed probe instances against the reference render of the pre-posed merged model | the tier |
+| R-8 | the pose (E5, E4's eye) | one instance rotated 90° about y and scaled 2 against the merged pre-posed model, with degree-3 SH | the tier |
+| R-9 | shared-center stereo (D-4) | the probes rendered per view and shared-center for two eyes 64 mm apart at 1 m | PSNR between the two modes ≥ 40 dB (calibrated); the per-view renders pass the tier |
+| R-10 | tier bounds (D-12) | `quest-balanced` storage against `conformance` on a degree-2 random model; a degree-2 cap against the reference rendered with `sh_degree` 2 | PSNR ≥ 50 dB; the tier |
+| R-11 | color space (D-6) | a flat-color probe through the display resolve onto an sRGB target: the pixel equals the file's color; a linear-light misreading fails | within 1/255; the misreading differs by more |
+| R-12 | occlusion (E13) | a synthetic depth image of a wall at 2 m: a primitive at 1 m visible, at 3 m hidden; the soft weight across z\_e ± δ | exact visibility; weights within 10⁻³ |
+| R-13 | centers mode (§1.4) | disc centers at the moved positions' μ′, radius ρ, DC colormap equals C₀c₀₀ + 0.5 | within 1 px; color within 1/255 |
+| R-14 | the light transform (E14) | gains (2, 1, 1) on a flat grey primitive: the displayed value equals decode, ×2, encode by hand | within 1/255 |
+| R-15 | `ftgsxr render` end to end (§1.7) | P1's request: the output file has openftgs's keys and metadata and the request's SHA-256, exit 0; a request in another time unit exits 2; a model whose scale is 10³⁰ gives a non-finite Σ′ and exits 3 with no file | exact |
+| R-16 | validation layers (§1.13) | R-1 to R-15 run with the API validation layers on | zero validation messages |
+| R-17 | the governor on GPU times (E16) | a budget of 0.1 ms steps every knob down in the stated counts; a budget of 1 s steps them back up | exact counts |
+
+### 3.3 Integration tests
+
+CPU rows run a headless Bevy `App` (no window, the schedule runner, the plugins of §2.1 with a stub audio output and the in-process server); XR rows run on Monado's simulated or qwerty driver (`xr` lane).
+
+| ID | Target | Test | Pass criterion |
+| --- | --- | --- | --- |
+| I-1 | load and unload (§1.5) | two probes loaded by `LoadRef` become instances with `LoadedModel`; `Unload` removes them and raises `SplatEvent::Uploaded` then frees | exact |
+| I-2 | library over HTTP (§1.5) | the three listing flavors on the local server list the same entries; header-only information is filled while the bytes served stay below the file size | exact |
+| I-3 | downloads (§1.5) | progress events, cancel within one chunk, resume after a cut, checksum mismatch → E-NET-CHECKSUM | exact |
+| I-4 | poses (§1.5) | save writes `poses.json`; reset returns to the saved pose, then forget and reset return to the identity; a reload applies the saved pose; fit places the box's bottom at 0 and its center 1.5 m along the yaw | 10⁻⁴ |
+| I-5 | playback (§1.6) | play advances every `SplatTime` by speed · Δt; loop modes; a frame step; an offset; the extrapolating flag; the stub audio sink's position follows the clock at speed 1 and mutes otherwise | 10⁻⁶ s |
+| I-6 | desktop bindings (Appendix D.1) | every row's default key produces its intent; a rebinding in the settings takes effect | exact |
+| I-7 | mouse selection (§1.7) | a synthetic cursor over an instance selects it; over nothing deselects | exact |
+| I-8 | nudges (§1.7) | arrow keys move 1 cm and 10 cm with Shift; \[ and \] turn 5° | 10⁻⁶ |
+| I-9 | scene files (§1.5) | save then load restores instances, poses, the clock, the environment settings; a scene naming a missing model lists it as missing | exact |
+| I-10 | settings persistence (§1.11) | a change is written within 1 s and at exit; a corrupt file is set aside and defaults load | exact |
+| I-11 | the panel pointer (§1.8) | a ray at known quad coordinates produces pointer events at the expected pixel; a click toggles a test button | 1 px |
+| I-12 | the governor (E16) | `SplatTierState` steps in order from injected frame times | exact |
+| I-13 | errors (§1.15) | an invalid file → a toast with its E-FILE code; a model over budget → E-MEM-BUDGET with the reduce option; an unreachable URL → E-NET-FETCH | exact |
+| I-14 | screenshots (§1.7) | F12 writes a PNG with the metadata chunk | exact |
+| I-15 | XR session (`xr` lane) | on Monado: the session reaches running, two `SplatCamera` eyes exist, 2 s of frames render without errors, passthrough is reported unavailable and the mode stays VR | exact |
+| I-16 | XR input (`xr` lane) | the simple controller's select produces `Select`, its aim pose `Pointer`; the hands path with the qwerty driver's hands produces grabs at the thresholds | exact |
+| I-17 | reference spaces (`xr` lane) | a runtime without STAGE falls back to LOCAL\_FLOOR or LOCAL with the warning | exact |
+
+### 3.4 Device tests (Quest 3)
+
+The `dv` lane runs on the desktop and drives the headset over adb: it installs the debug APK, launches the app with a test name in the intent extras, and reads `ftgsxr-test: <name> PASS|FAIL <detail>` lines from logcat; a test that needs a person's action (a pick, a gesture) is an acceptance check instead (§3.6).
+
+| ID | Target | Test | Pass criterion |
+| --- | --- | --- | --- |
+| Dv-1 | install and launch (§2.5) | the app installs, launches and reaches the running session within 10 s; the manifest's permissions and features are present in the package dump | exact |
+| Dv-2 | stereo rendering (§1.4) | two eyes render a probe for 10 s at the default 72 Hz; no Vulkan validation message in logcat (debug build) | exact |
+| Dv-3 | the sort on Adreno (D-33) | R-4 on the device | exact |
+| Dv-4 | conformance on the device | P1–P10 rendered by the headless renderer on the Quest's GPU against the committed references | the tier |
+| Dv-5 | budgets P-1, P-3, P-4 (§1.12) | the 1 M-primitive `kitchen` model in `quest-balanced`, passthrough and occlusion on, 10 s at every τ; load time; sort time | GPU time ≤ 12.4 ms every frame; ≤ 1 s per 100 MB; ≤ 2.5 ms |
+| Dv-6 | environment modes (§1.9) | switching to passthrough submits the passthrough layer and back; the blend mode stays OPAQUE | exact |
+| Dv-7 | the depth provider (§1.9) | after USE\_SCENE is granted: the provider starts, a depth frame with its camera and planes arrives every frame, the provider stops cleanly | exact |
+| Dv-8 | hands (§1.8) | joints and the aim state arrive; an index pinch above 0.7 produces `Select` | exact |
+| Dv-9 | anchors (§1.9) | create, persist, restart the app, locate | within 5 cm |
+| Dv-10 | storage (§1.5, D-49) | `adb push` of a probe into the models directory lists it; the shim's `listTree` and `openDocument` on a granted tree read a model | exact |
+| Dv-11 | the camera thumbnail (§1.9) | with the permissions granted, thumbnails arrive at 30 Hz or more; covering the cameras lowers the luma estimate by half or more within 1 s | exact |
+| Dv-12 | display settings (§1.12) | 90 Hz selected takes effect; every foveation level is accepted; a render scale of 0.8 re-creates the swapchain | exact |
+| Dv-13 | suspend and resume | the headset sleeps and wakes; the session goes idle and returns to running | exact |
+
+### 3.5 Benchmarks
+
+`ftgsxr bench NAME` runs them and writes JSON with the machine (GPU, driver, OS, headset build), the versions and the numbers. Budgets marked "calibrated" are set from the first run on the reference hardware. Before a merge, B-1, B-3 and B-5 run on the owner's machine through the ledger and fail when a budgeted figure is more than 10 % worse than the stored baseline.
+
+| ID | Measures | Setup | Budget or purpose |
+| --- | --- | --- | --- |
+| B-1 | desktop frames per second | random models of N = 0.25, 0.5, 1, 2 and 3 M at L = 0 … 3, 1920 × 1080, `desktop` tier, a camera orbit | P-2: ≥ 90 FPS at N = 1 M, L = 2 (RTX 4090) |
+| B-2 | Quest frame time per tier | the `kitchen` model (1 M, L = 2) in each Quest tier, passthrough and occlusion on | P-1; sets the tiers' capacities (calibrated) |
+| B-3 | sort time | C from 10⁵ to 4 × 10⁶ on both machines | P-4 |
+| B-4 | cull time | rows visited from 10⁵ to 3 × 10⁶, with and without the temporal index | reported; the index never slower |
+| B-5 | load time | files of 10, 100 and 500 MB from local storage, both machines | P-3 |
+| B-6 | memory per primitive | every tier and L against §1.12's table | within 1 % |
+| B-7 | stereo modes | shared-center against per-view on the Quest, B-2's model | reported; shared-center at least 1.5× faster in the sort (calibrated) |
+| B-8 | environment features | the frame-time cost of occlusion and of each lighting mode on the Quest | reported |
+| B-9 | startup | time to the first frame on both machines | reported |
+
+### 3.6 Acceptance checks
+
+Performed by a person on the headset after each XR milestone, each with a pass statement; the result goes into the PRD's comments.
+
+| ID | Check | Pass |
+| --- | --- | --- |
+| A-1 | placement | a first-loaded `tiny` model appears in front of the user at 1 m, standing on the floor, after the fit |
+| A-2 | grab precision | a model can be moved onto a marked spot within 5 cm and does not jitter while held still |
+| A-3 | two-hand resize | the scale follows the hands' distance proportionally; releasing one hand leaves the model where it is |
+| A-4 | reachability | every feature of §1 reachable from the main panel or the wrist menu within three taps, without a controller button |
+| A-5 | occlusion | a model placed behind a real table is hidden with soft edges and does not flicker; in front it is complete |
+| A-6 | color matching | covering a room light darkens the model proportionally within a second and the brightness does not oscillate |
+| A-7 | comfort | ten minutes of smooth locomotion with the vignette and of snap turns in VR mode cause no discomfort to the owner |
+| A-8 | legibility | the panel's text is readable at the default size from the summon distance |
+| A-9 | audio synchronization | a soundtrack's transient aligns with its visual event within one frame at speed 1 |
+| A-10 | sustained use | twenty minutes in `quest-balanced` without a thermal warning or a frame-rate drop below 72 Hz |
 
 <!-- §3 -->
 
