@@ -69,3 +69,19 @@ not grow the committed set:
   files and U-3's padded and unaligned containers, which a conforming writer would not produce.
 
 `real_sh` sits beside them as U-9's independent evaluation of E4's basis; it reads no fixture.
+
+## Read through helpers
+
+- `probe(name)` and `reference_render(name)` return a committed probe model with its render
+  request, and its reference renders checked against that request's digest, by the README's
+  probe names (Q-41). `metrics(a, b)` is E15 with D-46's clamp, U-21's subject; a
+  reference render against itself is exact.
+- `serve_fixtures()` serves the whole directory over HTTP on the loopback for U-28 and U-31
+  (Q-39): each file at its relative path with an ETag and a fixed `Last-Modified` taken from
+  the listing bodies, conditional requests answered by 304, a single byte range by 206. The
+  `listing/` bodies are served at the listing base `listing/models/`, where their relative paths
+  resolve to the listed copies; `serve_listing` picks which of the three answers there (Q-6), so
+  one server shows each flavor and the order D-31 detects them in, through its request records.
+  `truncate_next` breaks the next body after a given number of bytes, so a download can be
+  resumed (Q-40). Each call starts its own server, so tests running in parallel do not share
+  records, listing choice or truncation.
