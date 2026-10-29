@@ -12,9 +12,8 @@ use crate::SafetensorsBuilder;
 /// `tau1` as shortest round-trip decimals (Rust's `{:?}`, Python's `repr` for ordinary
 /// values), `producer` (written even when empty) and `render_conventions` =
 /// `RenderConventions::to_json`. The arrays are written as they are, unchecked; `identity`
-/// and `kind` are not part of the file. The tensors' data is ordered as the safetensors
-/// writer orders it (8-byte dtypes first, then by name), so every tensor is aligned in
-/// the file.
+/// and `kind` are not part of the file. The tensors' data is ordered 8-byte dtypes first,
+/// then by name, so every tensor is aligned in the file.
 pub fn exchange_bytes(model: &Model) -> Vec<u8> {
     let n = model.position.len();
     let k = (usize::from(model.sh_degree) + 1).pow(2);
