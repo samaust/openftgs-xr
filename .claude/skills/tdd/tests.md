@@ -1,6 +1,6 @@
 # Good and Bad Tests
 
-The examples come from openftgs, the other repository: they use `mcmc_split` from openftgs spec §2.1 (`openftgs.density`, openftgs E11) and its U-13 row: n = 2 gives 1 − √(1 − σ), n stacked copies compose back to σ, 1e-10 relative in float64. In openftgs-xr, take the signature from §2 and every value and tolerance from the row of the test you are writing.
+The examples come from openftgs, the other repository: they use `mcmc_split` from openftgs spec §2.1 (`openftgs.density`, openftgs E11) and its U-13 row: n = 2 gives 1 − √(1 − σ), n stacked copies compose back to σ, 1e-10 relative in float64. In openftgs-xr the tests are Rust (`#[test] fn u13_…()` with a doc comment citing the row, `approx::assert_relative_eq!` with the row's tolerance, `proptest` for property variants); take the signature from §2 and every value and tolerance from the row of the test you are writing.
 
 ## Good tests
 
@@ -80,7 +80,7 @@ The openftgs spec checks relocation through its outcome instead: its U-13 render
 
 Red flags:
 
-- Mocking anything inside `openftgsxr`
+- Mocking anything inside this workspace's crates
 - A spec test (one citing a §3 ID) that calls a private helper
 - Asserting on call counts or order
 - Expected values computed by the code under test, or by the same formula

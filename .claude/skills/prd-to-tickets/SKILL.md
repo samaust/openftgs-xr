@@ -103,7 +103,7 @@ The example below shows the format and the level of detail. Take every item from
 
 ## What to build
 
-`openftgsxr.app`: description of what to build.
+`<crate>::<module>` (a path spec §2 fixes): description of what to build.
 
 ## Spec items
 

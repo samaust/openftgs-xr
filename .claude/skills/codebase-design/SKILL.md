@@ -31,7 +31,7 @@ Use these terms exactly: don't substitute "component," "service," "API," or "bou
 
 **Locality**: what maintainers get from depth. Change, bugs, knowledge, and verification concentrate in one place rather than spreading across callers. Fix once, fixed everywhere.
 
-**In this repository.** These design terms sit beside the project's own vocabulary, which wins where they overlap. A *module* without qualification means a Python module of spec §2; say *deep module* when the scale-agnostic sense above is meant. *Public API* and *signature* keep the meaning CLAUDE.md and the spec give them: the public API is the set of §2 signatures plus the additions recorded as Q-n rows, and each module's `__all__` lists it. A module's *interface* in the sense above contains those signatures plus every invariant, ordering constraint and error mode a caller relies on.
+**In this repository.** These design terms sit beside the project's own vocabulary, which wins where they overlap. A *module* without qualification means a Rust crate or module of spec §2; say *deep module* when the scale-agnostic sense above is meant. *Public API* and *signature* keep the meaning CLAUDE.md and the spec give them: the public API is the set of §2 signatures plus the additions recorded as Q-n rows, and each crate's `lib.rs` re-exports it. A module's *interface* in the sense above contains those signatures plus every invariant, ordering constraint and error mode a caller relies on.
 
 ## Deep vs shallow
 
@@ -109,7 +109,7 @@ Good interfaces make testing natural. The examples come from openftgs. In this r
 ## Rejected framings
 
 - **Depth as ratio of implementation-lines to interface-lines** (Ousterhout): rewards padding the implementation. We use depth-as-leverage instead.
-- **"Interface" as a Python `Protocol` or a class's public methods**: too narrow: interface here includes every fact a caller must know.
+- **"Interface" as a Rust trait, a Python `Protocol` or a type's public methods**: too narrow: interface here includes every fact a caller must know.
 - **"Boundary"**: overloaded with DDD's bounded context. Say **seam** or **interface**.
 
 ## Going deeper

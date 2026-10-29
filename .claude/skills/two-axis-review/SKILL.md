@@ -42,8 +42,8 @@ Where the PRD and the project spec disagree, the project spec wins, and the disa
 
 This repository documents its standards in the files below; every one is on the list:
 
-- `CLAUDE.md`: file headers (SPDX; vendored files keep their own), `# Q-n` markers, commit messages, dependencies, what may never be committed, and the branch and merge rules.
-- Spec §2 and CLAUDE.md "Working from the openftgs-xr spec": the public API is the §2 signatures plus the additions recorded as Q-n rows; each module's `__all__` lists exactly that API and every other name starts with an underscore; a public name with neither a §2 signature nor a Q-n row is a finding; modules import from the bands below them and, within a band, only from the modules before them in the order §2 gives.
+- `CLAUDE.md`: file headers (SPDX; vendored files keep their own), `// Q-n` markers, commit messages, dependencies, what may never be committed, and the branch and merge rules.
+- Spec §2 and CLAUDE.md "Working from the openftgs-xr spec": the public API is the §2 signatures plus the additions recorded as Q-n rows; each crate's `lib.rs` re-exports exactly that API and every other item is `pub(crate)` or private; a `pub` item with neither a §2 signature nor a Q-n row is a finding; crates and modules depend only on the bands below them and, within a band, only on the crates and modules before them in the order §2 gives.
 - Spec §2: dependencies, versions and licenses.
 - CLAUDE.md "Guidelines rules" and `docs/agents/guidelines.md`: provenance (the source log, forbidden sources).
 - `.claude/skills/tdd/SKILL.md`, "Where expected values come from" and "House rules": the test standards.

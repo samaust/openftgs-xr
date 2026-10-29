@@ -1,52 +1,47 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The test files a branch's changes can reach, so that a run checks those and not the suite.
+"""The crates a branch's changes can reach, so that a run tests those and not the workspace.
 
     affected_tests.py [-C DIR] [--base REF] [--files PATH...]
-        prints the affected test files on stdout, one per line, relative to the checkout, or
-        `tests` alone when the whole suite is affected; on stderr, what brought each one in
+        prints `cargo test` package flags on stdout, `-p <crate>` per affected crate, one per
+        line, or `--workspace` alone when everything is affected; on stderr, what brought each
+        crate in
 
 The changes are the files that differ between REF (default `main`) and the working tree: those
 `git diff REF...HEAD` lists, uncommitted and untracked ones included, a rename as both its
 paths. `--files` names them instead, to ask what a change to those files would reach.
 
-A test file (`tests/**/test_*.py`) is affected when it changed or reaches a changed file, over
-these edges from every Python file in the checkout:
+A workspace member (from `cargo metadata`) is affected when:
 
-- Its imports, relative ones and those inside functions included. A dotted name under
-  `openftgsxr` is a file under `src/`, with its parent packages' `__init__.py`; a subpackage is
-  every file in it, but `openftgsxr` itself only its `__init__.py`. Any other name is a test
-  helper under `tests/` or, for an importer outside the package, a file beside it when one has
-  that name, and the stdlib or third-party otherwise.
-- Its string literals, docstrings aside: a dotted name under the package, as
-  `importlib.import_module`, `python -m` or `monkeypatch.setattr` take it, and a path, which is
-  every file whose path ends with it (`"helpers.py"`). A bare `"__init__.py"` names none, and a
-  Markdown file is never named: the code cites `docs/` in its messages, and no test reads
-  Markdown.
+- a file under its directory changed: its sources, shaders, tests, fixtures and `Cargo.toml`;
+- it depends on an affected crate, at any depth, through normal, dev or build dependencies
+  (its tests compile against them);
+- a file under the shared fixtures directory, `tests/fixtures/`, changed: every crate's tests
+  may read it;
+- it holds the skeleton test (ALWAYS_CRATES): it walks every source file, so it always runs.
 
-A changed file that isn't Python also reaches every test file under its directory's first level
-below `tests/` when it lies deeper there. `tests/test_skeleton.py`, which walks every source
-file, is always affected once it exists. The whole suite is affected when a `conftest.py`, `pyproject.toml` or
-this script changed, when a Python file doesn't parse, and when a changed file under `src/` or
-`tests/` that isn't Python reaches no test file.
+The whole workspace is affected when the root `Cargo.toml`, `Cargo.lock`,
+`rust-toolchain.toml`, `.cargo/config.toml` or this script changed. A changed file outside
+every crate (docs, `android/`, `tools/`) reaches no crate and is reported on stderr; the
+`device` lane and the fixture tooling check those by hand.
 
 Every choice errs towards running a test. What it can't see is a file a test finds by a name
-built at run time (an f-string, a glob) outside such a `tests/<dir>/`.
+built at run time outside its crate and outside `tests/fixtures/`.
 """
 
 from __future__ import annotations
 
 import argparse
-import ast
+import json
 import subprocess
 import sys
 from collections import deque
 from pathlib import Path, PurePosixPath
 
-PACKAGES = {"openftgsxr": "src/openftgsxr"}
-ALWAYS = "tests/test_skeleton.py"
-SUITE = "tests"
-WHOLE_SUITE = ("pyproject.toml",)
+ALWAYS_CRATES: tuple[str, ...] = ()  # the crate holding the skeleton test, once spec §2.7 names it
+FIXTURES = "tests/fixtures"
+WHOLE_WORKSPACE = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml")
 SELF = ".claude/skills/implement-without-subagents/scripts/affected_tests.py"
+WORKSPACE = "--workspace"
 
 
 def git(cwd: str | Path, *args: str) -> list[str]:
@@ -61,167 +56,86 @@ def changed_files(root: Path, base: str) -> set[str]:
     return {*committed, *uncommitted, *untracked}
 
 
-def is_test(path: str) -> bool:
-    p = PurePosixPath(path)
-    return p.parts[0] == "tests" and p.name.startswith("test_") and p.suffix == ".py"
+class Workspace:
+    """The members of the cargo workspace at `root`: their directories and dependency edges."""
 
+    def __init__(self, root: Path) -> None:
+        out = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        meta = json.loads(out)
+        members = set(meta["workspace_members"])
+        packages = [p for p in meta["packages"] if p["id"] in members]
+        self.names = sorted(p["name"] for p in packages)
+        self.dirs: dict[str, str] = {}  # crate -> its directory, relative to root, posix
+        for p in packages:
+            manifest = Path(p["manifest_path"]).resolve()
+            self.dirs[p["name"]] = PurePosixPath(manifest.parent.relative_to(root.resolve())).as_posix()
+        self.dependents: dict[str, set[str]] = {name: set() for name in self.names}
+        for p in packages:
+            for dep in p["dependencies"]:  # normal, dev and build dependencies alike
+                if dep["name"] in self.dependents:
+                    self.dependents[dep["name"]].add(p["name"])
 
-def docstrings(tree: ast.AST) -> set[int]:
-    """The ids of the string nodes that are docstrings."""
-    found = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            first = node.body[0] if node.body else None
-            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
-                found.add(id(first.value))
-    return found
-
-
-class Checkout:
-    def __init__(self, root: Path, changed: set[str]) -> None:
-        self.root = root
-        listed = git(root, "ls-files", "--cached", "--others", "--exclude-standard")
-        self.present = {f for f in listed if (root / f).is_file()}
-        self.files = self.present | changed  # deleted files too, so their importers are found
-        self.by_name: dict[str, set[str]] = {}
-        for f in self.files:
-            self.by_name.setdefault(PurePosixPath(f).name, set()).add(f)
-
-    def module(self, dotted: str) -> set[str]:
-        """The files importing `dotted` runs, when it names a module under PACKAGES."""
-        parts = dotted.split(".")
-        if parts[0] not in PACKAGES:
-            return set()
-        top = PurePosixPath(PACKAGES[parts[0]])
-        path = top.joinpath(*parts[1:])
-        if f"{path}.py" in self.files:
-            found = {f"{path}.py"}
-        elif f"{path}/__init__.py" in self.files:
-            whole = len(parts) > 1
-            found = {f for f in self.files if f.startswith(f"{path}/")} if whole else set()
-            found.add(f"{path}/__init__.py")
-        else:
-            return set()
-        for depth in range(1, len(parts)):  # the parent packages run their __init__.py
-            init = str(top.joinpath(*parts[1:depth], "__init__.py"))
-            if init in self.files:
-                found.add(init)
-        return found
-
-    def helper(self, name: str, importer: str) -> set[str]:
-        """A top-level name outside PACKAGES: a test helper, or a file beside `importer`."""
-        stem = f"{name.split('.')[0]}.py"
-        found = {f for f in self.by_name.get(stem, set()) if f.startswith("tests/")}
-        if self.package_of(importer):  # in a package, `from types import …` is the stdlib's
-            return found
-        beside = str(PurePosixPath(importer).parent / stem)
-        return found | ({beside} if beside in self.files else set())
-
-    def imported(self, dotted: str, importer: str) -> set[str]:
-        if dotted.split(".")[0] in PACKAGES:
-            return self.module(dotted)
-        return self.helper(dotted, importer) if dotted else set()
-
-    def package_of(self, path: str) -> list[str]:
-        """The dotted package a file belongs to, for its relative imports."""
-        for name, top in PACKAGES.items():
-            if path.startswith(f"{top}/"):
-                return [name, *PurePosixPath(path).relative_to(top).parent.parts]
-        return []
-
-    def mentions(self, text: str) -> set[str]:
-        found: set[str] = set()
-        for word in text.replace("\\", "/").split():
-            dotted = word.split(".")
-            if dotted[0] in PACKAGES and all(part.isidentifier() for part in dotted):
-                for end in range(len(dotted), 0, -1):  # a module, or an attribute of one
-                    if module := self.module(".".join(dotted[:end])):
-                        found |= module
-                        break
-            parts = [p for p in word.strip("\"'`,;:()[]{}<>").rstrip(".").split("/") if p]
-            parts = [p for p in parts if p not in (".", "..")]
-            if not parts or parts == ["__init__.py"] or parts[-1].endswith(".md"):
-                continue
-            for f in self.by_name.get(parts[-1], set()):
-                if PurePosixPath(f).parts[-len(parts) :] == tuple(parts):
-                    found.add(f)
-        return found
-
-    def edges(self, path: str) -> set[str]:
-        """The files `path` reaches directly; SyntaxError when it doesn't parse."""
-        tree = ast.parse((self.root / path).read_bytes(), filename=path)
-        package = self.package_of(path)
-        skip = docstrings(tree)
-        out: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    out |= self.imported(alias.name, path)
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    base = package[: len(package) - node.level + 1]
-                    dotted = ".".join([*base, *([node.module] if node.module else [])])
-                else:
-                    dotted = node.module or ""
-                out |= self.imported(dotted, path)
-                for alias in node.names:  # `from openftgsxr import _module` imports a module
-                    out |= self.module(f"{dotted}.{alias.name}")
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if id(node) not in skip:
-                    out |= self.mentions(node.value)
-        out.discard(path)
-        return out
+    def crate_of(self, path: str) -> str | None:
+        """The member whose directory holds `path`; the deepest one when crates nest."""
+        best = None
+        for name, directory in self.dirs.items():
+            if directory in (".", "") or path == directory or path.startswith(f"{directory}/"):
+                if best is None or len(directory) > len(self.dirs[best]):
+                    best = name
+        return best
 
 
 def affected(root: Path, changed: set[str]) -> tuple[list[str], list[str]]:
-    """The test files to run, or [SUITE], and the lines that say why."""
+    """The package flags to pass to `cargo test`, or [WORKSPACE], and the lines that say why."""
     for path in sorted(changed):
-        if path in WHOLE_SUITE or path == SELF or PurePosixPath(path).name == "conftest.py":
-            return [SUITE], [f"the whole suite: {path} changed"]
-    checkout = Checkout(root, changed)
-    users: dict[str, set[str]] = {}  # file -> the files that reach it directly
-    for path in sorted(f for f in checkout.present if f.endswith(".py")):
-        try:
-            targets = checkout.edges(path)
-        except (SyntaxError, ValueError) as error:
-            return [SUITE], [f"the whole suite: {path} doesn't parse ({error})"]
-        for target in targets:
-            users.setdefault(target, set()).add(path)
-    tests = sorted(f for f in checkout.present if is_test(f))
-
-    def reach(sources: list[str]) -> dict[str, str | None]:
-        """Each file reached, and the next file on a shortest chain back to a source."""
-        via: dict[str, str | None] = dict.fromkeys(sources)
-        queue = deque(sources)
-        while queue:
-            node = queue.popleft()
-            p = PurePosixPath(node)
-            near: list[str] = sorted(users.get(node, ()))
-            if p.suffix != ".py" and p.parts[0] == "tests" and len(p.parts) > 2:
-                near += [t for t in tests if t.startswith(f"tests/{p.parts[1]}/")]
-            for user in near:
-                if user not in via:
-                    via[user] = node
-                    queue.append(user)
-        return via
-
+        if path in WHOLE_WORKSPACE or path == SELF:
+            return [WORKSPACE], [f"the whole workspace: {path} changed"]
+    try:
+        ws = Workspace(root)
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        return [], [f"no cargo workspace at {root}: {error}"]
+    via: dict[str, str] = {}  # crate -> the file or crate that brought it in
+    queue: deque[str] = deque()
     for path in sorted(changed):
         p = PurePosixPath(path)
-        if p.suffix != ".py" and p.parts[0] in ("src", "tests"):
-            if not any(is_test(f) and f in checkout.present for f in reach([path])):
-                return [SUITE], [f"the whole suite: no test file reaches {path}"]
-    via = reach(sorted(changed))
-    chosen = [t for t in tests if t in via]
+        if p.suffix == ".md":
+            continue
+        if path == FIXTURES or path.startswith(f"{FIXTURES}/"):
+            for name in ws.names:
+                via.setdefault(name, f"{path} (shared fixtures)")
+                queue.append(name)
+            continue
+        crate = ws.crate_of(path)
+        if crate is None:
+            print(f"{path}: outside every crate, reaches no test", file=sys.stderr)
+            continue
+        if crate not in via:
+            via[crate] = path
+            queue.append(crate)
+    while queue:
+        crate = queue.popleft()
+        for user in sorted(ws.dependents.get(crate, ())):
+            if user not in via:
+                via[user] = crate
+                queue.append(user)
+    for name in ALWAYS_CRATES:
+        if name in ws.dependents and name not in via:
+            via[name] = "always"
+    chosen = [name for name in ws.names if name in via]
     why = []
-    for test in chosen:
-        hops = [test]
-        while (step := via[hops[-1]]) is not None:
-            hops.append(step)
-        why.append(" <- ".join(hops) if len(hops) > 1 else f"{test}: changed")
-    if ALWAYS not in chosen and ALWAYS in checkout.present:
-        chosen.append(ALWAYS)
-        why.append(f"{ALWAYS}: always")
-    return sorted(chosen), why
+    for name in chosen:
+        hops = [name]
+        while hops[-1] in via and via[hops[-1]] in ws.dependents and via[hops[-1]] != hops[-1]:
+            hops.append(via[hops[-1]])
+        why.append(" <- ".join(hops) + f" <- {via[hops[-1]]}")
+    flags = [f"-p {name}" for name in chosen]
+    return flags, why
 
 
 def main() -> int:
@@ -234,9 +148,9 @@ def main() -> int:
     args = parser.parse_args()
     root = Path(git(args.C, "rev-parse", "--show-toplevel")[0])
     changed = set(args.files) if args.files else changed_files(root, args.base)
-    tests, why = affected(root, changed)
+    flags, why = affected(root, changed)
     print("\n".join(why), file=sys.stderr)
-    print("\n".join(tests))
+    print("\n".join(flags))
     return 0
 
 

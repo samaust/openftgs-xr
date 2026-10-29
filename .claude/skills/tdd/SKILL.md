@@ -25,11 +25,11 @@ A **seam** is the public boundary you test at: the interface where you observe b
 
 In this repository the public seams are the public API: the signatures of spec §2 plus the additions recorded as Q-n rows (CLAUDE.md, "Working from the openftgs-xr spec"). The tests that pin them are the §3 items (U-n and the like) that the PRD or ticket lists, each with its pass criterion. Use those and don't ask again. A test the spec doesn't list (a regression test, an edge case the PRD agreed) goes at a public interface too, with its own independent source of truth.
 
-Where a §3 row targets something the spec names but gives no signature for (a function of an `openftgsxr` module, say), propose the signature as a provisional Q-n row, one row per module, and test at it; carry on with the provisional signature instead of waiting for the owner. Changing a signature §2 lists is never a test-driven decision: stop and ask, or, as a subagent, stop and report it. When the shape of an interface is in question, call the Skill tool with "codebase-design" for the vocabulary (it is a reference to consult, not a session to run).
+Where a §3 row targets something the spec names but gives no signature for (a function of a §2 crate, say), propose the signature as a provisional Q-n row, one row per module, and test at it; carry on with the provisional signature instead of waiting for the owner. Changing a signature §2 lists is never a test-driven decision: stop and ask, or, as a subagent, stop and report it. When the shape of an interface is in question, call the Skill tool with "codebase-design" for the vocabulary (it is a reference to consult, not a session to run).
 
 ## Private tests
 
-A private helper (its name starts with an underscore, and it is absent from the module's `__all__`) may have tests of its own when its numerics or invariants are worth pinning directly (in openftgs: the float64 path of its E11, the tie order of a k-NN search, a clamp in logit space). Such a test lives in the same file as the module's spec tests, is named `test_<helper>_…` without a §3 ID, and follows every rule below except the one about surviving refactors: it changes or goes when its helper does. It never stands in for a §3 row, which is always pinned at the public interface when its target is public.
+A private helper (not re-exported by its crate's `lib.rs`: `pub(crate)` or private) may have tests of its own when its numerics or invariants are worth pinning directly (in openftgs: the float64 path of its E11, the tie order of a k-NN search, a clamp in logit space). Such a test lives in the module's own `#[cfg(test)]` block, is named `<helper>_…` without a §3 ID, and follows every rule below except the one about surviving refactors: it changes or goes when its helper does. It never stands in for a §3 row, which is always pinned at the public interface when its target is public.
 
 ## Where expected values come from
 
@@ -42,12 +42,12 @@ Write each test from its row in spec §3, not from the code: the cases, the expe
 
 ## House rules
 
-- Every test file starts with `# SPDX-License-Identifier: Apache-2.0`.
-- Mark every test with the markers `pyproject.toml` defines.
+- Every test file starts with `// SPDX-License-Identifier: Apache-2.0`.
+- Put every test in its lane: `cpu` tests run under plain `cargo test`; a test of another lane (`gpu`, `xr`, `device`, `network`, `dataset`) is `#[ignore = "<lane>"]` and its name starts with the lane's prefix (`gpu_`, `xr_`, `dv_`, `net_`, `ds_`), so `cargo test -- --ignored <prefix>` runs that lane. Spec §3 fixes the lanes; until it does, these are the house rule.
 - Compare values with the tolerances of the test's §3 row, passed explicitly.
 - Draw random inputs within the row's stated domain, and pass any random generator through the public signatures rather than seeding or patching a global one.
 
-Until spec §3 fixes openftgs-xr's own, the rest of the openftgs house rules are a guide, not a rule: markers for CPU, GPU, dataset and pretrained-weights tests, CPU tests on a pure-PyTorch reference backend, `torch.testing.assert_close`, float64 gradient checks away from the spec's clamps and thresholds, and the hypothesis variants the spec asks for.
+Until spec §3 fixes openftgs-xr's own, the rest of the openftgs house rules are a guide, not a rule, read in Rust terms: `cpu` tests on the engine-free crates against hand-worked literals and f64 oracles, comparisons with the row's tolerance passed explicitly (`approx`), and property-based variants (`proptest`) where the spec asks for them.
 
 ## Anti-patterns
 
