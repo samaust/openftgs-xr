@@ -348,11 +348,8 @@ fn u31_http_index_auto_without_a_listing_is_e_net_listing() {
     let probes = Url::parse(&server.url_of("probes/")).unwrap();
     let source = HttpIndex::new(probes, ListingFlavor::Auto, http.clone());
     assert_eq!(source.list("").unwrap_err().code(), "E-NET-LISTING");
-    // A server that cannot be reached is E-NET-FETCH.
-    let gone = {
-        let gone = serve_fixtures();
-        listing_base(&gone)
-    };
+    // A server that cannot be reached is E-NET-FETCH (port 1: nothing listens there).
+    let gone = Url::parse("http://127.0.0.1:1/models/").unwrap();
     let source = HttpIndex::new(gone, ListingFlavor::Auto, http);
     assert_eq!(source.list("").unwrap_err().code(), "E-NET-FETCH");
 }
