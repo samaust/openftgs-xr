@@ -37,13 +37,13 @@ Rejected feature requests are recorded on the tracker, not in the repository: on
 
 ## Unverified tickets
 
-An implement run leaves a ticket open when its acceptance tests couldn't run on that machine (for example GPU-marked tests without a GPU, or tests that need a dataset the machine lacks), and comments on the ticket which tests didn't run and why. Its code may still be merged, with the owner's approval. The PRD stays open until every ticket is verified, so the next milestone waits.
+An implement run leaves a ticket open when its acceptance tests couldn't run on that machine (for example the `gpu` or `device` lane without a GPU or a headset, or the `dataset` lane without the dataset), and comments on the ticket which tests didn't run and why. Its code may still be merged, with the owner's approval. The PRD stays open until every ticket is verified, so the next milestone waits.
 
 To verify such a ticket later, on a machine that can run its tests:
 
-1. Check out `main`, which holds the merged code, from a clean working tree, and install the package. On another machine this needs `main` pushed to origin; if the ticket's comments say the commits are local only, ask the owner whether to push it first, and push only if they say yes.
-2. Run the ticket's acceptance tests, and the full suite of the marker they need.
-3. If they pass: comment the pytest summary and the machine (GPU model, dataset path) on the ticket, close it, and close the PRD once all its tickets are closed. Nothing is committed.
+1. Check out `main`, which holds the merged code, from a clean working tree, and build it with `cargo build`. On another machine this needs `main` pushed to origin; if the ticket's comments say the commits are local only, ask the owner whether to push it first, and push only if they say yes.
+2. Run the ticket's acceptance tests, and the whole lane they belong to.
+3. If they pass: comment the `cargo test` summary and the machine (GPU model, dataset path) on the ticket, close it, and close the PRD once all its tickets are closed. Nothing is committed.
 4. If they fail: the ticket stays open; fix it with `/implement-without-subagents <ticket#>`, which branches from `main` like any other run.
 
 ## Parent issues and blocking

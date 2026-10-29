@@ -5,9 +5,9 @@ The rules are in CLAUDE.md ("Working from the openftgs-xr spec", "Issues", "Comm
 ## Every skill
 
 - **The spec is fixed unless the owner approves an edit.** Never edit `docs/spec/openftgs-xr-spec.md` or `docs/spec/README.md` without approval, and never edit `docs/spec/openftgs-spec.md`; an approved edit goes as "Editing the spec" below says. A PRD, ticket, test, glossary entry or module doc never overrides the spec without approval; where one disagrees with it, the spec wins and the disagreement goes to the owner.
-- **Branches live in worktrees.** Every branch a skill creates gets its own worktree, `git worktree add -b <branch> .claude/worktrees/<branch> <base>`, and the work on it happens there, never in the main checkout. The main checkout stays on `main`, where merges into `main` are made. Once a branch is merged and the merge is checked (`git merge-base --is-ancestor <branch> <target>`), remove its worktree (`git worktree remove .claude/worktrees/<branch>`), then delete the branch (`git branch -d`). The editable install imports the main checkout's code, so a worktree's tests run with `PYTHONPATH=<worktree>/src` (CLAUDE.md, "Commits").
+- **Branches live in worktrees.** Every branch a skill creates gets its own worktree, `git worktree add -b <branch> .claude/worktrees/<branch> <base>`, and the work on it happens there, never in the main checkout. The main checkout stays on `main`, where merges into `main` are made. Once a branch is merged and the merge is checked (`git merge-base --is-ancestor <branch> <target>`), remove its worktree (`git worktree remove .claude/worktrees/<branch>`), then delete the branch (`git branch -d`). Run `cargo` inside the worktree, so it builds and tests that branch's code (CLAUDE.md, "Commits").
 - **Sources.** Before opening anything outside this repository and the spec, check that it is allowed and, for third-party software, read its license first: source code is allowed only under a permissive license that allows commercial use (CLAUDE.md). Every source you consult (a URL, a document, a third-party file or docstring) gets a row in `docs/prd/source-log.md` saying what it was and what you took from it. Log it when you consult it, not at the end. On `main` (before a build, or in a skill that doesn't build), record it on the tracker instead, as "Where the prd files are written" below says.
-- **Gaps.** Where the spec is silent or ambiguous and the choice changes numbers, outputs or public API, make the provisional Q-n decision CLAUDE.md describes: a row in `docs/prd/questions.md`, a `# Q-n` marker in the code, and a note to the owner. Before a build, the gap is a Q-n candidate on the tracker instead ("Where the prd files are written"). Where the spec seems wrong or contradicts itself, stop and ask before coding around it.
+- **Gaps.** Where the spec is silent or ambiguous and the choice changes numbers, outputs or public API, make the provisional Q-n decision CLAUDE.md describes: a row in `docs/prd/questions.md`, a `// Q-n` marker in the code, and a note to the owner. Before a build, the gap is a Q-n candidate on the tracker instead ("Where the prd files are written"). Where the spec seems wrong or contradicts itself, stop and ask before coding around it.
 - **Forbidden sources.** If you meet one, stop at once, take nothing from it, record the incident in the source log (on `main`, in an issue to the owner until a branch can log it) and tell the owner before doing anything else.
 
 ## Subagents
@@ -19,7 +19,7 @@ A subagent can't talk to the owner and may not have CLAUDE.md in its context. Ev
 As a subagent:
 
 - Log your sources as above. If you don't write files, list them under "Sources consulted" in your final report instead, so the agent that launched you logs them.
-- Record a gap as a Q-n row and a `# Q-n` marker like any session, and list every new Q-n in your final report: the agent that launched you tells the owner. If it sends you the owner's answer to one of your rows, record it as "Answers during a build" below says.
+- Record a gap as a Q-n row and a `// Q-n` marker like any session, and list every new Q-n in your final report: the agent that launched you tells the owner. If it sends you the owner's answer to one of your rows, record it as "Answers during a build" below says.
 - When the skill that launched you gives temporary IDs (`implement-with-subagents`, "Shared files": `Q-T<ticket>.<k>` for Q-n rows and their markers, `T<ticket>.<k>` for source-log rows), use those instead of numbers. The merger assigns the final numbers; never pick the next free number yourself.
 - When the spec seems wrong or contradicts itself, stop and report it rather than coding around it. When you meet a forbidden source, record the incident, stop, and report it first.
 
@@ -42,7 +42,7 @@ The openftgs-xr spec, `docs/spec/openftgs-xr-spec.md`, may be edited, by the own
 An approved edit goes on a short branch `spec-<slug>` from `main`, in its own worktree ("Branches live in worktrees"):
 
 1. Make the approved edit, and record it in `docs/spec/README.md`: the new revision, the date and what changed.
-2. For each Q-n row the edit absorbs, set its Status to `in spec (D-n)` and replace its `# Q-n` markers in the code with `# D-n`.
+2. For each Q-n row the edit absorbs, set its Status to `in spec (D-n)` and replace its `// Q-n` markers in the code with `// D-n`.
 3. Check that the owner rules CLAUDE.md records and the spec should carry are in it; report what is missing to the owner.
 4. Compare the open PRDs, tickets and agent briefs with the spec items that changed, and comment on each one affected.
 
