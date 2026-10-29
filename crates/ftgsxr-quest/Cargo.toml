@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ftgsxr-quest"
+description = "openftgs-xr Meta Quest 3 entry point, the library libftgsxr_quest.so (§2.1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ftgsxr_quest"
+crate-type = ["cdylib"]

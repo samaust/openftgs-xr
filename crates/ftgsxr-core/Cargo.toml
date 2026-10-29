@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ftgsxr-core"
+description = "openftgs-xr foundation: the model and its loaders, the CPU mathematics, the clock, the GPU layout and the openftgs formats (§2.1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

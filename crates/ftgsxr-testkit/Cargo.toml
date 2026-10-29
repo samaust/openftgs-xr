@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "ftgsxr-testkit"
+description = "openftgs-xr test kit: fixtures, checksums, image metrics and synthetic models (§2.1, §2.7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# M-1: `ftgsxr-core` only; `ftgsxr-render` and image join with `gpu_context` in M-2 (Q-1, Q-6).
+[dependencies]
+ftgsxr-core.workspace = true

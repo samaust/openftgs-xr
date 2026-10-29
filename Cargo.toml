@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0
+# The openftgs-xr workspace (§2.1). Every version of §2.3 is pinned once, in
+# `[workspace.dependencies]` below (D-1); a crate adds a dependency with
+# `<name>.workspace = true` in the milestone that first uses it.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/ftgsxr-core",
+    "crates/ftgsxr-io",
+    "crates/ftgsxr-render",
+    "crates/ftgsxr-app",
+    "crates/ftgsxr-xr",
+    "crates/ftgsxr-desktop",
+    "crates/ftgsxr-quest",
+    "crates/ftgsxr-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Bevy 0.19.1's minimum (§2.6; source log T2.1).
+rust-version = "1.95.0"
+license = "Apache-2.0"
+repository = "https://github.com/samaust/openftgs-xr"
+publish = false
+
+# The pin table of §2.3, applied by the pin rule D-1 (Bevy 0.19.1 on 2026-10-29).
+# Rows marked "Bevy's pin" or "the XR crates' pin" in §2.3 carry the version
+# those crates require (source log T2.2 to T2.5), so a direct use never
+# duplicates the engine's copy. Default features are off where they would make
+# a choice for the crate that uses the dependency (Bevy's render features,
+# rustls's crypto provider under D-20, image's codecs); that crate turns on
+# what it needs.
+[workspace.dependencies]
+# The workspace's own crates (§2.1).
+ftgsxr-core = { path = "crates/ftgsxr-core" }
+ftgsxr-io = { path = "crates/ftgsxr-io" }
+ftgsxr-render = { path = "crates/ftgsxr-render" }
+ftgsxr-app = { path = "crates/ftgsxr-app" }
+ftgsxr-xr = { path = "crates/ftgsxr-xr" }
+ftgsxr-testkit = { path = "crates/ftgsxr-testkit" }
+
+# Engine.
+bevy = { version = "0.19.1", default-features = false }
+wgpu = "29.0.3"
+wgpu-hal = "29.0.3"
+naga = "29.0.3"
+# bevy_math 0.19.1 requires glam ^0.32.0 (source log T2.2); §2.3's "(0.33)" is
+# superseded by its own rule "Bevy's pin" (D-1, PRD #1).
+glam = "0.32"
+winit = "0.30"
+
+# XR.
+bevy_mod_openxr = "0.6.0"
+bevy_mod_xr = "0.6.0"
+bevy_xr_utils = "0.6.0"
+openxr = "0.21.1"
+openxr-sys = "0.13.1"
+
+# Foundation.
+safetensors = "0.8"
+memmap2 = "0.9"
+bytemuck = "1.25"
+half = "2.7"
+serde = "1"
+serde_json = "1"
+toml = "1.1"
+sha2 = "0.10"
+thiserror = "2"
+rayon = "1"
+ureq = "3.5"
+# D-20: the `ring` provider, chosen by the crate that uses rustls.
+rustls = { version = "0.23", default-features = false }
+ring = "0.17"
+webpki-roots = "1.0"
+url = "2"
+directories = "6"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Application and desktop.
+bevy_egui = "0.42"
+egui = "0.36"
+bevy_kira_audio = "0.26"
+kira = "0.12.1"
+image = { version = "0.25", default-features = false }
+clap = "4"
+rfd = "0.17"
+
+# Quest.
+android-activity = "=0.6.0"
+android_logger = "0.15"
+jni = "0.20"
+ndk-context = "0.1"
+
+# Dev.
+proptest = "1"
+approx = "0.5"
+tiny_http = "0.12"
