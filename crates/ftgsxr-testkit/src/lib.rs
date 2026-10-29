@@ -7,6 +7,8 @@
 
 mod fixtures;
 mod real_sh;
+mod safetensors;
 
 pub use fixtures::fixtures_dir;
 pub use real_sh::real_sh;
+pub use safetensors::SafetensorsBuilder;

@@ -19,3 +19,5 @@ sha2.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
+# The independent reader the builder's output is checked against (§2.3's `ftgs-if` reader crate).
+safetensors.workspace = true
