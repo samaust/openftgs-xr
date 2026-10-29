@@ -34,8 +34,10 @@ pub struct DispatchRange {
     pub transient: Range<u32>,
 }
 
-// §2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1).
-#[allow(clippy::len_without_is_empty)]
+#[expect(
+    clippy::len_without_is_empty,
+    reason = "§2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1)"
+)]
 impl TemporalIndex {
     /// Builds the index and returns the row permutation (new row → file row).
     ///

@@ -130,8 +130,10 @@ fn check_finite<T: Copy + Into<f64>>(
     Ok(())
 }
 
-// §2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1).
-#[allow(clippy::len_without_is_empty)]
+#[expect(
+    clippy::len_without_is_empty,
+    reason = "§2.1 gives `len` without `is_empty`; a validated model is never empty (N ≥ 1)"
+)]
 impl Model {
     /// N, the number of primitives.
     pub fn len(&self) -> usize {
