@@ -2,7 +2,7 @@
 
 //! The playback clock T and each instance's model time τ_m (E9, §1.6, D-32).
 
-use crate::types::{CoreError, Model, TimeSpan};
+use crate::types::{CoreError, Model, ModelKind, TimeSpan};
 
 /// How the clock behaves at the ends of its active interval (E9, §1.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,22 +162,23 @@ impl Clock {
         }
     }
 
-    /// T, seconds.
+    /// T, seconds since the clock's zero (E9).
     pub fn time(&self) -> f64 {
         self.t
     }
 
-    /// The signed speed.
+    /// The signed speed, dT/dt while playing (E9); a ping-pong reflection negates it
+    /// (Q-T10.1).
     pub fn speed(&self) -> f64 {
         self.speed
     }
 
-    /// Playing or paused.
+    /// Playing or paused (§1.6).
     pub fn state(&self) -> PlayState {
         self.state
     }
 
-    /// T_len, seconds.
+    /// T_len, seconds (E9).
     pub fn length(&self) -> f64 {
         self.length
     }
@@ -185,6 +186,29 @@ impl Clock {
 
 /// The largest speed magnitude (E9).
 const MAX_SPEED: f64 = 4.0;
+
+/// The smallest frame step a median spacing may give, seconds (§1.6).
+const MIN_FRAME_STEP_S: f64 = 1.0 / 480.0;
+
+/// The frame step without a usable spacing or checkpoint hint, seconds (§1.6).
+const DEFAULT_FRAME_STEP_S: f64 = 1.0 / 30.0;
+
+/// The median gap between the sorted distinct values, `None` with fewer than two distinct
+/// values. Q-T10.2: the statistical median, an even count averaging the middle two, as
+/// openftgs computes its Δt_f (openftgs Q-8).
+fn median_spacing(centers: &[f64]) -> Option<f64> {
+    let mut sorted = centers.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted.dedup();
+    let mut gaps: Vec<f64> = sorted.windows(2).map(|w| w[1] - w[0]).collect();
+    gaps.sort_by(f64::total_cmp);
+    let n = gaps.len();
+    match n {
+        0 => None,
+        _ if n % 2 == 1 => Some(gaps[n / 2]),
+        _ => Some(0.5 * (gaps[n / 2 - 1] + gaps[n / 2])),
+    }
+}
 
 /// A length as the clock keeps it: a negative or non-finite one is 0 (Q-T10.1).
 fn valid_length(length_s: f64) -> f64 {
@@ -209,26 +233,72 @@ pub struct ModelTime {
 }
 
 impl ModelTime {
-    /// The default mapping of a model (E9).
+    /// The default mapping of a model (E9): the rate from the unit, offset 0, `Hold`.
+    ///
+    /// An unknown unit has rate 1 and emits a warning (D-32).
     pub fn from_span(span: &TimeSpan) -> ModelTime {
-        let _ = span;
-        todo!()
+        // D-32: 1 for `s`, 1000 for `ms`, 1 with a warning otherwise.
+        let rate = span.rate_per_second().unwrap_or_else(|_| {
+            tracing::warn!(
+                time_unit = %span.time_unit,
+                "unknown time unit {:?}: one unit per second assumed (D-32)",
+                span.time_unit
+            );
+            1.0
+        });
+        ModelTime {
+            span: span.clone(),
+            offset_s: 0.0,
+            rate,
+            end_rule: EndRule::Hold,
+        }
     }
 
     /// (τ_m, extrapolating) at clock time `t_s` (E9).
+    ///
+    /// `Hold` clamps τ_m to [τ₀, τ₁] and never flags; `Extrapolate` leaves it and flags it
+    /// when outside [τ₀, τ₁] (Q-T10.2). A single timestamp gives (τ₀, false) (D-9).
     pub fn tau_at(&self, t_s: f64) -> (f64, bool) {
-        let _ = t_s;
-        todo!()
+        let (tau0, tau1) = (self.span.tau0, self.span.tau1);
+        // D-9: a single-timestamp model ignores τ.
+        if self.span.is_single() {
+            return (tau0, false);
+        }
+        let tau = tau0 + self.rate * (t_s - self.offset_s);
+        match self.end_rule {
+            EndRule::Hold => (tau.clamp(tau0, tau1), false),
+            // Q-T10.2: flagged exactly outside the span.
+            EndRule::Extrapolate => (tau, !(tau0..=tau1).contains(&tau)),
+        }
     }
 
     /// o_m + T_τ / r_m, seconds (E9).
     pub fn length_s(&self) -> f64 {
-        todo!()
+        self.offset_s + self.span.span() / self.rate
     }
 
-    /// §1.6's Δ_frame, seconds (D-32).
+    /// §1.6's Δ_frame, seconds (D-32): the median spacing of the model's distinct time
+    /// centers ÷ r_m when there are at least two and it lies within [1/480 s, T_τ/r_m]; else
+    /// a checkpoint's Δt_f·T_τ/r_m; else 1/30 s.
+    ///
+    /// T_τ and r_m are this mapping's (`span`, `rate`); the model gives its time centers and
+    /// its kind (Q-T10.2).
     pub fn frame_step_s(&self, model: &Model) -> f64 {
-        let _ = model;
-        todo!()
+        let span_s = self.span.span() / self.rate;
+        // D-32: the median spacing, bounded.
+        if let Some(median) = median_spacing(&model.time_center) {
+            let step = median / self.rate;
+            if (MIN_FRAME_STEP_S..=span_s).contains(&step) {
+                return step;
+            }
+        }
+        // D-32: the checkpoint's Δt_f; Q-T10.2: only when finite and positive.
+        if let ModelKind::Checkpoint { frame_dt, .. } = model.kind {
+            let step = frame_dt * span_s;
+            if step.is_finite() && step > 0.0 {
+                return step;
+            }
+        }
+        DEFAULT_FRAME_STEP_S
     }
 }
