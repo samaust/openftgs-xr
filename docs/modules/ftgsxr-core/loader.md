@@ -30,7 +30,7 @@ The `safetensors` crate parses the header and checks that the offsets cover the 
 
 ## Where the identity is computed
 
-The model identity (D-40) is the SHA-256 of the bytes the reader was given, computed on one thread while the other decodes and validates them (`rayon::join`), so the file is read once by each and the digest costs no extra pass over memory that has gone cold. For a checkpoint the bytes are those of `params.safetensors`, which also lets the reader check the manifest's `files` entry against the same digest. The identity is set only on a model that passed every rule; a refused file has none. Above a fixed row count the activations of a checkpoint and the reassembly of a snapshot run in parallel over rows; `Model::validate` itself runs sequentially.
+The model identity (D-40) is the SHA-256 of the bytes the reader was given, computed on one thread while the other decodes and validates them (`rayon::join`), so the file is read once by each and the digest costs no extra pass over memory that has gone cold. For a checkpoint the bytes are those of `params.safetensors`, which also lets the reader check the manifest's `files` entry against the same digest. The identity is set only on a model that passed every rule; a refused file has none. Above a fixed row count the activations of a checkpoint, the reassembly of a snapshot and `Model::validate`'s rules run in parallel over rows (§2.4 Threads). `Model::validate` still checks one rule over every row before the next, and each rule reports its lowest broken row, so a file with several faults gets the same message on either path.
 
 ## What a header-only read tells
 
