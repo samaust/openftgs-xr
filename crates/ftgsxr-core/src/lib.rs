@@ -10,6 +10,7 @@
 pub mod clock;
 pub mod covariance;
 pub mod formats;
+pub mod index;
 pub mod layout;
 pub mod motion;
 pub mod pose;
@@ -33,6 +34,8 @@ pub use covariance::{
     sort_key, sort_key16,
 };
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
+
+pub use index::{DispatchRange, TemporalIndex};
 
 pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 pub use layout::{
