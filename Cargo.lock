@@ -261,11 +261,15 @@ name = "ftgsxr-core"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "ftgsxr-testkit",
  "glam",
  "half",
  "proptest",
  "rayon",
+ "safetensors",
+ "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tracing",
 ]
