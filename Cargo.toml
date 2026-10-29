@@ -69,7 +69,9 @@ toml = "1.1"
 sha2 = "0.10"
 thiserror = "2"
 rayon = "1"
-ureq = "3.5"
+# D-20: default features off (no gzip, which would break byte-offset resumes); the
+# crate that uses ureq enables `rustls` (ring and webpki-roots).
+ureq = { version = "3.5", default-features = false }
 # D-20: the `ring` provider, chosen by the crate that uses rustls.
 rustls = { version = "0.23", default-features = false }
 ring = "0.17"
