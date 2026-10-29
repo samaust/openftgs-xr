@@ -13,6 +13,7 @@ publish.workspace = true
 glam.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 approx.workspace = true

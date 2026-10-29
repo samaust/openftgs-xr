@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod clock;
 pub mod motion;
 pub mod pose;
 pub mod types;
@@ -18,6 +19,8 @@ pub use types::{
 };
 
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
+
+pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).
 pub use glam::{DMat3, DMat4, DVec3, Mat3, Mat4, Quat, UVec2, Vec2, Vec3};
