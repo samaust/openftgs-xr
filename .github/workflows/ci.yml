@@ -6,7 +6,6 @@ name: ci
 
 on:
   push:
-  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,8 +20,9 @@ jobs:
 
       - name: Toolchain
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup toolchain install stable --profile minimal
           rustup default stable
+          rustup component add rustfmt clippy
           rustc --version
 
       - uses: actions/cache@v4
