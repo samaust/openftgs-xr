@@ -178,7 +178,9 @@ fn format_rfc3339(secs: u64, nanos: u32) -> String {
 }
 
 /// The proleptic Gregorian (year, month, day) of the day `days` after 1970-01-01, by the
-/// usual era arithmetic over 400-year cycles that start on 1 March.
+/// era arithmetic over 400-year cycles that start on 1 March of Howard Hinnant's published
+/// `civil_from_days` algorithm, written from the arithmetic itself (no page or code
+/// consulted; source log T18.3).
 fn civil_from_days(days: u64) -> (u64, u64, u64) {
     let z = days + 719_468;
     let era = z / 146_097;
@@ -241,7 +243,7 @@ mod tests {
 
     #[test]
     fn record_round_trips_and_refuses_other_formats() {
-        let dir = std::env::temp_dir().join(format!("ftgsxr-record-{}", std::process::id()));
+        let dir = std::env::temp_dir().join("ftgsxr-http-record");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("meta.json");
         let record = Record {

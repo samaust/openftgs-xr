@@ -193,3 +193,13 @@ fn content_range<B>(response: &Response<B>) -> Option<(u64, Option<u64>)> {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+#[cfg(test)]
+mod tests {
+    /// §2.1 shares the client through `Arc` (`open_source`), across threads.
+    #[test]
+    fn http_client_is_send_and_sync() {
+        fn shared<T: Send + Sync>() {}
+        shared::<super::HttpClient>();
+    }
+}

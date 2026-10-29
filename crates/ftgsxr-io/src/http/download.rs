@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn download_restarts_when_the_validators_changed() {
         let server = ftgsxr_testkit::serve_fixtures();
-        let cache = std::env::temp_dir().join(format!("ftgsxr-restart-{}", std::process::id()));
+        let cache = std::env::temp_dir().join("ftgsxr-http-restart");
         let _ = std::fs::remove_dir_all(&cache);
         let http = HttpClient::new(cache.clone(), TlsRoots::WebPki, u64::MAX).unwrap();
         let name = "probes/P8.renders.safetensors";

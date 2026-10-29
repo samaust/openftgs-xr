@@ -9,7 +9,7 @@ One `HttpClient` holds one ureq agent, shared by every request it makes, over ru
 Three reads, three contracts:
 
 - **`get_text`** fetches a listing body (§1.5 Sources, D-31) fresh every time; listings are relisted on refresh, so they never enter the cache (Q-T18.3).
-- **`get_range`** is the header-only read of a library entry (§1.5 Library): one `Range` request, so the first 8 + header-length bytes of a model file cost two small requests and never the whole file. A server that ignores `Range` is read only as far as the slice needs (Q-T18.3).
+- **`get_range`** is the header-only read of a library entry (§1.5 Library): one `Range` request, so reading a model file's length prefix and JSON header costs two small requests and never the whole file. A server that ignores `Range` is read only as far as the slice needs (Q-T18.3).
 - **`download`** goes through the download cache, below.
 
 Text and range reads run in parallel; `download` and `prune` take one lock, so downloads run one at a time as §1.5 asks and a prune never removes a download in progress (Q-T18.4).
