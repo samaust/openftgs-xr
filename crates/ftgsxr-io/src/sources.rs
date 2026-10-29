@@ -36,9 +36,9 @@ pub enum ModelRef {
     Document(String),
 }
 
-/// A model file's bytes, read into memory (Q-30): what the readers of §1.2 take. Where they
-/// came from is the `ModelRef` beside them. Deref gives the bytes (Q-46).
-// Q-46
+/// A model file's bytes, read into memory (D-50): what the readers of §1.2 take. Where they
+/// came from is the `ModelRef` beside them. Deref gives the bytes (D-50).
+// D-50
 #[derive(Clone, PartialEq, Eq)]
 pub enum ModelBytes {
     /// The whole file, owned.
@@ -73,7 +73,7 @@ pub trait ModelSource: Send + Sync {
     fn info(&self, entry: &Entry) -> Result<ModelInfo, IoError>;
     /// The entry's file, read into memory, with the reference it was read from; `progress`
     /// hears as it arrives and `cancel` stops it (§1.5, Q-47). A checkpoint is refused
-    /// (Q-46).
+    /// (D-51; replaced in #77).
     fn fetch(
         &self,
         entry: &Entry,
@@ -355,8 +355,8 @@ pub fn open_source(
 
 /// The bytes `r` names (§1.5), read into memory: a local file, a download through `client`
 /// with no expected digest, or a document through `provider` (Q-47). A checkpoint
-/// directory is refused (Q-46).
-// Q-46, Q-47
+/// directory is refused (D-51; replaced in #77).
+// D-51 (the refusal is replaced in #77), Q-47
 pub fn open_ref(
     r: &ModelRef,
     client: Option<&HttpClient>,
@@ -395,7 +395,7 @@ fn header_only(entry: &Entry) -> Result<(), IoError> {
     }
 }
 
-/// Refuses an entry `fetch` cannot read into one buffer: a checkpoint (Q-46), a
+/// Refuses an entry `fetch` cannot read into one buffer: a checkpoint (D-51; replaced in #77), a
 /// directory or a file that is not a model.
 fn fetchable(entry: &Entry) -> Result<(), IoError> {
     match entry.kind {
@@ -408,8 +408,8 @@ fn fetchable(entry: &Entry) -> Result<(), IoError> {
     }
 }
 
-/// E-IO for a checkpoint asked for as bytes (Q-46).
-// Q-46
+/// E-IO for a checkpoint asked for as bytes (D-51; replaced in #77).
+// D-50
 fn checkpoint_refused(location: &str) -> IoError {
     unsupported(&format!(
         "{location}: a checkpoint directory cannot be fetched as one file yet"

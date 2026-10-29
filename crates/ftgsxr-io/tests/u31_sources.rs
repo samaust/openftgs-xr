@@ -3,7 +3,7 @@
 //! U-31: `ftgsxr_io::sources` (§1.5 Library and Sources, D-31, D-49; `cpu` lane): `LocalDir`
 //! lists one level with kinds; `info` reads the header only; `HttpIndex` with the three
 //! flavors over the local server; `DocumentSource` over a stub provider; `open_ref` for every
-//! `ModelRef`. Q-46 (`ModelBytes`, checkpoints), Q-47 (the module's signatures and
+//! `ModelRef`. D-50 and D-51 (`ModelBytes`, checkpoints; the checkpoint clauses change in #77), Q-47 (the module's signatures and
 //! rules), Q-48 (`Auto`), over the fixture server of Q-39 with the listing choice of Q-6.
 
 use std::fs;
@@ -195,7 +195,7 @@ fn u31_local_dir_fetch_reads_the_file_with_progress() {
 
 #[test]
 fn u31_checkpoint_fetch_is_refused() {
-    // Q-46: a checkpoint travels through no byte buffer until the owner decides how.
+    // D-51: checkpoints load by path; this refusal is replaced in #77.
     let dir = local_models("u31_checkpoint_fetch_is_refused");
     let source = LocalDir { root: dir.clone() };
     let entries = source.list("").unwrap();
@@ -439,7 +439,7 @@ fn u31_http_index_fetch_downloads_and_checks_the_index_digest() {
     let cancel = AtomicBool::new(false);
     let err = source.fetch(&wrong, &mut |_| {}, &cancel).unwrap_err();
     assert_eq!(err.code(), "E-NET-CHECKSUM");
-    // The index's checkpoint is refused (Q-46).
+    // The index's checkpoint is refused (D-51; replaced in #77).
     let tiny = entries
         .iter()
         .find(|e| e.kind == EntryKind::Checkpoint)

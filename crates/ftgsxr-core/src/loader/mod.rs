@@ -56,9 +56,9 @@ pub fn hex(identity: &[u8; 32]) -> String {
 /// (`read_checkpoint`), a file with a `.ply` suffix (any case) a PLY snapshot (`read_ply`),
 /// any other file an exchange model (`read_exchange`). The file is read into memory, not
 /// memory-mapped: `ftgsxr-core` forbids `unsafe` (§2.6) and mapping a file is `unsafe`
-/// (Q-30). A directory without `manifest.json` is E-FILE-FORMAT; a file that cannot be
+/// (D-50). A directory without `manifest.json` is E-FILE-FORMAT; a file that cannot be
 /// read is E-IO, its message naming the path.
-// Q-30
+// D-50
 pub fn open_model(path: &Path) -> Result<Model, CoreError> {
     if path.is_dir() {
         if !path.join(checkpoint::MANIFEST).is_file() {
