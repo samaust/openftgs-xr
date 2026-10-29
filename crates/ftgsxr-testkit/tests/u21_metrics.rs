@@ -78,3 +78,34 @@ fn u21_values_beyond_the_unit_interval_are_clamped_before_comparing() {
     assert_eq!(m.share, 0.0);
     assert_eq!(m.alpha, 0.0);
 }
+
+/// A 1 × 1 image.
+fn pixel(rgb: [f32; 3], alpha: f32) -> RenderImage {
+    RenderImage {
+        width: 1,
+        height: 1,
+        rgb: rgb.to_vec(),
+        alpha: vec![alpha],
+    }
+}
+
+/// Q-41: a NaN value counts its pixel in s and s_α and makes the PSNR NaN, so a NaN in a
+/// player render fails the tier rather than passing unseen.
+#[test]
+fn u21_a_nan_pixel_counts_as_differing() {
+    let m = metrics(
+        &pixel([0.5; 3], 0.5),
+        &pixel([0.5, f32::NAN, 0.5], f32::NAN),
+    );
+    assert!(m.psnr.is_nan());
+    assert_eq!((m.share, m.alpha), (1.0, 1.0));
+}
+
+/// Q-41: renders of different sizes are refused with a panic.
+#[test]
+#[should_panic(expected = "different sizes")]
+fn u21_renders_of_different_sizes_are_refused() {
+    let mut wide = pixel([0.0; 3], 0.0);
+    wide.width = 2;
+    metrics(&pixel([0.0; 3], 0.0), &wide);
+}
