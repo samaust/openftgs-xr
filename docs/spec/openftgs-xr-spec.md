@@ -269,7 +269,7 @@ where d̄ is d projected on the horizontal plane (ŷ the stage up axis) and norm
 \mathbf v = v_{max}\,R_{yaw}(\psi_{head})\,(x_s,\ 0,\ -y_s),\qquad \Delta \mathbf p = \mathbf v\,\Delta t,\qquad \Delta\psi = \begin{cases} \pm\theta_{snap} & \text{snap turn, on a flick of } x_t \\ \omega\,x_t\,\Delta t & \text{smooth turn}\end{cases}
 ```
 
-(x\_s, y\_s) is the move stick and x\_t the turn stick after a dead zone of 0.15 and a squared response; ψ\_head is the head's yaw; v\_max = 2 m/s (1–4 m/s), θ\_snap = 45° (30°, 45° or 90°), ω = 60°/s. In VR mode the rig moves by Δp and turns by Δψ about the head's position, so a turn does not translate the user. In passthrough mode the content group moves by −Δp and turns by −Δψ about the head's position instead, since the real room cannot move (D-17). Walking needs no equation: the tracked head moves in stage space.
+(x\_s, y\_s) is the move stick and x\_t the turn stick after a dead zone of 0.15 and a squared response; ψ\_head is the head's yaw; v\_max = 2 m/s (1–4 m/s), θ\_snap = 45° (30°, 45° or 90°), ω = 60°/s. In VR mode the rig moves by Δp and turns by Δψ about the head's position, so a turn does not translate the user. In passthrough mode the sticks move nothing: the real room cannot move, and moving the content instead was rejected (owner decision, 2026-10-29, D-17); the user walks. Walking needs no equation: the tracked head moves in stage space.
 
 **E13 · Occlusion** \[R: occlusion; X: XR\_META\_environment\_depth; D-16, D-45\]
 
@@ -412,7 +412,7 @@ ftgsxr bench NAME [--out BENCH.json] [--model MODEL]
 
 **Rays, selection and grabbing** \[R: grab with a ray and move; two hands resize; E10, E11; D-42, D-43\]. Each active hand casts a ray from its aim pose, drawn as a thin line to the first hit, or 10 m long, with a dot at the hit point; hovering an instance highlights it (§1.4). `select` on a hovered instance selects it; `select` on nothing deselects. `grab` on a hovered instance starts a one-hand grab: the instance follows the hand (E11) until release; while grabbing, the same hand's stick pushes and pulls the instance along the ray at 0.5 m/s times the current distance in metres (so far models move faster). A `grab` by the second hand on the same instance turns the grab into a two-hand grab: the instance scales with the hands' distance, follows their midpoint and turns with their yaw (E11), with "keep upright" on by default (yaw only) and "free rotation" as an option; releasing either hand returns to a one-hand grab by the other. Grabbing a UI panel by its title bar moves it the same way (two hands resize it). "Snap to floor" and "fit" are quick actions on the wrist menu and the panel.
 
-**Locomotion** \[R: move by walking; sticks move, strafe and turn; E12; D-17, D-44\]. Walking is natural: the tracked head moves in stage space. In VR mode the left stick moves the rig (E12: forward, back, strafe in the head's yaw frame at v\_max) and the right stick turns it, snap turn by default (45°, a flick of the stick past 0.7 with a return below 0.3 between flicks) or smooth turn (60°/s), always about the head. A teleport option replaces the smooth move: holding the left stick forward shows an arc to the floor, releasing teleports the rig there and fades the view for 150 ms. In passthrough mode the real room cannot move, so the same inputs move and turn the content group about the user instead (D-17); a setting disables stick locomotion in passthrough mode altogether. Comfort options: a vignette during smooth motion (on by default), a height offset of ±0.5 m for seated use, a reduced-motion setting that removes the animated transitions.
+**Locomotion** \[R: move by walking; sticks move, strafe and turn; E12; D-17, D-44\]. Walking is natural: the tracked head moves in stage space. In VR mode the left stick moves the rig (E12: forward, back, strafe in the head's yaw frame at v\_max) and the right stick turns it, snap turn by default (45°, a flick of the stick past 0.7 with a return below 0.3 between flicks) or smooth turn (60°/s), always about the head. A teleport option replaces the smooth move: holding the left stick forward shows an arc to the floor, releasing teleports the rig there and fades the view for 150 ms. In passthrough mode stick locomotion is off: the real room cannot move, so the sticks keep only their other roles (push and pull while grabbing, scrolling the panel), the user walks, and the recenter and fit actions bring the content to them (owner decision, 2026-10-29, D-17). Comfort options: a vignette during smooth motion (on by default), a height offset of ±0.5 m for seated use, a reduced-motion setting that removes the animated transitions.
 
 **User interface** \[R: easy to use AR/XR UI; D-21\]. Two surfaces:
 
@@ -434,7 +434,7 @@ The passthrough's appearance has three controls, brightness, contrast and satura
 
 **Depth occlusion** \[R: passthrough with occlusion using depth; X: XR\_META\_environment\_depth; A: Quest 3 and 3S only, `com.oculus.permission.USE_SCENE`; D-16, D-45\]. In passthrough mode, "occlusion" starts one environment-depth provider (created once per session, started when occlusion turns on and stopped when it turns off, after the permission is granted on first use), acquires one depth image per frame between the frame's begin and end, and gives the renderer the depth textures, their poses and fields of view and their near and far planes for E13. Soft occlusion is the default with δ = 5 cm (slider 0–20 cm); hard occlusion is an option. Hand removal (the provider's option) is off by default, so the user's real hands occlude the content they reach into; turning it on makes the content draw over the hands. The HUD shows the depth image's resolution and age. Where the runtime offers no environment depth (other headsets, the desktop) the control is absent.
 
-**Light estimation and color matching** \[R: color matching using light estimation, and with depth estimation; A: Passthrough Camera API, Horizon OS v74 or later (v76 for Camera2), `horizonos.permission.HEADSET_CAMERA` and `android.permission.CAMERA`; E14; D-15, D-38\]. Four lighting modes for the content, in the Environment tab: off (default), manual (exposure in EV, white-balance temperature and tint sliders), auto global (E14 over the whole frame) and auto local (E14 over the pixels within the selected instance's depth band, which needs occlusion's depth provider). The auto modes open the headset's passthrough camera at its lowest resolution (1280 × 960) and 60 Hz after the permissions are granted on first use; the shim computes the frame statistics E14 needs (Ȳ, r̄, ḡ, b̄, globally and for the depth band when the renderer supplies the band's mask) and hands them over as a few floats per frame (D-15, §2.5). Enabling an auto mode captures the reference E\_ref from the next smoothed estimate; "re-capture reference" is a button; the current gains are shown, and the strength γ is a slider (0–1, 0.5 by default). The transform applies to every instance, or to the selected one when "per instance" is set, and is saved with the scene. Where the camera API is unavailable (an older OS, a denied permission, the desktop) only manual mode is offered and the UI says why.
+**Light estimation and color matching** \[R: color matching using light estimation, and with depth estimation; A: Passthrough Camera API, Horizon OS v74 or later (v76 for Camera2), `horizonos.permission.HEADSET_CAMERA` and `android.permission.CAMERA`; E14; D-15, D-38\]. Four lighting modes for the content, in the Environment tab: off (default), manual (exposure in EV, white-balance temperature and tint sliders), auto global (E14 over the whole frame) and auto local (E14 over the pixels within the selected instance's depth band, which needs occlusion's depth provider). The auto modes open the headset's passthrough camera at its lowest resolution (1280 × 960) and 60 Hz after the permissions are granted on first use; the shim reduces each frame to a 64 × 48 RGB thumbnail with its timestamp and the camera's pose and field of view, and the player computes E14's statistics from the thumbnail, globally or over the depth band (D-15, §2.5). Enabling an auto mode captures the reference E\_ref from the next smoothed estimate; "re-capture reference" is a button; the current gains are shown, and the strength γ is a slider (0–1, 0.5 by default). The transform applies to every instance, or to the selected one when "per instance" is set, and is saved with the scene. Where the camera API is unavailable (an older OS, a denied permission, the desktop) only manual mode is offered and the UI says why.
 
 **Floor, shadows and anchors** \[+; X: XR\_FB\_spatial\_entity, XR\_META\_spatial\_entity\_persistence; A: `com.oculus.permission.USE_ANCHOR_API`; D-26\]. The floor is stage space's y = 0 (§1.8). In passthrough mode each instance may cast a contact shadow: a soft dark disc on the floor under B\_m's footprint (opacity 0.3, feathered over 10 cm), on by default, which grounds the model visually without lighting. When a scene is saved in passthrough mode on the headset, a spatial anchor is created at the content group's origin and persisted; the scene file keeps its UUID (§1.11). Loading the scene locates the anchor and places the content group on it, so the models return to the same place in the room; when the anchor cannot be located (another headset, a forgotten anchor) the file's rig-relative pose is used and a toast says so. Anchors are forgotten when their scene file is deleted from the player.
 
@@ -452,7 +452,7 @@ The passthrough's appearance has three controls, brightness, contrast and satura
 
 **Versioning rule** \[O: openftgs §2.2\]. Every file the player owns carries `format` and `version`; a reader rejects a major version it does not know, ignores a minor version, and ignores unknown keys. A settings file of an unknown major version is set aside as `settings.toml.unknown-<date>` and replaced by the defaults, with a warning in the HUD and the log.
 
-**`settings.toml`** (`ftgsxr-settings` v1; saved at most once a second after a change and at exit) holds these tables, each key with the default §1 gives: `[general]` (`tier`, `governor`, `ui_scale`, `log_level`); `[[sources]]` (`kind` ∈ {`dir`, `http`, `documents`}, `location`, `name`, `flavor` for HTTP listings: `auto`, `index`, `nginx-json`, `html`); `[playback]` (`speed`, `loop`); `[display]` (`mode`, `centers_radius`, `colormap`, `background`, `grid`, `overlays`); `[environment]` (`mode`, `passthrough_brightness`, `passthrough_contrast`, `passthrough_saturation`, `occlusion`, `occlusion_soft`, `occlusion_delta_m`, `hand_removal`, `lighting_mode`, `lighting_gamma`, `contact_shadows`); `[locomotion]` (`speed_mps`, `snap_turn`, `snap_deg`, `smooth_dps`, `vignette`, `teleport`, `height_offset_m`, `sticks_in_passthrough`, `left_handed`, `reduced_motion`); `[audio]` (`muted`, `master`, `ui`, `soundtrack`, `spatial`, per-sound switches); `[desktop]` (`fov_deg`, `fly_speed_mps`, `keys` as a table of action = key); `[xr]` (`refresh_rate`, `foveation`, `render_scale`, `reference_space`); `[cache]` (`max_bytes`, default 20 GiB). A missing key takes its default; a key of the wrong type is reported and takes its default.
+**`settings.toml`** (`ftgsxr-settings` v1; saved at most once a second after a change and at exit) holds these tables, each key with the default §1 gives: `[general]` (`tier`, `governor`, `ui_scale`, `log_level`); `[[sources]]` (`kind` ∈ {`dir`, `http`, `documents`}, `location`, `name`, `flavor` for HTTP listings: `auto`, `index`, `nginx-json`, `html`); `[playback]` (`speed`, `loop`); `[display]` (`mode`, `centers_radius`, `colormap`, `background`, `grid`, `overlays`); `[environment]` (`mode`, `passthrough_brightness`, `passthrough_contrast`, `passthrough_saturation`, `occlusion`, `occlusion_soft`, `occlusion_delta_m`, `hand_removal`, `lighting_mode`, `lighting_gamma`, `contact_shadows`); `[locomotion]` (`speed_mps`, `snap_turn`, `snap_deg`, `smooth_dps`, `vignette`, `teleport`, `height_offset_m`, `left_handed`, `reduced_motion`); `[audio]` (`muted`, `master`, `ui`, `soundtrack`, `spatial`, per-sound switches); `[desktop]` (`fov_deg`, `fly_speed_mps`, `keys` as a table of action = key); `[xr]` (`refresh_rate`, `foveation`, `render_scale`, `reference_space`); `[cache]` (`max_bytes`, default 20 GiB). A missing key takes its default; a key of the wrong type is reported and takes its default.
 
 **`poses.json`** (`ftgsxr-poses` v1): an object mapping each model identity (64 lowercase hex digits) to `{"translation": [x, y, z], "rotation": [x, y, z, w], "scale": s, "preset": "y-up" | "z-up" | "neg-y-up" | "custom", "fit_size_m": L, "saved_at": "<RFC 3339>"}`.
 
@@ -504,7 +504,7 @@ Position and the rebased time center are always float32. The capacities and the 
 
 ### 1.14 Conventions
 
-- **Frames.** Model space is openftgs's world: right-handed, no up axis assumed, units of the camera poses \[O: openftgs §1.4\]. Stage space is the player's world: right-handed, y up, metres, the ground at y = 0; on a headset it is the OpenXR STAGE space (or its fallback, §1.8); the engine's world frame is stage space. The pose P\_m maps model space into stage space (E5); the content group is a transform applied to every instance's pose in passthrough mode (E12). Cameras in openftgs's conventions (OpenCV axes, world-to-camera, continuous pixels) are built per view as E6 says; the OpenXR-to-OpenCV camera rotation is diag(1, −1, −1) applied to the transposed view rotation.
+- **Frames.** Model space is openftgs's world: right-handed, no up axis assumed, units of the camera poses \[O: openftgs §1.4\]. Stage space is the player's world: right-handed, y up, metres, the ground at y = 0; on a headset it is the OpenXR STAGE space (or its fallback, §1.8); the engine's world frame is stage space. The pose P\_m maps model space into stage space (E5); the content group is a transform applied to every instance's pose, moved by recentering and by spatial anchors (§1.8, §1.9). Cameras in openftgs's conventions (OpenCV axes, world-to-camera, continuous pixels) are built per view as E6 says; the OpenXR-to-OpenCV camera rotation is diag(1, −1, −1) applied to the transposed view rotation.
 - **Quaternions.** Files hold (w, x, y, z) \[O: openftgs §1.1\]; the engine's quaternion type stores (x, y, z, w); the conversion happens once, at load, and poses in the player's files are written (x, y, z, w) (§1.11).
 - **Time.** τ in the model's `time_unit`; T in seconds; E9 converts; displays follow §1.6.
 - **Color.** The SH coefficients produce display-referred sRGB-encoded values: openftgs trains against 8-bit frames read without gamma conversion \[O: openftgs §1.4 Images\], and openftgs-synth's frames are 8-bit sRGB (Appendix A, row 10). Blending happens in that space (E7, D-6); the resolve pass decodes for the engine's linear pipeline; the light transform multiplies in linear light (E14).
@@ -541,11 +541,768 @@ The player never crashes on a bad input; every error below has a code, a user te
 | E-SETTINGS | a settings file of an unknown major version or an unreadable one | "Settings reset (old file kept)" | defaults, file set aside |
 | E-NUMERIC | a non-finite value in a render | "Render produced invalid values" | `render` exits 3 and writes no file; the player drops the frame and logs |
 
-<!-- §2 -->
-
 ## 2. Package architecture
 
-<!-- §2 -->
+### 2.1 Workspace layout and public API
+
+The workspace is one Cargo workspace with one `[workspace.dependencies]` table, where every version of §2.3 is pinned once (D-1). Crates depend only downward, in bands: platform entry points → XR → application → engine → foundation. Within a band a crate depends only on the crates before it, and within a crate a module only on the modules before it in the tables below, so dependencies run one way with no cycles (CLAUDE.md). Every library crate's `lib.rs` re-exports (`pub use`) exactly the items this section lists; every other item is `pub(crate)` or private.
+
+| Band | Crate | Kind | Depends on | Responsibility |
+| --- | --- | --- | --- | --- |
+| Foundation | `ftgsxr-core` | lib, no engine dependency | safetensors, memmap2, bytemuck, half, glam, serde, serde\_json, sha2, thiserror | the model and its loaders (§1.2), E1–E5 and E8–E11 on the CPU, the temporal index, the clock, the GPU layout, the openftgs request and renders formats |
+| Foundation | `ftgsxr-io` | lib, no engine dependency | `ftgsxr-core`, toml, ureq, rustls, url, directories | paths, settings, scene and pose files, listings, HTTP, model sources (§1.5, §1.11) |
+| Engine | `ftgsxr-render` | lib | the two above, bevy (render features) | the wgpu render layer (shaders, passes, the headless renderer) and its Bevy plugin adapter (§1.4) |
+| Application | `ftgsxr-app` | lib | the three above, bevy, bevy\_egui, bevy\_kira\_audio, image | everything both builds share: intents, the platform port, library, playback, manipulation, locomotion, UI, audio, capture, persistence, the headless commands, desktop input (§1.5–§1.7, §1.10–§1.13) |
+| XR | `ftgsxr-xr` | lib | the four above, bevy\_mod\_openxr, bevy\_mod\_xr, bevy\_xr\_utils, openxr | the OpenXR session, tracking, XR intents, passthrough, depth, light, anchors, the panel (§1.8, §1.9) |
+| Platform | `ftgsxr-desktop` | bin `ftgsxr` | `ftgsxr-app`, `ftgsxr-xr` (feature `xr`, on by default), clap, rfd | the Linux player and the command line (§1.7) |
+| Platform | `ftgsxr-quest` | cdylib `libftgsxr_quest.so` | `ftgsxr-app`, `ftgsxr-xr`, android-activity, jni, ndk-context | the Android entry point and the JNI adapter of the shim (§2.5) |
+| Dev | `ftgsxr-testkit` | lib, dev-dependency | `ftgsxr-core`, `ftgsxr-render`, image | fixtures, checksums, image metrics (E15), a wgpu test context, synthetic tiny models (§3) |
+| Dev | `tools/fixtures/` | Python | openftgs (as a program) | writes the probe models, requests and reference renders of §3.2 |
+| Dev | `android/` | Gradle project with the Kotlin shim | the Khronos OpenXR loader, GameActivity | packages the Quest app (§2.5) |
+
+Builds: the desktop binary links `ftgsxr-desktop` → `ftgsxr-app` → `ftgsxr-render` → `ftgsxr-io` → `ftgsxr-core`, plus `ftgsxr-xr` for `--xr`; the Quest library links `ftgsxr-quest` → `ftgsxr-xr` → `ftgsxr-app` → … The headless commands use `ftgsxr-render`'s wgpu layer without a Bevy `App`.
+
+Deletion test: without `ftgsxr-core`, the E1–E6 mathematics, the validation and the clock would reappear in the shaders' CPU mirrors, the headless command and the app; without `ftgsxr-io`, three transports would re-implement listing and caching inside the app; without the wgpu layer, the headless command would need a Bevy `App`; without `ftgsxr-app`, the two builds would each re-implement the library, playback and UI; without `ftgsxr-xr`, nothing XR-specific would leak into the app.
+
+#### Modules
+
+**`ftgsxr-core`**
+
+| Module | Responsibility | Spec items |
+| --- | --- | --- |
+| `types` | `Model`, `ModelInfo`, `TimeSpan`, `RenderConventions`, `Camera`, `Intrinsics`, `Pose`, `Aabb`, `CoreError` | §1.2, E5, E6, §1.14 |
+| `sh` | the real SH basis and E4's color | E4 |
+| `motion` | E1, E2, E3's window | E1, E2, E3 |
+| `covariance` | quaternion conversion, E5, the CPU mirror of E6's projection | E5, E6 |
+| `index` | the temporal index and its dispatch ranges | E3, D-10 |
+| `clock` | the playback clock and per-instance time | E9, §1.6 |
+| `pose` | grabs, fits, orientation presets | E10, E11, §1.5 |
+| `loader` | the three readers of §1.2, header-only reads, validation, identity | §1.2, D-40, D-41 |
+| `layout` | packing for the GPU, half precision, memory estimates | §1.2 load options, §1.12 |
+| `formats` | `ftgs-render-request` reading, `ftgs-renders` writing and reading, the `info` reply | §1.7, openftgs §2.2 |
+
+**`ftgsxr-io`**
+
+| Module | Responsibility | Spec items |
+| --- | --- | --- |
+| `paths` | `AppPaths` for Linux and Android | §1.11 |
+| `settings` | `Settings`: defaults, TOML, versions, atomic writes | §1.11, D-23 |
+| `scene` | scene and pose files | §1.5, §1.11 |
+| `listing` | the four listing parsers | §1.5, D-31 |
+| `http` | `HttpClient`: text, ranges, resumable cached downloads | §1.5, D-20 |
+| `sources` | `ModelRef`, `ModelSource` and its adapters, the document-provider port | §1.5, D-49 |
+
+**`ftgsxr-render`**
+
+| Module | Responsibility | Spec items |
+| --- | --- | --- |
+| `gpu` | wgpu only: tiers, device, `GpuModel`, frame buffers, the passes and shaders (`cull.wgsl`, `sort_count.wgsl`, `sort_scan.wgsl`, `sort_scatter.wgsl`, `splat.wgsl`, `centers.wgsl`, `resolve.wgsl`), statistics, the headless renderer | §1.4, E6–E8, E13, E14, §1.12, D-3, D-33, D-34, D-35 |
+| `bevy` | the plugin adapter: assets, components, resources, events, the two render nodes | §1.4, D-2, D-4, D-5, D-6 |
+
+**`ftgsxr-app`**
+
+| Module | Responsibility | Spec items |
+| --- | --- | --- |
+| `intent` | `Intent`, the one event both input adapters produce | §1.7, §1.8 |
+| `platform` | the `Platform` port (paths, pickers, permissions, documents, camera statistics) | §1.5, §1.9, §2.5 |
+| `library` | sources, entries, header reads, fetching, loading, unloading | §1.5 |
+| `playback` | the clock resource and per-instance τ | §1.6, E9 |
+| `manipulate` | picking, grabs, the pose store | E10, E11, §1.5 |
+| `rig` | the player rig, locomotion | E12, §1.8 |
+| `ui` | the panels on screen or on a quad, the HUD data, the pointer mapping | §1.7, §1.8, §1.13, D-21 |
+| `audio` | sounds, volumes, soundtracks | §1.10, D-22 |
+| `capture` | screenshots | §1.7 |
+| `persist` | settings, scenes, poses to and from the world | §1.11 |
+| `headless` | the `render`, `info`, `validate`, `import`, `export` commands | §1.7 |
+| `desktop_input` | keyboard and mouse to intents | §1.7, Appendix D.1 |
+| `governor` | E16 | E16, §1.12 |
+| `plugin` | `AppPlugin` | — |
+
+**`ftgsxr-xr`**
+
+| Module | Responsibility | Spec items |
+| --- | --- | --- |
+| `session` | the session, reference spaces, eye cameras, the rig binding | §1.8, D-24 |
+| `tracking` | controllers and hands to `XrHands` | §1.8, Appendix D.2, D.3 |
+| `xr_input` | `hands_to_intents` | §1.8, E10–E12 |
+| `passthrough` | the passthrough layer, style, mode switching | §1.9, D-14 |
+| `depth` | the environment depth provider | E13, §1.9 |
+| `light` | the light estimator and E14's gains | E14, §1.9, D-15 |
+| `anchors` | spatial anchors | §1.9, D-26 |
+| `panel` | the main panel's and wrist menu's placement | §1.8 |
+| `display` | refresh rate, foveation, render scale | §1.12, D-27 |
+| `plugin` | `XrPlugin` | — |
+
+**Public API signatures.** Everything not listed is private and may change between minor versions. `Vec2`, `Vec3`, `Quat`, `Mat3`, `Mat4`, `DVec3`, `DMat3`, `DMat4` and `UVec2` are glam's, re-exported by `ftgsxr_core` from the workspace pin so every crate uses the engine's glam.
+
+```rust
+// ftgsxr_core::types
+/// An exchange model in memory (§1.2): physical values in raw time units; row i is primitive i.
+pub struct Model {
+    pub position: Vec<[f32; 3]>,      // [N, 3] μx, world units
+    pub time_center: Vec<f64>,        // [N] raw τ
+    pub duration: Vec<f64>,           // [N] > 0, units of τ (1 with a single timestamp)
+    pub velocity: Vec<[f32; 3]>,      // [N, 3] world units per unit of τ
+    pub scale: Vec<[f32; 3]>,         // [N, 3] > 0
+    pub rotation: Vec<[f32; 4]>,      // [N, 4] unit quaternion, file order (w, x, y, z), canonical sign
+    pub opacity: Vec<f32>,            // [N] in (0, 1)
+    pub sh: Vec<f32>,                 // N · (L+1)² · 3, coefficient-major, RGB innermost (E4's order)
+    pub sh_degree: u8,                // L ∈ 0..=3
+    pub time: TimeSpan,
+    pub conventions: RenderConventions,
+    pub producer: String,
+    pub identity: [u8; 32],           // SHA-256 of the file (D-40)
+    pub kind: ModelKind,              // ExchangeFile, Checkpoint { spatial_scale, frame_dt }, Ply
+}
+pub enum ModelKind { ExchangeFile, Checkpoint { spatial_scale: f64, frame_dt: f64 }, Ply }
+impl Model {
+    pub fn len(&self) -> usize;                           // N
+    pub fn bounds(&self, samples: usize) -> Aabb;        // E10's B_m: positions at `samples` + 1 times, expanded by 3·max scale
+    pub fn validate(&self) -> Result<(), CoreError>;     // §1.2's reader rules
+    pub fn cap_sh(&mut self, degree: u8);                 // §1.2 load option 1
+    pub fn is_single_timestamp(&self) -> bool;           // τ₀ == τ₁ (D-9)
+}
+
+/// What the file's header alone tells (§1.5 header-only information).
+pub struct ModelInfo {
+    pub n: u64, pub sh_degree: u8, pub time: TimeSpan, pub producer: String,
+    pub conventions: RenderConventions, pub kind: ModelKind, pub file_bytes: u64,
+}
+
+/// τ₀, τ₁ and the unit of a model (openftgs §1.4 Time).
+pub struct TimeSpan { pub tau0: f64, pub tau1: f64, pub time_unit: String }
+impl TimeSpan {
+    pub fn span(&self) -> f64;                 // T_τ, 0 with a single timestamp
+    pub fn is_single(&self) -> bool;
+    pub fn rate_per_second(&self) -> Result<f64, CoreError>; // E9's r: 1 for "s", 1000 for "ms"; Err for others (the caller warns and uses 1)
+}
+
+/// The `render_conventions` block of §1.2 (openftgs D-73); `Default` is openftgs's values.
+pub struct RenderConventions {
+    pub alpha_max: f32, pub eps2d: f32, pub near: f32, pub far: f32, pub alpha_skip: f32,
+    pub transmittance_stop: Option<f32>, pub pixel_center_offset: f32, pub background: [f32; 3],
+    pub jacobian_clamp_margin: f32, pub screen_extent_rule: String, pub screen_extent_max: f32,
+    pub rasterize_mode: String,
+}
+impl RenderConventions {
+    pub fn from_json(json: &str) -> Result<Self, CoreError>;  // unknown keys ignored; background checked in [0, 1]³; missing numbers take the defaults
+    pub fn to_json(&self) -> String;                           // compact, openftgs's key order
+    pub fn warnings(&self) -> Vec<String>;                     // a rule or mode other than openftgs's (E6, D-39)
+}
+
+/// A pinhole camera in openftgs's conventions (E6): OpenCV axes, world-to-camera, continuous pixels.
+pub struct Camera { pub width: u32, pub height: u32, pub k: DMat3, pub world_to_camera: DMat4 }
+pub struct Intrinsics { pub fx: f32, pub fy: f32, pub cx: f32, pub cy: f32, pub width: u32, pub height: u32 }
+impl Camera {
+    pub fn center(&self) -> DVec3;                                   // −R_wᵀ t_w
+    pub fn intrinsics(&self) -> Intrinsics;
+    pub fn from_stage_pose(position: Vec3, rotation: Quat, fov: Fov, width: u32, height: u32) -> Camera; // E6's desktop and XR rules
+}
+/// Field of view: a symmetric vertical angle (desktop) or four tangent angles (XR, XrFovf).
+pub enum Fov { Vertical { radians: f32 }, Angles { left: f32, right: f32, up: f32, down: f32 } }
+
+/// A model instance's pose (E5): a similarity transform, model space → stage space.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Pose { pub translation: Vec3, pub rotation: Quat, pub scale: f32 }
+impl Pose {
+    pub const IDENTITY: Pose;
+    pub fn matrix(&self) -> Mat4;
+    pub fn inverse(&self) -> Pose;
+    pub fn then(&self, outer: &Pose) -> Pose;        // outer ∘ self
+    pub fn transform_point(&self, p: Vec3) -> Vec3;
+    pub fn transform_direction(&self, d: Vec3) -> Vec3; // rotation only
+}
+pub struct Aabb { pub min: Vec3, pub max: Vec3 }
+impl Aabb { pub fn center(&self) -> Vec3; pub fn size(&self) -> Vec3; pub fn longest_side(&self) -> f32; }
+
+/// Every error §1.15 lists, with its code and user text.
+pub enum CoreError {
+    Format(String), Version(String), Keys(String), Shape(String), Value(String), SingleTimestamp(String),
+    Sh(String), Checksum(String), RequestUnit { request: String, model: String }, Io(std::io::Error), Json(String),
+}
+impl CoreError { pub fn code(&self) -> &'static str; pub fn user_text(&self) -> String; }
+```
+
+```rust
+// ftgsxr_core::sh
+pub const SH_C0: f32 = 0.282_094_791_773_878_14;
+/// Y_lm(dir) for l ≤ degree in E4's order and signs; `dir` is normalized here; entries past (degree+1)² are 0.
+pub fn sh_basis(degree: u8, dir: Vec3) -> [f32; 16];
+/// E4's color for one primitive: `coeffs` holds (degree+1)²·3 values, coefficient-major.
+pub fn sh_color(degree: u8, coeffs: &[f32], dir: Vec3) -> [f32; 3];
+
+// ftgsxr_core::motion
+pub fn moved_position(position: Vec3, velocity: Vec3, time_center: f64, tau: f64) -> Vec3;        // E1
+pub fn temporal_opacity(tau: f64, time_center: f64, duration: f64, single: bool) -> f64;          // E2 (1 when `single`)
+pub fn effective_opacity(opacity: f32, sigma_t: f64) -> f32;                                       // E2
+/// E3's half-width w, None when 255·opacity ≤ 1; `widened` applies the index margins (D-10).
+pub fn temporal_window(opacity: f32, duration: f64, span: f64, widened: bool) -> Option<f64>;
+
+// ftgsxr_core::covariance
+pub fn quat_from_wxyz(q: [f32; 4]) -> Quat;                       // file order → engine order, normalized
+pub fn quat_to_wxyz(q: Quat) -> [f32; 4];                         // canonical sign (§1.2)
+pub fn covariance(rotation: Quat, scale: Vec3) -> Mat3;           // E5
+pub fn posed_covariance(cov: Mat3, pose: &Pose) -> Mat3;          // E5's Σ^S
+/// One projected primitive as the cull shader writes it (E6).
+pub struct Projected { pub mean: Vec2, pub conic: [f32; 3], pub radii: [u32; 2], pub depth: f32 }
+/// E6 for one primitive given its stage-space mean and covariance and σ_eff; None when culled.
+pub fn project(mean: Vec3, cov: Mat3, sigma_eff: f32, view: &Camera, conv: &RenderConventions) -> Option<Projected>;
+/// E7's α at pixel center p for a projected primitive, 0 when skipped.
+pub fn alpha_at(p: Vec2, projected: &Projected, sigma_eff: f32, conv: &RenderConventions) -> f32;
+
+// ftgsxr_core::index
+/// The temporal index (E3, D-10): persistent rows first, then transient rows by time center.
+pub struct TemporalIndex { /* persistent count, sorted centers, w_max */ }
+pub struct DispatchRange { pub persistent: std::ops::Range<u32>, pub transient: std::ops::Range<u32> }
+impl TemporalIndex {
+    /// Builds the index and returns the row permutation (new row → file row).
+    pub fn build(model: &Model) -> (TemporalIndex, Vec<u32>);
+    pub fn range(&self, tau: f64) -> DispatchRange;      // a superset of the active set (U-8)
+    pub fn len(&self) -> u32;
+}
+
+// ftgsxr_core::clock
+pub enum LoopMode { Loop, PingPong, Once }
+pub enum EndRule { Hold, Extrapolate }
+pub enum PlayState { Playing, Paused }
+/// The playback clock T (E9): pure, advanced by the caller's Δt.
+pub struct Clock { /* t, speed, state, length, loop, range */ }
+impl Clock {
+    pub fn new(length_s: f64) -> Clock;
+    pub fn advance(&mut self, dt_s: f64);
+    pub fn seek(&mut self, t_s: f64);
+    pub fn set_state(&mut self, s: PlayState);
+    pub fn set_speed(&mut self, speed: f64) -> Result<(), CoreError>;   // in [−4, 4] \ {0}
+    pub fn set_loop(&mut self, m: LoopMode);
+    pub fn set_range(&mut self, range: Option<(f64, f64)>);
+    pub fn set_length(&mut self, length_s: f64);
+    pub fn time(&self) -> f64; pub fn speed(&self) -> f64; pub fn state(&self) -> PlayState; pub fn length(&self) -> f64;
+}
+/// One instance's time mapping (E9).
+pub struct ModelTime { pub span: TimeSpan, pub offset_s: f64, pub rate: f64, pub end_rule: EndRule }
+impl ModelTime {
+    pub fn from_span(span: &TimeSpan) -> ModelTime;        // rate from the unit (1 with a warning for unknown units), offset 0, Hold
+    pub fn tau_at(&self, t_s: f64) -> (f64, bool);         // (τ_m, extrapolating)
+    pub fn length_s(&self) -> f64;                         // o_m + T_τ / r_m
+    pub fn frame_step_s(&self, model: &Model) -> f64;      // §1.6's Δ_frame rule (D-32)
+}
+
+// ftgsxr_core::pose
+pub struct Grab { /* model pose in the hand frame */ }
+impl Grab { pub fn begin(hand: Pose, model: Pose) -> Grab; pub fn update(&self, hand: Pose) -> Pose; }   // E11 one hand
+pub struct ScaleLimits { pub min: f32, pub max: f32 }   // 0.01, 100
+pub struct TwoHandGrab { /* a₀, b₀, m₀, P₀ */ }
+impl TwoHandGrab {
+    pub fn begin(a: Pose, b: Pose, model: Pose) -> TwoHandGrab;
+    pub fn update(&self, a: Pose, b: Pose, limits: &ScaleLimits, free_rotation: bool) -> Pose;   // E11 two hands
+}
+pub enum Preset { YUp, ZUp, NegYUp, Custom(Quat) }
+impl Preset { pub fn rotation(&self) -> Quat; pub fn from_camera_ups(ups: &[Vec3]) -> Preset; }   // §1.5 presets and the manifest hint
+/// §1.5's fit: the box's longest side scaled to `size_m`, centered `ahead_m` along the head's yaw, bottom on the floor.
+pub fn fit_pose(bounds: &Aabb, preset: Preset, size_m: f32, head: Pose, ahead_m: f32) -> Pose;
+pub fn snap_to_floor(bounds: &Aabb, pose: Pose, floor_y: f32) -> Pose;
+/// E10: the entry distance of a stage-space ray into the posed box, None when it misses or lies beyond `max_m`.
+pub fn ray_hit(origin: Vec3, dir: Vec3, bounds: &Aabb, pose: &Pose, max_m: f32) -> Option<f32>;
+
+// ftgsxr_core::loader
+pub const SAFETENSORS_PREFIX: usize = 8;
+pub fn header_len(prefix: &[u8; 8]) -> u64;                                      // little-endian u64
+pub fn read_info(header: &[u8], file_bytes: u64) -> Result<ModelInfo, CoreError>; // from the header bytes alone
+pub fn read_exchange(bytes: &[u8]) -> Result<Model, CoreError>;                   // ftgs-if, validated, identity computed
+pub fn read_checkpoint(dir: &std::path::Path) -> Result<Model, CoreError>;        // manifest + params, activated (§1.2)
+pub fn read_ply(bytes: &[u8]) -> Result<Model, CoreError>;                        // the PLY snapshot (§1.2, D-41)
+pub fn open_model(path: &std::path::Path) -> Result<Model, CoreError>;            // by kind: file → mmap → the reader above
+pub fn sha256(bytes: &[u8]) -> [u8; 32];
+pub fn hex(identity: &[u8; 32]) -> String;                                        // 64 lowercase digits
+
+// ftgsxr_core::layout
+pub struct HalfFields { pub velocity: bool, pub duration: bool, pub scale: bool, pub rotation: bool, pub opacity: bool, pub sh: bool }
+pub struct GpuLayoutOptions { pub half: HalfFields, pub sh_cap: Option<u8> }
+/// The flat arrays the GPU holds, rows permuted by `order`, time rebased to τ − τ₀ (§1.2 load options).
+pub struct GpuArrays {
+    pub n: u32, pub sh_degree: u8, pub tau0: f64, pub single: bool, pub half: HalfFields,
+    pub position: Vec<f32>, pub time_center: Vec<f32>, pub velocity: Vec<u8>, pub duration: Vec<u8>,
+    pub scale: Vec<u8>, pub rotation: Vec<u8>, pub opacity: Vec<u8>, pub sh: Vec<u8>,
+}
+pub fn pack_for_gpu(model: &Model, order: &[u32], opts: &GpuLayoutOptions) -> GpuArrays;
+pub struct MemoryEstimate { pub static_bytes: u64, pub per_capacity_bytes: u32, pub layer_bytes_per_pixel: u32 }
+pub fn memory_estimate(n: u64, sh_degree: u8, opts: &GpuLayoutOptions, shared_sort: bool) -> MemoryEstimate;   // §1.12's table
+/// §1.2 load option 4's opt-in reduction: the `budget` rows of highest opacity·scale product, in file order.
+pub fn reduce_to_budget(model: &Model, budget: usize) -> Vec<u32>;
+
+// ftgsxr_core::formats
+pub struct RenderItem { pub id: String, pub timestamp: f64, pub camera: Camera }
+pub struct RenderRequest { pub time_unit: String, pub background: [f32; 3], pub sh_degree: Option<u8>, pub items: Vec<RenderItem>, pub sha256: [u8; 32] }
+pub fn read_request(json: &[u8]) -> Result<RenderRequest, CoreError>;                   // openftgs's checks (§1.7)
+pub struct RenderImage { pub width: u32, pub height: u32, pub rgb: Vec<f32>, pub alpha: Vec<f32> } // row-major, rgb unclamped
+pub fn write_renders(path: &std::path::Path, items: &[(String, RenderImage)], producer: &str, request_sha256: [u8; 32]) -> Result<(), CoreError>;
+pub fn read_renders(bytes: &[u8]) -> Result<Vec<(String, RenderImage)>, CoreError>;      // sorted by id
+pub struct InfoReply { pub name: String, pub version: String, pub query_kinds: Vec<String>, pub rasterizer_name: String, pub rasterizer_version: String, pub render_conventions: RenderConventions }
+pub fn info_json(reply: &InfoReply) -> String;                                           // §1.7's `info`
+```
+
+```rust
+// ftgsxr_io::paths
+pub struct AppPaths { pub config: PathBuf, pub cache: PathBuf, pub models: PathBuf, pub scenes: PathBuf, pub screenshots: PathBuf, pub logs: PathBuf }
+impl AppPaths {
+    pub fn linux() -> Result<AppPaths, IoError>;                                  // §1.11's XDG locations
+    pub fn android(internal: &Path, external: Option<&Path>, cache: &Path) -> AppPaths;
+}
+
+// ftgsxr_io::settings
+pub struct Settings { /* the tables of §1.11, each a struct with Default */ }
+impl Default for Settings { /* §1's defaults */ }
+pub fn load_settings(path: &Path) -> Result<(Settings, Vec<String>), IoError>;   // (settings, warnings); missing → Default
+pub fn save_settings(path: &Path, s: &Settings) -> Result<(), IoError>;           // atomic
+
+// ftgsxr_io::scene
+pub struct SceneFile { pub models: Vec<SceneModel>, pub clock: ClockState, pub environment: EnvironmentSettings, pub anchor: Option<String>, pub rig: Option<Pose>, pub camera: Option<CameraState>, pub bookmarks: Vec<CameraState> }
+pub struct SceneModel { pub source: SourceSpec, pub identity: String, pub name: String, pub pose: Pose, pub visible: bool, pub mode: String, pub time_offset_s: f64, pub end_rule: EndRule, pub lighting: Option<ManualLighting>, pub audio: Option<String> }
+pub fn read_scene(json: &[u8]) -> Result<SceneFile, IoError>;
+pub fn write_scene(path: &Path, scene: &SceneFile) -> Result<(), IoError>;
+pub struct PoseStore { /* identity → SavedPose */ }
+pub struct SavedPose { pub pose: Pose, pub preset: Preset, pub fit_size_m: f32, pub saved_at: String }
+impl PoseStore {
+    pub fn load(path: &Path) -> Result<PoseStore, IoError>;
+    pub fn save(&self, path: &Path) -> Result<(), IoError>;
+    pub fn get(&self, identity: &str) -> Option<&SavedPose>;
+    pub fn set(&mut self, identity: &str, pose: SavedPose);
+    pub fn forget(&mut self, identity: &str);
+}
+
+// ftgsxr_io::listing
+pub enum EntryKind { Dir, Exchange, Checkpoint, Ply, Other }
+pub struct Entry { pub name: String, pub location: String, pub kind: EntryKind, pub size: Option<u64>, pub mtime: Option<String>, pub sha256: Option<String>, pub thumbnail: Option<String>, pub audio: Option<String>, pub scene: Option<String> }
+pub fn parse_index_manifest(body: &str, base: &Url) -> Result<Vec<Entry>, IoError>;   // ftgsxr-index v1
+pub fn parse_nginx_json(body: &str, base: &Url) -> Result<Vec<Entry>, IoError>;
+pub fn parse_html_listing(body: &str, base: &Url) -> Result<Vec<Entry>, IoError>;     // anchors' href
+pub fn list_dir(path: &Path) -> Result<Vec<Entry>, IoError>;                           // one level, §1.5's kinds
+pub fn classify_name(name: &str) -> EntryKind;
+
+// ftgsxr_io::http
+pub enum TlsRoots { WebPki, Platform }
+pub struct Progress { pub done: u64, pub total: Option<u64> }
+pub struct HttpClient { /* agent, cache dir, limits */ }
+impl HttpClient {
+    pub fn new(cache_dir: PathBuf, roots: TlsRoots, max_bytes: u64) -> Result<HttpClient, IoError>;
+    pub fn get_text(&self, url: &Url) -> Result<String, IoError>;
+    pub fn get_range(&self, url: &Url, start: u64, len: u64) -> Result<Vec<u8>, IoError>;
+    /// A cached, resumable, validated download (§1.5); returns the cached file's path.
+    pub fn download(&self, url: &Url, expected_sha256: Option<&str>, progress: &mut dyn FnMut(Progress), cancel: &AtomicBool) -> Result<PathBuf, IoError>;
+    pub fn prune(&self) -> Result<u64, IoError>;        // least recently used, to max_bytes; returns bytes freed
+}
+
+// ftgsxr_io::sources
+pub enum ModelRef { File(PathBuf), Http(Url), Document(String) }      // Document: an Android content URI
+pub enum ModelBytes { Mapped(memmap2::Mmap), Owned(Vec<u8>) }
+pub trait ModelSource: Send + Sync {
+    fn name(&self) -> &str;
+    fn list(&self, subdir: &str) -> Result<Vec<Entry>, IoError>;
+    fn info(&self, entry: &Entry) -> Result<ModelInfo, IoError>;       // header-only
+    fn fetch(&self, entry: &Entry, progress: &mut dyn FnMut(Progress), cancel: &AtomicBool) -> Result<(ModelRef, ModelBytes), IoError>;
+}
+pub struct LocalDir { pub root: PathBuf }
+pub enum ListingFlavor { Auto, Index, NginxJson, Html }
+pub struct HttpIndex { pub base: Url, pub flavor: ListingFlavor /* , client */ }
+/// The port Android's document provider implements (§2.5); the desktop has none.
+pub trait DocumentProvider: Send + Sync {
+    fn list_tree(&self, tree_uri: &str) -> Result<Vec<Entry>, IoError>;
+    fn open(&self, uri: &str) -> Result<std::fs::File, IoError>;
+}
+pub struct DocumentSource { pub tree_uri: String /* , provider */ }
+pub struct SourceSpec { pub kind: String, pub location: String, pub name: String, pub flavor: Option<ListingFlavor> }
+pub fn open_source(spec: &SourceSpec, client: Option<Arc<HttpClient>>, provider: Option<Arc<dyn DocumentProvider>>) -> Result<Arc<dyn ModelSource>, IoError>;
+pub fn open_ref(r: &ModelRef, client: Option<&HttpClient>, provider: Option<&dyn DocumentProvider>) -> Result<ModelBytes, IoError>;
+pub enum IoError { Fetch(String), Listing(String), Checksum(String), Settings(String), Scene(String), Core(CoreError), Io(std::io::Error) }
+impl IoError { pub fn code(&self) -> &'static str; pub fn user_text(&self) -> String; }
+```
+
+```rust
+// ftgsxr_render::gpu  (wgpu only; usable without a Bevy App)
+pub enum SortKey { Depth32, Depth16 }
+pub enum SortMode { PerView, SharedCenter }
+pub enum Foveation { Off, Low, Medium, High, Dynamic }
+/// A quality tier (§1.12): every number that changes outputs or speed.
+pub struct QualityTier {
+    pub name: String, pub layout: GpuLayoutOptions, pub sort_key: SortKey, pub sort_mode: SortMode,
+    pub capacity: Capacity, pub occlusion: bool, pub render_scale: f32, pub foveation: Foveation,
+    pub memory_budget_bytes: u64,
+}
+pub enum Capacity { Fixed(u32), SumOfModels }
+impl QualityTier {
+    pub fn conformance() -> Self; pub fn desktop() -> Self; pub fn quest_high() -> Self; pub fn quest_balanced() -> Self; pub fn quest_low() -> Self;
+    pub fn by_name(name: &str) -> Option<Self>;
+}
+pub struct SplatDevice { /* device, queue, limits, features */ }
+impl SplatDevice {
+    pub fn from_wgpu(device: wgpu::Device, queue: wgpu::Queue, adapter_info: wgpu::AdapterInfo) -> SplatDevice;
+    pub fn adapter_name(&self) -> &str;
+}
+/// One model on the GPU: the SoA buffers of `GpuArrays`, the temporal index, one uniform block.
+pub struct GpuModel { /* buffers, index, n */ }
+impl GpuModel {
+    pub fn upload(dev: &SplatDevice, arrays: &GpuArrays, index: TemporalIndex, conv: &RenderConventions) -> Result<GpuModel, RenderError>;
+    pub fn memory_bytes(&self) -> u64;
+    pub fn n(&self) -> u32;
+}
+/// What the shaders need of a view (E6): the camera and the clip mapping.
+pub struct ViewParams { pub camera: Camera, pub target_size: UVec2 }
+/// E4's eye and E8's forward axis for the shared sort (D-4).
+pub struct SortPose { pub origin: Vec3, pub forward: Vec3 }
+pub enum RenderMode { Splats, Centers { pixel_radius: f32, colormap: Colormap }, Both { pixel_radius: f32, colormap: Colormap }, Hidden }
+pub enum Colormap { Dc, TimeCenter, Speed, Opacity }
+/// E14's transform: gains in linear light; identity = (1, 1, 1).
+pub struct ColorTransform { pub gain: Vec3 }
+pub struct ModelDraw<'a> { pub model: &'a GpuModel, pub pose: Pose, pub tau: f64, pub mode: RenderMode, pub transform: ColorTransform, pub sh_degree: u8, pub overlays: Overlays }
+pub struct Overlays { pub bounds: bool, pub velocities: Option<u32>, pub time_tint: bool }
+pub struct FrameBuffers { /* records, keys×2, payloads×2, histograms, indirect args, dispatch args, stats, staging */ }
+impl FrameBuffers { pub fn new(dev: &SplatDevice, tier: &QualityTier, capacity: u32) -> FrameBuffers; pub fn capacity(&self) -> u32; }
+/// E13's inputs: the environment depth of a view with its camera and planes.
+pub struct OcclusionInput<'a> { pub depth: &'a wgpu::TextureView, pub camera: Camera, pub near: f32, pub far: f32, pub soft: bool, pub delta_m: f32 }
+pub struct SplatPasses { /* pipelines, layouts, compiled once per (formats, tier) */ }
+impl SplatPasses {
+    pub fn new(dev: &SplatDevice, layer_format: wgpu::TextureFormat, depth_format: Option<wgpu::TextureFormat>, tier: &QualityTier) -> Result<SplatPasses, RenderError>;
+    /// Stages 1–4 of §1.4 for every model at `sort_pose`; `cull_view` is the view whose frustum culls (per view: itself; shared: the union frustum).
+    pub fn encode_prepare(&self, enc: &mut wgpu::CommandEncoder, frame: &FrameBuffers, models: &[ModelDraw], sort_pose: &SortPose, cull_view: &ViewParams);
+    /// Stages 5 and 6 into the file-space layer, depth-tested against `depth` when given.
+    pub fn encode_draw(&self, pass: &mut wgpu::RenderPass, frame: &FrameBuffers, view: &ViewParams, occlusion: Option<&OcclusionInput>);
+    /// Stage 7: the layer over the engine target, decoded for display, with an optional opaque background.
+    pub fn encode_resolve(&self, pass: &mut wgpu::RenderPass, layer: &wgpu::TextureView, background: Option<[f32; 3]>);
+    /// Stage 8: the statistics block to the staging buffer; `FrameStats::poll` reads it two frames later.
+    pub fn encode_stats(&self, enc: &mut wgpu::CommandEncoder, frame: &FrameBuffers);
+}
+pub struct FrameStats { pub visible_splats: u32, pub visible_centers: u32, pub capacity: u32, pub overflow: bool, pub gpu_times_ms: GpuTimes }
+pub struct GpuTimes { pub cull: f32, pub sort: f32, pub draw: f32, pub total: f32 }
+impl FrameStats { pub fn poll(frame: &FrameBuffers, dev: &SplatDevice) -> Option<FrameStats>; }   // never blocks
+/// The headless adapter (§1.7 `render`): its own wgpu instance, adapter and device.
+pub struct HeadlessRenderer { /* ... */ }
+pub struct ModelId(pub u32);
+impl HeadlessRenderer {
+    pub fn new(tier: QualityTier) -> Result<HeadlessRenderer, RenderError>;        // E-GPU-ADAPTER when no adapter
+    pub fn load(&mut self, model: &Model, sh_degree: Option<u8>) -> Result<ModelId, RenderError>;
+    /// E6 and E7 for `camera` at `tau` over `background`; rgb unclamped, alpha = A.
+    pub fn render(&mut self, models: &[(ModelId, Pose)], camera: &Camera, tau: f64, background: [f32; 3]) -> Result<RenderImage, RenderError>;
+    pub fn adapter_name(&self) -> &str;
+}
+pub enum RenderError { NoAdapter, DeviceLost, Budget { needed: u64, budget: u64 }, Shader(String), NonFinite, Core(CoreError) }
+
+// ftgsxr_render::bevy  (the plugin adapter)
+pub struct SplatPlugin { pub tier: QualityTier }
+#[derive(Asset, TypePath)] pub struct SplatAsset { pub info: ModelInfo, pub bounds: Aabb, pub identity: [u8; 32] /* arrays and index: pub(crate) */ }
+/// The CPU part of a load (read, validate, pack), runnable in a task pool.
+pub fn load_splat_asset(bytes: &ModelBytes, kind_hint: Option<ModelKind>, opts: &GpuLayoutOptions, reduce_to: Option<usize>) -> Result<SplatAsset, RenderError>;
+#[derive(Component)] pub struct SplatModel(pub Handle<SplatAsset>);     // with Transform (uniform scale) and Visibility
+#[derive(Component)] pub struct SplatTime { pub tau: f64, pub extrapolating: bool }
+#[derive(Component)] pub struct SplatMode(pub RenderMode);
+#[derive(Component)] pub struct SplatTransform(pub ColorTransform);
+#[derive(Component)] pub struct SplatOverlays(pub Overlays);
+#[derive(Component)] pub struct SplatCamera { pub sort: SortMode, pub output: OutputSpace }   // marks the cameras that draw splats
+pub enum OutputSpace { LinearOver { background: Option<[f32; 3]> }, FileEncoded }
+#[derive(Resource)] pub struct SplatOcclusion { pub depth: Option<Handle<Image>>, pub camera: Camera, pub near: f32, pub far: f32, pub soft: bool, pub delta_m: f32 }
+#[derive(Resource)] pub struct SplatStats(pub Option<FrameStats>);
+#[derive(Resource)] pub struct SplatTierState { pub tier: QualityTier, pub render_scale: f32, pub sh_cap: u8, pub sort_mode: SortMode, pub foveation: Foveation }  // the governor's copy (E16)
+#[derive(Event)] pub enum SplatEvent { Uploaded { entity: Entity, bytes: u64 }, Failed { entity: Entity, error: String }, Overflow { visible: u32, capacity: u32 } }
+```
+
+```rust
+// ftgsxr_app::intent
+pub enum Hand { Left, Right, Mouse }
+pub enum Feature { Passthrough, Sound, Hud, Occlusion, Panel, Lighting }
+pub enum PlaybackCommand { Play, Pause, Toggle, Seek(f64), StepFrames(i32), Speed(f64), Loop(LoopMode), Range(Option<(f64, f64)>), Offset { instance: Entity, offset_s: f64 }, EndRule { instance: Entity, rule: EndRule } }
+pub enum InstanceAction { SavePose, ResetPose, ForgetPose, Fit, SnapToFloor, SetMode(RenderMode), SetVisible(bool), Unload, Select, Deselect }
+/// The one event both input adapters produce and every feature consumes (§1.7, §1.8).
+#[derive(Event)]
+pub enum Intent {
+    Pointer { hand: Hand, origin: Vec3, dir: Vec3 },
+    Select { hand: Hand, pressed: bool },
+    GrabBegin { hand: Hand, pose: Pose }, GrabMove { hand: Hand, pose: Pose }, GrabEnd { hand: Hand },
+    PushPull { hand: Hand, axis: f32 },
+    Locomote { move_xz: Vec2, turn: f32 },          // E12's stick values after the dead zone
+    SnapTurn { steps: i32 },
+    Teleport { target: Vec3 },
+    Recenter,
+    Playback(PlaybackCommand),
+    Instance { instance: Entity, action: InstanceAction },
+    Toggle(Feature),
+    Screenshot,
+    Volume { channel: VolumeChannel, value: f32 },
+}
+pub enum VolumeChannel { Master, Ui, Soundtrack }
+
+// ftgsxr_app::platform
+pub enum PickKind { Files, Folder }
+pub enum Permission { Camera, Scene, HandTracking, Anchors }
+pub struct PickHandle(pub u32); pub struct PermissionHandle(pub u32);
+/// A passthrough camera frame reduced by the shim (§1.9, D-15): 64 × 48 RGB in [0, 1], row-major, with the camera's pose and field of view in stage space when known.
+pub struct CameraThumb { pub width: u32, pub height: u32, pub rgb: Vec<f32>, pub at_s: f64, pub camera: Option<Camera> }
+/// The platform port: two adapters, `LinuxPlatform` (rfd dialogs, every permission granted, no documents, no camera) and `QuestPlatform` (the JNI shim). Non-blocking: the caller polls.
+pub trait Platform: Send + Sync {
+    fn paths(&self) -> &AppPaths;
+    fn pick(&self, kind: PickKind) -> PickHandle;
+    fn poll_pick(&self, h: PickHandle) -> Poll<Result<Vec<ModelRef>, String>>;
+    fn request_permission(&self, p: Permission) -> PermissionHandle;
+    fn poll_permission(&self, h: PermissionHandle) -> Poll<bool>;
+    fn document_provider(&self) -> Option<Arc<dyn DocumentProvider>>;
+    fn camera_frames(&self) -> Option<Arc<dyn CameraFrames>>;
+}
+pub trait CameraFrames: Send + Sync {
+    fn start(&self) -> Result<(), String>;        // after the permissions of §1.9 are granted
+    fn latest(&self) -> Option<CameraThumb>;      // the newest thumbnail, None until the first arrives
+    fn stop(&self);
+}
+#[derive(Resource)] pub struct PlatformRes(pub Arc<dyn Platform>);
+
+// ftgsxr_app::library
+pub enum EntryState { Listed, Fetching(Progress), Loading, Loaded(Entity), Failed(String), Missing }
+pub struct LibraryEntry { pub source: usize, pub entry: Entry, pub info: Option<ModelInfo>, pub identity: Option<String>, pub thumbnail: Option<Handle<Image>>, pub state: EntryState }
+#[derive(Resource)] pub struct Library { pub sources: Vec<(SourceSpec, Arc<dyn ModelSource>)>, pub entries: Vec<LibraryEntry> }
+#[derive(Event)] pub enum LibraryCommand { AddSource(SourceSpec), RemoveSource(usize), Refresh(usize), Load { entry: usize, reduce: bool }, LoadRef(ModelRef), Cancel(usize), Unload(Entity), UnloadAll, Pick(PickKind) }
+#[derive(Component)] pub struct LoadedModel { pub source: ModelRef, pub identity: String, pub info: ModelInfo, pub name: String, pub time: ModelTime, pub reduced: bool, pub audio: Option<ModelRef> }
+
+// ftgsxr_app::playback
+#[derive(Resource)] pub struct Playback { pub clock: Clock }
+// System: advances the clock by the frame's Δt and writes SplatTime per instance (E9).
+
+// ftgsxr_app::manipulate
+#[derive(Resource)] pub struct ManipulateSettings { pub limits: ScaleLimits, pub ray_max_m: f32, pub keep_upright: bool, pub push_pull_mps: f32 }
+#[derive(Component)] pub enum Grabbed { One { hand: Hand, grab: Grab }, Two { grab: TwoHandGrab } }
+#[derive(Component)] pub struct Selected;
+#[derive(Component)] pub struct Hovered { pub hand: Hand, pub distance: f32 }
+/// E10 over every instance: the nearest hit.
+pub fn pick_instance(origin: Vec3, dir: Vec3, instances: &[(Entity, Pose, Aabb)], max_m: f32) -> Option<(Entity, f32)>;
+#[derive(Resource)] pub struct Poses(pub PoseStore);
+
+// ftgsxr_app::rig
+#[derive(Component)] pub struct PlayerRig;              // the user's origin: the desktop camera's parent, the XR tracking space
+#[derive(Component)] pub struct ContentGroup;           // every instance's parent (§1.14)
+#[derive(Resource)] pub struct Locomotion { pub speed_mps: f32, pub snap: bool, pub snap_deg: f32, pub smooth_dps: f32, pub vignette: bool, pub teleport: bool, pub height_offset_m: f32, pub enabled: bool }
+/// E12, pure: the rig's new pose from the stick intents; `enabled` is false in passthrough mode (D-17).
+pub fn apply_locomotion(rig: Pose, head: Pose, intent: &Intent, loco: &Locomotion, dt: f32) -> Pose;
+
+// ftgsxr_app::ui
+#[derive(Resource)] pub enum UiSurface { Screen, Panel { entity: Entity, size_px: UVec2, size_m: Vec2 } }
+#[derive(Component)] pub struct WorldPanel { pub image: Handle<Image> }
+#[derive(Component)] pub struct WristMenu;
+/// The ray's hit on the panel quad as a pointer position in pixels; None when it misses (§1.8).
+pub fn panel_hit(origin: Vec3, dir: Vec3, panel: Pose, size_m: Vec2, size_px: UVec2) -> Option<Vec2>;
+#[derive(Resource)] pub struct HudData { /* §1.13's fields */ }
+#[derive(Event)] pub struct Toast { pub text: String, pub level: ToastLevel }
+pub enum ToastLevel { Info, Warning, Error }
+
+// ftgsxr_app::audio
+#[derive(Resource)] pub struct AudioState { pub muted: bool, pub master: f32, pub ui: f32, pub soundtrack: f32, pub spatial: bool, pub sounds: SoundSwitches }
+pub enum UiSound { Hover, Select, GrabBegin, GrabEnd, SnapTurn, Click, Error, Confirm }
+#[derive(Event)] pub struct PlayUiSound(pub UiSound);
+#[derive(Component)] pub struct Soundtrack { pub source: ModelRef }     // synchronized by §1.6
+
+// ftgsxr_app::capture
+#[derive(Event)] pub struct ScreenshotRequest { pub camera: Entity }
+
+// ftgsxr_app::persist
+#[derive(Resource)] pub struct SettingsRes(pub Settings);
+#[derive(Event)] pub enum PersistCommand { SaveSettings, SaveScene(PathBuf), LoadScene(PathBuf), SavePose(Entity), ForgetPose(Entity) }
+pub fn scene_from_world(world: &World) -> SceneFile;
+pub fn apply_scene(commands: &mut Commands, scene: &SceneFile, library: &mut Library) -> Vec<String>;   // the missing models' names
+
+// ftgsxr_app::governor
+#[derive(Resource)] pub struct Governor { pub enabled: bool, pub down_frames: u32, pub up_frames: u32 }   // E16
+
+// ftgsxr_app::headless  (§1.7; exit codes 0, 2, 3)
+pub fn cmd_render(model: &Path, request: &Path, out: &Path, tier: QualityTier, version: &str) -> Result<(), HeadlessError>;
+pub fn cmd_info(version: &str, json: bool) -> String;
+pub fn cmd_validate(models: &[PathBuf]) -> Result<Vec<ModelInfo>, HeadlessError>;
+pub fn cmd_import(input: &Path, out: &Path) -> Result<(), HeadlessError>;
+pub fn cmd_export(model: &Path, out: &Path) -> Result<(), HeadlessError>;
+pub enum HeadlessError { Input(String), Numeric(String), Environment(String) }
+pub fn exit_code(e: &HeadlessError) -> i32;    // Input, Environment → 2; Numeric → 3
+
+// ftgsxr_app::desktop_input
+pub struct DesktopInputPlugin;                   // Appendix D.1 → Intent; mouse ray from the active camera
+#[derive(Resource)] pub struct KeyMap { /* action → key, from Settings.desktop.keys */ }
+
+// ftgsxr_app::plugin
+pub struct AppPlugin { pub platform: Arc<dyn Platform>, pub tier: QualityTier, pub initial: Vec<ModelRef>, pub scene: Option<PathBuf> }
+```
+
+```rust
+// ftgsxr_xr
+pub struct XrPlugin { pub passthrough: bool, pub hands: bool, pub sort: SortMode }
+pub enum HandSource { Controller, Hand }
+pub struct TrackedHand { pub aim: Pose, pub grip: Pose, pub pinch: f32, pub squeeze: f32, pub trigger: f32, pub stick: Vec2, pub primary: bool, pub secondary: bool, pub menu: bool, pub source: HandSource, pub tracked: bool }
+#[derive(Resource)] pub struct XrHands { pub left: Option<TrackedHand>, pub right: Option<TrackedHand>, pub head: Pose, pub left_handed: bool }
+pub struct XrInputConfig { pub grab_begin: f32, pub grab_end: f32, pub pinch_begin: f32, pub pinch_end: f32, pub stick_deadzone: f32, pub snap: bool, pub locomotion_enabled: bool }
+/// Appendix D.2 and D.3 to intents, pure: grabs, two-hand grabs, locomotion, pointers, toggles.
+pub fn hands_to_intents(prev: &XrHands, now: &XrHands, cfg: &XrInputConfig) -> Vec<Intent>;
+pub enum EnvironmentMode { Vr, Passthrough }
+#[derive(Resource)] pub struct Environment { pub mode: EnvironmentMode, pub passthrough_available: bool, pub style: PassthroughStyle }
+pub struct PassthroughStyle { pub brightness: f32, pub contrast: f32, pub saturation: f32 }   // in [−1, 1]
+pub struct DepthFrame { pub image: Handle<Image>, pub camera: Camera, pub near: f32, pub far: f32, pub age_frames: u32 }
+/// The environment-depth port (E13); adapter: XR_META_environment_depth; None where unsupported.
+pub trait EnvironmentDepth: Send + Sync { fn start(&mut self, hand_removal: bool) -> Result<(), XrError>; fn acquire(&mut self) -> Option<DepthFrame>; fn stop(&mut self); }
+pub enum LightingMode { Off, Manual(ManualLighting), AutoGlobal, AutoLocal }
+pub struct ManualLighting { pub exposure_ev: f32, pub temperature: f32, pub tint: f32 }
+pub struct LightEstimate { pub luma: f32, pub rgb: [f32; 3] }
+/// E14, pure: the gains from the smoothed estimate and the reference.
+pub fn light_gains(estimate: &LightEstimate, reference: &LightEstimate, gamma: f32) -> ColorTransform;
+pub fn manual_gains(manual: &ManualLighting) -> ColorTransform;
+pub fn grey_world_gains(estimate: &LightEstimate) -> ColorTransform;
+pub struct AnchorId(pub String);     // the runtime's UUID as text
+/// Spatial anchors (§1.9); adapter: XR_FB_spatial_entity with XR_META_spatial_entity_persistence; `NoAnchors` on the desktop.
+pub trait AnchorStore: Send + Sync {
+    fn create(&mut self, pose: Pose) -> Result<AnchorId, XrError>;
+    fn locate(&self, id: &AnchorId) -> Option<Pose>;
+    fn persist(&mut self, id: &AnchorId) -> Result<(), XrError>;
+    fn forget(&mut self, id: &AnchorId) -> Result<(), XrError>;
+}
+pub struct NoAnchors;
+pub enum PanelFollow { WorldLocked, Summon }
+#[derive(Component)] pub struct MainPanel { pub follow: PanelFollow }
+#[derive(Resource)] pub struct DisplaySettings { pub refresh_rate: Option<f32>, pub available_rates: Vec<f32>, pub foveation: Foveation, pub render_scale: f32 }
+pub enum XrError { Unsupported(&'static str), Permission(Permission), Runtime(String), SessionLost }
+```
+
+```rust
+// ftgsxr_desktop  (binary `ftgsxr`, §1.7)
+pub struct LinuxPlatform { /* paths */ }     // impl Platform: rfd dialogs on a helper thread, permissions granted, no documents, no camera
+
+// ftgsxr_quest  (cdylib)
+#[bevy_main] fn main();                       // AppPlugin + XrPlugin + QuestPlatform; no Bevy window (§2.5)
+pub struct QuestPlatform { /* AndroidApp, JniShim */ }   // impl Platform + DocumentProvider + CameraFrames over the shim
+```
+
+### 2.2 Stable file interfaces
+
+The player reads openftgs's `ftgs-if`, `ftgs-checkpoint` and `ftgs-render-request`, and writes `ftgs-renders` and, from `import` and `export`, `ftgs-if`, all as openftgs §2.2 defines them and §1.2 and §1.7 restate (readers reject an unknown major version and ignore unknown keys). Its own versioned formats are §1.11's: `ftgsxr-settings` v1 (TOML), `ftgsxr-poses` v1 (JSON), `ftgsxr-scene` v1 (JSON), `ftgsxr-index` v1 (JSON) and the cache's `meta.json`. Every one of them carries `format` and `version`, is written atomically, and is read by `ftgsxr-io` alone. Nothing is ever deserialized from an executable format.
+
+### 2.3 Dependencies and licenses
+
+Every dependency is under a license compatible with an Apache-2.0 release; none is GPL or AGPL. "Verified" means the license was read from the project's license file or crates.io's license field during the planning research of 2026-10-29 (Appendix A); "knowledge" entries are confirmed by the release-time license scan (cargo-deny, below). Versions are those of the pin rule D-1 on 2026-10-29: the newest Bevy minor for which bevy\_mod\_openxr has a crates.io release, with every crate at the version compatible with it; the one `[workspace.dependencies]` table holds them, and moving to a newer Bevy is one edit of that table once the XR crates release for it, re-checked at the start of every milestone.
+
+| Crate or tool | Version | Use | Scope | License | Checked |
+| --- | --- | --- | --- | --- | --- |
+| bevy | 0.19.1 | engine: ECS, rendering (wgpu 29), windowing (winit 0.30), assets, tasks | core | MIT OR Apache-2.0 | verified |
+| ↳ wgpu, wgpu-hal, naga | Bevy's pins (29) | the GPU layer of `ftgsxr-render`, through Bevy's re-exports | core | MIT OR Apache-2.0 | verified |
+| ↳ glam | Bevy's pin (0.33) | vectors, quaternions, matrices, re-exported by `ftgsxr-core` | core | MIT OR Apache-2.0 | verified |
+| ↳ winit | Bevy's pin (0.30) | the desktop window | desktop | Apache-2.0 | verified |
+| bevy\_mod\_openxr, bevy\_mod\_xr, bevy\_xr\_utils | 0.6.0 | the OpenXR session, swapchains, per-eye cameras, actions, hand tracking, passthrough layer | xr | MIT OR Apache-2.0 | verified (crates.io field, README; license files present) |
+| ↳ openxr, openxr-sys | 0.21.1 (the XR crates' pin) | OpenXR bindings; the extensions of Appendix E | xr | MIT OR Apache-2.0 | verified |
+| ↳ android-activity | =0.6.0 (the XR crates' pin) | the Android activity glue | quest | MIT OR Apache-2.0 | verified |
+| safetensors | 0.8 | reading `ftgs-if`, `params.safetensors`; writing `ftgs-renders` and `ftgs-if` | core | Apache-2.0 | verified |
+| memmap2 | 0.9 | memory-mapped model files | core | MIT OR Apache-2.0 | verified |
+| bytemuck | 1.25 | casting tensor bytes | core | Zlib OR Apache-2.0 OR MIT | verified |
+| half | 2.7 | half-precision packing | core | MIT OR Apache-2.0 | verified |
+| serde, serde\_json | 1 | JSON files | core | MIT OR Apache-2.0 | verified |
+| toml | 1.1 | `settings.toml` | core | MIT OR Apache-2.0 | verified |
+| sha2 | 0.10 | identities, checksums | core | MIT OR Apache-2.0 | knowledge |
+| thiserror | 2 | error types | core | MIT OR Apache-2.0 | knowledge |
+| rayon | 1 | parallel packing and validation on the CPU | core | MIT OR Apache-2.0 | knowledge |
+| ureq | 3.5 | HTTP listings and downloads | core | MIT OR Apache-2.0 | verified |
+| ↳ rustls | 0.23 | TLS, with the `ring` provider | core | Apache-2.0 OR ISC OR MIT | verified |
+| ↳ ring | 0.17 | the TLS crypto provider (D-20) | core | Apache-2.0 AND ISC | verified |
+| ↳ webpki-roots | 1.0 | the root certificates (D-20) | core | CDLA-Permissive-2.0 (a permissive data license; owner accepted 2026-10-29) | verified |
+| url | 2 | URLs | core | MIT OR Apache-2.0 | knowledge |
+| directories | 6 | XDG paths (brings `option-ext`, MPL-2.0, used unmodified) | desktop | MIT OR Apache-2.0 | verified |
+| bevy\_egui | 0.42 | the panels (D-21) | app | MIT | verified |
+| ↳ egui | bevy\_egui's pin | immediate-mode UI | app | MIT OR Apache-2.0 | verified |
+| bevy\_kira\_audio | 0.26 | sounds and soundtracks (D-22) | app | MIT OR Apache-2.0 | verified |
+| ↳ kira | bevy\_kira\_audio's pin (0.12) | audio engine with seeking | app | MIT OR Apache-2.0 | verified |
+| image | 0.25 | PNG screenshots and thumbnails | app | MIT OR Apache-2.0 | knowledge |
+| clap | 4 | the command line | desktop | MIT OR Apache-2.0 | knowledge |
+| rfd | 0.17 | file dialogs (XDG portal, GTK fallback) | desktop | MIT | verified |
+| tracing, tracing-subscriber | 0.1, 0.3 | logging | core | MIT | verified |
+| android\_logger | 0.15 | logcat | quest | MIT OR Apache-2.0 | verified |
+| jni | 0.20 (the XR crates' pin) | calling the shim | quest | MIT OR Apache-2.0 | verified |
+| ndk-context | 0.1 | the JavaVM and activity handles | quest | MIT OR Apache-2.0 | verified |
+| proptest, approx | 1, 0.5 | property tests, tolerances | dev | MIT OR Apache-2.0; Apache-2.0 | knowledge |
+| cargo-deny | latest | the license and advisory scan in CI | dev tool | MIT OR Apache-2.0 | knowledge |
+| cargo-ndk | 4.1 | building the Android library | build tool | Apache-2.0 OR MIT | verified |
+| Gradle, the Android SDK and NDK, Kotlin | the versions `android/` pins | packaging the Quest app | build tools and programs | Apache-2.0 (Gradle, Kotlin); the Android SDK license (programs) | knowledge |
+| Khronos OpenXR loader for Android (`org.khronos.openxr:openxr_loader_for_android`) | ≥ 1.0.34, pinned in `android/` | the OpenXR loader (D-19) | quest, bundled | Apache-2.0 (OpenXR-SDK); the Maven artifact's POM license is confirmed when `android/` is set up | verified for OpenXR-SDK |
+| GameActivity (Android Game Development Kit) | pinned in `android/` | the activity base class (D-18) | quest, bundled | Apache-2.0 | knowledge |
+| openftgs | the clone's commit, recorded in `tests/fixtures/README.md` | produces the fixtures of §3.2 (`ftgs render --backend reference`) | dev program | Apache-2.0 | verified |
+| Monado | the system's | the OpenXR runtime of the `xr` lane | runtime, never read | BSL-1.0 main code (docs only) | verified (Debian copyright) |
+
+Notes:
+
+- bevy\_gaussian\_splatting (MIT OR Apache-2.0) is not a dependency (D-2); where a piece of its design is adapted (the radix sort's structure), the code carries the attribution comment and NOTICE entry CLAUDE.md requires, and Appendix A has its rows.
+- Meta's OpenXR Mobile SDK, its loader and its samples are not used; the Khronos loader is (D-19). Meta's documentation is the source of Appendix E.
+- The license scan runs cargo-deny in CI with an allowlist (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0, CDLA-Permissive-2.0, MPL-2.0 for unmodified dependencies) and fails on GPL, AGPL, LGPL and unknown licenses. MPL-2.0 (`option-ext` under `directories`, as hypothesis in openftgs) is file-level copyleft: depending on the unmodified crate is compatible with the Apache-2.0 release, and its source is never read (CLAUDE.md).
+- The Android build bundles the Khronos loader and the GameActivity library in the APK; their license texts ship in the app's licenses panel (§1.7) with every crate's, generated by cargo-about or cargo-deny's list.
+- No pretrained weights, datasets or models are bundled; the fixtures of §3.2 are the player's own (§2.7).
+
+### 2.4 Performance architecture
+
+The targets are §1.12's budgets P-1 to P-5 on the reference hardware. Four rules apply to every hot path, as in openftgs §2.4:
+
+1. **No host synchronization in the frame loop.** Counts and dispatch sizes stay on the GPU (indirect draws and dispatches, §1.4 stages 2–5); statistics are read two frames late; uploads are chunked (≤ 64 MB per frame); loading, validation and packing run on the compute task pool, listings and downloads on the I/O task pool.
+2. **Exact optimizations are always on**: skipping the prepare stages when nothing changed (§1.4), the temporal index (E3), frustum culling, half-extent quads. They change no pixel.
+3. **Approximate optimizations live in tiers only** (D-37): half-precision storage, the SH cap, `Depth16`, shared-center sorting, the render scale, foveation. Each is bounded in §1.12 and tested in §3.2; the conformance tier turns every one of them off.
+4. **Memory is checked before it is spent**: the static estimate against the tier's budget before upload (§1.2), the frame buffers sized once per tier and capacity, the layer sized from the swapchain or window.
+
+**Where the time goes** (one frame, one view; measured by B-1 to B-4):
+
+| Stage | Runs | Cost driver | Plan |
+| --- | --- | --- | --- |
+| prepare | per instance | nothing (microseconds) | CPU, uniform writes only |
+| cull | per instance, per dispatch range | rows visited (the active superset) × E6 | the temporal index keeps rows visited near the active set; one thread per row; early exits in the order σ\_eff, near/far, frustum |
+| size | once | — | one workgroup |
+| sort | once per view (per-view) or once (shared) | visible rows × passes | 4 passes of 8 bits; `Depth16` halves them; shared-center halves the views |
+| draw splats | per view | covered pixels × overdraw | half-extent quads from the opacity-aware extent; discard below 1/255; render scale |
+| draw centers | per view | visible rows | cheap; no sort |
+| resolve | per view | pixels | one full-screen pass |
+| statistics | once | — | copy to staging, mapped two frames later |
+
+**GPU data layout.** Structure-of-arrays buffers per model (one buffer per field, no padding), float32 positions and rebased time centers, half-precision packs as `u32` pairs where the tier says so; the temporal index's permutation applied at pack time so dispatch ranges are contiguous. Records, keys, payloads, histograms and arguments in one `FrameBuffers` per tier and capacity, shared by every model of a view; two views in per-view mode hold two sets. The sort is the player's own classic radix sort (D-33): count, scan and scatter kernels with 256-thread workgroups, 8-bit digits, workgroup-local histograms and a single-workgroup scan of the global histogram, no subgroup operations and no decoupled look-back, so it runs on Adreno drivers as on desktop ones; keys and payloads ping-pong between two buffer pairs.
+
+**Frame loop hooks.** On the headset the XR crate calls `xr_wait_frame` in its `XrFirst` schedule, begins the frame and acquires the swapchain images in the render world's `PreRender`, and releases them and ends the frame in `PostRender`; it renders one Bevy camera per eye into one array layer each \[L: bevy\_mod\_openxr 0.6.0 source\]. The player's two render nodes run inside each `SplatCamera`'s 3D pass: the prepare node before the opaque pass, the draw node after the opaque pass and before the transparent pass (so opaque geometry occludes splats by depth and the UI quad draws over them); the exact ordering labels are those of the pinned Bevy, where render passes are systems in the 3D schedule \[L: Bevy 0.19 migration guide\]. A render-world resource holds the frame's number and whether the shared prepare ran, reset at extraction, so the second eye only draws. The sort pose of shared-center mode comes from the two eye views extracted for the frame.
+
+**Threads.** The main and render threads are Bevy's; loading uses the compute task pool (one task per load; validation and packing parallel over rows with rayon within the task), network the I/O pool (one download at a time, header reads in parallel), audio decoding the audio crate's thread. The shim's camera thread lives in the Android process (§2.5).
+
+### 2.5 Platform layer
+
+**Android packaging** \[A: Meta Quest manifest and loader documentation; D-18, D-19\]. `cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build --release -p ftgsxr-quest` builds `libftgsxr_quest.so`; the Gradle project in `android/` packages it with the Khronos OpenXR loader from Maven (`org.khronos.openxr:openxr_loader_for_android`, version pinned in `android/app/build.gradle.kts`, ≥ 1.0.34 as Meta requires) and the GameActivity library. The activity is the Kotlin class `MainActivity : GameActivity` (D-18); should bevy\_mod\_openxr at the pinned version force android-activity's `native-activity` backend (the two backends are mutually exclusive across the dependency graph), `MainActivity` extends `NativeActivity` instead, and nothing outside `ftgsxr-quest` and `android/` changes. No Bevy window is created on the Quest; the XR session drives the frames. The manifest declares: `minSdkVersion` 32 and `targetSdkVersion` 34 (Meta: apps created after 2026-03-01 target 34; GameActivity needs API 31 or later); arm64-v8a only; the intent category `com.oculus.intent.category.VR` and `org.khronos.openxr.intent.category.IMMERSIVE_HMD`; the feature `android.hardware.vr.headtracking` (required, version 1); `com.oculus.supportedDevices` = `quest3|quest3s`; landscape orientation; the feature `com.oculus.feature.PASSTHROUGH`; the feature `oculus.software.handtracking` (not required) with the permission `com.oculus.permission.HAND_TRACKING` and the meta-data `com.oculus.handtracking.frequency` = `HIGH`; the permissions `com.oculus.permission.USE_SCENE` (depth and scene), `com.oculus.permission.USE_ANCHOR_API` (anchors), `horizonos.permission.HEADSET_CAMERA` and `android.permission.CAMERA` (light estimation; the feature `android.hardware.camera2.any`, not required), `android.permission.INTERNET`; the application id is the owner's (D-36). Debug builds sign with a local debug keystore (ignored by git); release signing is the owner's. `adb install -r` installs; `adb logcat -s ftgsxr` reads the log; the app appears under Unknown Sources.
+
+**The shim** (`android/app/src/main/kotlin/<application id>/MainActivity.kt` and `Shim.kt`) \[D-15, D-49\]. Rust reaches it through JNI (the `jni` crate, the JavaVM and activity handles from android-activity); Kotlin never calls into Rust: every result is polled. The surface is these static methods of `Shim`, and nothing else:
+
+| Method | Does |
+| --- | --- |
+| `pickDocuments(requestId: Int, tree: Boolean)` | starts `ACTION_OPEN_DOCUMENT` (several files) or `ACTION_OPEN_DOCUMENT_TREE` and takes persistable read permission on the result |
+| `pollPick(requestId: Int): Array<String>?` | the content URIs once the picker returns; null while pending; an empty array when cancelled |
+| `listTree(treeUri: String): Array<String>` | the documents of a tree, one `name\tsize\tmime\turi` per entry |
+| `openDocument(uri: String): Int` | a detached read-only file descriptor for the URI (−1 on failure) |
+| `requestPermission(requestId: Int, permission: String)`; `pollPermission(requestId: Int): Int` | the runtime permission flow; −1 pending, 0 denied, 1 granted |
+| `startCamera(): Int`; `pollCameraThumb(): FloatArray?`; `stopCamera()` | opens the passthrough camera through Camera2 at 1280 × 960 YUV, 60 Hz; each poll returns the newest 64 × 48 RGB thumbnail (9216 floats) followed by the timestamp and the camera pose and field of view when the metadata gives them, or null when none is new |
+
+Rust wraps them as `QuestPlatform` (the `Platform`, `DocumentProvider` and `CameraFrames` ports of §2.1). The desktop's `LinuxPlatform` runs rfd's dialogs on a helper thread, grants every permission, and has no documents and no camera.
+
+**Paths and storage** (§1.11): Android's internal files directory for settings, poses and scenes, the app-external files directory for models and screenshots, the cache directory for the HTTP cache, thumbnails and logs; all from android-activity's paths. Models may also come from `adb push` into the models directory (D-49).
+
+**Desktop.** The system's OpenXR loader and runtime discovery (`XR_RUNTIME_JSON`, then the active-runtime file under the XDG config directories) through the openxr crate's `loaded` feature; `--xr` without a runtime is E-XR-RUNTIME. For development and the `xr` lane, Monado's `monado-service` with `QWERTY_ENABLE=1` or its simulated driver.
+
+### 2.6 Coding standards
+
+- Rust edition 2024; the workspace's `rust-version` is the pinned Bevy's minimum; `cargo fmt` with the default style; `cargo clippy --all-targets -D warnings`.
+- `#![forbid(unsafe_code)]` in `ftgsxr-core`, `ftgsxr-io` and `ftgsxr-app`; `unsafe` only in `ftgsxr-render` (wgpu-hal interop, if any), `ftgsxr-xr` (OpenXR FFI the crates do not wrap) and `ftgsxr-quest` (JNI), each block with a `// SAFETY:` comment.
+- `#![warn(missing_docs)]`; every `pub` item re-exported by `lib.rs` is one of §2.1's; a doc comment on each gives the spec items it implements.
+- No `unwrap` or `expect` outside tests except on invariants, with the invariant in the `expect` message; errors are the typed enums of §2.1 and carry §1.15's codes.
+- Markers: `// Q-n` for provisional decisions, `// D-n` where a decision's choice is coded; shaders carry the same comments; `# Q-n` in TOML and the Python tooling.
+- Every source file starts with its SPDX header (CLAUDE.md); shaders are plain WGSL with a header comment naming the equations they implement; every constant of E6 and E7 reaches the shaders through the model's uniform block, never as a literal (D-39).
+- Dependencies only from §2.3; `cargo deny check` passes.
+- Logging through `tracing`; no `println!` outside the command-line output of §1.7.
+
+### 2.7 Test infrastructure
+
+**Lanes** (D-28). `cpu` tests run under plain `cargo test` on any machine. The other lanes are `#[ignore = "<lane>"]` with a name prefix: `gpu_` (needs a graphics adapter), `xr_` (needs an OpenXR runtime: Monado on the desktop), `dv_` (needs the Quest over adb), `net_` (needs the internet), `ds_` (needs `$OPENFTGS_DATASETS` and the trained tiny models). A lane runs with `cargo test -- --ignored <prefix>`, and the `gpu`, `xr` and `dv` lanes with `--test-threads 1`. The skills' ledger budgets every run (`.claude/skills/implement-without-subagents/SKILL.md`).
+
+**Skeleton test.** `ftgsxr-core` has the always-run test `skeleton`: every source file of the workspace starts with its SPDX header; `cargo metadata` lists exactly §2.1's crates; every `.wgsl` file is referenced by `ftgsxr-render`.
+
+**Organisation.** Unit tests in `#[cfg(test)]` modules beside the code (private helpers may have their own, `tdd` skill "Private tests"); spec tests at the public interface in `crates/<crate>/tests/`, named after the §3 row they pin (`u07_temporal_opacity_rebased`, `r03_probe_p3`); `ftgsxr-testkit` provides `fixtures_dir()`, `probe(name) -> (Model, RenderRequest)`, `reference_render(name) -> Vec<(String, RenderImage)>`, `metrics(a, b) -> Metrics { psnr, share, alpha }` (E15), `gpu_context() -> SplatDevice`, `random_model(seed, n, degree) -> Model`, `serve_fixtures() -> LocalServer` (an in-process HTTP server for the `cpu` lane's listing and download tests).
+
+**Fixtures** (D-29). `tests/fixtures/` holds, committed: the probe models P1–P10 and the player's additional probes as `ftgs-if` files, their `ftgs-render-request` files, the reference renders (`ftgs render … --backend reference` output) as `ftgs-renders` files, a pre-posed merged model for the multi-model test, three listing bodies (an `index.json`, an nginx JSON listing, an Apache HTML listing), sample settings, scene and pose files of every version, `SHA256SUMS` over all of them, and `README.md` recording the openftgs commit, the commands and `ftgs info`'s reply that produced them. `tools/fixtures/make_probes.py` writes the probes and requests and runs openftgs; `tools/fixtures/merge_posed.py` writes the merged model; both are Python dev tooling that imports nothing from this workspace. Trained models are not committed: `tools/fixtures/train_tiny.sh` runs openftgs on openftgs-synth's `tiny` and `tiny_unsync` scenes (and `kitchen` for the budgets) into `$OPENFTGS_DATASETS/xr-fixtures/`, which the `ds` lane reads. A fixture's checksum mismatch fails the suite before any test.
+
+**Continuous integration.** On every push: `cargo fmt --check`, `cargo clippy`, `cargo deny check`, the `cpu` lane, the skeleton test, and a Quest build (`cargo ndk` with the Android NDK, without Gradle) to catch compile breaks. The `gpu` lane runs on the owner's machine through the ledger before a merge; the `xr` lane there under Monado; the `dv` lane by hand with the headset connected; `net` and `ds` on demand.
+
+<!-- §3b -->
 
 ## 3. Test plan
 
