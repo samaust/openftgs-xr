@@ -6,16 +6,9 @@
 //! the request camera's checks applied. The checks beyond the cameras are Q-T14.2's, the
 //! refusals' codes Q-T14.1's.
 
-use std::path::PathBuf;
-
 use ftgsxr_core::{CoreError, DMat4, Preset, SceneManifest, Vec3, read_scene_manifest};
+use ftgsxr_testkit::fixtures_dir;
 use serde_json::{Value, json};
-
-/// The committed fixtures (tests/fixtures/README.md, Layout), found from this crate's
-/// manifest until the testkit's `fixtures_dir` is merged.
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
-}
 
 fn scene_bytes() -> Vec<u8> {
     std::fs::read(fixtures_dir().join("checkpoint/scene/scene.json")).unwrap()

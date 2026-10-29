@@ -23,4 +23,5 @@ tracing.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
+ftgsxr-testkit.workspace = true
 proptest.workspace = true

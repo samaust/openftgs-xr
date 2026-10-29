@@ -8,13 +8,8 @@
 use std::path::PathBuf;
 
 use ftgsxr_core::{CoreError, RenderImage, read_renders, read_request, write_renders};
+use ftgsxr_testkit::fixtures_dir;
 use serde_json::Value;
-
-/// The committed fixtures (tests/fixtures/README.md, Layout), found from this crate's
-/// manifest until the testkit's `fixtures_dir` is merged.
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
-}
 
 /// A scratch directory of this test binary's own, emptied first.
 fn scratch(name: &str) -> PathBuf {

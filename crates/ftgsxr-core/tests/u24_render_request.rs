@@ -8,13 +8,8 @@
 use std::path::PathBuf;
 
 use ftgsxr_core::{CoreError, read_request};
+use ftgsxr_testkit::fixtures_dir;
 use serde_json::{Value, json};
-
-/// The committed fixtures (tests/fixtures/README.md, Layout), found from this crate's
-/// manifest until the testkit's `fixtures_dir` is merged.
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
-}
 
 /// Every committed probe request, sorted by name.
 fn probe_requests() -> Vec<PathBuf> {
