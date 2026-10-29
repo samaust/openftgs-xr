@@ -181,6 +181,41 @@ pub fn memory_estimate(
     }
 }
 
+/// §1.2 load option 4's opt-in reduction: the `budget` rows of highest importance score
+/// opacity·scale_x·scale_y·scale_z, in file order (D-13). The score is computed in
+/// float64; at equal scores the earlier file row is kept, so the result is deterministic.
+/// A budget of N or more keeps every row.
+///
+/// # Panics
+///
+/// If the model has more than `u32::MAX` rows.
+// Q-T13.3
+pub fn reduce_to_budget(model: &Model, budget: usize) -> Vec<u32> {
+    let n = u32::try_from(model.len()).expect("at most u32::MAX rows");
+    if budget >= model.len() {
+        return (0..n).collect();
+    }
+    let scores: Vec<f64> = model
+        .opacity
+        .par_iter()
+        .zip(model.scale.par_iter())
+        .map(|(&o, s)| f64::from(o) * f64::from(s[0]) * f64::from(s[1]) * f64::from(s[2]))
+        .collect();
+    // Higher score first, then lower file row: a total order with no equal elements.
+    let rank = |a: &u32, b: &u32| {
+        scores[*b as usize]
+            .total_cmp(&scores[*a as usize])
+            .then(a.cmp(b))
+    };
+    let mut rows: Vec<u32> = (0..n).collect();
+    if budget > 0 {
+        rows.select_nth_unstable_by(budget - 1, rank);
+    }
+    rows.truncate(budget);
+    rows.sort_unstable();
+    rows
+}
+
 /// A per-view record's bytes (§1.4 stage 2).
 const VIEW_RECORD_BYTES: u32 = 48;
 /// A shared-center record's bytes with Σ^S in float32 (§1.4 stage 2).

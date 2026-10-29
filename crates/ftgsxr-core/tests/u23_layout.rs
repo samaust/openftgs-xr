@@ -7,6 +7,7 @@
 
 use ftgsxr_core::layout::{
     GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, memory_estimate, pack_for_gpu,
+    reduce_to_budget,
 };
 use ftgsxr_core::{Model, ModelKind, RenderConventions, TimeSpan};
 
@@ -479,5 +480,69 @@ fn u23_static_bytes_equal_packed_bytes() {
             let estimate = memory_estimate(7, m.sh_degree, &opts, false).static_bytes;
             assert_eq!(estimate, packed as u64, "{half:?} cap {sh_cap:?}");
         }
+    }
+}
+
+/// U-23: `reduce_to_budget` keeps the `budget` rows of highest opacity·scale_x·scale_y·
+/// scale_z (§1.2 load option 4, D-13), returned in file order. Hand-worked scores: row 0
+/// 0.5, row 1 0.09, row 2 0.8, row 3 0.5, row 4 0.1, row 5 0.7; rows 0 and 3 tie, and
+/// the earlier file row is kept (Q-T13.3).
+#[test]
+fn u23_reduce_to_budget_keeps_top_scores_in_file_order() {
+    let mut m = model(6, 0.0, 8.0);
+    m.opacity = vec![0.5, 0.9, 0.1, 0.5, 0.2, 0.7];
+    m.scale = vec![
+        [1.0, 1.0, 1.0],
+        [0.1, 1.0, 1.0],
+        [2.0, 2.0, 2.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, 0.5],
+        [1.0, 1.0, 1.0],
+    ];
+    m.validate().unwrap();
+    assert_eq!(reduce_to_budget(&m, 0), Vec::<u32>::new());
+    assert_eq!(reduce_to_budget(&m, 1), [2]);
+    assert_eq!(reduce_to_budget(&m, 2), [2, 5]);
+    assert_eq!(reduce_to_budget(&m, 3), [0, 2, 5]);
+    assert_eq!(reduce_to_budget(&m, 4), [0, 2, 3, 5]);
+    assert_eq!(reduce_to_budget(&m, 5), [0, 2, 3, 4, 5]);
+    assert_eq!(reduce_to_budget(&m, 6), [0, 1, 2, 3, 4, 5]);
+    assert_eq!(reduce_to_budget(&m, 100), [0, 1, 2, 3, 4, 5]);
+}
+
+/// U-23: on 5,000 random rows with many ties, every kept score is at least every dropped
+/// one, the rows are strictly ascending, and the result is the same on every call.
+#[test]
+fn u23_reduce_to_budget_top_scores_deterministic() {
+    let n = 5000;
+    let mut g = Values(0x0123_4567_89ab_cdef);
+    let mut m = model(n, 0.0, 8.0);
+    // Scores drawn from a few levels, so ties are common.
+    m.opacity = (0..n)
+        .map(|_| [0.25f32, 0.5, 0.75][(g.next(0.0, 3.0) as usize).min(2)])
+        .collect();
+    m.scale = (0..n)
+        .map(|_| [g.next(0.5, 1.0).round().max(0.5), 1.0, 2.0])
+        .collect();
+    let score = |i: usize| {
+        let s = m.scale[i];
+        f64::from(m.opacity[i]) * f64::from(s[0]) * f64::from(s[1]) * f64::from(s[2])
+    };
+    for budget in [1, 17, 1000, 2500, 4999] {
+        let kept = reduce_to_budget(&m, budget);
+        assert_eq!(kept.len(), budget);
+        assert!(kept.windows(2).all(|w| w[0] < w[1]), "file order");
+        let mut is_kept = vec![false; n];
+        kept.iter().for_each(|&i| is_kept[i as usize] = true);
+        let lowest_kept = kept
+            .iter()
+            .map(|&i| score(i as usize))
+            .fold(f64::INFINITY, f64::min);
+        let highest_dropped = (0..n)
+            .filter(|&i| !is_kept[i])
+            .map(score)
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(lowest_kept >= highest_dropped, "budget {budget}");
+        assert_eq!(reduce_to_budget(&m, budget), kept, "deterministic");
     }
 }

@@ -20,7 +20,10 @@ pub use types::{
 
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
 
-pub use layout::{GpuArrays, GpuLayoutOptions, HalfFields, pack_for_gpu};
+pub use layout::{
+    GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, memory_estimate, pack_for_gpu,
+    reduce_to_budget,
+};
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).
 pub use glam::{DMat3, DMat4, DVec3, Mat3, Mat4, Quat, UVec2, Vec2, Vec3};
