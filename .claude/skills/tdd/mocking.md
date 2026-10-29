@@ -4,16 +4,16 @@ Mock only at **system boundaries**, and prefer a real stand-in to a mock. The bo
 
 | Boundary | What sits there | Use in tests |
 | --- | --- | --- |
-| GPU rasterizer | gsplat (CUDA) | The pure-PyTorch reference backend (`render(..., backend="reference")`) on CPU. GPU-marked tests compare it with gsplat. Never mock the renderer. |
-| Downloaded weights | RoMa, DINOv2, the LPIPS networks | The real weights, in tests carrying the weights marker of `pyproject.toml`; tests without it don't touch the network. |
+| GPU rasterizer | gsplat (CUDA) | The pure-PyTorch reference backend (`render(..., backend="reference")`) on CPU. openftgs's GPU tests compare it with gsplat; openftgs-xr's `gpu` lane compares its renders with committed reference renders. Never mock the renderer. |
+| Downloaded weights or files | RoMa, DINOv2, the LPIPS networks (openftgs); model files on an HTTP server (openftgs-xr) | The real downloads, in the `network` lane; tests outside it serve fixtures from a local test server or from files. |
 | Separate programs | ffmpeg, COLMAP, BackgroundMattingV2 | A stub executable that records its input and writes the expected output, as openftgs U-37 does for COLMAP. |
-| Randomness | `torch.Generator` | A seeded generator passed through the public signature (`generator=` in §2). Never seed or patch the global generator. |
-| Datasets | Neural3DV, ENeRF-Outdoor, SelfCap | Generated mini-fixtures, like openftgs U-37's mini-archive. Real data only in dataset-gated tests, and no dataset material is ever committed (CLAUDE.md, "Commits"). |
-| File system | checkpoints, exchange files, manifests | Real files under pytest's `tmp_path`. |
+| Randomness | `torch.Generator` (openftgs); a `rand` RNG (openftgs-xr) | A seeded generator passed through the public signature. Never seed or patch a global one. |
+| Datasets | Neural3DV, ENeRF-Outdoor, SelfCap | Generated mini-fixtures, like openftgs U-37's mini-archive. Real data only in the `dataset` lane, and no dataset material is ever committed (CLAUDE.md, "Commits"). |
+| File system | checkpoints, exchange files, manifests | Real files under a `tempfile::TempDir`. |
 
 Don't mock:
 
-- Anything inside `openftgsxr`, including vendored code
+- Anything inside this workspace's crates, including vendored code
 - Internal collaborators (in openftgs, `mcmc_split` inside `relocate`)
 - Anything you control
 

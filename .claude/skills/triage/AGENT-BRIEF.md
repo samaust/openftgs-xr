@@ -15,7 +15,7 @@ The spec already says what most code must do. The brief names the spec items the
 The issue may sit in `ready-for-agent` for days or weeks while the code changes around it. Write the brief so it stays useful:
 
 - **Do** name the §2 public interfaces involved: signatures, types, config fields.
-- **Do** name the module paths spec §2 fixes (`openftgsxr.<module>`); they don't go stale.
+- **Do** name the crate and module paths spec §2 fixes (`<crate>::<module>`); they don't go stale.
 - **Don't** name other file paths, line numbers or private functions.
 - **Don't** assume today's implementation structure will survive.
 

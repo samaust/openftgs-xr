@@ -12,7 +12,7 @@ Pure computation, in-memory state, no I/O: motion and temporal opacity, the SH b
 
 ### 2. Local-substitutable
 
-Dependencies that have a local stand-in the spec already provides or the tests can generate: gsplat (the pure-PyTorch reference backend), datasets (generated mini-fixtures), the filesystem (pytest's `tmp_path`). Deepenable if the stand-in exists. The deepened module is tested with the stand-in running in the test suite. The seam is internal; no port at the module's external interface.
+Dependencies that have a local stand-in the spec already provides or the tests can generate: in openftgs, gsplat (the pure-PyTorch reference backend), datasets (generated mini-fixtures), the filesystem (pytest's `tmp_path`); in openftgs-xr, the GPU (the headless renderer against committed reference renders), model files (committed probe models), the filesystem (`tempfile::TempDir`). Deepenable if the stand-in exists. The deepened module is tested with the stand-in running in the test suite. The seam is internal; no port at the module's external interface.
 
 ### 3. Owned, across a process boundary (Ports & Adapters)
 

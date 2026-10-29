@@ -2,24 +2,18 @@
 .claude/worktrees/
 .scratch/
 
-# Python build outputs
+# Rust build outputs
+target/
+**/*.rs.bk
+
+# Android build outputs
+android/.gradle/
+android/**/build/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+
+# Python dev tooling caches
 __pycache__/
 *.py[cod]
-build/
-dist/
-*.egg-info/
-.eggs/
-
-# Virtual environments
-.venv/
-venv/
-
-# Tool caches
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.hypothesis/
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/

@@ -11,12 +11,12 @@ lives as long as the process that holds it: an entry whose process has died is i
         what is free and, with COMMAND, that command's past runs on this machine
     machine.py run (--threads N | --exclusive) [--gpu] [--wait] [--estimate SECONDS]
                    [-C DIR] -- COMMAND...
-        runs COMMAND with N threads (OMP_NUM_THREADS, MKL_NUM_THREADS, OPENBLAS_NUM_THREADS,
-        TORCHINDUCTOR_COMPILE_THREADS), every GPU with --gpu, or the whole machine at the
-        default thread count with --exclusive, and exits with COMMAND's exit code. When that
-        budget isn't free it exits 75 and prints the ledger, or with --wait takes its turn.
-        With `pytest -n auto`, tests/conftest.py divides --threads N among N/2 workers, two
-        threads each (the convention of openftgs Q-214).
+        runs COMMAND with N threads (CARGO_BUILD_JOBS, RUST_TEST_THREADS and RAYON_NUM_THREADS
+        for cargo and the tests; OMP_NUM_THREADS, MKL_NUM_THREADS, OPENBLAS_NUM_THREADS and
+        TORCHINDUCTOR_COMPILE_THREADS for the Python tooling that drives openftgs), every GPU
+        with --gpu, or the whole machine at the default thread count with --exclusive, and
+        exits with COMMAND's exit code. When that budget isn't free it exits 75 and prints the
+        ledger, or with --wait takes its turn.
 
 Waiters start in arrival order: a run that fits starts at once unless a waiter ahead of it is
 short of a resource it would take. Each finished run goes into `history.jsonl` beside the
@@ -40,10 +40,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-BUSY = 75  # EX_TEMPFAIL: the budget isn't free; pytest's own codes are 0 to 5
+BUSY = 75  # EX_TEMPFAIL: the budget isn't free; cargo's own codes are 0, 1 and 101
 POLL_S = 2.0
 THREAD_VARIABLES = (
-    "OMP_NUM_THREADS",
+    "CARGO_BUILD_JOBS",  # rustc jobs cargo runs at once
+    "RUST_TEST_THREADS",  # the test harness's threads
+    "RAYON_NUM_THREADS",  # rayon pools in tests and tools
+    "OMP_NUM_THREADS",  # the Python tooling that drives openftgs: PyTorch's OpenMP
     "MKL_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",  # NumPy's and SciPy's BLAS
     "TORCHINDUCTOR_COMPILE_THREADS",  # torch.compile's compile workers
@@ -314,7 +317,7 @@ def main() -> int:
     budget.add_argument(
         "--exclusive", action="store_true", help="the whole machine, at the default threads"
     )
-    go.add_argument("--gpu", action="store_true", help="every GPU, for GPU-marked tests")
+    go.add_argument("--gpu", action="store_true", help="every GPU, for the gpu lane")
     go.add_argument("--wait", action="store_true", help="queue until the budget is free")
     go.add_argument("--estimate", type=float, help="the run's expected seconds, for others")
     go.add_argument("-C", metavar="DIR", help="run COMMAND in DIR (a worktree)")
