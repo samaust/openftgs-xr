@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared helpers of the probe tests (R-1, R-2): a committed probe rendered item by item
-//! through `HeadlessRenderer` in the `conformance` tier and compared with its reference
-//! render under E15's tier.
+//! Shared helpers of the probe tests (R-1, R-2, R-3, R-7, R-8, R-10, R-19): a committed probe's
+//! request rendered item by item through `HeadlessRenderer` in the `conformance` tier and
+//! compared with its reference render under E15's tier.
 
 #![allow(dead_code, reason = "each test file uses a part of the helpers")]
 
-use ftgsxr_core::{Model, Pose, RenderImage, RenderRequest};
-use ftgsxr_render::{HeadlessRenderer, QualityTier};
-use ftgsxr_testkit::{Metrics, metrics, probe, reference_render};
+use ftgsxr_core::{Model, Pose, Quat, RenderImage, RenderRequest, Vec3, open_model};
+use ftgsxr_render::{HeadlessRenderer, ModelId, QualityTier};
+pub use ftgsxr_testkit::probe;
+use ftgsxr_testkit::{Metrics, fixtures_dir, metrics, reference_render};
 
 /// E15's tier: PSNR ≥ 45 dB, s ≤ 0.5 %, s_α ≤ 0.5 %.
 pub const MIN_PSNR: f64 = 45.0;
@@ -38,6 +39,38 @@ pub fn render_items(
     let id = renderer
         .load(model, request.sh_degree)
         .expect("the model loads");
+    render_instances(
+        &mut renderer,
+        &[(id, Pose::IDENTITY)],
+        name,
+        request,
+        references,
+    )
+}
+
+/// Every item of probe `name`'s request rendered by `renderer` with `instances` (each a
+/// loaded model at its pose, E5) at the item's timestamp from its camera over the
+/// request's background, paired with the probe's reference render by id (R-7, R-8: the
+/// probe is the pre-posed merged model, Q-12).
+pub fn render_request(
+    renderer: &mut HeadlessRenderer,
+    instances: &[(ModelId, Pose)],
+    name: &str,
+) -> Vec<(String, RenderImage, RenderImage)> {
+    let (_, request) = probe(name);
+    render_instances(renderer, instances, name, &request, &reference_render(name))
+}
+
+/// Every item of `request` rendered by `renderer` with `instances` at the item's
+/// timestamp from its camera over the request's background, paired with its reference in
+/// `references` by id.
+fn render_instances(
+    renderer: &mut HeadlessRenderer,
+    instances: &[(ModelId, Pose)],
+    name: &str,
+    request: &RenderRequest,
+    references: &[(String, RenderImage)],
+) -> Vec<(String, RenderImage, RenderImage)> {
     assert_eq!(
         references.len(),
         request.items.len(),
@@ -48,12 +81,7 @@ pub fn render_items(
         .iter()
         .map(|item| {
             let ours = renderer
-                .render(
-                    &[(id, Pose::IDENTITY)],
-                    &item.camera,
-                    item.timestamp,
-                    request.background,
-                )
+                .render(instances, &item.camera, item.timestamp, request.background)
                 .unwrap_or_else(|e| panic!("{name} {}: {e}", item.id));
             let reference = references
                 .iter()
@@ -109,4 +137,43 @@ pub fn check_items(name: &str, items: &[(String, RenderImage, RenderImage)], rep
         items.len(),
         failures.join("\n")
     );
+}
+
+/// The instances of a fixture pose file (`merged/<file>`, Q-12): each model, read by
+/// `open_model` from its path relative to the file, with its pose, `x_merged = translation
+/// + scale·R(rotation)·x_instance` and the rotation stored as (x, y, z, w).
+pub fn posed_instances(file: &str) -> Vec<(Model, Pose)> {
+    let path = fixtures_dir().join("merged").join(file);
+    let text = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let json: serde_json::Value =
+        serde_json::from_slice(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert_eq!(json["format"], "openftgs-xr-fixture-poses");
+    let floats = |v: &serde_json::Value| -> Vec<f32> {
+        v.as_array()
+            .expect("an array")
+            .iter()
+            .map(|x| x.as_f64().expect("a number") as f32)
+            .collect()
+    };
+    json["instances"]
+        .as_array()
+        .expect("instances")
+        .iter()
+        .map(|inst| {
+            let model_path = path
+                .parent()
+                .unwrap()
+                .join(inst["model"].as_str().expect("a model path"));
+            let model =
+                open_model(&model_path).unwrap_or_else(|e| panic!("{}: {e}", model_path.display()));
+            let t = floats(&inst["translation"]);
+            let q = floats(&inst["rotation"]);
+            let pose = Pose {
+                translation: Vec3::new(t[0], t[1], t[2]),
+                rotation: Quat::from_xyzw(q[0], q[1], q[2], q[3]),
+                scale: inst["scale"].as_f64().expect("a scale") as f32,
+            };
+            (model, pose)
+        })
+        .collect()
 }

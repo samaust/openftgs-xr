@@ -1704,6 +1704,7 @@ dependencies = [
  "ftgsxr-core",
  "ftgsxr-testkit",
  "naga",
+ "serde_json",
  "wgpu",
 ]
 
