@@ -101,6 +101,25 @@ fn u21_a_nan_pixel_counts_as_differing() {
     assert_eq!((m.share, m.alpha), (1.0, 1.0));
 }
 
+/// Q-41: an infinite RGB value is not clamped to 1, so +∞ against 1.0 counts its pixel in s
+/// and makes the PSNR NaN.
+#[test]
+fn u21_an_infinite_channel_counts_as_differing() {
+    let m = metrics(
+        &pixel([1.0; 3], 1.0),
+        &pixel([1.0, f32::INFINITY, 1.0], 1.0),
+    );
+    assert!(m.psnr.is_nan());
+    assert_eq!((m.share, m.alpha), (1.0, 0.0));
+}
+
+/// Q-41: an infinite alpha is not clamped to 0, so −∞ against 0.0 counts its pixel in s_α.
+#[test]
+fn u21_an_infinite_alpha_counts_as_differing() {
+    let m = metrics(&pixel([0.0; 3], 0.0), &pixel([0.0; 3], f32::NEG_INFINITY));
+    assert_eq!((m.share, m.alpha), (0.0, 1.0));
+}
+
 /// Q-41: renders of different sizes are refused with a panic.
 #[test]
 #[should_panic(expected = "different sizes")]
