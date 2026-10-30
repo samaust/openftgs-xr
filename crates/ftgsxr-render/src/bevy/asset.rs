@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ::bevy::asset::Asset;
+use ::bevy::log::warn;
 use ::bevy::reflect::TypePath;
 use ftgsxr_core::{
     Aabb, CoreError, GpuArrays, GpuLayoutOptions, Model, ModelInfo, ModelKind, RenderConventions,
@@ -52,7 +53,8 @@ pub struct SplatAsset {
 /// hint on owned bytes is E-FILE-FORMAT (a checkpoint is a directory, D-51). With
 /// `reduce_to`, the model keeps its `reduce_to` rows of highest importance (§1.2 load
 /// option 4, D-13). `opts` are the tier's load options (§1.2 options 1 and 2); the
-/// memory check against the budget is the upload's (§2.4 rule 4).
+/// memory check against the budget is the upload's (§2.4 rule 4). A convention rendered
+/// as openftgs's instead is logged as a warning (E6, D-39, Q-T76.5).
 pub fn load_splat_asset(
     bytes: &ModelBytes,
     kind_hint: Option<ModelKind>,
@@ -60,6 +62,10 @@ pub fn load_splat_asset(
     reduce_to: Option<usize>,
 ) -> Result<SplatAsset, RenderError> {
     let (model, file_bytes) = read_model(bytes, kind_hint).map_err(RenderError::Core)?;
+    // D-39, Q-T76.5
+    for w in model.conventions.warnings() {
+        warn!("{w}");
+    }
     let model = match reduce_to {
         Some(budget) if budget < model.len() => {
             select_rows(&model, &reduce_to_budget(&model, budget))

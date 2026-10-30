@@ -160,6 +160,10 @@ fn run(matches: &ArgMatches) -> Result<bool, HeadlessError> {
                 let info = cmd_validate(std::slice::from_ref(path))?
                     .pop()
                     .expect("invariant: cmd_validate returns one ModelInfo per model");
+                // Q-T76.5, D-39: E6's conventions rendered as openftgs's instead.
+                for w in info.conventions.warnings() {
+                    eprintln!("ftgsxr: warning: {}: {w}", path.display());
+                }
                 // `ModelKind` is the core's; the desktop crate depends on the app only
                 // (§2.1), so the kind is told by its variant's name.
                 let kind = format!("{:?}", info.kind);

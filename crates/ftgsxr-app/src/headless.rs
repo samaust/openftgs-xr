@@ -128,7 +128,9 @@ pub fn exit_code(e: &HeadlessError) -> i32 {
 /// is the model's L), and writes `out` as `ftgs-renders` with `producer` = `openftgs-xr
 /// <version> (<GPU adapter name>)` and `request_sha256` = the SHA-256 of the request
 /// file's bytes. The file is written once every item has rendered, so a failure, a
-/// non-finite render among them (E-NUMERIC, exit 3), writes no file (Q-90).
+/// non-finite render among them (E-NUMERIC, exit 3), writes no file (Q-90). A convention
+/// rendered as openftgs's instead (E6, D-39) is printed to standard error as
+/// `ftgsxr: warning: <model>: <text>` before the render (Q-T76.5).
 // Q-90, Q-86
 pub fn cmd_render(
     model: &Path,
@@ -156,6 +158,10 @@ pub fn cmd_render(
             request.display(),
             loaded.sh_degree
         )));
+    }
+    // Q-T76.5, D-39: the command line's warning lines (§1.7).
+    for w in loaded.conventions.warnings() {
+        eprintln!("ftgsxr: warning: {}: {w}", model.display());
     }
     let mut renderer = HeadlessRenderer::new(tier).map_err(|e| render_error(model, e))?;
     let id = renderer
@@ -285,7 +291,8 @@ fn identity_file(path: &Path) -> PathBuf {
 /// `ftgsxr validate MODEL ...` (§1.7): reads and validates each model, in order, and
 /// returns its header information: N, L, the time span, the producer, the conventions,
 /// the kind and the size of the file its identity hashes (Q-76). The first invalid
-/// file stops the run with its E-FILE code (exit 2).
+/// file stops the run with its E-FILE code (exit 2). The conventions carry E6's
+/// warnings (`RenderConventions::warnings`), which the command line prints (Q-T76.5).
 pub fn cmd_validate(models: &[PathBuf]) -> Result<Vec<ModelInfo>, HeadlessError> {
     models
         .iter()

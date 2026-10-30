@@ -115,6 +115,39 @@ fn validate_prints_each_valid_model_before_the_first_invalid_one() {
 }
 
 #[test]
+fn validate_warns_of_a_convention_rendered_as_openftgss() {
+    // E6, D-39: a `rasterize_mode` other than `classic` is reported as a warning (on
+    // standard error, Q-T76.5) and the model still validates. P1's header with its
+    // `"classic"` replaced by a word of the same length, so the header keeps its size.
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "validate_warning",
+    );
+    let mut bytes = fs::read(fixtures_dir().join("probes/P1.safetensors")).unwrap();
+    let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+    let at = bytes[8..8 + n]
+        .windows(7)
+        .position(|w| w == b"classic")
+        .expect("P1's rasterize_mode")
+        + 8;
+    bytes[at..at + 7].copy_from_slice(b"stochas");
+    let model = dir.join("stochas.safetensors");
+    fs::write(&model, bytes).unwrap();
+    let o = ftgsxr(&["validate", model.to_str().unwrap()]);
+    let err = String::from_utf8(o.stderr.clone()).unwrap();
+    assert_eq!(o.status.code(), Some(0), "{err}");
+    assert_eq!(stdout(&o).lines().count(), 1);
+    assert_eq!(
+        err,
+        format!(
+            "ftgsxr: warning: {}: rasterize_mode \"stochas\" is not supported; rendering as \"classic\"\n",
+            model.display()
+        )
+    );
+}
+
+#[test]
 fn export_writes_the_file() {
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
