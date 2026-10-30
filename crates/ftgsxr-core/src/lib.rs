@@ -18,9 +18,11 @@ pub mod pose;
 pub mod sh;
 pub mod types;
 
+// Q-65, Q-72: the exchange writer.
 pub use formats::{
-    InfoReply, ManifestImage, RenderImage, RenderItem, RenderRequest, SceneManifest, info_json,
-    read_renders, read_request, read_scene_manifest, write_renders,
+    InfoReply, ManifestImage, RenderImage, RenderItem, RenderRequest, SceneManifest,
+    encode_exchange, info_json, read_renders, read_request, read_scene_manifest, write_exchange,
+    write_renders,
 };
 pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
@@ -31,8 +33,8 @@ pub use types::{
 pub use sh::{SH_C0, sh_basis, sh_color};
 
 pub use covariance::{
-    Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
-    sort_key, sort_key16,
+    Projected, alpha_at, covariance, occlusion_weight, posed_covariance, project, quat_from_wxyz,
+    quat_to_wxyz, sort_key, sort_key16,
 };
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
 
