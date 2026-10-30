@@ -80,6 +80,8 @@ pub struct GpuModel {
     pub(crate) tau0: f64,
     /// L′, the loaded SH degree.
     pub(crate) sh_degree: u8,
+    /// The model's E6 and E7 constants (D-39), which the draw reads too.
+    pub(crate) conventions: RenderConventions,
     n: u32,
     bytes: u64,
 }
@@ -177,6 +179,7 @@ impl GpuModel {
             index,
             tau0: arrays.tau0,
             sh_degree: arrays.sh_degree,
+            conventions: conv.clone(),
             n: arrays.n,
             bytes,
         })

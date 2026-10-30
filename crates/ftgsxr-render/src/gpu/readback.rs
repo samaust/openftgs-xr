@@ -45,7 +45,7 @@ pub struct FrameContents {
 }
 
 /// IEEE binary16 to float32, exactly.
-fn half_to_f32(h: u16) -> f32 {
+pub(crate) fn half_to_f32(h: u16) -> f32 {
     let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exp = i32::from((h >> 10) & 0x1f);
     let frac = f32::from(h & 0x3ff);

@@ -9,6 +9,7 @@ pub mod gpu;
 
 pub use gpu::{
     BudgetSource, Capacity, ColorTransform, Colormap, Foveation, FrameBuffers, FrameContents,
-    FrameStats, GpuModel, GpuTimes, MemoryBudget, ModelDraw, Overlays, QualityTier, RecordView,
-    RenderError, RenderMode, SortKey, SortMode, SortPose, SplatDevice, SplatPasses, ViewParams,
+    FrameStats, GpuModel, GpuTimes, HeadlessRenderer, MemoryBudget, ModelDraw, ModelId,
+    OcclusionInput, Overlays, QualityTier, RecordView, RenderError, RenderMode, SortKey, SortMode,
+    SortPose, SplatDevice, SplatPasses, ViewParams,
 };
