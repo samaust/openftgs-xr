@@ -7,7 +7,8 @@ use ftgsxr_render::SplatDevice;
 /// A `SplatDevice` of its own for a `gpu` test (§2.7, Q-1): `SplatDevice::headless`'s
 /// Vulkan instance, adapter and device, with the validation layers and the shader
 /// validator on in debug builds and the validation collector installed, so the test fails
-/// on any validation message (§1.13, R-16).
+/// on any message of wgpu's own validation (§1.13, R-16). The Vulkan layer's messages go
+/// to the log instead: a test watches them with `layer_messages`, made first (Q-T121.1).
 ///
 /// # Panics
 ///

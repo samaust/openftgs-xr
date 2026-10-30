@@ -188,8 +188,9 @@ fn render_tier_names() {
 }
 
 /// A Khronos validation layer settings file in `dir` that sends the layer's errors,
-/// warnings and information to `log` (the file `VK_LAYER_SETTINGS_PATH` names); its
-/// directory is returned. The layer writes its log even beside wgpu's own messenger.
+/// warnings (performance ones too) and information to `log`; the directory holding it, the
+/// one `VK_LAYER_SETTINGS_PATH` names, is returned. The layer writes its log even beside
+/// wgpu's own messenger.
 fn layer_settings(dir: &Path, log: &Path) -> PathBuf {
     let settings = dir.join("layer-settings");
     fs::create_dir_all(&settings).unwrap();
@@ -198,7 +199,7 @@ fn layer_settings(dir: &Path, log: &Path) -> PathBuf {
         settings.join("vk_layer_settings.txt"),
         format!(
             "khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG\n\
-             khronos_validation.report_flags = error,warn,info\n\
+             khronos_validation.report_flags = error,warn,perf,info\n\
              khronos_validation.log_filename = {}\n",
             log.display()
         ),
