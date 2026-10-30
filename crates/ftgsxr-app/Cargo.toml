@@ -9,3 +9,11 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+
+# M-2 (#117): the headless commands need the core only; bevy and the other crates of §2.1's
+# row join with the modules that use them.
+[dependencies]
+ftgsxr-core.workspace = true
+
+[dev-dependencies]
+ftgsxr-testkit.workspace = true
