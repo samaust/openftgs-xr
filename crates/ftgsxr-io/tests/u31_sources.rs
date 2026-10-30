@@ -737,6 +737,25 @@ fn u31_http_checkpoint_params_against_the_manifest_digest() {
     );
     assert!(!dir.join("params.safetensors.part").exists());
     assert!(!dir.join("params.safetensors.meta.part.json").exists());
+
+    // The manifest the params disagreed with is discarded too (owner, #97), so the retry
+    // fetches it whole, without validators, and the checkpoint loads.
+    assert!(!manifest.exists());
+    assert!(!dir.join("manifest.json.meta.json").exists());
+    let before = server.requests().len();
+    let (_, bytes, _) = fetch_all(&source, &tiny);
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    let retry = &server.requests()[before..];
+    assert_eq!(retry[0].path, "/listing/models/tiny/manifest.json");
+    assert_eq!(retry[0].status, 200);
+    assert!(
+        retry[0]
+            .headers
+            .iter()
+            .all(|(name, _)| !name.eq_ignore_ascii_case("if-none-match")
+                && !name.eq_ignore_ascii_case("if-modified-since")),
+        "no validators"
+    );
 }
 
 #[test]
