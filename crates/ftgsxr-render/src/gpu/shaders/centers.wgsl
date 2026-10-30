@@ -26,7 +26,7 @@ struct InstanceConstants {
     colormap: u32,
     // ρ in the camera's pixels.
     pixel_radius: f32,
-    // 1 / (τ₁ − τ₀), 0 when unknown or a single timestamp.
+    // 1 / (τ₁ − τ₀), 0 for a single timestamp (Q-97).
     inv_span: f32,
     // 1 / the speeds' 99th percentile, 0 when it is 0.
     inv_speed: f32,

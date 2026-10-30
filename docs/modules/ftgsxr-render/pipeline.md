@@ -43,7 +43,7 @@ Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 a
 
 **5 Draw splats.** Reads the records, the first payload buffer (draw order), the draw constants and a view block; one indirect draw from counter words 0–3, blended `One, OneMinusSrcAlpha` into the layer, depth-tested without depth write when a depth format was given (Q-87). In shared-center mode nothing is drawn until the per-eye projection of R-9 (Q-87).
 
-**6 Draw centers.** Reads the records, the counters (bound read-only: instance i draws slot `visible_splats + i`, where `visible_splats` is word 1 after stage 3), the draw constants and the view block; one indirect draw from counter words 4–7. Each disc is the pixels whose sample point lies within ρ camera pixels of the record's μ′, written opaque in the instance's colormap color (Q-92), with depth written when depth-tested. In `Both` mode a disc replaces its splat's pixels (Q-96).
+**6 Draw centers.** Reads the records, the counters (bound read-only: instance i draws slot `visible_splats + i`, where `visible_splats` is word 1 after stage 3), the draw constants and the view block; one indirect draw from counter words 4–7. Each disc is the pixels whose sample point lies within ρ camera pixels of the record's μ′, written opaque in the instance's colormap color (Q-92; the time-center map spans \[τ₀, τ₁\], whose τ₁ `GpuArrays` carries, and a single-timestamp model maps every center to its low end, Q-97), with depth written when depth-tested. In `Both` mode a disc replaces its splat's pixels (Q-96).
 
 **7 Resolve.** Reads the layer through a linear sampler at each target pixel's center (Q-95) and a block holding the background. Without a background it writes the layer un-premultiplied, decoded from sRGB and re-premultiplied, blended over the target, so the target keeps the layer's alpha for the compositor (D-14). With one it decodes E7's C + (1 − A)·c\_bg, formed in the file's space, and writes it opaque (Q-94). The sRGB target's encode on store then shows the file's values (D-6, R-11).
 
@@ -72,4 +72,4 @@ The main world loads on the async compute task pool (`SplatLoad`, Q-T119.2), upl
 
 ## What waits on later milestones
 
-E13's environment depth is not sampled yet (`occlusion` is unread, R-12); the shared-center vertex projection of splats and centers is R-9's (Q-87); the time-center colormap has no span until τ₁ reaches the GPU model (Q-97); the debug overlays are carried but not drawn (PRD #76); the adapter applies no `RenderLayers`, render scale or foveation yet, and a shared-center camera prepares per view and draws no splats (Q-87).
+E13's environment depth is not sampled yet (`occlusion` is unread, R-12); the shared-center vertex projection of splats and centers is R-9's (Q-87); the debug overlays are carried but not drawn (PRD #76); the adapter applies no `RenderLayers`, render scale or foveation yet, and a shared-center camera prepares per view and draws no splats (Q-87).

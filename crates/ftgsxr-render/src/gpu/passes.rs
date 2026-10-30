@@ -872,8 +872,8 @@ fn resolve_uniform(background: Option<[f32; 3]>) -> [u8; RESOLVE_BYTES] {
 
 /// One instance's draw constants (`InstanceConstants` of `splat.wgsl` and `centers.wgsl`):
 /// α_max, α_skip and the pixel center offset of its model (D-39), then the colormap
-/// (0 DC, 1 time center, 2 speed, 3 opacity), ρ, 1 / (τ₁ − τ₀) and 1 / the speeds' 99th
-/// percentile, 0 when that is 0 (Q-92, Q-93).
+/// (0 DC, 1 time center, 2 speed, 3 opacity), ρ, 1 / (τ₁ − τ₀), 0 for a single timestamp
+/// (Q-97), and 1 / the speeds' 99th percentile, 0 when that is 0 (Q-92, Q-93).
 fn draw_constants(draw: &ModelDraw) -> [u8; DRAW_CONSTANTS_BYTES] {
     let c = &draw.model.conventions;
     let (colormap, pixel_radius) = match draw.mode {
@@ -904,9 +904,10 @@ fn draw_constants(draw: &ModelDraw) -> [u8; DRAW_CONSTANTS_BYTES] {
     b.f32(c.pixel_center_offset);
     b.u32(colormap);
     b.f32(pixel_radius);
-    // Q-97: τ₁ reaches neither `GpuArrays` nor `GpuModel` (§2.1), so the time-center
-    // colormap has no span yet and maps every center to its low end.
-    b.f32(0.0);
+    // Q-97: the time-center map's inverse span, in float64 before the rounding (τ₀ may be
+    // 10⁹ s); a single timestamp (τ₁ = τ₀, D-9) gives 0, every center at viridis(0).
+    let span = draw.model.tau1 - draw.model.tau0;
+    b.f32(if span > 0.0 { (1.0 / span) as f32 } else { 0.0 });
     b.f32(if p99 > 0.0 { 1.0 / p99 } else { 0.0 });
     out
 }
