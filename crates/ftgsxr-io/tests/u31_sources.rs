@@ -442,6 +442,36 @@ fn u31_http_index_info_reads_8_plus_header_length_bytes() {
     }
 }
 
+/// Q-44 (changed, #87): the header-only read of an empty model file (`http/empty.safetensors`,
+/// tests/fixtures/README.md) is the server's 416, an empty prefix, so it fails as a broken
+/// file (E-FILE-FORMAT), like a file shorter than its prefix, not as an unreachable URL.
+#[test]
+fn u31_http_index_info_of_an_empty_file_is_e_format() {
+    let server = serve_fixtures();
+    let source = HttpIndex::new(listing_base(&server), ListingFlavor::Index, client("empty"));
+    let entry = Entry {
+        name: "empty".into(),
+        location: server.url_of("http/empty.safetensors"),
+        kind: EntryKind::Exchange,
+        size: None,
+        mtime: None,
+        sha256: None,
+        thumbnail: None,
+        audio: None,
+        scene: None,
+    };
+    let err = source.info(&entry).unwrap_err();
+    assert_eq!(err.code(), "E-FILE-FORMAT");
+    assert!(
+        err.to_string().contains("shorter than its length prefix"),
+        "{err}"
+    );
+    let records = server.requests();
+    assert_eq!(records.len(), 1, "the prefix's request only");
+    assert_eq!(records[0].header("Range"), Some("bytes=0-7"));
+    assert_eq!(records[0].status, 416);
+}
+
 #[test]
 fn u31_http_index_fetch_downloads_and_checks_the_index_digest() {
     let server = serve_fixtures();
