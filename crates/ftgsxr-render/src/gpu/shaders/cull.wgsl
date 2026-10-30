@@ -98,9 +98,9 @@ const CENTER_COUNT: u32 = 5u;
 const OVERFLOW: u32 = 8u;
 const ACTIVE: u32 = 9u;
 
-// The sort's block, elements per workgroup of its count pass (§1.4 stage 3), set from
-// `passes.rs`'s `SORT_BLOCK`.
-override SORT_BLOCK: u32 = 256u;
+// The sort's block, keys per workgroup of its count and scatter passes (§1.4 stage 3),
+// set from `sort.rs`'s `SORT_BLOCK`.
+override SORT_BLOCK: u32 = 1024u;
 
 const WORKGROUP: u32 = 256u;
 
@@ -134,7 +134,7 @@ const SH_C33: f32 = 0.5900435899266435;
 
 // Stage 3's own bindings (a pipeline layout of its own).
 @group(0) @binding(10) var<storage, read_write> size_counters: array<atomic<u32>, 12>;
-@group(0) @binding(11) var<storage, read_write> size_dispatch: array<u32, 3>;
+@group(0) @binding(11) var<storage, read_write> size_dispatch: array<u32, 6>;
 @group(0) @binding(12) var<storage, read_write> size_stats: array<u32, 16>;
 @group(0) @binding(13) var<uniform> size_frame: Frame;
 
@@ -563,7 +563,8 @@ fn cull_centers(
 }
 
 // Stage 3: the counts clamped to C (splats first, then centers in what remains), the draw
-// arguments completed, the sort's dispatch ⌈count / SORT_BLOCK⌉, and the statistics
+// arguments completed, the sort's dispatches (⌈count / SORT_BLOCK⌉ blocks, then the scan's
+// single workgroup), and the statistics
 // block's counts, overflow flag and capacity, its timestamps zeroed (§1.4 stage 8).
 @compute @workgroup_size(1)
 fn size() {
@@ -585,9 +586,14 @@ fn size() {
     atomicStore(&size_counters[6], 0u);
     atomicStore(&size_counters[7], 0u);
     atomicStore(&size_counters[OVERFLOW], over);
-    size_dispatch[0] = (s + SORT_BLOCK - 1u) / SORT_BLOCK;
+    let blocks = (s + SORT_BLOCK - 1u) / SORT_BLOCK;
+    size_dispatch[0] = blocks;
     size_dispatch[1] = 1u;
     size_dispatch[2] = 1u;
+    // The sort's scan: one workgroup, none when nothing is visible (Q-85).
+    size_dispatch[3] = min(blocks, 1u);
+    size_dispatch[4] = 1u;
+    size_dispatch[5] = 1u;
     size_stats[0] = s;
     size_stats[1] = c;
     size_stats[2] = over;

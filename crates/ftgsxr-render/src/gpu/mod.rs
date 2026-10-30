@@ -2,9 +2,9 @@
 
 //! The wgpu render layer (§2.1 `ftgsxr_render::gpu`), usable without a Bevy `App`: tiers,
 //! device, `GpuModel`, frame buffers, the frame inputs, the passes (`SplatPasses`: so far
-//! the cull and size passes of stages 1–3 and the statistics of stage 8) and the frame
-//! buffers' read back; the sort, the draws and the headless renderer join in the later
-//! M-2 tickets.
+//! the cull and size passes of stages 1–3, the radix sort of stage 4 and the statistics of
+//! stage 8) and the frame buffers' read back; the draws and the headless renderer join in
+//! the later M-2 tickets.
 
 mod device;
 mod error;
@@ -13,6 +13,7 @@ mod inputs;
 mod model;
 mod passes;
 mod readback;
+mod sort;
 mod stats;
 mod tier;
 

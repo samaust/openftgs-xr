@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `SplatPasses` (§2.1): the pipelines of §1.4's stages, compiled once per (formats, tier).
-//! This module holds stages 1–3 (prepare, cull, size) of `encode_prepare` and stage 8's
-//! `encode_stats`; the sort (stage 4) and the draws join in later M-2 tickets.
+//! This module holds stages 1–3 (prepare, cull, size) of `encode_prepare`, which then runs
+//! stage 4's sort (`sort.rs`), and stage 8's `encode_stats`; the draws join in later M-2
+//! tickets.
 
 use std::sync::atomic::Ordering;
 
@@ -16,14 +17,11 @@ use super::frame::{
 };
 use super::inputs::{ColorTransform, ModelDraw, RenderMode, SortPose, ViewParams};
 use super::model::MODEL_UNIFORM_BYTES;
+use super::sort::{RadixSort, SORT_BLOCK};
 use super::tier::QualityTier;
 
 /// `cull.wgsl`: stages 2 and 3 (§1.4).
 pub(crate) const CULL_WGSL: &str = include_str!("shaders/cull.wgsl");
-
-/// The sort's block, the elements one workgroup of its count pass takes: stage 3 writes
-/// ⌈count / SORT_BLOCK⌉ workgroups (R-4), `cull.wgsl`'s override of the same name.
-pub(crate) const SORT_BLOCK: u32 = 256;
 
 /// The cull's workgroup size (`cull.wgsl`).
 const WORKGROUP: u32 = 256;
@@ -71,6 +69,7 @@ pub struct SplatPasses {
     cull_splats: wgpu::ComputePipeline,
     cull_centers: wgpu::ComputePipeline,
     size: wgpu::ComputePipeline,
+    sort: RadixSort,
 }
 
 fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -194,6 +193,7 @@ impl SplatPasses {
         let cull_splats = pipeline("ftgsxr cull splats", &cull_layout, "cull_splats");
         let cull_centers = pipeline("ftgsxr cull centers", &cull_layout, "cull_centers");
         let size = pipeline("ftgsxr size", &size_pipeline_layout, "size");
+        let sort = RadixSort::new(&device, tier.sort_key);
         if let Some(e) = bevy::tasks::block_on(scope.pop()) {
             return Err(RenderError::Shader(e.to_string()));
         }
@@ -209,6 +209,7 @@ impl SplatPasses {
             cull_splats,
             cull_centers,
             size,
+            sort,
         })
     }
 
@@ -218,7 +219,9 @@ impl SplatPasses {
     /// the SH degree, E14's transform, the mode) and its dispatch ranges from the temporal
     /// index (E3). Stage 2: one cull dispatch per instance and kind, splats before centers,
     /// so the centers region follows the splats (Q-78). Stage 3: one workgroup clamps
-    /// the counts to C and writes the sort's dispatch arguments. In per-view mode E4's eye
+    /// the counts to C and writes the sort's dispatch arguments. Stage 4: the radix sort
+    /// of the splats' (k̄, slot) pairs, its own compute pass, every dispatch indirect; the
+    /// sorted slots end in the first payload buffer (D-33). In per-view mode E4's eye
     /// and E8's depth are the camera's of `cull_views[0]` (`sort_pose` is not read); in
     /// shared-center mode they are `sort_pose`'s (D-4). Nothing is read back (D-34).
     ///
@@ -376,8 +379,18 @@ impl SplatPasses {
             pass.set_bind_group(0, &size_group, &[]);
             pass.dispatch_workgroups(1, 1, 1);
         }
+        // Stage 4.
+        let timestamp_writes =
+            set.queries
+                .as_ref()
+                .map(|(queries, _)| wgpu::ComputePassTimestampWrites {
+                    query_set: queries,
+                    beginning_of_pass_write_index: Some(2),
+                    end_of_pass_write_index: Some(3),
+                });
+        self.sort.encode(enc, set, timestamp_writes);
         if set.queries.is_some() {
-            frame.ring.written.store(2, Ordering::Release);
+            frame.ring.written.store(4, Ordering::Release);
         }
     }
 
