@@ -259,12 +259,13 @@ impl ModelSource for HttpIndex {
         fetchable(entry)?;
         let url = self.entry_url(entry)?;
         // Q-47: an entry without the index's digest may have one beside the model.
-        let sidecar = match entry.sha256 {
-            Some(_) => None,
+        let expected = match &entry.sha256 {
+            Some(digest) => Some(digest.clone()),
             None => self.sidecar_digest(entry, &url)?,
         };
-        let expected = entry.sha256.as_deref().or(sidecar.as_deref());
-        let path = self.client.download(&url, expected, progress, cancel)?;
+        let path = self
+            .client
+            .download(&url, expected.as_deref(), progress, cancel)?;
         let bytes = read_local(&path, &mut |_| {}, &AtomicBool::new(false))?;
         Ok((ModelRef::Http(url), bytes))
     }
@@ -295,12 +296,12 @@ impl HttpIndex {
     // Q-47
     fn sidecar_digest(&self, entry: &Entry, url: &Url) -> Result<Option<String>, IoError> {
         let named = beside(url, &format!("{}.sha256", entry.name));
-        if let Some(body) = self.sidecar(named.as_ref())? {
+        if let Some(body) = named.map_or(Ok(None), |named| self.sidecar(&named))? {
             return Ok(Some(
                 body.split_whitespace().next().unwrap_or("").to_owned(),
             ));
         }
-        let Some(body) = self.sidecar(beside(url, SUMS).as_ref())? else {
+        let Some(body) = beside(url, SUMS).map_or(Ok(None), |sums| self.sidecar(&sums))? else {
             return Ok(None);
         };
         let file = url
@@ -311,12 +312,9 @@ impl HttpIndex {
         Ok(sums_digest(&body, &file))
     }
 
-    /// The body of the sidecar at `url`; `None` when there is no such URL or it answers
-    /// 404, E-NET-FETCH for any other failure (Q-47).
-    fn sidecar(&self, url: Option<&Url>) -> Result<Option<String>, IoError> {
-        let Some(url) = url else {
-            return Ok(None);
-        };
+    /// The body of the sidecar at `url`; `None` when it answers 404, E-NET-FETCH for any
+    /// other failure (Q-47).
+    fn sidecar(&self, url: &Url) -> Result<Option<String>, IoError> {
         match self.client.get_text_or_status(url)? {
             Ok(body) => Ok(Some(body)),
             Err(404) => Ok(None),

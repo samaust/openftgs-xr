@@ -238,9 +238,14 @@ fn u31_checkpoint_fetch_is_refused() {
     assert_eq!(err.code(), "E-IO");
 }
 
+/// The cache directory of `test`'s client.
+fn cache_dir(test: &str) -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31-cache-{test}"))
+}
+
 /// A client over a fresh cache directory for one test.
 fn client(test: &str) -> Arc<HttpClient> {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31-cache-{test}"));
+    let dir = cache_dir(test);
     let _ = fs::remove_dir_all(&dir);
     Arc::new(HttpClient::new(dir, TlsRoots::WebPki, 1 << 40).expect("a client"))
 }
@@ -542,8 +547,7 @@ fn u31_http_index_fetch_refuses_a_wrong_sha256sums_digest() {
         ]
     );
     // Q-43: the file that failed its digest is discarded; no cache entry holds a file.
-    let cache = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31-cache-{test}"));
-    let held: Vec<PathBuf> = walk(&cache)
+    let held: Vec<PathBuf> = walk(&cache_dir(test))
         .into_iter()
         .filter(|p| p.file_name().is_some_and(|n| n == "file"))
         .collect();
@@ -801,9 +805,9 @@ fn u31_open_source_refuses_what_it_cannot_serve() {
     assert_eq!(code(&spec("documents", TREE), None), Some("E-IO"));
     // A location that is not a URL is a setting to fix, not a fetch to retry (Q-47).
     let http = client("open-source");
-    assert_eq!(
-        code(&spec("http", "not a url"), Some(http.clone())),
-        Some("E-IO")
-    );
+    match open_source(&spec("http", "not a url"), Some(http.clone()), None) {
+        Err(IoError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput),
+        other => panic!("not E-IO InvalidInput: {:?}", other.err()),
+    }
     assert_eq!(code(&spec("http", "http://127.0.0.1/m/"), Some(http)), None);
 }
