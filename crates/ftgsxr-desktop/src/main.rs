@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The Linux player and its command line, the binary `ftgsxr` (§1.7, §2.1, D-36). M-2 gives
-//! it the headless commands that need no GPU: `info [--json]`, `validate`, `import` and
-//! `export` (#117); `play`, `render` and `bench` arrive with their milestones.
+//! it the headless commands: `render` (#118), and `info [--json]`, `validate`, `import` and
+//! `export` (#117); `play` and `bench` arrive with their milestones.
 
 #![warn(missing_docs)]
 
@@ -10,10 +10,22 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
-use ftgsxr_app::{HeadlessError, cmd_export, cmd_import, cmd_info, cmd_validate, exit_code};
+use ftgsxr_app::{
+    HeadlessError, QualityTier, cmd_export, cmd_import, cmd_info, cmd_render, cmd_validate,
+    exit_code,
+};
 
 /// The player's version, which `info` reports (§1.7).
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The names `--tier` accepts, those of `QualityTier::by_name` (§1.12, Q-89).
+const TIERS: [&str; 5] = [
+    "conformance",
+    "desktop",
+    "quest-high",
+    "quest-balanced",
+    "quest-low",
+];
 
 /// The command line of §1.7, the subcommands implemented so far.
 fn command() -> Command {
@@ -28,6 +40,24 @@ fn command() -> Command {
         .about("openftgs-xr, a player for openftgs models")
         .subcommand_required(true)
         .arg_required_else_help(true)
+        .subcommand(
+            Command::new("render")
+                .about("Answer a ftgs-render-request headless and write a ftgs-renders file")
+                .arg(path(
+                    "MODEL",
+                    "A ftgs-if file, a checkpoint directory or a PLY snapshot",
+                ))
+                .arg(path("REQUEST", "The ftgs-render-request JSON file"))
+                .arg(path("OUT", "The ftgs-renders file to write"))
+                .arg(
+                    Arg::new("tier")
+                        .long("tier")
+                        .value_name("TIER")
+                        .value_parser(TIERS)
+                        .default_value("conformance")
+                        .help("The quality tier (§1.12)"),
+                ),
+        )
         .subcommand(
             Command::new("info")
                 .about("Print the adapter reply of openftgs's harness contract")
@@ -72,6 +102,20 @@ fn path_arg<'a>(m: &'a ArgMatches, name: &str) -> &'a Path {
 /// Runs the subcommand, printing its output to standard output (Q-77).
 fn run(matches: &ArgMatches) -> Result<(), HeadlessError> {
     match matches.subcommand() {
+        Some(("render", m)) => {
+            // Q-89: clap accepts only the names of `TIERS`.
+            let name = m
+                .get_one::<String>("tier")
+                .expect("invariant: the tier has a default");
+            let tier = QualityTier::by_name(name).expect("invariant: clap checks the name");
+            cmd_render(
+                path_arg(m, "MODEL"),
+                path_arg(m, "REQUEST"),
+                path_arg(m, "OUT"),
+                tier,
+                VERSION,
+            )?;
+        }
         Some(("info", m)) => println!("{}", cmd_info(VERSION, m.get_flag("json"))),
         Some(("validate", m)) => {
             let models: Vec<PathBuf> = m

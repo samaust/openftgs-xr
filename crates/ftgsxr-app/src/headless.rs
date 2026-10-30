@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The headless commands (§1.7, §2.1 `ftgsxr_app::headless`): `info`, `validate`, `import`
-//! and `export`, and their errors with §1.15's codes and the exit codes 2 and 3.
+//! The headless commands (§1.7, §2.1 `ftgsxr_app::headless`): `render`, `info`,
+//! `validate`, `import` and `export`, and their errors with §1.15's codes and the exit
+//! codes 2 and 3.
 
 use std::fmt;
 use std::fs;
@@ -9,9 +10,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use ftgsxr_core::{
-    CoreError, InfoReply, Model, ModelInfo, ModelKind, RenderConventions, info_json, open_model,
-    sha256, write_exchange,
+    CoreError, InfoReply, Model, ModelInfo, ModelKind, Pose, RenderConventions, info_json,
+    open_model, read_request, sha256, write_exchange, write_renders,
 };
+use ftgsxr_render::{HeadlessRenderer, QualityTier, RenderError};
 
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their
 /// cause's §1.15 code in the message's leading `E-…: ` prefix (Q-64).
@@ -109,6 +111,81 @@ pub fn exit_code(e: &HeadlessError) -> i32 {
     match e {
         HeadlessError::Input(_) | HeadlessError::Environment(_) => 2,
         HeadlessError::Numeric(_) => 3,
+    }
+}
+
+/// `ftgsxr render MODEL REQUEST.json OUT.safetensors [--tier TIER]` (§1.7): answers a
+/// `ftgs-render-request` headless. It reads the request and the model (any §1.2 input),
+/// checks the request against the model (E-REQ-UNIT, E-REQ-DEGREE; exit 2) before it opens
+/// the GPU, renders each item through `HeadlessRenderer` in `tier` at its timestamp from
+/// its camera, at the identity pose, with the request's background and SH degree (`None`
+/// is the model's L), and writes `out` as `ftgs-renders` with `producer` = `openftgs-xr
+/// <version> (<GPU adapter name>)` and `request_sha256` = the SHA-256 of the request
+/// file's bytes. The file is written once every item has rendered, so a failure, a
+/// non-finite render among them (E-NUMERIC, exit 3), writes no file (Q-90).
+// Q-90, Q-86
+pub fn cmd_render(
+    model: &Path,
+    request: &Path,
+    out: &Path,
+    tier: QualityTier,
+    version: &str,
+) -> Result<(), HeadlessError> {
+    let bytes = fs::read(request).map_err(|e| input_error(request, e))?;
+    let req = read_request(&bytes).map_err(|e| core_input(request, &e))?;
+    let loaded = load(model)?;
+    if req.time_unit != loaded.time.time_unit {
+        return Err(core_input(
+            request,
+            &CoreError::RequestUnit {
+                request: req.time_unit,
+                model: loaded.time.time_unit,
+            },
+        ));
+    }
+    if let Some(degree) = req.sh_degree.filter(|&d| d > loaded.sh_degree) {
+        // Q-64: no `CoreError` carries E-REQ-DEGREE, so the code is the message's prefix.
+        return Err(HeadlessError::Input(format!(
+            "E-REQ-DEGREE: {}: Request degree {degree}, model degree {}",
+            request.display(),
+            loaded.sh_degree
+        )));
+    }
+    let mut renderer = HeadlessRenderer::new(tier).map_err(|e| render_error(model, e))?;
+    let id = renderer
+        .load(&loaded, req.sh_degree)
+        .map_err(|e| render_error(model, e))?;
+    let renders = req
+        .items
+        .iter()
+        .map(|item| {
+            renderer
+                .render(
+                    &[(id, Pose::IDENTITY)],
+                    &item.camera,
+                    item.timestamp,
+                    req.background,
+                )
+                .map(|image| (item.id.clone(), image))
+                .map_err(|e| match e {
+                    RenderError::NonFinite => HeadlessError::Numeric(format!("item {}", item.id)),
+                    other => render_error(model, other),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let producer = format!("openftgs-xr {version} ({})", renderer.adapter_name());
+    write_renders(out, &renders, &producer, req.sha256).map_err(|e| core_input(out, &e))
+}
+
+/// A render-layer failure as a `HeadlessError` (Q-90): a core error on the model as
+/// `core_input`, a non-finite render as `Numeric`, every GPU condition as `Environment`
+/// with its §1.15 code (all exit 2, §1.15).
+// Q-90, Q-64
+fn render_error(model: &Path, e: RenderError) -> HeadlessError {
+    match e {
+        RenderError::Core(core) => core_input(model, &core),
+        RenderError::NonFinite => HeadlessError::Numeric(String::new()),
+        other => HeadlessError::Environment(format!("{}: {}", other.code(), other.user_text())),
     }
 }
 

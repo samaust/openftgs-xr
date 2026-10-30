@@ -8,7 +8,7 @@ use std::fs;
 use std::process::{Command, Output};
 
 use ftgsxr_app::cmd_info;
-use ftgsxr_testkit::{fixtures_dir, scratch_dir};
+use ftgsxr_testkit::{fixtures_dir, probe, scratch_dir};
 
 fn ftgsxr(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
@@ -106,4 +106,147 @@ fn export_writes_the_file() {
 fn a_usage_error_exits_2() {
     assert_eq!(ftgsxr(&["validate"]).status.code(), Some(2));
     assert_eq!(ftgsxr(&["frobnicate"]).status.code(), Some(2));
+}
+
+/// P1's request with `field`'s JSON value replaced by `value`, written into `dir`.
+fn altered_p1_request(dir: &std::path::Path, field: &str, value: &str) -> std::path::PathBuf {
+    let text = fs::read_to_string(fixtures_dir().join("probes/P1.request.json")).unwrap();
+    let needle = format!("\"{field}\": ");
+    let start = text.find(&needle).expect("the field") + needle.len();
+    let end = start + text[start..].find([',', '}']).unwrap();
+    let path = dir.join("request.json");
+    fs::write(&path, format!("{}{value}{}", &text[..start], &text[end..])).unwrap();
+    path
+}
+
+/// R-15 through the binary (§1.7): a request in another time unit and a request degree
+/// above the model's exit 2 with their codes and write no file (Q-90).
+#[test]
+fn r15_render_refuses_a_request_with_exit_2() {
+    let model = fixtures_dir().join("probes/P1.safetensors");
+    for (name, field, value, code) in [
+        ("unit", "time_unit", "\"ms\"", "E-REQ-UNIT"),
+        ("degree", "sh_degree", "1", "E-REQ-DEGREE"),
+    ] {
+        let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name);
+        let request = altered_p1_request(&dir, field, value);
+        let out = dir.join("out.safetensors");
+        let o = ftgsxr(&[
+            "render",
+            model.to_str().unwrap(),
+            request.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ]);
+        assert_eq!(o.status.code(), Some(2), "{name}");
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert!(
+            err.starts_with(&format!("ftgsxr: {code}: ")),
+            "{name}: {err}"
+        );
+        assert!(!out.exists(), "{name}");
+    }
+}
+
+/// `--tier` takes the five names of §1.12 and refuses any other as a usage error (exit 2,
+/// Q-89).
+#[test]
+fn render_tier_names() {
+    let model = fixtures_dir().join("probes/P1.safetensors");
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "tier",
+    );
+    // A request the model refuses before the GPU, so each accepted tier exits 2 with
+    // E-REQ-UNIT rather than clap's usage error.
+    let request = altered_p1_request(&dir, "time_unit", "\"ms\"");
+    let out = dir.join("out.safetensors");
+    let args = |tier: &str| {
+        ftgsxr(&[
+            "render",
+            model.to_str().unwrap(),
+            request.to_str().unwrap(),
+            out.to_str().unwrap(),
+            "--tier",
+            tier,
+        ])
+    };
+    for tier in [
+        "conformance",
+        "desktop",
+        "quest-high",
+        "quest-balanced",
+        "quest-low",
+    ] {
+        let err = String::from_utf8(args(tier).stderr).unwrap();
+        assert!(err.starts_with("ftgsxr: E-REQ-UNIT: "), "{tier}: {err}");
+    }
+    let o = args("ultra");
+    assert_eq!(o.status.code(), Some(2));
+    assert!(!String::from_utf8(o.stderr).unwrap().contains("E-REQ-UNIT"));
+}
+
+/// The safetensors header of `bytes`, its JSON text.
+fn header(bytes: &[u8]) -> &str {
+    let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+    std::str::from_utf8(&bytes[8..8 + n]).unwrap()
+}
+
+/// The value of the metadata key `key` in a safetensors header, a JSON string without
+/// escapes (the strings `render` writes).
+fn metadata<'a>(header: &'a str, key: &str) -> &'a str {
+    let needle = format!("\"{key}\":\"");
+    let start = header
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no {key} in {header}"))
+        + needle.len();
+    &header[start..start + header[start..].find('"').unwrap()]
+}
+
+/// R-15 through the binary (§1.7, `gpu` lane): P1's request writes a `ftgs-renders` file
+/// with openftgs's keys (`rgb/<id>`, `alpha/<id>` for every item) and metadata, the
+/// request's SHA-256, prints nothing and exits 0.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r15_render_writes_the_renders_file() {
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "render",
+    );
+    let model = fixtures_dir().join("probes/P1.safetensors");
+    let request_path = fixtures_dir().join("probes/P1.request.json");
+    let out = dir.join("P1.renders.safetensors");
+    let o = ftgsxr(&[
+        "render",
+        model.to_str().unwrap(),
+        request_path.to_str().unwrap(),
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(o.stdout.is_empty());
+    // The committed request, read by the testkit (its items and its file's SHA-256).
+    let (_, request) = probe("P1");
+    let bytes = fs::read(&out).unwrap();
+    let header = header(&bytes);
+    for item in &request.items {
+        for key in [format!("rgb/{}", item.id), format!("alpha/{}", item.id)] {
+            assert!(header.contains(&format!("\"{key}\":{{")), "no {key}");
+        }
+    }
+    assert_eq!(metadata(header, "format"), "ftgs-renders");
+    assert_eq!(metadata(header, "version"), "1");
+    let hex: String = request.sha256.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(metadata(header, "request_sha256"), hex);
+    let producer = metadata(header, "producer");
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        producer.starts_with(&format!("openftgs-xr {version} (")) && producer.ends_with(')'),
+        "{producer}"
+    );
 }
