@@ -6,11 +6,11 @@
 //! atomic writer.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use toml::{Table, Value};
 
-use crate::util::{now_rfc3339, write_atomic};
+use crate::util::{set_aside, write_atomic};
 use crate::{IoError, ListingFlavor, SourceSpec};
 
 /// The file's `format` (§1.11).
@@ -478,26 +478,6 @@ pub fn save_settings(path: &Path, s: &Settings) -> Result<(), IoError> {
         std::fs::create_dir_all(dir)?;
     }
     write_atomic(path, text.as_bytes())
-}
-
-/// Renames the file at `path` to `<file name>.unknown-<YYYY-MM-DD>` (UTC), with `-2`,
-/// `-3`, … appended when that name is taken; returns the new path (Q-51).
-fn set_aside(path: &Path) -> Result<PathBuf, IoError> {
-    let now = now_rfc3339();
-    let date = now.get(..10).unwrap_or(&now);
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "settings.toml".into());
-    let base = format!("{name}.unknown-{date}");
-    let mut target = path.with_file_name(&base);
-    let mut n = 2;
-    while std::fs::symlink_metadata(&target).is_ok() {
-        target = path.with_file_name(format!("{base}-{n}"));
-        n += 1;
-    }
-    std::fs::rename(path, &target)?;
-    Ok(target)
 }
 
 /// What a key's value must be, and how it converts: the warning's wording and the check.

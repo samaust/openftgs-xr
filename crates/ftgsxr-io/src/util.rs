@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! What the player's own files share (§1.11): the atomic write, the clock their times
-//! come from and the versioning rule's `version` check, and the cancel error every source
-//! gives. Placed before every module of §2.1, which may all use it.
+//! What the player's own files share (§1.11): the atomic write, the set-aside of a refused
+//! file, the clock their times come from and the versioning rule's `version` check, and
+//! the cancel error every source gives. Placed before every module of §2.1, which may all
+//! use it.
 
 use std::fs::File;
 use std::io::Write;
@@ -34,6 +35,25 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), IoError> {
     drop(file);
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// Renames the file at `path` to `<file name>.unknown-<YYYY-MM-DD>` (UTC) beside it, with
+/// `-2`, `-3`, … appended when that name is taken, so that the next save cannot overwrite
+/// a file the reader refused; returns the new path. E-IO, the file left as it is, when the
+/// rename fails (Q-51, Q-53).
+pub(crate) fn set_aside(path: &Path) -> Result<PathBuf, IoError> {
+    let now = now_rfc3339();
+    let date = now.get(..10).unwrap_or(&now);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let base = format!("{name}.unknown-{date}");
+    let mut target = path.with_file_name(&base);
+    let mut n = 2;
+    while std::fs::symlink_metadata(&target).is_ok() {
+        target = path.with_file_name(format!("{base}-{n}"));
+        n += 1;
+    }
+    std::fs::rename(path, &target)?;
+    Ok(target)
 }
 
 /// Whether `version` names major version 1 (§1.11's versioning rule, which ignores a
