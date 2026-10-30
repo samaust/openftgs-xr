@@ -94,6 +94,7 @@ ftgs render probes/R2_single_timestamp.safetensors --request probes/R2_single_ti
 ftgs render probes/R2_epoch_time.safetensors --request probes/R2_epoch_time.request.json --out probes/R2_epoch_time.renders.safetensors --backend reference
 ftgs render probes/R2_random.safetensors --request probes/R2_random.request.json --out probes/R2_random.renders.safetensors --backend reference
 ftgs render probes/R19_transmittance.safetensors --request probes/R19_transmittance.request.json --out probes/R19_transmittance.renders.safetensors --backend reference
+ftgs render probes/R10_deg2.safetensors --request probes/R10_deg2.request.json --out probes/R10_deg2.renders.safetensors --backend reference
 ftgs render probes/R7_merged.safetensors --request probes/R7_merged.request.json --out probes/R7_merged.renders.safetensors --backend reference
 ftgs render probes/R8_merged.safetensors --request probes/R8_merged.request.json --out probes/R8_merged.renders.safetensors --backend reference
 ftgs render $FIXTURES_WORK/gt.safetensors --request $FIXTURES_WORK/gt.request.json --out $FIXTURES_WORK/gt.renders.safetensors --backend reference
@@ -138,6 +139,8 @@ package versions, a rerun changes none.
   - `R2_overlap_deg3`, `R2_white_background`, `R2_single_timestamp`, `R2_epoch_time`,
     `R2_random`: R-2's additional probes (Q-10; `R2_random` is reduced, Q-11);
   - `R19_transmittance`: R-19's near α = 0.95 over far α = 0.999 (Q-10);
+  - `R10_deg2`: P5's model and items with the request's `sh_degree` at 2, R-10's degree-2
+    reference (Q-70);
   - `R7_merged`, `R8_merged`: the pre-posed merged models of R-7 and R-8 (Q-12).
 - `probes/R2_overlap_deg3.tau1.3.ply`: openftgs's `write_ply` of that probe's per-time arrays at
   τ = 1.3 (U-6).
