@@ -5,10 +5,12 @@
 
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use ftgsxr_core::{
-    CoreError, InfoReply, Model, ModelInfo, RenderConventions, info_json, open_model,
+    CoreError, InfoReply, Model, ModelInfo, ModelKind, RenderConventions, info_json, open_model,
+    sha256, write_exchange,
 };
 
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their
@@ -180,7 +182,7 @@ fn json_entries(object: &str) -> Vec<(String, String)> {
 
 /// `Input("<code>: <path>: <user text>")` for a core error met on `path` (Q-T117.1).
 // Q-T117.1
-fn input(path: &Path, e: &CoreError) -> HeadlessError {
+fn core_input(path: &Path, e: &CoreError) -> HeadlessError {
     HeadlessError::Input(format!(
         "{}: {}: {}",
         e.code(),
@@ -189,9 +191,9 @@ fn input(path: &Path, e: &CoreError) -> HeadlessError {
     ))
 }
 
-/// Reads and validates the model at `path` (§1.2): `open_model`, its errors as `input`.
+/// Reads and validates the model at `path` (§1.2): `open_model`, its errors as `core_input`.
 fn load(path: &Path) -> Result<Model, HeadlessError> {
-    open_model(path).map_err(|e| input(path, &e))
+    open_model(path).map_err(|e| core_input(path, &e))
 }
 
 /// The size of the file a model's identity hashes (D-40): `params.safetensors` for a
@@ -216,7 +218,7 @@ pub fn cmd_validate(models: &[PathBuf]) -> Result<Vec<ModelInfo>, HeadlessError>
             let model = load(path)?;
             let file = identity_file(path);
             let file_bytes = fs::metadata(&file)
-                .map_err(|e| input(&file, &CoreError::Io(e)))?
+                .map_err(|e| core_input(&file, &CoreError::Io(e)))?
                 .len();
             Ok(ModelInfo {
                 n: model.len() as u64,
@@ -229,4 +231,69 @@ pub fn cmd_validate(models: &[PathBuf]) -> Result<Vec<ModelInfo>, HeadlessError>
             })
         })
         .collect()
+}
+
+/// `ftgsxr import IF OUT` (§1.7): as `cmd_export`; §1.7 gives the two commands one rule.
+pub fn cmd_import(input: &Path, out: &Path) -> Result<(), HeadlessError> {
+    convert(input, out)
+}
+
+/// `ftgsxr export MODEL OUT` (§1.7): reads and validates `model` (§1.2), then writes a
+/// `ftgs-if` file at `out`: a byte copy of a `ftgs-if` input, and the activated exchange
+/// form of a checkpoint or a PLY (`write_exchange`, producer `openftgs-xr <version>`;
+/// Q-65, Q-72). An invalid input writes nothing (exit 2).
+pub fn cmd_export(model: &Path, out: &Path) -> Result<(), HeadlessError> {
+    convert(model, out)
+}
+
+/// The rule `import` and `export` share (§1.7).
+// Q-65, Q-72
+fn convert(input: &Path, out: &Path) -> Result<(), HeadlessError> {
+    let model = load(input)?;
+    match model.kind {
+        ModelKind::ExchangeFile => {
+            let bytes = fs::read(input).map_err(|e| input_error(input, e))?;
+            // The bytes copied are the bytes validated: a file replaced between the two
+            // reads is refused rather than copied unchecked.
+            if sha256(&bytes) != model.identity {
+                return Err(core_input(
+                    input,
+                    &CoreError::Checksum(format!("{} changed while read", input.display())),
+                ));
+            }
+            write_atomic(out, &bytes).map_err(|e| input_error(out, e))
+        }
+        ModelKind::Checkpoint { .. } | ModelKind::Ply => {
+            write_exchange(out, &model).map_err(|e| core_input(out, &e))
+        }
+    }
+}
+
+/// `core_input` for an I/O error on `path` (E-IO).
+fn input_error(path: &Path, e: std::io::Error) -> HeadlessError {
+    core_input(path, &CoreError::Io(e))
+}
+
+/// Writes `bytes` at `path` through a temporary sibling `.<name>.tmp-<pid>` renamed over
+/// it, as `write_exchange` writes (openftgs Q-126): a failed write leaves the old file, or
+/// none, and no temporary.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} names no file", path.display()),
+        )
+    })?;
+    let temporary = path.with_file_name(format!(
+        ".{}.tmp-{}",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let written = fs::File::create(&temporary)
+        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
+        .and_then(|()| fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
 }
