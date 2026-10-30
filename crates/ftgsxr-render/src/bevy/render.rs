@@ -598,20 +598,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn file_encoded_draws_unwarned_on_a_16_bit_float_target() {
+    fn file_encoded_rule_draws_unwarned_on_a_16_bit_float_target() {
         assert_eq!(file_encoded_rule(TextureFormat::Rgba16Float), Ok(None));
     }
 
     #[test]
-    fn file_encoded_draws_warned_on_an_8_bit_linear_target() {
+    fn file_encoded_rule_draws_with_the_rounding_warning_on_an_8_bit_linear_target() {
         assert!(matches!(
             file_encoded_rule(TextureFormat::Rgba8Unorm),
-            Ok(Some(_))
+            Ok(Some(w)) if w.contains("rounds the layer")
         ));
     }
 
     #[test]
-    fn file_encoded_is_refused_on_srgb_targets() {
+    fn file_encoded_rule_refuses_srgb_targets() {
         for format in [TextureFormat::Rgba8UnormSrgb, TextureFormat::Bgra8UnormSrgb] {
             assert!(file_encoded_rule(format).is_err(), "{format:?}");
         }

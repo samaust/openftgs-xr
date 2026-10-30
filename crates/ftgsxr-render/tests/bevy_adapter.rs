@@ -373,7 +373,12 @@ fn gpu_bevy_adapter_resolves_p1_over_a_background_onto_an_srgb_target() {
 #[ignore = "gpu"]
 fn gpu_bevy_adapter_does_not_draw_file_encoded_onto_an_srgb_target() {
     let _layer = layer_messages(); // R-16, Q-105
-    let (data, _) = render_p1(OutputSpace::FileEncoded, TextureFormat::Rgba8UnormSrgb);
+    let (data, stats) = render_p1(OutputSpace::FileEncoded, TextureFormat::Rgba8UnormSrgb);
+    // The view was refused, so it drew nothing and counted nothing.
+    assert!(
+        stats.0.is_none(),
+        "no statistics from a refused view: {stats:?}"
+    );
     let (_, request) = probe("P1");
     let (w, h) = (
         request.items[0].camera.width as usize,
