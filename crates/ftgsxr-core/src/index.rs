@@ -45,14 +45,18 @@ impl TemporalIndex {
     /// unwidened, covers \[τ₀, τ₁\]; persistent rows keep their file order. The other rows
     /// are transient, sorted by time center, ties in file order; w_max is the widest of
     /// their windows widened with openftgs's margins (`temporal_window`, D-10). A row with
-    /// opacity ≤ α_skip has no window: it is transient and adds nothing to w_max. With a
-    /// single timestamp σt ≡ 1 (D-9), so no row's activity depends on τ: every row is
-    /// persistent and the permutation is the identity.
+    /// opacity ≤ α_skip has no window and adds nothing to w_max. With more than one
+    /// timestamp, a row with opacity exactly α_skip is persistent all the same, in file
+    /// order with the others: the cull keeps it wherever σt rounds to 1 in float32, a band
+    /// around its center that nothing ties to w_max. A row below α_skip passes the cull at
+    /// no τ and is transient. With a single timestamp σt ≡ 1 (D-9), so no row's activity
+    /// depends on τ: every row is persistent and the permutation is the identity.
     ///
     /// # Panics
     ///
     /// When the model has more than `u32::MAX` rows.
-    // Q-28: rows with opacity ≤ α_skip, and the single-timestamp model.
+    // Q-28: a row at opacity = α_skip persistent, one below it transient; with a single
+    // timestamp every row persistent.
     // Q-29: unwidened w for persistence, file order within ties, w_max = 0 with no window.
     pub fn build(model: &Model) -> (TemporalIndex, Vec<u32>) {
         let n = u32::try_from(model.len()).expect("a temporal index holds at most u32::MAX rows");
@@ -80,7 +84,8 @@ impl TemporalIndex {
             .into_par_iter()
             .map(|i| {
                 let tc = model.time_center[i];
-                window(i, false).is_some_and(|w| tc - tau0 <= w && tau1 - tc <= w)
+                model.opacity[i] == alpha_skip
+                    || window(i, false).is_some_and(|w| tc - tau0 <= w && tau1 - tc <= w)
             })
             .collect();
 
