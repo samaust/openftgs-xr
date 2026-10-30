@@ -283,9 +283,12 @@ impl ModelSource for HttpIndex {
         fetchable(entry)?;
         let url = self.entry_url(entry)?;
         if entry.kind == EntryKind::Checkpoint {
-            let dir = self
-                .client
-                .download_checkpoint(&dir_url(url), progress, cancel)?;
+            let dir = self.client.download_checkpoint(
+                &dir_url(url),
+                entry.sha256.as_deref(),
+                progress,
+                cancel,
+            )?;
             return Ok((ModelRef::File(dir.clone()), ModelBytes::Checkpoint(dir)));
         }
         // Q-47: an entry without the index's digest may have one beside the model.

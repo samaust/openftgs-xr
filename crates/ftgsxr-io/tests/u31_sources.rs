@@ -739,6 +739,28 @@ fn u31_http_checkpoint_params_against_the_manifest_digest() {
     assert!(!dir.join("params.safetensors.meta.part.json").exists());
 }
 
+#[test]
+fn u31_http_checkpoint_params_against_the_index_digest() {
+    // Q-57: an index `sha256` on a checkpoint entry is the params digest (§1.5: the
+    // downloaded file must match it) and wins over the manifest's. The committed index
+    // gives none, so the entry is given one here.
+    let server = serve_fixtures();
+    let source = HttpIndex::new(
+        listing_base(&server),
+        ListingFlavor::Index,
+        client("checkpoint-index-digest"),
+    );
+    let mut tiny = http_checkpoint(&source);
+    let cancel = AtomicBool::new(false);
+    tiny.sha256 = Some("0".repeat(64));
+    let err = source.fetch(&tiny, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-CHECKSUM");
+    let params = fs::read(listing_models().join("tiny/params.safetensors")).unwrap();
+    tiny.sha256 = Some(ftgsxr_core::hex(&ftgsxr_core::sha256(&params)).to_uppercase());
+    let (_, bytes, _) = fetch_all(&source, &tiny);
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+}
+
 /// The bytes of every file in a cache entry.
 fn entry_bytes(entry: &Path) -> u64 {
     fs::read_dir(entry)

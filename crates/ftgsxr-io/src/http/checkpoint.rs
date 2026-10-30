@@ -25,8 +25,9 @@ const MAX_MANIFEST: u64 = 16 << 20;
 impl HttpClient {
     /// Downloads the checkpoint at the directory URL `dir_url` (ending in `/`, Q-36) into its
     /// cache entry `<cache dir>/http/<sha256 of dir_url>/` and returns the entry's directory
-    /// (D-51, Q-42): `manifest.json` first, then `params.safetensors` against the manifest's
-    /// digest for it, a mismatch being E-NET-CHECKSUM (Q-57). Each member is cached,
+    /// (D-51, Q-42): `manifest.json` first, then `params.safetensors` against `params_sha256`
+    /// (the index entry's digest) when given, else the manifest's digest for it, a mismatch
+    /// being E-NET-CHECKSUM (Q-57). Each member is cached,
     /// revalidated and resumed as `download`'s file is (§1.5, Q-43); both downloads hold the
     /// cache lock, so `prune` never sees half an entry. `progress` is cumulative over both
     /// files (Q-59).
@@ -34,6 +35,7 @@ impl HttpClient {
     pub(crate) fn download_checkpoint(
         &self,
         dir_url: &Url,
+        params_sha256: Option<&str>,
         progress: &mut dyn FnMut(Progress),
         cancel: &AtomicBool,
     ) -> Result<PathBuf, IoError> {
@@ -43,6 +45,15 @@ impl HttpClient {
                 .map_err(|e| IoError::Fetch(format!("{dir_url}{name} ({e})")))
         };
         let (manifest_url, params_url) = (join(MANIFEST)?, join(PARAMS)?);
+        let given = match params_sha256 {
+            None => None,
+            // Q-43: a malformed digest is refused before any request.
+            Some(digest) => Some(parse_digest(digest).ok_or_else(|| {
+                IoError::Checksum(format!(
+                    "{dir_url}: expected digest {digest:?} is not SHA-256"
+                ))
+            })?),
+        };
         let _guard = lock(&self.cache_lock);
         let dir = entry_dir(&self.entries, dir_url);
         let manifest = Entry::member(&dir, MANIFEST);
@@ -60,7 +71,7 @@ impl HttpClient {
             cancel,
         )?;
         let held = std::fs::metadata(&path)?.len();
-        let expected = params_digest(&path);
+        let expected = given.or_else(|| params_digest(&path));
         let params = Entry::member(&dir, PARAMS);
         self.download_into(
             &params,

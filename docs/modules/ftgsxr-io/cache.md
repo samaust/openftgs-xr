@@ -45,7 +45,7 @@ A checkpoint is a directory of two files, and it travels by path (D-51), so `Htt
 | `<name>.meta.json` | each member's record, as `meta.json` is a single file's |
 | `<name>.part`, `<name>.meta.part.json` | a member's download in progress and its record |
 
-Each member goes through the three states and the four endings above on its own, so a second fetch revalidates the manifest (a 304) and reuses the params without a request when their recorded digest equals the manifest's (Q-43), and a broken download resumes the member it broke in. `manifest.json` comes first, with no expected digest (the index gives none for a checkpoint); `params.safetensors` follows against the manifest's digest for it, so a corrupt params download is E-NET-CHECKSUM and never reaches the reader (Q-57). Both downloads run under the one lock, so a prune never sees half an entry. The progress `fetch` reports is cumulative over the two files (Q-59).
+Each member goes through the three states and the four endings above on its own, so a second fetch revalidates the manifest (a 304) and reuses the params without a request when their recorded digest equals the manifest's (Q-43), and a broken download resumes the member it broke in. `manifest.json` comes first, with no expected digest; `params.safetensors` follows against the index entry's `sha256` when it gives one, else the manifest's digest for it, so a corrupt params download is E-NET-CHECKSUM and never reaches the reader (Q-57). Both downloads run under the one lock, so a prune never sees half an entry. The progress `fetch` reports is cumulative over the two files (Q-59).
 
 ## A download's life
 
