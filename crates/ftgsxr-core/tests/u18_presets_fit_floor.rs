@@ -138,7 +138,8 @@ fn u18_fit_pose_y_up_with_a_turned_and_pitched_head() {
     let p = fit_pose(&bounds, Preset::YUp, 1.0, head, AHEAD_M);
     // Scale 1/4 puts the 4 m side at 1 m; the posed box is 1 × 0.25 × 0.25 m with its
     // bottom on y = 0, so its center is at y = 0.125. The rotation is the preset's
-    // alone (Q-18): the model's x stays along stage x.
+    // turned by the head's yaw (Q-18): R_y(90°) takes the model's x to stage −z and
+    // its z to stage x.
     assert!((p.scale - 0.25).abs() <= TOL, "scale {}", p.scale);
     assert_vec3(
         apply(&p, Vec3::new(1.0, 0.5, 0.0)),
@@ -152,22 +153,22 @@ fn u18_fit_pose_y_up_with_a_turned_and_pitched_head() {
     );
     assert_vec3(
         apply(&p, Vec3::new(3.0, 0.5, 0.0)),
-        Vec3::new(1.0, 0.125, 3.0),
+        Vec3::new(0.5, 0.125, 2.5),
         "+x end",
     );
     assert_vec3(
         apply(&p, Vec3::new(-1.0, 0.5, 0.0)),
-        Vec3::new(0.0, 0.125, 3.0),
+        Vec3::new(0.5, 0.125, 3.5),
         "−x end",
     );
     assert_vec3(
         apply(&p, Vec3::new(1.0, 0.5, 0.5)),
-        Vec3::new(0.5, 0.125, 3.125),
+        Vec3::new(0.625, 0.125, 3.0),
         "+z face",
     );
 
     // A head looking straight down has no yaw of its own; the top of the head points
-    // along −x here, as before (Q-17).
+    // along −x here, as before (Q-17), and turns the model the same way (Q-18).
     let down = Pose {
         rotation: Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_x(-FRAC_PI_2),
         ..head
@@ -177,6 +178,11 @@ fn u18_fit_pose_y_up_with_a_turned_and_pitched_head() {
         apply(&p, Vec3::new(1.0, 0.5, 0.0)),
         Vec3::new(0.5, 0.125, 3.0),
         "center, looking down",
+    );
+    assert_vec3(
+        apply(&p, Vec3::new(3.0, 0.5, 0.0)),
+        Vec3::new(0.5, 0.125, 2.5),
+        "+x end, looking down",
     );
 }
 

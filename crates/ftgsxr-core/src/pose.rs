@@ -166,11 +166,13 @@ impl Preset {
 /// §1.5's fit: the box's longest side scaled to `size_m`, centered `ahead_m` along the
 /// head's yaw, bottom on the floor.
 ///
-/// The pose's rotation is the preset's (Q-18) and its scale `size_m` over B_m's
-/// longest side. Its translation puts the posed box's center `ahead_m` from the head's
-/// position along the head's horizontal forward, the horizontal part of its −z axis
-/// (Q-17 when the head looks straight up or down), at the height where the posed
-/// box's lowest corner lies on the floor y = 0.
+/// The pose's rotation is the preset's followed by the yaw about stage +y that takes
+/// stage −z to the head's horizontal forward, the horizontal part of its −z axis (Q-17
+/// when the head looks straight up or down), so the same side of the model faces the
+/// user wherever they stand (Q-18). Its scale is `size_m` over B_m's longest side. Its
+/// translation puts the posed box's center `ahead_m` from the head's position along
+/// that forward, at the height where the posed box's lowest corner lies on the floor
+/// y = 0.
 pub fn fit_pose(bounds: &Aabb, preset: Preset, size_m: f32, head: Pose, ahead_m: f32) -> Pose {
     let longest = bounds.longest_side();
     let scale = if longest > 0.0 && longest.is_finite() {
@@ -178,13 +180,16 @@ pub fn fit_pose(bounds: &Aabb, preset: Preset, size_m: f32, head: Pose, ahead_m:
     } else {
         1.0 // Q-17
     };
+    let forward = yaw_forward(&head);
+    // Q-18: R_y(ψ) takes −z to (−sin ψ, 0, −cos ψ), which is `forward`.
+    let yaw = Quat::from_rotation_y(f32::atan2(-forward.x, -forward.z));
     let placed = Pose {
         translation: Vec3::ZERO,
-        rotation: preset.rotation(), // Q-18: the preset's rotation alone, no head yaw
+        rotation: yaw * preset.rotation(),
         scale,
     };
     let center = placed.transform_point(bounds.center());
-    let target = head.translation + ahead_m * yaw_forward(&head);
+    let target = head.translation + ahead_m * forward;
     Pose {
         translation: Vec3::new(
             target.x - center.x,
