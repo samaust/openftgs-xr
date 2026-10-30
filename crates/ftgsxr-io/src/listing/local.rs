@@ -16,6 +16,8 @@ use crate::IoError;
 const MANIFEST: &str = "manifest.json";
 /// A checkpoint directory's parameters file, the other file its reader reads (Q-34).
 const PARAMS: &str = "params.safetensors";
+/// The exchange model's `format` (§1.2).
+const EXCHANGE_FORMAT: &str = "ftgs-if";
 /// The checkpoint's `format`.
 const CHECKPOINT_FORMAT: &str = "ftgs-checkpoint";
 /// The largest safetensors header read (`checked_header_len`): the `safetensors` crate's own limit (source log 39).
@@ -97,10 +99,25 @@ pub(crate) fn checked_header_len(
     Ok(n)
 }
 
-/// Whether the safetensors file `path` of `len` bytes has a header `read_info` accepts:
-/// the 8-byte prefix, then the header alone (Q-33).
+/// Whether the safetensors file `path` of `len` bytes says `ftgs-if`: its 8-byte prefix
+/// reads, its header length passes `checked_header_len`, the header reads and parses as
+/// JSON, and its `__metadata__.format` is `ftgs-if` (§1.5). Nothing else in the header is
+/// checked: `info` and loading report a broken file with its E-FILE code (Q-38).
+// Q-38
 fn is_exchange(path: &Path, len: u64) -> bool {
-    File::open(path).is_ok_and(|mut file| header_info(&mut file, len).is_ok())
+    let Some(header) = File::open(path)
+        .ok()
+        .and_then(|mut file| read_header(&mut file, len).ok())
+    else {
+        return false;
+    };
+    serde_json::from_slice::<Value>(&header).is_ok_and(|header| {
+        header
+            .get("__metadata__")
+            .and_then(|meta| meta.get("format"))
+            .and_then(Value::as_str)
+            == Some(EXCHANGE_FORMAT)
+    })
 }
 
 /// The header-only information of the exchange model `reader` starts, a file of `len`
@@ -109,12 +126,20 @@ fn is_exchange(path: &Path, len: u64) -> bool {
 /// `MAX_HEADER` is E-FILE-FORMAT, a failed read E-IO.
 // Q-33
 pub(crate) fn header_info(reader: &mut impl Read, len: u64) -> Result<ModelInfo, IoError> {
+    let header = read_header(reader, len)?;
+    Ok(read_info(&header, len)?)
+}
+
+/// The header bytes of the safetensors file `reader` starts, a file of `len` bytes: its
+/// 8-byte prefix, then the header it gives (`checked_header_len`); nothing past the header
+/// is read. A failed read is E-IO.
+fn read_header(reader: &mut impl Read, len: u64) -> Result<Vec<u8>, IoError> {
     let mut prefix = [0u8; SAFETENSORS_PREFIX];
     reader.read_exact(&mut prefix)?;
     let n = checked_header_len(&prefix, len)?;
     let mut header = vec![0u8; n as usize];
     reader.read_exact(&mut header)?;
-    Ok(read_info(&header, len)?)
+    Ok(header)
 }
 
 /// The size of the checkpoint directory `dir` (its manifest and parameters files, Q-34),
