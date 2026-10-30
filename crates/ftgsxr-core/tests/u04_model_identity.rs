@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use ftgsxr_core::{hex, open_model, read_exchange, sha256};
-use ftgsxr_testkit::fixtures_dir;
+use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 
 /// `sha256sum`'s digest of a fixture, from `SHA256SUMS`.
 fn sha256sum(name: &str) -> String {
@@ -20,15 +20,9 @@ fn sha256sum(name: &str) -> String {
 }
 
 /// A fresh scratch directory for this test.
-/// Named after this test binary and the process, so no other binary and no overlapping run
-/// in another session or worktree shares it (#94).
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("u04_model_identity-{}", std::process::id()))
-        .join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
 }
 
 #[test]

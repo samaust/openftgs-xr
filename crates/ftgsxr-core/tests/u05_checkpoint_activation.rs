@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ftgsxr_core::{Model, ModelKind, hex, open_model, read_checkpoint, read_exchange, sha256};
-use ftgsxr_testkit::fixtures_dir;
+use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 use serde_json::Value;
 
 fn rel(a: f64, b: f64) -> f64 {
@@ -130,15 +130,10 @@ fn u05_single_timestamp_checkpoint_uses_the_unit_1() {
     }
 }
 
-/// A copy of the tiny checkpoint's two read files in a scratch directory.
-/// Named after this test binary and the process, so no other binary and no overlapping run
-/// in another session or worktree shares it (#94).
+/// A copy of the tiny checkpoint's two read files in a scratch directory, the binary's own
+/// per-process folder (#94, Q-62).
 fn copy_tiny(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("u05_checkpoint_activation-{}", std::process::id()))
-        .join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name);
     let src = fixtures_dir().join("checkpoint/tiny");
     for file in ["manifest.json", "params.safetensors"] {
         fs::copy(src.join(file), dir.join(file)).unwrap();
