@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64};
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
 
 use super::device::SplatDevice;
+use super::sort::histogram_bytes;
 use super::tier::{QualityTier, SortMode};
 
 /// A per-view record (§1.4 stage 2): μ′, the conic, the half-extents, four half floats of
@@ -20,15 +21,14 @@ const SHARED_RECORD_BYTES: u64 = 64;
 const HALF_SHARED_RECORD_BYTES: u64 = 48;
 /// One key or payload, a 32-bit word (E8).
 const WORD: u64 = 4;
-/// The histograms' bytes per unit of capacity (Q-23: §1.12's "about C").
-const HISTOGRAM_BYTES_PER_RECORD: u64 = 1;
 /// The counters (`cull.wgsl`): two indirect draws (splats and centers, §1.4 stages 5 and
 /// 6) of four words each, the overflow flag, the rows that passed E3's test (Q-79) and
 /// two spare words.
 pub(crate) const COUNTER_WORDS: u64 = 12;
 const INDIRECT_BYTES: u64 = COUNTER_WORDS * WORD;
-/// The sort passes' indirect dispatch (§1.4 stage 3), three words.
-const DISPATCH_BYTES: u64 = 3 * WORD;
+/// The sort passes' indirect dispatches (§1.4 stage 3): the blocks of the count and
+/// scatter passes, then the scan's one workgroup, three words each. // Q-T113.1
+const DISPATCH_BYTES: u64 = 6 * WORD;
 /// The statistics block (§1.4 stage 8): the two counts, the overflow flag, C, and six
 /// 64-bit timestamps (Q-81).
 pub(crate) const STATS_BYTES: u64 = 64;
@@ -101,10 +101,6 @@ pub(crate) struct FrameSet {
     pub(crate) records: wgpu::Buffer,
     pub(crate) keys: [wgpu::Buffer; 2],
     pub(crate) payloads: [wgpu::Buffer; 2],
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "bound by the sort of #113 (§1.4 stage 4)")
-    )]
     pub(crate) histograms: wgpu::Buffer,
     /// The counters, whose first eight words are the indirect draw arguments.
     pub(crate) indirect: wgpu::Buffer,
@@ -176,12 +172,8 @@ impl FrameBuffers {
                 buffer(dev, "ftgsxr payloads 0", c * WORD, storage),
                 buffer(dev, "ftgsxr payloads 1", c * WORD, storage),
             ],
-            histograms: buffer(
-                dev,
-                "ftgsxr histograms",
-                c * HISTOGRAM_BYTES_PER_RECORD,
-                storage,
-            ),
+            // Q-23's "about C": 1 KiB per block of 1024 keys (Q-T113.1).
+            histograms: buffer(dev, "ftgsxr histograms", histogram_bytes(capacity), storage),
             indirect: buffer(
                 dev,
                 "ftgsxr indirect draws",

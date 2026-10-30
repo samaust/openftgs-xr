@@ -88,7 +88,7 @@ fn decode_view_record(w: &[u32]) -> RecordView {
 
 /// Copies `[0, size)` of each `(source, size)` into one mappable buffer, submits, waits and
 /// returns the bytes of each.
-fn read_buffers(dev: &SplatDevice, sources: &[(&wgpu::Buffer, u64)]) -> Vec<Vec<u8>> {
+pub(crate) fn read_buffers(dev: &SplatDevice, sources: &[(&wgpu::Buffer, u64)]) -> Vec<Vec<u8>> {
     let total: u64 = sources.iter().map(|(_, s)| s.div_ceil(4) * 4).sum();
     let staging = dev.device().create_buffer(&BufferDescriptor {
         label: Some("ftgsxr read back"),

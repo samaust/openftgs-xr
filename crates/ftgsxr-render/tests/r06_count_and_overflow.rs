@@ -54,7 +54,7 @@ fn gpu_r06_visible_count_equals_the_cpu_count_and_overflow_clamps() {
     );
     assert_eq!(got.visible_splats, expected);
     assert!(!got.overflow);
-    assert_eq!(got.sort_dispatch, [expected.div_ceil(256), 1, 1]);
+    assert_eq!(got.sort_dispatch, [expected.div_ceil(1024), 1, 1]);
     assert_eq!(got.records.len() as u32, expected);
     assert_eq!(got.sorted.len() as u32, expected);
 
@@ -83,7 +83,7 @@ fn gpu_r06_visible_count_equals_the_cpu_count_and_overflow_clamps() {
     );
     assert_eq!((got.visible_splats, got.overflow), (c, true));
     assert_eq!(got.records.len() as u32, c);
-    assert_eq!(got.sort_dispatch, [c.div_ceil(256), 1, 1]);
+    assert_eq!(got.sort_dispatch, [c.div_ceil(1024), 1, 1]);
     // Every slot below C holds a record the oracle keeps (same depth as one of its rows).
     let depths: Vec<f32> = oracle(&model, &pose, tau, &cam)
         .iter()
