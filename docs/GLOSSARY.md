@@ -472,6 +472,18 @@ _Avoid_: scene depth, real depth, depth map (ambiguous with the player's own dep
 The exposure and white-balance gains derived from the passthrough camera's thumbnail, globally or over a depth band, applied to the colors in linear light. E14, §1.9, D-38
 _Avoid_: lighting, ambient light, color correction (the manual controls)
 
+**Layer**:
+The 16-bit float premultiplied RGBA target one view's splats are blended into, cleared transparent each frame, which the resolve pass composites for display and a headless render reads back. §1.4 stages 5 and 7, D-6, D-35
+_Avoid_: framebuffer, splat buffer, accumulation buffer
+
+**Record**:
+One visible primitive's per-frame entry in a view's record buffer, written by the cull pass and drawn in sorted order: per view its projected footprint and color, in shared-center mode its stage-space position, covariance, color and key. §1.4 stage 2, D-5
+_Avoid_: splat (reserved for a primitive's projected quad), instance (the model instance), vertex
+
+**Capacity C**:
+The number of records a view's frame buffers hold, shared by every model instance; rows beyond it are dropped and the overflow flag raised. §1.4, §1.12, D-34
+_Avoid_: budget (the memory budget), max splats, limit
+
 ### Data
 
 **Scene manifest**:
