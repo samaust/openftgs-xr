@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The Linux player and its command line, the binary `ftgsxr` (§1.7, §2.1, D-36). M-2 gives
-//! it the headless commands: `render` (#118), and `info [--json]`, `validate`, `import` and
-//! `export` (#117); `play` and `bench` arrive with their milestones.
+//! it the headless commands: `render` (#118), `info [--json]`, `validate`, `import` and
+//! `export` (#117), and `bench` (#122); `play` arrives with its milestone.
 
 #![warn(missing_docs)]
 
@@ -11,8 +11,8 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use ftgsxr_app::{
-    HeadlessError, QualityTier, cmd_export, cmd_import, cmd_info, cmd_render, cmd_validate,
-    exit_code,
+    HeadlessError, QualityTier, cmd_bench, cmd_export, cmd_import, cmd_info, cmd_render,
+    cmd_validate, exit_code,
 };
 
 /// The player's version, which `info` reports (§1.7).
@@ -26,6 +26,12 @@ const TIERS: [&str; 5] = [
     "quest-balanced",
     "quest-low",
 ];
+
+/// The benchmarks the desktop runs (§3.5, Q-T122.2).
+const BENCHMARKS: [&str; 4] = ["B-1", "B-3", "B-5", "B-6"];
+
+/// The exit code of a run whose budgets regressed against the baseline (Q-67).
+const REGRESSION_EXIT: u8 = 3;
 
 /// The command line of §1.7, the subcommands implemented so far.
 fn command() -> Command {
@@ -91,6 +97,30 @@ fn command() -> Command {
                 .arg(path("MODEL", "The model to export"))
                 .arg(path("OUT", "The ftgs-if file to write")),
         )
+        .subcommand(
+            Command::new("bench")
+                .about("Run a benchmark of §3.5 and compare it with the stored baseline")
+                .arg(
+                    Arg::new("NAME")
+                        .required(true)
+                        .value_parser(BENCHMARKS)
+                        .help("The benchmark: B-1, B-3, B-5 or B-6"),
+                )
+                .arg(
+                    Arg::new("out")
+                        .long("out")
+                        .value_name("BENCH.json")
+                        .value_parser(value_parser!(PathBuf))
+                        .help("Write the benchmark file here instead of standard output"),
+                )
+                .arg(
+                    Arg::new("model")
+                        .long("model")
+                        .value_name("MODEL")
+                        .value_parser(value_parser!(PathBuf))
+                        .help("Run on this model instead of the synthetic ones"),
+                ),
+        )
 }
 
 /// The path argument `name` of `m`, which clap has made required.
@@ -99,8 +129,9 @@ fn path_arg<'a>(m: &'a ArgMatches, name: &str) -> &'a Path {
         .expect("invariant: clap requires the argument")
 }
 
-/// Runs the subcommand, printing its output to standard output (Q-77).
-fn run(matches: &ArgMatches) -> Result<(), HeadlessError> {
+/// Runs the subcommand, printing its output to standard output (Q-77); `Ok(false)` when
+/// a benchmark's budgets regressed (exit 3, Q-67).
+fn run(matches: &ArgMatches) -> Result<bool, HeadlessError> {
     match matches.subcommand() {
         Some(("render", m)) => {
             // Q-89: clap accepts only the names of `TIERS`.
@@ -153,18 +184,42 @@ fn run(matches: &ArgMatches) -> Result<(), HeadlessError> {
         }
         Some(("import", m)) => cmd_import(path_arg(m, "IF"), path_arg(m, "OUT"))?,
         Some(("export", m)) => cmd_export(path_arg(m, "MODEL"), path_arg(m, "OUT"))?,
+        Some(("bench", m)) => {
+            // Q-67, Q-T122.2: the file at --out or on standard output; failed budgets and
+            // regressions on standard error; exit 3 when any budget regressed.
+            let name = m
+                .get_one::<String>("NAME")
+                .expect("invariant: clap requires the name");
+            let out = m.get_one::<PathBuf>("out").map(PathBuf::as_path);
+            let model = m.get_one::<PathBuf>("model").map(PathBuf::as_path);
+            let report = cmd_bench(name, out, model)?;
+            if out.is_none() {
+                print!("{}", report.json);
+            }
+            for line in report.json.lines() {
+                if line.trim_start().starts_with("\"pass\": false") {
+                    eprintln!("ftgsxr: {name}: a budget is not met (see \"pass\": false)");
+                    break;
+                }
+            }
+            for line in &report.regressions {
+                eprintln!("ftgsxr: regression: {line}");
+            }
+            return Ok(report.regressions.is_empty());
+        }
         _ => unreachable!("invariant: clap requires a known subcommand"),
     }
-    Ok(())
+    Ok(true)
 }
 
-/// The entry point (§1.7): exit 0 on success, `exit_code`'s 2 or 3 on a failure, clap's 2
-/// on a usage error.
-// Q-77
+/// The entry point (§1.7): exit 0 on success, `exit_code`'s 2 or 3 on a failure, 3 on a
+/// benchmark's regression (Q-67), clap's 2 on a usage error.
+// Q-77, Q-67
 fn main() -> ExitCode {
     let matches = command().get_matches();
     match run(&matches) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::from(REGRESSION_EXIT),
         Err(e) => {
             eprintln!("ftgsxr: {e}");
             ExitCode::from(u8::try_from(exit_code(&e)).unwrap_or(2))
