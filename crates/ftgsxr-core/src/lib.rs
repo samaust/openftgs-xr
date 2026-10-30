@@ -18,9 +18,11 @@ pub mod pose;
 pub mod sh;
 pub mod types;
 
+// Q-65, Q-T109.1: the exchange writer.
 pub use formats::{
-    InfoReply, ManifestImage, RenderImage, RenderItem, RenderRequest, SceneManifest, info_json,
-    read_renders, read_request, read_scene_manifest, write_renders,
+    InfoReply, ManifestImage, RenderImage, RenderItem, RenderRequest, SceneManifest,
+    encode_exchange, info_json, read_renders, read_request, read_scene_manifest, write_exchange,
+    write_renders,
 };
 pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
