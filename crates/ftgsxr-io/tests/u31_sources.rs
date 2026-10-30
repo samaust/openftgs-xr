@@ -593,6 +593,95 @@ fn u31_http_index_fetch_of_a_checkpoint_fills_one_cache_entry() {
     assert_eq!(reports.last().map(|p| p.done), Some(size));
 }
 
+#[test]
+fn u31_http_checkpoint_params_against_the_manifest_digest() {
+    // Q-56: `params.safetensors` downloads against the manifest's digest for it. The
+    // fixture server serves the committed files as they are, so the cached manifest's
+    // digest is doctored instead (its size kept, so the server's 304 keeps it, Q-42): the
+    // params then disagree with it, which is E-NET-CHECKSUM, the download discarded.
+    let server = serve_fixtures();
+    let source = HttpIndex::new(
+        listing_base(&server),
+        ListingFlavor::Index,
+        client("checkpoint-digest"),
+    );
+    let tiny = http_checkpoint(&source);
+    let (_, bytes, _) = fetch_all(&source, &tiny);
+    let dir = bytes.checkpoint_dir().unwrap().to_path_buf();
+    let manifest = dir.join("manifest.json");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let digest = "5456b847ca9238c2c9f915e0ab034014ffe052842f0581c4e9c6e103ada2ed87";
+    assert!(text.contains(digest), "the manifest's params digest");
+    fs::write(&manifest, text.replace(digest, &"0".repeat(64))).unwrap();
+
+    let before = server.requests().len();
+    let cancel = AtomicBool::new(false);
+    let err = source.fetch(&tiny, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-CHECKSUM");
+    let seen: Vec<(String, u16)> = server.requests()[before..]
+        .iter()
+        .map(|r| (r.path.clone(), r.status))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("/listing/models/tiny/manifest.json".to_owned(), 304),
+            ("/listing/models/tiny/params.safetensors".to_owned(), 200),
+        ]
+    );
+    assert!(!dir.join("params.safetensors.part").exists());
+    assert!(!dir.join("params.safetensors.meta.part.json").exists());
+}
+
+/// The bytes of every file in a cache entry.
+fn entry_bytes(entry: &Path) -> u64 {
+    fs::read_dir(entry)
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len())
+        .sum()
+}
+
+#[test]
+fn u31_prune_never_evicts_a_checkpoint_in_use() {
+    // U-28's "never a loaded one" for a checkpoint's entry (Q-4, Q-55): the entry is kept
+    // while its directory, or a file in it, is in use, and it is ordered by the latest
+    // `fetched_at` of its members (Q-42).
+    let server = serve_fixtures();
+    let test = "checkpoint-prune";
+    let http = client(test);
+    let source = HttpIndex::new(listing_base(&server), ListingFlavor::Index, http.clone());
+    let entries = source.list("").unwrap();
+    let tiny = http_checkpoint(&source);
+    let probe = entries.iter().find(|e| e.name == "probe p1").unwrap();
+    let (_, bytes, _) = fetch_all(&source, &tiny);
+    let dir = bytes.checkpoint_dir().unwrap().to_path_buf();
+    let probe_url = Url::parse(&probe.location).unwrap();
+    let cancel = AtomicBool::new(false);
+    let probe_file = http
+        .download(&probe_url, None, &mut |_| {}, &cancel)
+        .unwrap();
+    let probe_dir = probe_file.parent().unwrap().to_path_buf();
+    // The checkpoint is used again (two 304s), so the probe is now the least recently used.
+    fetch_all(&source, &tiny);
+    let (dir_bytes, probe_bytes) = (entry_bytes(&dir), entry_bytes(&probe_dir));
+
+    // Room for the checkpoint alone: the probe goes, the checkpoint stays.
+    let roomy = HttpClient::new(cache_of(test), TlsRoots::WebPki, dir_bytes).unwrap();
+    assert_eq!(roomy.prune().unwrap(), probe_bytes);
+    assert!(dir.join("params.safetensors").exists() && !probe_file.exists());
+
+    // No room at all: kept while the entry directory, or one of its files, is in use.
+    let none = HttpClient::new(cache_of(test), TlsRoots::WebPki, 0).unwrap();
+    none.set_in_use(&[dir.clone()]);
+    assert_eq!(none.prune().unwrap(), 0, "the directory in use");
+    none.set_in_use(&[dir.join("params.safetensors")]);
+    assert_eq!(none.prune().unwrap(), 0, "a member in use");
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    none.set_in_use(&[]);
+    assert_eq!(none.prune().unwrap(), dir_bytes);
+    assert!(!dir.exists());
+}
+
 /// A stub of the Android document provider (§2.5, D-49): one tree, `content://stub/tree`,
 /// whose documents are the listing fixture's two model files; every call is recorded.
 struct StubProvider {

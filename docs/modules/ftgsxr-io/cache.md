@@ -1,6 +1,6 @@
 # The download cache in `ftgsxr_io::http`
 
-How `HttpClient` keeps the download cache: the files of a cache entry, the three states an entry can be in, how a download moves between them, and how `prune` keeps the cache to its size limit. The spec items are §1.5 (Sources, HTTP; Download cache), §1.11 (Locations, the write rule, the versioning rule, Cache entries), §1.15 (E-NET-FETCH, E-NET-CHECKSUM), D-20 and U-28; this doc explains them and never overrides them.
+How `HttpClient` keeps the download cache: the files of a cache entry, the three states an entry can be in, how a download moves between them, and how `prune` keeps the cache to its size limit. The spec items are §1.5 (Sources, HTTP; Download cache), §1.11 (Locations, the write rule, the versioning rule, Cache entries), §1.15 (E-NET-FETCH, E-NET-CHECKSUM), D-20, D-51, U-28 and U-31; this doc explains them and never overrides them.
 
 ## The client
 
@@ -35,6 +35,18 @@ Every record is written to a temporary sibling and renamed (§1.11). A record th
 
 When an entry has both, the partial wins: it was started after the complete file was found out of date.
 
+## A checkpoint's entry
+
+A checkpoint is a directory of two files, and it travels by path (D-51), so `HttpIndex::fetch` of an `index.json` checkpoint entry downloads both into one entry and returns the entry's directory, which is then itself the checkpoint directory `read_checkpoint` reads. The entry is keyed by the directory's URL, trailing slash included, and holds each member under its own name (Q-42):
+
+| File | Holds |
+| --- | --- |
+| `manifest.json`, `params.safetensors` | the complete members, under the names `read_checkpoint` reads |
+| `<name>.meta.json` | each member's record, as `meta.json` is a single file's |
+| `<name>.part`, `<name>.meta.part.json` | a member's download in progress and its record |
+
+Each member goes through the three states and the four endings above on its own, so a second fetch revalidates each one (two 304s) and a broken download resumes the member it broke in. `manifest.json` comes first, with no expected digest (the index gives none for a checkpoint); `params.safetensors` follows against the manifest's digest for it, so a corrupt params download is E-NET-CHECKSUM and never reaches the reader (Q-56). Both downloads run under the one lock, so a prune never sees half an entry. The progress `fetch` reports is cumulative over the two files (Q-58).
+
 ## A download's life
 
 The body is streamed into `file.part` chunk by chunk. Before each chunk `cancel` is read, and after each one `progress` hears the bytes held and the size the server announced, counting the bytes a resume started from. The SHA-256 is computed while streaming; a resume first hashes the bytes already held, since a digest in progress cannot survive the process that started it.
@@ -48,14 +60,17 @@ The download ends in one of four ways:
 
 ## Pruning
 
-`prune` sees only the `http/` entries: thumbnails and logs share the cache directory but are written by others (Q-45). It measures each entry as the bytes of all its files, orders entries by `fetched_at`, which every successful `download`, a 304 included, rewrites and which therefore is the entry's last use (Q-42), and removes whole entries, oldest first, until the total is within the limit `HttpClient::new` was given. An entry without a readable record sorts first.
+`prune` sees only the `http/` entries: thumbnails and logs share the cache directory but are written by others (Q-45). It measures each entry as the bytes of all its files, orders entries by `fetched_at`, which every successful `download`, a 304 included, rewrites and which therefore is the entry's last use (Q-42; a checkpoint's entry by the latest `fetched_at` of its members), and removes whole entries, oldest first, until the total is within the limit `HttpClient::new` was given. An entry without a readable record sorts first.
 
-It never removes an entry whose `file` is in the set `set_in_use` last gave (Q-4): the application passes the paths `download` returned for the models loaded now, before it prunes, and paths are compared canonicalized. If the files in use alone exceed the limit, `prune` frees what it can and leaves them. `download` never prunes by itself, since only the application knows what is loaded.
+It never removes an entry whose directory, or any file in it, is in the set `set_in_use` last gave (Q-4, Q-55): the application passes the paths `download` returned for the models loaded now, and the entry directory of each fetched checkpoint loaded now, before it prunes, and paths are compared canonicalized. If the files in use alone exceed the limit, `prune` frees what it can and leaves them. `download` never prunes by itself, since only the application knows what is loaded.
 
 ## Q-n rows relied on
 
 - **Q-4** `set_in_use`, the public-API addition that tells `prune` which files are loaded.
-- **Q-42** the entry's files and records: the `<cache dir>` root, the URL's serialization as the key, `format` and `version` in the record, `fetched_at` as the last use, the partial and its own record.
+- **Q-42** the entry's files and records: the `<cache dir>` root, the URL's serialization as the key, `format` and `version` in the record, `fetched_at` as the last use, the partial and its own record; a checkpoint's entry and its members.
+- **Q-55** a checkpoint's entry in use: its directory or any file in it.
+- **Q-56** `params.safetensors` checked against the manifest's digest.
+- **Q-58** a checkpoint fetch's cumulative progress.
 - **Q-43** what `download` does where §1.5 is silent: failures part-way, cancel, a resume answered with 200 or 416, the expected digest against the cache's record, a malformed digest, timeouts.
 - **Q-44** `get_range` on a short file or a server without ranges; `get_text` uncached.
 - **Q-45** what `prune` counts and removes, and the one lock it shares with `download`.
