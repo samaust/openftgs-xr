@@ -156,6 +156,34 @@ fn u31_local_dir_info_reads_the_header_only() {
 }
 
 #[test]
+fn u31_local_dir_info_reports_a_listed_broken_file() {
+    // A broken `ftgs-if` file is listed by its format alone; `info` gives its E-FILE code
+    // (Q-38, #84): the probe cut short, and the probe with major version 2.
+    let dir = fresh_dir("u31_local_dir_info_reports_a_listed_broken_file");
+    let probe = fs::read(listing_models().join("probe p1.safetensors")).unwrap();
+    fs::write(dir.join("cut.safetensors"), &probe[..probe.len() - 4]).unwrap();
+    let from = br#""version":"1""#;
+    let at = probe
+        .windows(from.len())
+        .position(|w| w == from)
+        .expect("the probe's version");
+    let mut v2 = probe.clone();
+    v2[at + from.len() - 2] = b'2';
+    fs::write(dir.join("v2.safetensors"), &v2).unwrap();
+
+    let source = LocalDir { root: dir };
+    let entries = source.list("").unwrap();
+    let codes: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|e| (e.name.as_str(), source.info(e).unwrap_err().code()))
+        .collect();
+    assert_eq!(
+        codes,
+        vec![("cut", "E-FILE-FORMAT"), ("v2", "E-FILE-VERSION")]
+    );
+}
+
+#[test]
 fn u31_local_dir_info_of_a_kind_without_a_header_read_is_e_io() {
     let dir = local_models("u31_local_dir_info_of_a_kind_without_a_header_read");
     let source = LocalDir { root: dir };
