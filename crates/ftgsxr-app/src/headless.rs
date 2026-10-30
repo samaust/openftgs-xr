@@ -4,8 +4,12 @@
 //! and `export`, and their errors with §1.15's codes and the exit codes 2 and 3.
 
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use ftgsxr_core::{InfoReply, RenderConventions, info_json};
+use ftgsxr_core::{
+    CoreError, InfoReply, Model, ModelInfo, RenderConventions, info_json, open_model,
+};
 
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their
 /// cause's §1.15 code in the message's leading `E-…: ` prefix (Q-64).
@@ -170,6 +174,59 @@ fn json_entries(object: &str) -> Vec<(String, String)> {
                 .and_then(|v| v.strip_suffix('"'))
                 .unwrap_or(value);
             Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+/// `Input("<code>: <path>: <user text>")` for a core error met on `path` (Q-T117.1).
+// Q-T117.1
+fn input(path: &Path, e: &CoreError) -> HeadlessError {
+    HeadlessError::Input(format!(
+        "{}: {}: {}",
+        e.code(),
+        path.display(),
+        e.user_text()
+    ))
+}
+
+/// Reads and validates the model at `path` (§1.2): `open_model`, its errors as `input`.
+fn load(path: &Path) -> Result<Model, HeadlessError> {
+    open_model(path).map_err(|e| input(path, &e))
+}
+
+/// The size of the file a model's identity hashes (D-40): `params.safetensors` for a
+/// checkpoint directory, the file itself otherwise (Q-T117.2).
+// Q-T117.2
+fn identity_file(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.join("params.safetensors")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// `ftgsxr validate MODEL ...` (§1.7): reads and validates each model, in order, and
+/// returns its header information: N, L, the time span, the producer, the conventions,
+/// the kind and the size of the file its identity hashes (Q-T117.2). The first invalid
+/// file stops the run with its E-FILE code (exit 2).
+pub fn cmd_validate(models: &[PathBuf]) -> Result<Vec<ModelInfo>, HeadlessError> {
+    models
+        .iter()
+        .map(|path| {
+            let model = load(path)?;
+            let file = identity_file(path);
+            let file_bytes = fs::metadata(&file)
+                .map_err(|e| input(&file, &CoreError::Io(e)))?
+                .len();
+            Ok(ModelInfo {
+                n: model.len() as u64,
+                sh_degree: model.sh_degree,
+                time: model.time,
+                producer: model.producer,
+                conventions: model.conventions,
+                kind: model.kind,
+                file_bytes,
+            })
         })
         .collect()
 }

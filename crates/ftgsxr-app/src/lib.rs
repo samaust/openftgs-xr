@@ -8,4 +8,4 @@
 
 pub mod headless;
 
-pub use headless::{HeadlessError, cmd_info, exit_code};
+pub use headless::{HeadlessError, cmd_info, cmd_validate, exit_code};
