@@ -256,6 +256,17 @@ fn u28_a_checksum_mismatch_discards_the_download() {
     assert_eq!(std::fs::read(path).unwrap(), whole);
 }
 
+/// A cancel is E-IO of kind `Interrupted`, as a cancelled local or document `fetch` is
+/// (Q-43, Q-47).
+fn assert_cancelled(result: Result<PathBuf, ftgsxr_io::IoError>) {
+    let err = result.expect_err("a cancelled download");
+    assert_eq!(err.code(), "E-IO");
+    assert!(
+        matches!(&err, ftgsxr_io::IoError::Io(e) if e.kind() == std::io::ErrorKind::Interrupted),
+        "a cancel is recognised by its kind: {err:?}"
+    );
+}
+
 #[test]
 fn u28_cancel_stops_within_one_chunk() {
     let server = serve_fixtures();
@@ -267,7 +278,7 @@ fn u28_cancel_stops_within_one_chunk() {
     // Cancelled before it starts: no request at all.
     let cancel = AtomicBool::new(true);
     let early = http.download(&url, None, &mut |_| {}, &cancel);
-    assert_eq!(early.map_err(|e| e.code()), Err("E-NET-FETCH"));
+    assert_cancelled(early);
     assert!(server.requests().is_empty());
 
     // Cancelled at the first chunk's report: no further chunk is read or reported.
@@ -282,7 +293,7 @@ fn u28_cancel_stops_within_one_chunk() {
         },
         &cancel,
     );
-    assert_eq!(result.map_err(|e| e.code()), Err("E-NET-FETCH"));
+    assert_cancelled(result);
     assert_eq!(
         reports.len(),
         1,

@@ -44,7 +44,7 @@ The download ends in one of four ways:
 - **Complete.** The size must agree with the server's; then, when the caller gave an `expected_sha256` (from the index entry, a `SHA256SUMS` or a `<name>.sha256`, §1.5), the digest must match, compared without regard to case. `file.part` is renamed over `file` and the record over `meta.json`, in that order, and the partial's record is removed. The returned path is always the entry's `file`.
 - **Checksum mismatch.** The partial and its record are deleted and the call returns E-NET-CHECKSUM (§1.5, §1.15). A complete cached file whose recorded digest disagrees with the expected one is not offered for revalidation in the first place: the expected digest wins and the file is fetched again (Q-43).
 - **Failure part-way.** A body that breaks off keeps every byte received in `file.part`, and the call returns E-NET-FETCH without retrying itself; the next call resumes. That is §1.15's retry button, and what U-28's truncation exercises through the fixture server's broken chunk (Q-40).
-- **Cancel.** The partial is kept for a later resume and the call returns E-NET-FETCH with "cancelled" in its text (Q-43); a cancel already set before the call sends no request.
+- **Cancel.** `cancel` is read before the request and before every chunk read. The partial is kept for a later resume and the call returns E-IO, an `IoError::Io` of kind `Interrupted` with the URL in its text, as a cancelled local or document `fetch` does, so a caller recognises every cancel by its kind (Q-43, Q-47); a cancel already set before the call sends no request.
 
 ## Pruning
 

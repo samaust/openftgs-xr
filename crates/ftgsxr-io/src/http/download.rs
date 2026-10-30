@@ -41,8 +41,9 @@ impl HttpClient {
     /// on a 304; a partial one is resumed with `Range` and `If-Range`, or restarted when its
     /// validators no longer match (§1.5, Q-43). With `expected_sha256` the finished file
     /// must have that digest, or it is discarded with E-NET-CHECKSUM (§1.5, §1.15).
-    /// `progress` hears after every chunk; `cancel` is read before every chunk, and a
-    /// cancelled download keeps its partial file and returns E-NET-FETCH (Q-43).
+    /// `progress` hears after every chunk; `cancel` is read before the request and before
+    /// every chunk, and a cancelled download keeps its partial file and returns E-IO of kind
+    /// `Interrupted`, as a cancelled local or document `fetch` does (Q-43, Q-47).
     pub fn download(
         &self,
         url: &Url,
@@ -256,9 +257,12 @@ fn receive(
     Ok(entry.file.clone())
 }
 
-/// The cancel error (Q-43).
+/// The cancel error: E-IO of kind `Interrupted`, the one every source gives (Q-43, Q-47).
 fn cancelled(url: &Url) -> IoError {
-    IoError::Fetch(format!("{url}: cancelled"))
+    IoError::Io(std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        format!("{url}: cancelled"),
+    ))
 }
 
 /// A SHA-256 given as 64 hex digits in either case, lowercased (Q-43).
