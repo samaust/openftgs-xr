@@ -37,7 +37,7 @@ const PRESETS: &[&str] = &["y-up", "z-up", "neg-y-up", "custom"];
 pub struct ClockState {
     /// The clock time T in seconds.
     pub t: f64,
-    /// The speed, signed (§1.6's presets in either direction).
+    /// The speed, signed: E9's \[−4, 4\] \\ {0}, which the reader does not check.
     pub speed: f64,
     /// The loop mode, the file's key `loop`.
     pub loop_mode: LoopMode,
