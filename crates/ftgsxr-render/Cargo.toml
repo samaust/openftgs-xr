@@ -25,6 +25,6 @@ wgpu = { workspace = true, features = ["vulkan", "wgsl"] }
 [dev-dependencies]
 ftgsxr-testkit.workspace = true
 # The shader validator (§2.3's naga row, Bevy's pin) for the cpu lane's check of the WGSL.
-naga = { workspace = true, features = ["wgsl-in"] }
+naga = { workspace = true, features = ["wgsl-in"] } # Q-T76.2
 # The fixture pose files of R-7 and R-8 (Q-12).
 serde_json.workspace = true # Q-104
