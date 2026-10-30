@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use cull_support::{draw, look_at, oracle, passes, prepare, sort_pose, test_pose, upload, view};
 use ftgsxr_core::{UVec2, Vec3};
 use ftgsxr_render::{Colormap, FrameBuffers, FrameStats, QualityTier, RenderMode};
-use ftgsxr_testkit::{gpu_context, random_model};
+use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 /// The watchdog of R-6: no call of the frame loop may wait longer than this.
 const WATCHDOG: Duration = Duration::from_millis(1);
@@ -30,6 +30,7 @@ fn camera() -> ftgsxr_core::Camera {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r06_visible_count_equals_the_cpu_count_and_overflow_clamps() {
+    let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let tier = QualityTier::conformance();
     let model = random_model(0x6_06, 20_000, 1);
@@ -104,6 +105,7 @@ fn gpu_r06_visible_count_equals_the_cpu_count_and_overflow_clamps() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r06_centers_follow_the_splats_under_the_same_capacity() {
+    let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let tier = QualityTier::conformance();
     let model = random_model(0x6_07, 5_000, 0);
@@ -181,6 +183,7 @@ fn gpu_r06_centers_follow_the_splats_under_the_same_capacity() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
+    let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let tier = QualityTier::conformance();
     let model = random_model(0x6_08, 20_000, 0);

@@ -5,6 +5,7 @@
 //! and 2 on an invalid input, printing §1.7's output (Q-77).
 
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use ftgsxr_app::cmd_info;
@@ -186,6 +187,46 @@ fn render_tier_names() {
     assert!(!String::from_utf8(o.stderr).unwrap().contains("E-REQ-UNIT"));
 }
 
+/// A Khronos validation layer settings file in `dir` that sends the layer's errors,
+/// warnings (performance ones too) and information to `log`; the directory holding it, the
+/// one `VK_LAYER_SETTINGS_PATH` names, is returned. The layer writes its log even beside
+/// wgpu's own messenger.
+fn layer_settings(dir: &Path, log: &Path) -> PathBuf {
+    let settings = dir.join("layer-settings");
+    fs::create_dir_all(&settings).unwrap();
+    let _ = fs::remove_file(log);
+    fs::write(
+        settings.join("vk_layer_settings.txt"),
+        format!(
+            "khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG\n\
+             khronos_validation.report_flags = error,warn,perf,info\n\
+             khronos_validation.log_filename = {}\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    settings
+}
+
+/// The layer's log: whether it reported itself active (its status message at instance
+/// creation) and the header line of each error or warning, the lines that read
+/// `<message id>(ERROR / <type>): …` or `<message id>(WARNING / <type>): …`.
+fn layer_log(log: &Path) -> (bool, Vec<String>) {
+    let text = fs::read_to_string(log).unwrap_or_default();
+    let active = text.contains("Khronos Validation Layer Active");
+    let messages = text
+        .lines()
+        .filter(|line| {
+            line.split_once('(').is_some_and(|(id, rest)| {
+                !id.contains(' ')
+                    && (rest.starts_with("ERROR / ") || rest.starts_with("WARNING / "))
+            })
+        })
+        .map(str::to_owned)
+        .collect();
+    (active, messages)
+}
+
 /// The safetensors header of `bytes`, its JSON text.
 fn header(bytes: &[u8]) -> &str {
     let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
@@ -217,12 +258,20 @@ fn gpu_r15_render_writes_the_renders_file() {
     let model = fixtures_dir().join("probes/P1.safetensors");
     let request_path = fixtures_dir().join("probes/P1.request.json");
     let out = dir.join("P1.renders.safetensors");
-    let o = ftgsxr(&[
-        "render",
-        model.to_str().unwrap(),
-        request_path.to_str().unwrap(),
-        out.to_str().unwrap(),
-    ]);
+    // R-16 (Q-105): the binary has no logger, so wgpu-hal drops the layer's messages;
+    // the layer's own log, chosen by a settings file, keeps them.
+    let log = dir.join("validation.log");
+    let settings = layer_settings(&dir, &log);
+    let o = Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
+        .args([
+            "render",
+            model.to_str().unwrap(),
+            request_path.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ])
+        .env("VK_LAYER_SETTINGS_PATH", &settings)
+        .output()
+        .expect("the binary runs");
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -230,6 +279,16 @@ fn gpu_r15_render_writes_the_renders_file() {
         String::from_utf8_lossy(&o.stderr)
     );
     assert!(o.stdout.is_empty());
+    // §1.13: a debug binary has the layers on (`InstanceFlags::from_build_config`), and
+    // they reported nothing.
+    let (active, messages) = layer_log(&log);
+    if cfg!(debug_assertions) {
+        assert!(
+            active,
+            "the Khronos validation layer did not report itself active"
+        );
+    }
+    assert!(messages.is_empty(), "{messages:#?}");
     // The committed request, read by the testkit (its items and its file's SHA-256).
     let (_, request) = probe("P1");
     let bytes = fs::read(&out).unwrap();

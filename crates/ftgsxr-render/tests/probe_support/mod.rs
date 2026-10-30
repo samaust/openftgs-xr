@@ -27,8 +27,9 @@ pub fn render_probe(name: &str) -> Vec<(String, RenderImage, RenderImage)> {
 /// `conformance` tier, at the item's timestamp from its camera, with the request's
 /// background and SH degree, at the identity pose (§1.7 `render`), paired with its
 /// reference in `references` by id; `name` names the model in messages. The renderer and
-/// its device are dropped before returning, so in a debug build any GPU validation message
-/// fails the caller (§1.13, R-16, Q-74).
+/// its device are dropped before returning, so in a debug build any message of wgpu's own
+/// validation fails the caller (§1.13, R-16, Q-74); the Vulkan layer's messages fail it
+/// through the caller's `layer_messages` guard (Q-105).
 pub fn render_items(
     name: &str,
     model: &Model,

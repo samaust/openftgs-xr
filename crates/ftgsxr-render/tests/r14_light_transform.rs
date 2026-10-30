@@ -12,11 +12,12 @@ use display_support::{
 };
 use ftgsxr_core::Vec3;
 use ftgsxr_render::{ColorTransform, RenderMode};
-use ftgsxr_testkit::gpu_context;
+use ftgsxr_testkit::{gpu_context, layer_messages};
 
 #[test]
 #[ignore = "gpu"]
 fn gpu_r14_gains_apply_in_linear_light() {
+    let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let grey = 0.4;
     let model = flat_probe([grey; 3]);

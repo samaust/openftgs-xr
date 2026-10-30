@@ -13,7 +13,7 @@ mod display_support;
 use display_support::{Frame, Row, Run, draw, model, probe_camera, render, upload};
 use ftgsxr_core::Vec2;
 use ftgsxr_render::{ColorTransform, Colormap, RenderMode};
-use ftgsxr_testkit::gpu_context;
+use ftgsxr_testkit::{gpu_context, layer_messages};
 
 const RHO: f32 = 3.0;
 const TAU: f64 = 1.2;
@@ -98,6 +98,7 @@ fn check_disc_colors(frame: &Frame, rows: &[Row], colors: &[[f32; 3]]) {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r13_centers_are_discs_of_radius_rho_in_the_dc_color() {
+    let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let rows = rows();
     let model = model(&rows);
@@ -213,6 +214,7 @@ fn time_center_frame(model: &ftgsxr_core::Model, tau: f64) -> Frame {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r13_time_center_colormap_spans_tau0_to_tau1() {
+    let _layer = layer_messages(); // R-16, Q-105
     // τ₀ ≠ 0, so the inverse span is 1 / (τ₁ − τ₀), not 1 / τ₁ (Q-97).
     let rows = timed_rows([10.0, 11.0, 12.0]);
     let mut m = model(&rows);

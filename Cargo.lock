@@ -1778,6 +1778,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "tiny_http",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

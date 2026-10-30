@@ -9,11 +9,13 @@
 mod probe_support;
 
 use ftgsxr_render::{HeadlessRenderer, QualityTier};
+use ftgsxr_testkit::layer_messages;
 use probe_support::{check_items, posed_instances, probe, render_request};
 
 #[test]
 #[ignore = "gpu"]
 fn gpu_r08_rotated_and_scaled_instance_with_degree_3_sh() {
+    let _layer = layer_messages(); // R-16, Q-105
     let instances = posed_instances("R8_poses.json");
     assert_eq!(instances.len(), 1);
     let (model, pose) = &instances[0];

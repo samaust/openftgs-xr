@@ -29,5 +29,7 @@ Every test belongs to one lane, by what it needs (§2.7, D-28; "Test lane" in
 | `ds` | `$OPENFTGS_DATASETS` and the trained tiny models | `#[ignore = "ds"]`, prefix `ds_` |
 
 A lane other than `cpu` runs with `cargo test -- --ignored <prefix>`; the `gpu`, `xr`
-and `dv` lanes add `--test-threads 1` (§2.7, Lanes). CI runs the `cpu` lane and the
+and `dv` lanes add `--test-threads 1` (§2.7, Lanes). A `gpu` test starts with
+`let _layer = ftgsxr_testkit::layer_messages();`, before its first device, so a Vulkan
+validation layer warning or error fails it in a debug build (§1.13, R-16, Q-105). CI runs the `cpu` lane and the
 skeleton test on every push (`.github/workflows/ci.yml`).

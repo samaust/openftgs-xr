@@ -11,7 +11,7 @@
 mod probe_support;
 
 use ftgsxr_core::{Vec3, sh_color};
-use ftgsxr_testkit::probe;
+use ftgsxr_testkit::{layer_messages, probe};
 use probe_support::render_probe;
 
 /// One binary16 step (unit in the last place) at the magnitude of `v`: 2^(⌊log₂|v|⌋ − 10)
@@ -28,6 +28,7 @@ fn half_step(v: f32) -> f32 {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r19_difference_within_the_remaining_transmittance() {
+    let _layer = layer_messages(); // R-16, Q-105
     let (model, _) = probe("R19_transmittance");
     assert_eq!(model.len(), 2, "the near and the far primitive");
     // The far primitive is the near-opaque one (opacity 1 − 10⁻⁷); degree 0, so its color
