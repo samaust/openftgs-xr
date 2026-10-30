@@ -159,7 +159,7 @@ fn u23_permutation_applied() {
 
 /// U-23: time centers rebased to float32 τ − τ₀ and durations float32, at τ₀ = 10⁹ s
 /// where the raw centers lose their fraction in float32; position and time stay float32
-/// and unchanged whatever fields are half (D-12).
+/// and unchanged whatever fields are half (D-12); τ₀ and τ₁ carried as float64 (Q-97).
 #[test]
 fn u23_time_rebased_position_and_time_unchanged() {
     let tau0 = 1.0e9;
@@ -168,6 +168,7 @@ fn u23_time_rebased_position_and_time_unchanged() {
     for half in [HalfFields::default(), ALL_HALF] {
         let a = pack_for_gpu(&m, &order, &GpuLayoutOptions { half, sh_cap: None });
         assert_eq!(a.tau0, tau0);
+        assert_eq!(a.tau1, tau0 + 8.0); // Q-97
         assert!(!a.single);
         for (k, &i) in order.iter().enumerate() {
             let i = i as usize;
@@ -179,7 +180,8 @@ fn u23_time_rebased_position_and_time_unchanged() {
     }
 }
 
-/// U-23: a single-timestamp model (D-9) packs with `single` set, every rebased center 0.
+/// U-23: a single-timestamp model (D-9) packs with `single` set, τ₁ = τ₀ (Q-97), every
+/// rebased center 0.
 #[test]
 fn u23_single_timestamp_rebases_to_zero() {
     let mut m = model(3, 5.0, 5.0);
@@ -190,6 +192,7 @@ fn u23_single_timestamp_rebases_to_zero() {
     let a = pack_for_gpu(&m, &[0, 1, 2], &GpuLayoutOptions::default());
     assert!(a.single);
     assert_eq!(a.tau0, 5.0);
+    assert_eq!(a.tau1, 5.0); // Q-97
     assert_eq!(a.time_center, [0.0; 3]);
     assert_eq!(a.duration, [1.0; 3]);
 }

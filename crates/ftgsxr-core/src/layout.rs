@@ -63,6 +63,9 @@ pub struct GpuArrays {
     pub sh_degree: u8,
     /// τ₀, the origin of the rebased time centers.
     pub tau0: f64,
+    /// τ₁, the end of the model's span (τ₀ for a single timestamp), which gives the
+    /// time-center colormap its span \[τ₀, τ₁\] (§1.4 stage 6). // Q-97
+    pub tau1: f64,
     /// Whether the model has a single timestamp (D-9).
     pub single: bool,
     /// Which of the byte arrays hold half floats.
@@ -89,8 +92,8 @@ pub struct GpuArrays {
 /// file row, the direction `TemporalIndex::build` returns, §1.2 load option 5); the SH
 /// bands above `opts.sh_cap` are dropped (option 1); the fields `opts.half` names are
 /// rounded to half floats, to nearest even (option 2, D-12); time centers become float32
-/// τ − τ₀, computed in float64 then rounded, and durations float32 (option 3). Packing is
-/// parallel over rows (§2.4). `order` may list any rows of `model`, a subset included.
+/// τ − τ₀, computed in float64 then rounded, and durations float32 (option 3); τ₀ and τ₁
+/// are carried as float64 (Q-97). Packing is parallel over rows (§2.4). `order` may list any rows of `model`, a subset included.
 ///
 /// # Panics
 ///
@@ -107,6 +110,7 @@ pub fn pack_for_gpu(model: &Model, order: &[u32], opts: &GpuLayoutOptions) -> Gp
         n,
         sh_degree: degree,
         tau0,
+        tau1: model.time.tau1, // Q-97
         single: model.is_single_timestamp(),
         half,
         position: gather_f32(model.position.as_flattened(), 3, order),
