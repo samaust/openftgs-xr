@@ -16,6 +16,7 @@ mod local;
 mod nginx;
 
 pub(crate) use html::percent_decode;
+pub(crate) use index::as_directory;
 pub(crate) use local::{checked_header_len, header_info};
 
 /// What a listed entry is (§1.5's kinds, and a directory to list on demand).

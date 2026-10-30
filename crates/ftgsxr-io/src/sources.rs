@@ -16,7 +16,7 @@ use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
 use url::Url;
 
 use crate::http::status_error;
-use crate::listing::{checked_header_len, header_info, percent_decode};
+use crate::listing::{as_directory, checked_header_len, header_info, percent_decode};
 use crate::util::cancelled;
 use crate::{
     Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
@@ -94,7 +94,8 @@ pub struct LocalDir {
 /// An HTTP index (§1.5, D-31): a base URL listed in one of the three listing flavors,
 /// fetched through the shared `HttpClient`.
 pub struct HttpIndex {
-    /// The directory URL listed; `index.json` resolves against it, so it ends in `/`.
+    /// The directory URL listed, ending in `/` (`new` appends it, Q-48), so `index.json`,
+    /// subdirectories and relative entry locations resolve under it.
     pub base: Url,
     /// The listing read, or `Auto` to detect it on every listing (Q-48).
     pub flavor: ListingFlavor,
@@ -138,11 +139,12 @@ const SUMS: &str = "SHA256SUMS";
 const CHUNK: usize = 1 << 20;
 
 impl HttpIndex {
-    /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-47).
-    // Q-47
+    /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-47). A base is a
+    /// directory: one whose path does not end in `/` gets one (Q-48).
+    // Q-47, Q-48
     pub fn new(base: Url, flavor: ListingFlavor, client: Arc<HttpClient>) -> HttpIndex {
         HttpIndex {
-            base,
+            base: as_directory(base),
             flavor,
             client,
         }
@@ -273,14 +275,17 @@ impl ModelSource for HttpIndex {
 
 impl HttpIndex {
     /// `Auto`'s detection at the directory URL `dir` (D-31, Q-48): `index` when it
-    /// answers 2xx, then `dir` once, as nginx JSON, then as HTML anchors.
+    /// answers 2xx, then `dir` once, as nginx JSON, then as HTML anchors. A `dir` answering
+    /// 404 or 403 has no listing (E-NET-LISTING); any other failure status is E-NET-FETCH.
     // Q-48
     fn detect(&self, dir: &Url, index: &Url) -> Result<Vec<Entry>, IoError> {
         if let Ok(body) = self.client.get_text_or_status(index)? {
             return parse_index_manifest(&body, dir);
         }
-        let Ok(body) = self.client.get_text_or_status(dir)? else {
-            return Err(IoError::Listing(dir.to_string()));
+        let body = match self.client.get_text_or_status(dir)? {
+            Ok(body) => body,
+            Err(404 | 403) => return Err(IoError::Listing(dir.to_string())),
+            Err(status) => return Err(status_error(dir, status)),
         };
         parse_nginx_json(&body, dir)
             .or_else(|_| parse_html_listing(&body, dir))
