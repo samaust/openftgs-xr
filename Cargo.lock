@@ -1610,6 +1610,7 @@ dependencies = [
  "bevy",
  "ftgsxr-core",
  "ftgsxr-testkit",
+ "naga",
  "wgpu",
 ]
 

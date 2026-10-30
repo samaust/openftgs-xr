@@ -59,10 +59,6 @@ fn model_uniform(arrays: &GpuArrays, conv: &RenderConventions) -> [u8; MODEL_UNI
 
 /// The buffers of one model, one per `GpuArrays` field (§2.4: no padding between rows; a
 /// buffer is padded to whole 32-bit words at its end, Q-22).
-#[expect(
-    dead_code,
-    reason = "bound by the cull pass of a later M-2 ticket (§1.4 stage 2)"
-)]
 pub(crate) struct ModelBuffers {
     pub(crate) position: wgpu::Buffer,
     pub(crate) time_center: wgpu::Buffer,
@@ -78,16 +74,12 @@ pub(crate) struct ModelBuffers {
 /// One model on the GPU (§2.1): the SoA buffers of `GpuArrays`, the temporal index, one
 /// uniform block.
 pub struct GpuModel {
-    #[expect(
-        dead_code,
-        reason = "bound by the cull pass of a later M-2 ticket (§1.4 stage 2)"
-    )]
-    buffers: ModelBuffers,
-    #[expect(
-        dead_code,
-        reason = "read by the prepare stage of a later M-2 ticket (§1.4 stage 1)"
-    )]
-    index: TemporalIndex,
+    pub(crate) buffers: ModelBuffers,
+    pub(crate) index: TemporalIndex,
+    /// τ₀, the origin of the rebased time centers (§1.2 load option 3).
+    pub(crate) tau0: f64,
+    /// L′, the loaded SH degree.
+    pub(crate) sh_degree: u8,
     n: u32,
     bytes: u64,
 }
@@ -183,6 +175,8 @@ impl GpuModel {
         Ok(GpuModel {
             buffers,
             index,
+            tau0: arrays.tau0,
+            sh_degree: arrays.sh_degree,
             n: arrays.n,
             bytes,
         })

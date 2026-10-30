@@ -62,15 +62,7 @@ pub struct SplatDevice {
     device: wgpu::Device,
     queue: wgpu::Queue,
     adapter_name: String,
-    #[expect(
-        dead_code,
-        reason = "read by the passes of the later M-2 tickets (§2.1)"
-    )]
     limits: wgpu::Limits,
-    #[expect(
-        dead_code,
-        reason = "read by the passes of the later M-2 tickets (§2.1)"
-    )]
     features: wgpu::Features,
     budget: MemoryBudget,
     messages: Arc<Mutex<Vec<String>>>,
@@ -176,6 +168,16 @@ impl SplatDevice {
     pub fn queue(&self) -> &wgpu::Queue {
         // Q-68
         &self.queue
+    }
+
+    /// The device's limits, as created.
+    pub(crate) fn limits(&self) -> &wgpu::Limits {
+        &self.limits
+    }
+
+    /// The device's features, as created.
+    pub(crate) fn features(&self) -> wgpu::Features {
+        self.features
     }
 
     /// The budget `GpuModel::upload` checks a model's static bytes against (D-13, Q-66).
