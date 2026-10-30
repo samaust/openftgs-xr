@@ -6,10 +6,10 @@
 
 #![allow(dead_code, reason = "each test file uses a part of the helpers")]
 
-use ftgsxr_core::{Pose, RenderImage};
+use ftgsxr_core::{Model, Pose, Quat, RenderImage, Vec3, open_model};
 use ftgsxr_render::{HeadlessRenderer, ModelId, QualityTier};
 pub use ftgsxr_testkit::probe;
-use ftgsxr_testkit::{Metrics, metrics, reference_render};
+use ftgsxr_testkit::{Metrics, fixtures_dir, metrics, reference_render};
 
 /// E15's tier: PSNR ≥ 45 dB, s ≤ 0.5 %, s_α ≤ 0.5 %.
 pub const MIN_PSNR: f64 = 45.0;
@@ -95,4 +95,43 @@ pub fn check_items(name: &str, items: &[(String, RenderImage, RenderImage)]) {
         items.len(),
         failures.join("\n")
     );
+}
+
+/// The instances of a fixture pose file (`merged/<file>`, Q-12): each model, read by
+/// `open_model` from its path relative to the file, with its pose, `x_merged = translation
+/// + scale·R(rotation)·x_instance` and the rotation stored as (x, y, z, w).
+pub fn posed_instances(file: &str) -> Vec<(Model, Pose)> {
+    let path = fixtures_dir().join("merged").join(file);
+    let text = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let json: serde_json::Value =
+        serde_json::from_slice(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert_eq!(json["format"], "openftgs-xr-fixture-poses");
+    let floats = |v: &serde_json::Value| -> Vec<f32> {
+        v.as_array()
+            .expect("an array")
+            .iter()
+            .map(|x| x.as_f64().expect("a number") as f32)
+            .collect()
+    };
+    json["instances"]
+        .as_array()
+        .expect("instances")
+        .iter()
+        .map(|inst| {
+            let model_path = path
+                .parent()
+                .unwrap()
+                .join(inst["model"].as_str().expect("a model path"));
+            let model =
+                open_model(&model_path).unwrap_or_else(|e| panic!("{}: {e}", model_path.display()));
+            let t = floats(&inst["translation"]);
+            let q = floats(&inst["rotation"]);
+            let pose = Pose {
+                translation: Vec3::new(t[0], t[1], t[2]),
+                rotation: Quat::from_xyzw(q[0], q[1], q[2], q[3]),
+                scale: inst["scale"].as_f64().expect("a scale") as f32,
+            };
+            (model, pose)
+        })
+        .collect()
 }
