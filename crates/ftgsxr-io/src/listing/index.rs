@@ -38,9 +38,9 @@ fn resolve(base: &Url, path: &str) -> Result<Url, IoError> {
 }
 
 /// `url` with a `/` ending its path, its query and fragment kept: a checkpoint is a
-/// directory, so its two files resolve inside it (Q-36).
+/// directory, so its two files resolve inside it (Q-36); an HTTP index's base too (Q-48).
 // Q-36
-fn as_directory(mut url: Url) -> Url {
+pub(crate) fn as_directory(mut url: Url) -> Url {
     if !url.path().ends_with('/') {
         let path = format!("{}/", url.path());
         url.set_path(&path);

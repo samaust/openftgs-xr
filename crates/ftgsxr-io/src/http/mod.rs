@@ -188,7 +188,7 @@ fn fetch_error(url: &Url, error: &ureq::Error) -> IoError {
 }
 
 /// E-NET-FETCH for an unexpected status (§1.15: "Could not reach URL (status)").
-fn status_error(url: &Url, status: u16) -> IoError {
+pub(crate) fn status_error(url: &Url, status: u16) -> IoError {
     IoError::Fetch(format!("{url} (status {status})"))
 }
 
