@@ -20,22 +20,19 @@ use ftgsxr_io::{
     ListingFlavor, LocalDir, ModelBytes, ModelRef, ModelSource, Progress, SourceSpec, TlsRoots,
     open_ref, open_source,
 };
-use ftgsxr_testkit::{LocalServer, ServedListing, fixtures_dir, serve_fixtures};
+use ftgsxr_testkit::{
+    LocalServer, ServedListing, fixtures_dir, process_dir, scratch_dir, serve_fixtures,
+};
 use url::Url;
 
-/// This test binary's folder under Cargo's temporary directory, named after the binary and the
-/// process, so no other binary and no overlapping run in another session or worktree shares it
-/// (#94).
+/// This test binary's per-process folder under Cargo's temporary directory (#94, Q-62).
 fn binary_dir() -> PathBuf {
-    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31_sources-{}", std::process::id()))
+    process_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"))
 }
 
 /// A fresh, empty directory in this binary's folder.
 fn fresh_dir(name: &str) -> PathBuf {
-    let dir = binary_dir().join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
 }
 
 /// The listing fixture's models directory (tests/fixtures/README.md, Layout).
