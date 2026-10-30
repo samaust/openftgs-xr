@@ -27,6 +27,7 @@ use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 const MEAN_PX: f64 = 1e-3;
 // Q-82
 const MEAN_ROUNDING: f64 = 8.0;
+// Q-T76.7
 const CONIC_REL: f32 = 1e-4;
 const DEPTH: f32 = 1e-5;
 // Q-82
@@ -109,7 +110,8 @@ fn pair(
 
 /// R-5 on 10⁴ random primitives and 20 random views, ten from inside the model and ten from
 /// outside it (Q-82): the visible set equal; μ′ within 10⁻³ px plus
-/// 8·f·2⁻²³(‖R_w μ^S‖ + ‖t_w‖)/z_c per axis, conics 10⁻⁴ relative, depths 10⁻⁵, radii
+/// 8·f·2⁻²³(‖R_w μ^S‖ + ‖t_w‖)/z_c per axis, each conic component 10⁻⁴ relative with a
+/// floor of 10⁻⁴ of the largest component (Q-T76.7), depths 10⁻⁵, radii
 /// exact but within 1 where the oracle's pre-ceiling value is within 10⁻⁵ relative of an
 /// integer.
 // Q-82
@@ -128,6 +130,9 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
     let mut rng = Rng(0x05_2026);
     let mut failures = Vec::new();
     let mut compared = 0usize;
+    // Each conic component's largest error as a fraction of its bound, with the oracle's
+    // and the record's values there (Q-T76.7).
+    let mut worst_conic = [(0f32, 0f32, 0f32); 3];
     for v in 0..20 {
         // Even views from inside the model, 0.3–1.2 m from its center, odd views from
         // outside it, 3–6 m: sizes, focal lengths and principal points vary, and τ
@@ -192,8 +197,19 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
                 (f64::from(r.mean_px[k]) - f64::from(p.mean[k])).abs()
                     <= MEAN_PX + focal[k] * spread
             });
-            let scale = p.conic.iter().fold(0f32, |m, c| m.max(c.abs()));
-            let conic_ok = (0..3).all(|k| (r.conic[k] - p.conic[k]).abs() <= CONIC_REL * scale);
+            // Q-T76.7: each component within 10⁻⁴ of its own value, with a floor of 10⁻⁴ of
+            // the conic's largest component (a near-zero off-diagonal loses its relative
+            // digits to float32 cancellation).
+            let largest = p.conic.iter().fold(0f32, |m, c| m.max(c.abs()));
+            let mut conic_ok = true;
+            for (k, worst) in worst_conic.iter_mut().enumerate() {
+                let bound = CONIC_REL * p.conic[k].abs().max(largest);
+                let fraction = (r.conic[k] - p.conic[k]).abs() / bound;
+                conic_ok &= fraction <= 1.0;
+                if fraction > worst.0 {
+                    *worst = (fraction, p.conic[k], r.conic[k]);
+                }
+            }
             let radii = [r.half_extent.x as u32, r.half_extent.y as u32];
             let radii_ok = (0..2).all(|k| radius_ok(radii[k], p.radii[k], pre[k]));
             if !mean_ok || !conic_ok || !radii_ok || (r.depth - p.depth).abs() > DEPTH {
@@ -203,6 +219,11 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
                 ));
             }
         }
+    }
+    for (k, (fraction, want, got)) in worst_conic.iter().enumerate() {
+        eprintln!(
+            "R-5 conic[{k}]: worst error {fraction:.3} of its bound (oracle {want:e}, record {got:e})"
+        );
     }
     assert!(
         compared > 10_000,
