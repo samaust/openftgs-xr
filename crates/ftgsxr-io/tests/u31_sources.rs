@@ -1172,6 +1172,83 @@ fn u31_open_ref_reads_every_model_ref() {
 }
 
 #[test]
+fn u31_open_ref_of_an_http_checkpoint_directory_downloads_it() {
+    // Q-60: an `Http` URL whose path ends in `/` is a checkpoint directory: its two files
+    // download into the cache entry keyed by that URL (§1.11, D-51), which `open_ref`
+    // returns as `Checkpoint(<entry dir>)`.
+    let server = serve_fixtures();
+    let url = Url::parse(&server.url_of("listing/models/tiny/")).unwrap();
+    let http = client("open-ref-checkpoint");
+    let bytes = open_ref(&ModelRef::Http(url.clone()), Some(&http), None).unwrap();
+    let dir = checkpoint(&bytes).to_path_buf();
+    for name in ["manifest.json", "params.safetensors"] {
+        assert!(dir.join(name).is_file(), "{name}");
+    }
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    let key = ftgsxr_core::hex(&ftgsxr_core::sha256(url.as_str().as_bytes()));
+    assert_eq!(
+        dir.canonicalize().unwrap(),
+        cache_dir("open-ref-checkpoint")
+            .join("http")
+            .join(key)
+            .canonicalize()
+            .unwrap()
+    );
+    // Without a client, as for a file, E-IO.
+    assert_eq!(
+        open_ref(&ModelRef::Http(url), None, None)
+            .unwrap_err()
+            .code(),
+        "E-IO"
+    );
+}
+
+#[test]
+fn u31_open_ref_and_http_index_share_a_checkpoint_entry() {
+    // Q-60: the checkpoint an `index.json` entry names and the same directory URL given to
+    // `open_ref` land in one cache entry (§1.11, D-51), so the second only revalidates the
+    // manifest (a 304) and reuses the params (Q-43).
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let http = client("open-ref-shared");
+    let source = HttpIndex::new(base.clone(), ListingFlavor::Index, http.clone());
+    let tiny = http_checkpoint(&source);
+    let (_, fetched, _) = fetch_all(&source, &tiny);
+    let before = server.requests().len();
+    let url = base.join("tiny/").unwrap();
+    let opened = open_ref(&ModelRef::Http(url), Some(&http), None).unwrap();
+    assert_eq!(opened, fetched);
+    assert_eq!(read_fetched(&opened), fixture_checkpoint());
+    let seen: Vec<(String, u16)> = server.requests()[before..]
+        .iter()
+        .map(|r| (r.path.clone(), r.status))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![("/listing/models/tiny/manifest.json".to_owned(), 304)]
+    );
+}
+
+#[test]
+fn u31_open_ref_of_an_http_directory_without_a_manifest_is_e_net_fetch() {
+    // Q-60: a URL ending in `/` is tried as a checkpoint; where no `manifest.json` answers,
+    // here a directory whose server answers an HTML listing, that is E-NET-FETCH (§1.15),
+    // and the listing is not cached as a model file.
+    let server = serve_fixtures();
+    server.serve_listing(ServedListing::Html);
+    let base = listing_base(&server);
+    let http = client("open-ref-not-checkpoint");
+    let err = open_ref(&ModelRef::Http(base.clone()), Some(&http), None).unwrap_err();
+    assert_eq!(err.code(), "E-NET-FETCH", "{err}");
+    assert_eq!(paths(&server), vec!["/listing/models/manifest.json"]);
+    let cached = walk(&cache_dir("open-ref-not-checkpoint"));
+    assert!(
+        cached.iter().all(|p| p.file_name().unwrap() != "file"),
+        "{cached:?}"
+    );
+}
+
+#[test]
 fn u31_open_source_refuses_what_it_cannot_serve() {
     let spec = |kind: &str, location: &str| SourceSpec {
         kind: kind.into(),

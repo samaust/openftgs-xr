@@ -32,7 +32,8 @@ pub use crate::{IoError, listing::ListingFlavor};
 pub enum ModelRef {
     /// A file (or a checkpoint directory) on a local file system.
     File(PathBuf),
-    /// A model file on an HTTP server, fetched through the download cache.
+    /// A model file on an HTTP server, or a checkpoint directory when the path ends in `/`
+    /// (Q-60), fetched through the download cache.
     Http(Url),
     /// An Android content URI, read through the `DocumentProvider` (D-49).
     Document(String),
@@ -432,10 +433,12 @@ pub fn open_source(
 }
 
 /// The model `r` names (§1.5): a local file read into memory, a local directory as the
-/// checkpoint it holds, loaded by path (D-51), a download through `client` with no expected
-/// digest (an `Http` reference names a file, Q-60), or a document through `provider`
-/// (Q-47).
-// D-51, Q-47, Q-60
+/// checkpoint it holds, loaded by path (D-51), a download through `client`, or a document
+/// through `provider` (Q-47). An `Http` URL whose path ends in `/` is a checkpoint directory,
+/// downloaded into its cache entry as `HttpIndex::fetch` downloads one (its params checked
+/// against the manifest's digest, Q-57), a missing manifest being E-NET-FETCH; any other
+/// names a file, downloaded with no expected digest (Q-60).
+// D-51, Q-47, Q-57, Q-60
 pub fn open_ref(
     r: &ModelRef,
     client: Option<&HttpClient>,
@@ -451,6 +454,11 @@ pub fn open_ref(
         }
         ModelRef::Http(url) => {
             let client = client.ok_or_else(|| unsupported("an HTTP reference without a client"))?;
+            // Q-60: the trailing `/` only chooses what to try; the manifest is the proof.
+            if url.path().ends_with('/') {
+                let dir = client.download_checkpoint(url, None, &mut |_| {}, &cancel)?;
+                return Ok(ModelBytes::Checkpoint(dir));
+            }
             let path = client.download(url, None, &mut |_| {}, &cancel)?;
             read_local(&path, &mut |_| {}, &cancel)
         }

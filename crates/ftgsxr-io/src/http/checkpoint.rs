@@ -24,7 +24,7 @@ pub(crate) const PARAMS: &str = "params.safetensors";
 const MAX_MANIFEST: u64 = 16 << 20;
 
 impl HttpClient {
-    /// Downloads the checkpoint at the directory URL `dir_url` (ending in `/`, Q-36) into its
+    /// Downloads the checkpoint at the directory URL `dir_url` (ending in `/`, Q-36, Q-60) into its
     /// cache entry `<cache dir>/http/<sha256 of dir_url>/` and returns the entry's directory
     /// (D-51, Q-42): `manifest.json` first, then `params.safetensors` against `params_sha256`
     /// (the index entry's digest) when given, else the manifest's digest for it, a mismatch
