@@ -174,8 +174,8 @@ fn spdx_comment(path: &Path) -> Option<&'static str> {
 }
 
 /// Directories the walk skips: build outputs, caches and version control, anywhere; and,
-/// from the workspace root, the agent tooling and scratch notes and the committed data
-/// fixtures, whose bytes are the documented formats' (Q-7).
+/// from the workspace root, the branches' worktrees, the scratch notes and the committed
+/// data fixtures, whose bytes are the documented formats' (Q-7).
 fn skipped(root: &Path, dir: &Path) -> bool {
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
     if matches!(
@@ -185,7 +185,7 @@ fn skipped(root: &Path, dir: &Path) -> bool {
         return true;
     }
     let rel = dir.strip_prefix(root).unwrap_or(dir);
-    [".claude", ".scratch", "tests/fixtures"]
+    [".claude/worktrees", ".scratch", "tests/fixtures"]
         .iter()
         .any(|s| rel == Path::new(s))
 }
