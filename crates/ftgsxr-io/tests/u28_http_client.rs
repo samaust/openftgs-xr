@@ -11,10 +11,10 @@ use ftgsxr_io::http::{HttpClient, Progress, TlsRoots};
 use ftgsxr_testkit::{fixtures_dir, serve_fixtures};
 use url::Url;
 
-/// A fresh, empty cache directory for one test, named after it so tests sharing the process
-/// never meet and a rerun replaces the last run's.
+/// A fresh, empty cache directory for one test, named after it and the process so that
+/// neither tests sharing the process nor runs in other worktrees or sessions ever meet (#93).
 fn cache_dir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ftgsxr-u28-{test}"));
+    let dir = std::env::temp_dir().join(format!("ftgsxr-u28-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a temporary cache directory");
     dir
