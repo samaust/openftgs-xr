@@ -460,7 +460,7 @@ The passthrough's appearance has three controls, brightness, contrast and satura
 
 **`index.json`** (`ftgsxr-index` v1, served by the user's HTTP server): `{"format": "ftgsxr-index", "version": 1, "entries": [{"name", "path", "kind": "ftgs-if" | "ftgs-checkpoint" | "ply", "size", "sha256"?, "thumbnail"?, "audio"?, "scene"?}]}`, every path relative to the index's URL. `kind` `ftgs-checkpoint` points at the directory, whose `manifest.json` and `params.safetensors` are fetched.
 
-**Cache entries**: `http/<sha256 of the URL>/file` and `meta.json` (`url`, `etag`, `last_modified`, `size`, `sha256`, `fetched_at`); `thumbnails/<identity>.png` (256 × 256); `logs/ftgsxr.log` rotated at 10 MB, five files kept. The cache is pruned to `max_bytes` by least recent use, never removing a loaded model's file.
+**Cache entries**: `http/<sha256 of the URL>/file` and `meta.json` (`url`, `etag`, `last_modified`, `size`, `sha256`, `fetched_at`); a checkpoint's entry, keyed by its directory's URL (trailing slash included), holds `manifest.json` and `params.safetensors` under their own names, each with its `<name>.meta.json`, so the entry is the checkpoint directory a load reads (D-51); `thumbnails/<identity>.png` (256 × 256); `logs/ftgsxr.log` rotated at 10 MB, five files kept. The cache is pruned to `max_bytes` by least recent use, never removing a loaded model's file.
 
 ### 1.12 Performance budgets and quality tiers
 
