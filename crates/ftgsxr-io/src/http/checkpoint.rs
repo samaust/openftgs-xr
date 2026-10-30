@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 use serde_json::Value;
 use url::Url;
 
-use super::cache::{Entry, entry_dir};
+use super::cache::{Entry, entry_dir, remove_if_present};
 use super::download::parse_digest;
 use super::{HttpClient, Progress, lock};
 use crate::IoError;
@@ -28,7 +28,8 @@ impl HttpClient {
     /// cache entry `<cache dir>/http/<sha256 of dir_url>/` and returns the entry's directory
     /// (D-51, Q-42): `manifest.json` first, then `params.safetensors` against `params_sha256`
     /// (the index entry's digest) when given, else the manifest's digest for it, a mismatch
-    /// being E-NET-CHECKSUM (Q-57). Each member is cached,
+    /// being E-NET-CHECKSUM (Q-57); a mismatch with the manifest's digest discards the
+    /// manifest too, so a retry fetches both (owner, 2026-10-29, #97). Each member is cached,
     /// revalidated and resumed as `download`'s file is (§1.5, Q-43); both downloads hold the
     /// cache lock, so `prune` never sees half an entry. `progress` is cumulative over both
     /// files (Q-59).
@@ -72,9 +73,9 @@ impl HttpClient {
             cancel,
         )?;
         let held = std::fs::metadata(&path)?.len();
-        let expected = given.or_else(|| params_digest(&path));
+        let expected = given.clone().or_else(|| params_digest(&path));
         let params = Entry::member(&dir, PARAMS);
-        self.download_into(
+        let result = self.download_into(
             &params,
             &params_url,
             expected,
@@ -85,7 +86,14 @@ impl HttpClient {
                 })
             },
             cancel,
-        )?;
+        );
+        // Q-57: a manifest whose digest the params disagree with may itself be the bad file,
+        // kept by every 304; dropping it lets the retry E-NET-CHECKSUM offers fetch it again.
+        if given.is_none() && matches!(result, Err(IoError::Checksum(_))) {
+            remove_if_present(&manifest.meta)?;
+            remove_if_present(&manifest.file)?;
+        }
+        result?;
         Ok(dir)
     }
 }
