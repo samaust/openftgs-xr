@@ -155,7 +155,8 @@ mod tests {
 
     #[test]
     fn record_round_trips_and_refuses_other_formats() {
-        let dir = std::env::temp_dir().join("ftgsxr-http-record");
+        let dir = std::env::temp_dir().join(format!("ftgsxr-http-record-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("meta.json");
         let record = Record {
@@ -179,7 +180,9 @@ mod tests {
     /// version it does not know.
     #[test]
     fn record_read_ignores_a_minor_version() {
-        let dir = std::env::temp_dir().join("ftgsxr-http-record-version");
+        let dir =
+            std::env::temp_dir().join(format!("ftgsxr-http-record-version-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("meta.json");
         let record = |version: &str| {
