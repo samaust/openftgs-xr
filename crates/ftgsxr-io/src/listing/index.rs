@@ -8,7 +8,7 @@ use url::Url;
 
 use super::{Entry, EntryKind};
 use crate::IoError;
-use crate::util::version_is_1;
+use crate::util::version_major;
 
 /// The manifest's `format`.
 const FORMAT: &str = "ftgsxr-index";
@@ -119,7 +119,7 @@ pub(super) fn parse(body: &str, base: &Url) -> Result<Vec<Entry>, IoError> {
         None => return Err(schema(base, "missing key format")),
     }
     match map.get("version") {
-        Some(v) if version_is_1(v) => {}
+        Some(v) if version_major(v) == Some(1) => {}
         Some(v) => return Err(schema(base, format!("version {v} is not supported"))),
         None => return Err(schema(base, "missing key version")),
     }

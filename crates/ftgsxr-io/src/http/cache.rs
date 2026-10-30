@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::IoError;
-use crate::util::{is_rfc3339, version_is_1, write_atomic};
+use crate::util::{is_rfc3339, version_major, write_atomic};
 
 /// The `format` of an entry's record (Q-42).
 const FORMAT: &str = "ftgsxr-cache-entry";
@@ -92,7 +92,9 @@ impl Record {
     /// to `url` (any URL when `None`) (Q-42).
     pub(crate) fn read(path: &Path, url: Option<&Url>) -> Option<Record> {
         let value: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-        if value.get("format")?.as_str()? != FORMAT || !version_is_1(value.get("version")?) {
+        if value.get("format")?.as_str()? != FORMAT
+            || version_major(value.get("version")?) != Some(1)
+        {
             return None;
         }
         let text = |key: &str| match value.get(key) {

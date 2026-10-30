@@ -56,26 +56,25 @@ pub(crate) fn set_aside(path: &Path) -> Result<PathBuf, IoError> {
     Ok(target)
 }
 
-/// Whether `version` names major version 1 (§1.11's versioning rule, which ignores a
-/// minor version): a JSON integer, or a `"major[.minor]"` string of decimal parts without
-/// leading zeros.
-pub(crate) fn version_is_1(version: &Value) -> bool {
+/// The major version `version` names under §1.11's versioning rule, which ignores a minor
+/// version: a non-negative JSON integer, or a `"major[.minor]"` string of decimal parts
+/// without leading zeros. `None` when it is neither (malformed, E-SCENE-FORMAT); a
+/// major too large for `u64` is `u64::MAX`, still not 1 (Q-37, Q-53).
+pub(crate) fn version_major(version: &Value) -> Option<u64> {
     fn decimal(part: &str) -> Option<u64> {
         let digits = !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
         let leading_zero = part.len() > 1 && part.starts_with('0');
-        (digits && !leading_zero)
-            .then(|| part.parse().ok())
-            .flatten()
+        (digits && !leading_zero).then(|| part.parse().unwrap_or(u64::MAX))
     }
     match version {
-        Value::Number(n) => n.as_u64() == Some(1),
+        Value::Number(n) => n.as_u64(),
         Value::String(text) => {
             let mut parts = text.splitn(2, '.');
             let major = parts.next().and_then(decimal);
             let minor_ok = parts.next().is_none_or(|m| decimal(m).is_some());
-            major == Some(1) && minor_ok
+            major.filter(|_| minor_ok)
         }
-        _ => false,
+        _ => None,
     }
 }
 
@@ -210,21 +209,31 @@ mod tests {
     }
 
     #[test]
-    fn version_is_1_ignores_a_minor_version() {
-        for ok in [Value::from(1), "1".into(), "1.0".into(), "1.12".into()] {
-            assert!(version_is_1(&ok), "{ok}");
+    fn version_major_ignores_a_minor_version() {
+        for (v, major) in [
+            (Value::from(1), 1),
+            ("1".into(), 1),
+            ("1.0".into(), 1),
+            ("1.12".into(), 1),
+            (Value::from(2), 2),
+            ("2.0".into(), 2),
+            (Value::from(0), 0),
+            ("99999999999999999999".into(), u64::MAX),
+        ] {
+            assert_eq!(version_major(&v), Some(major), "{v}");
         }
         for bad in [
-            Value::from(2),
             Value::from(1.5),
-            "2".into(),
-            "2.0".into(),
+            Value::from(-1),
+            Value::from(true),
+            "v1".into(),
             "01".into(),
             "1.".into(),
             "1.2.3".into(),
+            "1.x".into(),
             Value::Null,
         ] {
-            assert!(!version_is_1(&bad), "{bad}");
+            assert_eq!(version_major(&bad), None, "{bad}");
         }
     }
 }
