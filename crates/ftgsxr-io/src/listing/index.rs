@@ -8,7 +8,7 @@ use url::Url;
 
 use super::{Entry, EntryKind};
 use crate::IoError;
-use crate::util::version_is_1;
+use crate::util::version_major;
 
 /// The manifest's `format`.
 const FORMAT: &str = "ftgsxr-index";
@@ -105,7 +105,8 @@ fn entry(value: &Value, base: &Url) -> Result<Entry, IoError> {
 }
 
 /// Parses an `ftgsxr-index` v1 manifest (§1.11) fetched from `base` (Q-36, Q-37): every
-/// path resolves against `base`, and a checkpoint's location ends in `/`.
+/// path resolves against `base`, and a checkpoint's location ends in `/`; a well-formed
+/// `version` of another major is E-FILE-VERSION, checked after `format`.
 // Q-36, Q-37
 pub(super) fn parse(body: &str, base: &Url) -> Result<Vec<Entry>, IoError> {
     let value: Value = serde_json::from_str(body)
@@ -118,9 +119,15 @@ pub(super) fn parse(body: &str, base: &Url) -> Result<Vec<Entry>, IoError> {
         Some(other) => return Err(schema(base, format!("format {other}, expected {FORMAT:?}"))),
         None => return Err(schema(base, "missing key format")),
     }
-    match map.get("version") {
-        Some(v) if version_is_1(v) => {}
-        Some(v) => return Err(schema(base, format!("version {v} is not supported"))),
+    match map.get("version").map(|v| (v, version_major(v))) {
+        Some((_, Some(1))) => {}
+        Some((v, Some(_))) => return Err(CoreError::Version(v.to_string()).into()),
+        Some((v, None)) => {
+            return Err(schema(
+                base,
+                format!("version {v} is not an integer or a \"major.minor\" string"),
+            ));
+        }
         None => return Err(schema(base, "missing key version")),
     }
     match map.get("entries") {

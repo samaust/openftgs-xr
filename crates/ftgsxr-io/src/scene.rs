@@ -14,7 +14,7 @@ use crate::settings::{
     ENVIRONMENT_MODES, LIGHTING_MODES, LOOP_MODES, RENDER_MODES, SOURCE_KINDS, flavor_name,
     flavor_of, loop_mode_name, loop_mode_of,
 };
-use crate::util::{version_is_1, write_atomic};
+use crate::util::{set_aside, version_major, write_atomic};
 use crate::{EnvironmentSettings, IoError, ManualLighting, SourceSpec};
 
 /// A scene file's `format` (§1.11).
@@ -120,8 +120,9 @@ pub struct SavedPose {
 }
 
 /// Reads a scene file (`ftgsxr-scene` v1, §1.11) from its bytes. E-JSON when they are not
-/// JSON, E-SCENE-FORMAT when the document breaks the schema (Q-53). The files it names
-/// are not opened: whether they exist is the library's question (§1.5).
+/// JSON, E-SCENE-FORMAT when the document breaks the schema, E-FILE-VERSION when its
+/// major version is not 1 (Q-53). The files it names are not opened: whether they exist
+/// is the library's question (§1.5).
 // Q-3, Q-52, Q-53
 pub fn read_scene(json: &[u8]) -> Result<SceneFile, IoError> {
     let doc = parse(json, SCENE_FORMAT)?;
@@ -143,8 +144,11 @@ impl PoseStore {
     /// Reads the pose store at `path` (`ftgsxr-poses` v1, §1.11); a missing file is an
     /// empty store. A key that is not a model identity (64 lowercase hexadecimal digits;
     /// an identity spelled in uppercase hex is not one) is an unknown key: it is ignored,
-    /// and the next `save` drops it (Q-52). E-JSON when the file is not JSON, E-SCENE-FORMAT when it
-    /// breaks the schema, E-IO when it cannot be read (Q-52, Q-53).
+    /// and the next `save` drops it (Q-52). E-JSON when the file is not JSON,
+    /// E-SCENE-FORMAT when it breaks the schema, E-FILE-VERSION when its major version is
+    /// not 1; the refused file is first renamed to `<file name>.unknown-<date>` beside it,
+    /// which the error's text names, so that the next save cannot overwrite it. E-IO when
+    /// the file cannot be read or set aside (Q-52, Q-53).
     // Q-52, Q-53
     pub fn load(path: &Path) -> Result<PoseStore, IoError> {
         let bytes = match std::fs::read(path) {
@@ -153,8 +157,12 @@ impl PoseStore {
             }
             other => other?,
         };
-        let doc = parse(&bytes, POSES_FORMAT)?;
-        store_of(&doc)
+        parse(&bytes, POSES_FORMAT)
+            .and_then(|doc| store_of(&doc))
+            .or_else(|refusal| {
+                let kept = set_aside(path)?;
+                Err(kept_as(refusal, &kept))
+            })
     }
 
     /// Writes the store to `path` (§1.11), atomically, identities in sorted order; the
@@ -222,8 +230,24 @@ fn schema(at: &str, detail: impl std::fmt::Display) -> IoError {
     IoError::Scene(format!("{at}: {detail}"))
 }
 
+/// The refusal `error` of a file set aside as `kept`, its text naming the new file (Q-53).
+// Q-53
+fn kept_as(error: IoError, kept: &Path) -> IoError {
+    let note = format!("kept as {}", kept.display());
+    match error {
+        IoError::Scene(detail) => IoError::Scene(format!("{note}: {detail}")),
+        IoError::Core(CoreError::Json(detail)) => {
+            CoreError::Json(format!("{detail}, {note},")).into()
+        }
+        IoError::Core(CoreError::Version(v)) => CoreError::Version(format!("{v} ({note})")).into(),
+        other => other,
+    }
+}
+
 /// The JSON document of `bytes`, checked to be an object of `format` and major version 1
-/// (§1.11's versioning rule; Q-37's `version` forms).
+/// (§1.11's versioning rule): E-FILE-VERSION for a well-formed `version` of another
+/// major, E-SCENE-FORMAT for a missing or malformed one, after `format` (Q-53).
+// Q-53
 fn parse(bytes: &[u8], format: &str) -> Result<Value, IoError> {
     let doc: Value = serde_json::from_slice(bytes)
         .map_err(|e| CoreError::Json(format!("the {format} file ({e})")))?;
@@ -233,11 +257,12 @@ fn parse(bytes: &[u8], format: &str) -> Result<Value, IoError> {
         Some(other) => return Err(schema("format", format!("{other}, expected {format}"))),
         None => return Err(schema("format", "missing")),
     }
-    match map.get("version") {
-        Some(v) if version_is_1(v) => Ok(doc),
-        Some(v) => Err(schema(
+    match map.get("version").map(|v| (v, version_major(v))) {
+        Some((_, Some(1))) => Ok(doc),
+        Some((v, Some(_))) => Err(CoreError::Version(v.to_string()).into()),
+        Some((v, None)) => Err(schema(
             "version",
-            format!("{v}, this player reads version 1"),
+            format!("{v}, expected an integer or a \"major.minor\" string"),
         )),
         None => Err(schema("version", "missing")),
     }
