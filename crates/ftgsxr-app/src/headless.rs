@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use ftgsxr_core::{InfoReply, RenderConventions, info_json};
+
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their
 /// cause's §1.15 code in the message's leading `E-…: ` prefix (Q-64).
 #[derive(Clone, Debug, PartialEq)]
@@ -102,4 +104,72 @@ pub fn exit_code(e: &HeadlessError) -> i32 {
         HeadlessError::Input(_) | HeadlessError::Environment(_) => 2,
         HeadlessError::Numeric(_) => 3,
     }
+}
+
+/// `ftgsxr info [--json]` (§1.7): the adapter reply of openftgs §3.3's contract, with name
+/// `openftgs-xr`, the given version, no query kinds, the rasterizer `openftgs-xr
+/// wgpu-blend` at the same version, and openftgs's conventions with `transmittance_stop`
+/// null (D-7). With `json`, `info_json`'s compact object; without it, one `key: value`
+/// line per field in the same order, `rasterizer` as `<name> <version>` and each
+/// convention as `render_conventions.<key>: <value>` (Q-71), strings bare and other values
+/// as their JSON text (Q-T117.3). No trailing newline.
+// Q-71, Q-T117.3
+pub fn cmd_info(version: &str, json: bool) -> String {
+    let reply = InfoReply {
+        name: "openftgs-xr".to_owned(),
+        version: version.to_owned(),
+        query_kinds: Vec::new(),
+        rasterizer_name: "openftgs-xr wgpu-blend".to_owned(),
+        rasterizer_version: version.to_owned(),
+        // D-7: E7 applies no transmittance stop.
+        render_conventions: RenderConventions {
+            transmittance_stop: None,
+            ..RenderConventions::default()
+        },
+    };
+    if json {
+        return info_json(&reply);
+    }
+    let kinds = reply
+        .query_kinds
+        .iter()
+        .map(|k| format!("{k:?}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut lines = vec![
+        format!("name: {}", reply.name),
+        format!("version: {}", reply.version),
+        format!("query_kinds: [{kinds}]"),
+        format!(
+            "rasterizer: {} {}",
+            reply.rasterizer_name, reply.rasterizer_version
+        ),
+    ];
+    for (key, value) in json_entries(&reply.render_conventions.to_json()) {
+        lines.push(format!("render_conventions.{key}: {value}"));
+    }
+    lines.join("\n")
+}
+
+/// The entries of a flat compact JSON object as `RenderConventions::to_json` writes it, in
+/// its order: each key, and its value's JSON text with a string's quotes removed. The
+/// object's values are numbers, `null`, strings without commas or escapes, and one array
+/// of numbers, so an entry ends at the next `,"`.
+fn json_entries(object: &str) -> Vec<(String, String)> {
+    let inner = object
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or(object);
+    inner
+        .split(",\"")
+        .filter_map(|entry| {
+            let (key, value) = entry.split_once("\":")?;
+            let key = key.trim_start_matches('"');
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value);
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
