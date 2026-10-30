@@ -8,7 +8,7 @@ use std::fs;
 use std::process::{Command, Output};
 
 use ftgsxr_app::cmd_info;
-use ftgsxr_testkit::{fixtures_dir, scratch_dir};
+use ftgsxr_testkit::{fixtures_dir, probe, scratch_dir};
 
 fn ftgsxr(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
@@ -186,8 +186,26 @@ fn render_tier_names() {
     assert!(!String::from_utf8(o.stderr).unwrap().contains("E-REQ-UNIT"));
 }
 
+/// The safetensors header of `bytes`, its JSON text.
+fn header(bytes: &[u8]) -> &str {
+    let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+    std::str::from_utf8(&bytes[8..8 + n]).unwrap()
+}
+
+/// The value of the metadata key `key` in a safetensors header, a JSON string without
+/// escapes (the strings `render` writes).
+fn metadata<'a>(header: &'a str, key: &str) -> &'a str {
+    let needle = format!("\"{key}\":\"");
+    let start = header
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no {key} in {header}"))
+        + needle.len();
+    &header[start..start + header[start..].find('"').unwrap()]
+}
+
 /// R-15 through the binary (§1.7, `gpu` lane): P1's request writes a `ftgs-renders` file
-/// with every item's keys and the request's SHA-256, prints nothing and exits 0.
+/// with openftgs's keys (`rgb/<id>`, `alpha/<id>` for every item) and metadata, the
+/// request's SHA-256, prints nothing and exits 0.
 #[test]
 #[ignore = "gpu"]
 fn gpu_r15_render_writes_the_renders_file() {
@@ -212,11 +230,23 @@ fn gpu_r15_render_writes_the_renders_file() {
         String::from_utf8_lossy(&o.stderr)
     );
     assert!(o.stdout.is_empty());
-    let request = ftgsxr_core::read_request(&fs::read(&request_path).unwrap()).unwrap();
-    let renders = ftgsxr_core::read_renders(&fs::read(&out).unwrap(), Some(request.sha256))
-        .expect("a ftgs-renders file made from the request");
-    let mut ids: Vec<&str> = request.items.iter().map(|i| i.id.as_str()).collect();
-    ids.sort_unstable();
-    let got: Vec<&str> = renders.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(got, ids);
+    // The committed request, read by the testkit (its items and its file's SHA-256).
+    let (_, request) = probe("P1");
+    let bytes = fs::read(&out).unwrap();
+    let header = header(&bytes);
+    for item in &request.items {
+        for key in [format!("rgb/{}", item.id), format!("alpha/{}", item.id)] {
+            assert!(header.contains(&format!("\"{key}\":{{")), "no {key}");
+        }
+    }
+    assert_eq!(metadata(header, "format"), "ftgs-renders");
+    assert_eq!(metadata(header, "version"), "1");
+    let hex: String = request.sha256.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(metadata(header, "request_sha256"), hex);
+    let producer = metadata(header, "producer");
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        producer.starts_with(&format!("openftgs-xr {version} (")) && producer.ends_with(')'),
+        "{producer}"
+    );
 }
