@@ -18,7 +18,7 @@
   "results": [
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 0,
         "width": 1920,
@@ -26,12 +26,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 818.5697458259084,
+      "value": 177.52662100445272,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 0,
         "width": 1920,
@@ -39,12 +39,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 912.6152401725722,
+      "value": 192.99606659541573,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 0,
         "width": 1920,
@@ -52,12 +52,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 1.2216429999999998,
+      "value": 5.632958,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 0,
         "width": 1920,
@@ -65,12 +65,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.14046400040388107,
+      "value": 0.39747199416160583,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 0,
         "width": 1920,
@@ -78,12 +78,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 80334.5,
+      "value": 249952.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 1,
         "width": 1920,
@@ -91,12 +91,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 793.3970325364189,
+      "value": 189.18479703403642,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 1,
         "width": 1920,
@@ -104,12 +104,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 930.0746377146144,
+      "value": 197.48848679836783,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 1,
         "width": 1920,
@@ -117,12 +117,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 1.260403,
+      "value": 5.285837,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 1,
         "width": 1920,
@@ -130,12 +130,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.13955199718475342,
+      "value": 0.39686399698257446,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 1,
         "width": 1920,
@@ -143,12 +143,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 80487.5,
+      "value": 249947.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 2,
         "width": 1920,
@@ -156,12 +156,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 833.6181528688969,
+      "value": 188.56930581981447,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 2,
         "width": 1920,
@@ -169,12 +169,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 909.1145782103564,
+      "value": 196.2127612365121,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 2,
         "width": 1920,
@@ -182,12 +182,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 1.19959,
+      "value": 5.30309,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 2,
         "width": 1920,
@@ -195,12 +195,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.1696000024676323,
+      "value": 0.39881598949432373,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 2,
         "width": 1920,
@@ -208,12 +208,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 80465,
+      "value": 249960,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 3,
         "width": 1920,
@@ -221,12 +221,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 844.560355661257,
+      "value": 187.05154392344355,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 3,
         "width": 1920,
@@ -234,12 +234,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 924.3835154739041,
+      "value": 193.66904291050744,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 3,
         "width": 1920,
@@ -247,12 +247,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 1.184048,
+      "value": 5.34612,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 3,
         "width": 1920,
@@ -260,12 +260,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.13955199718475342,
+      "value": 0.39897599816322327,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 250000,
         "sh_degree": 3,
         "width": 1920,
@@ -273,12 +273,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 80604.5,
+      "value": 249943.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 0,
         "width": 1920,
@@ -286,12 +286,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 432.16033494154607,
+      "value": 98.97873738763438,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 0,
         "width": 1920,
@@ -299,12 +299,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 477.2005791544827,
+      "value": 101.10757861671382,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 0,
         "width": 1920,
@@ -312,12 +312,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 2.3139559999999997,
+      "value": 10.10318,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 0,
         "width": 1920,
@@ -325,12 +325,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.2794239968061447,
+      "value": 0.7434560060501099,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 0,
         "width": 1920,
@@ -338,12 +338,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 161006.5,
+      "value": 499908,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 1,
         "width": 1920,
@@ -351,12 +351,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 435.32316650588723,
+      "value": 98.62694525622639,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 1,
         "width": 1920,
@@ -364,12 +364,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 488.63239488631524,
+      "value": 101.04814447404489,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 1,
         "width": 1920,
@@ -377,12 +377,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 2.2971440000000003,
+      "value": 10.139217,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 1,
         "width": 1920,
@@ -390,12 +390,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.2785920053720474,
+      "value": 0.7422720193862915,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 1,
         "width": 1920,
@@ -403,12 +403,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 160918.5,
+      "value": 499895,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 2,
         "width": 1920,
@@ -416,12 +416,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 355.5314110223981,
+      "value": 95.44932003813392,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 2,
         "width": 1920,
@@ -429,12 +429,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 474.7580476385016,
+      "value": 100.67581817031646,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 2,
         "width": 1920,
@@ -442,12 +442,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 2.812691,
+      "value": 10.476764,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 2,
         "width": 1920,
@@ -455,12 +455,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.28115199506282806,
+      "value": 0.7442240118980408,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 2,
         "width": 1920,
@@ -468,12 +468,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 160989.5,
+      "value": 499912.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 3,
         "width": 1920,
@@ -481,12 +481,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 384.23071056169533,
+      "value": 95.51773477781622,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 3,
         "width": 1920,
@@ -494,12 +494,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 476.9091581051094,
+      "value": 99.74262772523488,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 3,
         "width": 1920,
@@ -507,12 +507,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 2.602603,
+      "value": 10.469259999999998,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 3,
         "width": 1920,
@@ -520,12 +520,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.28060799837112427,
+      "value": 0.7440959811210632,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 500000,
         "sh_degree": 3,
         "width": 1920,
@@ -533,12 +533,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 161358.5,
+      "value": 499901.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 0,
         "width": 1920,
@@ -546,12 +546,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 221.60767950388245,
+      "value": 50.01526465877386,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 0,
         "width": 1920,
@@ -559,12 +559,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 247.97416985325526,
+      "value": 51.492499882100056,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 0,
         "width": 1920,
@@ -572,12 +572,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 4.512479,
+      "value": 19.993896,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 0,
         "width": 1920,
@@ -585,12 +585,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.4997600018978119,
+      "value": 1.4610080122947693,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 0,
         "width": 1920,
@@ -598,12 +598,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 322119,
+      "value": 999824,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 1,
         "width": 1920,
@@ -611,12 +611,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 231.28253567070547,
+      "value": 50.148512311785744,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 1,
         "width": 1920,
@@ -624,12 +624,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 251.16058077661071,
+      "value": 51.46219910850917,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 1,
         "width": 1920,
@@ -637,12 +637,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 4.323716,
+      "value": 19.940770999999998,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 1,
         "width": 1920,
@@ -650,12 +650,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.4994560033082962,
+      "value": 1.462719976902008,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 1,
         "width": 1920,
@@ -663,12 +663,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 322211.5,
+      "value": 999806,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 2,
         "width": 1920,
@@ -676,12 +676,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 220.90743028768995,
+      "value": 50.52268496342335,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 2,
         "width": 1920,
@@ -689,12 +689,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 243.60470818879585,
+      "value": 51.26882184458886,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 2,
         "width": 1920,
@@ -702,12 +702,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 4.526783,
+      "value": 19.793089,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 2,
         "width": 1920,
@@ -715,12 +715,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.4994560033082962,
+      "value": 1.463200032711029,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 2,
         "width": 1920,
@@ -728,12 +728,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 321682.5,
+      "value": 999804,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 3,
         "width": 1920,
@@ -741,12 +741,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 217.07838114231419,
+      "value": 49.198671714581586,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 3,
         "width": 1920,
@@ -754,12 +754,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 241.11085073371743,
+      "value": 50.788196230949154,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 3,
         "width": 1920,
@@ -767,12 +767,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 4.606631,
+      "value": 20.325751999999998,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 3,
         "width": 1920,
@@ -780,12 +780,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.5006400048732758,
+      "value": 1.4634560346603394,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 3,
         "width": 1920,
@@ -793,12 +793,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 322247,
+      "value": 999809,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 0,
         "width": 1920,
@@ -806,12 +806,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 112.48226998219405,
+      "value": 25.711128020462972,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 0,
         "width": 1920,
@@ -819,12 +819,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 130.50682781543432,
+      "value": 26.01474255605178,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 0,
         "width": 1920,
@@ -832,12 +832,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 8.89029,
+      "value": 38.893665,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 0,
         "width": 1920,
@@ -845,12 +845,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.9463039934635162,
+      "value": 2.8723840713500977,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 0,
         "width": 1920,
@@ -858,12 +858,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 644031.5,
+      "value": 1999630.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 1,
         "width": 1920,
@@ -871,12 +871,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 117.99326494443699,
+      "value": 25.47762651654298,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 1,
         "width": 1920,
@@ -884,12 +884,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 130.36960135067253,
+      "value": 25.9657533243589,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 1,
         "width": 1920,
@@ -897,12 +897,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 8.47506,
+      "value": 39.250124,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 1,
         "width": 1920,
@@ -910,12 +910,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.9468640089035034,
+      "value": 2.8734240531921387,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 1,
         "width": 1920,
@@ -923,12 +923,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 644407,
+      "value": 1999617,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 2,
         "width": 1920,
@@ -936,12 +936,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 117.1247650477213,
+      "value": 25.42557389143417,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 2,
         "width": 1920,
@@ -949,12 +949,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 128.77467456010592,
+      "value": 25.922813641454375,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 2,
         "width": 1920,
@@ -962,12 +962,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 8.537904000000001,
+      "value": 39.330479000000004,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 2,
         "width": 1920,
@@ -975,12 +975,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.9484800100326538,
+      "value": 2.872688055038452,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 2,
         "width": 1920,
@@ -988,12 +988,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 643715,
+      "value": 1999627.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1001,12 +1001,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 115.41177710246501,
+      "value": 25.241198583362976,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1014,12 +1014,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 128.00091113893012,
+      "value": 25.68163138240281,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1027,12 +1027,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 8.664627,
+      "value": 39.61776999999999,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1040,12 +1040,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 0.9504800140857697,
+      "value": 2.877984046936035,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 2000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1053,12 +1053,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 644664,
+      "value": 1999624.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 0,
         "width": 1920,
@@ -1066,12 +1066,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 76.87374172098629,
+      "value": 17.133733968007963,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 0,
         "width": 1920,
@@ -1079,12 +1079,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 88.89524753302072,
+      "value": 17.367525662990417,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 0,
         "width": 1920,
@@ -1092,12 +1092,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 13.008343,
+      "value": 58.364394,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 0,
         "width": 1920,
@@ -1105,12 +1105,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 1.425920009613037,
+      "value": 4.288831949234009,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 0,
         "width": 1920,
@@ -1118,12 +1118,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 966582,
+      "value": 2999444.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 1,
         "width": 1920,
@@ -1131,12 +1131,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 75.31734019825784,
+      "value": 17.119150933938705,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 1,
         "width": 1920,
@@ -1144,12 +1144,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 87.56461281803857,
+      "value": 17.349605187793934,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 1,
         "width": 1920,
@@ -1157,12 +1157,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 13.277155,
+      "value": 58.414111999999996,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 1,
         "width": 1920,
@@ -1170,12 +1170,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 1.4449440240859985,
+      "value": 4.323967933654785,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 1,
         "width": 1920,
@@ -1183,12 +1183,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 966868.5,
+      "value": 2999435,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 2,
         "width": 1920,
@@ -1196,12 +1196,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 75.13209537178028,
+      "value": 17.083400563632633,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 2,
         "width": 1920,
@@ -1209,12 +1209,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 85.64232576960931,
+      "value": 17.32011925177302,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 2,
         "width": 1920,
@@ -1222,12 +1222,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 13.309891,
+      "value": 58.536355,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 2,
         "width": 1920,
@@ -1235,12 +1235,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 1.44240003824234,
+      "value": 4.28879976272583,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 2,
         "width": 1920,
@@ -1248,12 +1248,12 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 966123,
+      "value": 2999446.5,
       "unit": "splats"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1261,12 +1261,12 @@
         "tier": "desktop"
       },
       "measure": "fps_min",
-      "value": 78.78074507204775,
+      "value": 16.961249938282254,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1274,12 +1274,12 @@
         "tier": "desktop"
       },
       "measure": "fps_mean",
-      "value": 87.01753627063437,
+      "value": 17.17828440140615,
       "unit": "fps"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1287,12 +1287,12 @@
         "tier": "desktop"
       },
       "measure": "frame_ms_max",
-      "value": 12.693457,
+      "value": 58.957919,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1300,12 +1300,12 @@
         "tier": "desktop"
       },
       "measure": "gpu_sort_ms",
-      "value": 1.4223039746284485,
+      "value": 4.286687850952148,
       "unit": "ms"
     },
     {
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 3000000,
         "sh_degree": 3,
         "width": 1920,
@@ -1313,7 +1313,7 @@
         "tier": "desktop"
       },
       "measure": "visible_splats",
-      "value": 966855,
+      "value": 2999426.5,
       "unit": "splats"
     }
   ],
@@ -1321,7 +1321,7 @@
     {
       "id": "P-2",
       "setup": {
-        "model": "synthetic",
+        "model": "synthetic, every row persistent",
         "n": 1000000,
         "sh_degree": 2,
         "width": 1920,
@@ -1331,8 +1331,8 @@
       "measure": "fps_min",
       "rule": "at_least",
       "limit": 90,
-      "value": 220.90743028768995,
-      "pass": true
+      "value": 50.52268496342335,
+      "pass": false
     }
   ],
   "baseline": null,
