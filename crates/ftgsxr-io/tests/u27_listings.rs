@@ -115,7 +115,7 @@ fn u27_index_manifest_refusals() {
 fn u27_index_manifest_checkpoint_location_ends_in_slash() {
     // Q-36 (#82): a checkpoint is a directory, so `manifest.json` and `params.safetensors`
     // resolve inside it; `tiny` and `tiny/` give the same location.
-    let checkpoint = |path: &str, kind: &str| {
+    let location_of = |path: &str, kind: &str| {
         let body = index_with("", "")
             .replace(r#""path": "m.ply""#, &format!(r#""path": "{path}""#))
             .replace(r#""kind": "ply""#, &format!(r#""kind": "{kind}""#));
@@ -123,16 +123,20 @@ fn u27_index_manifest_checkpoint_location_ends_in_slash() {
             .location
             .clone()
     };
-    assert_eq!(checkpoint("tiny", "ftgs-checkpoint"), TINY);
-    assert_eq!(checkpoint("tiny/", "ftgs-checkpoint"), TINY);
-    // A query stays after the added `/`.
+    assert_eq!(location_of("tiny", "ftgs-checkpoint"), TINY);
+    assert_eq!(location_of("tiny/", "ftgs-checkpoint"), TINY);
+    // A query or fragment stays after the added `/`.
     assert_eq!(
-        checkpoint("tiny?v=2", "ftgs-checkpoint"),
+        location_of("tiny?v=2", "ftgs-checkpoint"),
         "http://localhost:8000/listing/models/tiny/?v=2"
+    );
+    assert_eq!(
+        location_of("tiny#top", "ftgs-checkpoint"),
+        "http://localhost:8000/listing/models/tiny/#top"
     );
     // An exchange file without a suffix is resolved as written.
     assert_eq!(
-        checkpoint("probe", "ftgs-if"),
+        location_of("probe", "ftgs-if"),
         "http://localhost:8000/listing/models/probe"
     );
 }
