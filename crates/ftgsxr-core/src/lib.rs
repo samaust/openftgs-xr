@@ -31,8 +31,8 @@ pub use types::{
 pub use sh::{SH_C0, sh_basis, sh_color};
 
 pub use covariance::{
-    Projected, alpha_at, covariance, posed_covariance, project, quat_from_wxyz, quat_to_wxyz,
-    sort_key, sort_key16,
+    Projected, alpha_at, covariance, occlusion_weight, posed_covariance, project, quat_from_wxyz,
+    quat_to_wxyz, sort_key, sort_key16,
 };
 pub use motion::{effective_opacity, moved_position, temporal_opacity, temporal_window};
 

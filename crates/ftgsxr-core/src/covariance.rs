@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Quaternion conversion, E5's covariance and pose, and the CPU mirrors of E6's projection,
-//! E7's α and E8's sort key (§2.1 `ftgsxr_core::covariance`).
+//! E7's α, E8's sort key and E13's occlusion weight (§2.1 `ftgsxr_core::covariance`).
 
 use glam::{DMat3, DQuat, DVec2, DVec3, Mat3, Quat, Vec2, Vec3};
 
@@ -181,6 +181,28 @@ pub fn sort_key(depth: f32) -> Option<u32> {
 // Q-2
 pub fn sort_key16(key: u32) -> u16 {
     (key >> 16) as u16
+}
+
+/// E13's occlusion weight w_occ of a fragment at depth `z_f` in the depth camera against the
+/// environment depth `z_e` (m) with the margin `delta_m` (δ, m): hard, 1 for z_f ≤ z_e + δ
+/// and 0 beyond; soft, 1 − smoothstep(z_e − δ, z_e + δ, z_f). `z_e = None` is a fragment
+/// outside the depth image or an invalid sample, and gives 1. The CPU oracle that the splat
+/// fragment stage mirrors (Q-63).
+// Q-63
+pub fn occlusion_weight(z_f: f32, z_e: Option<f32>, delta_m: f32, soft: bool) -> f32 {
+    let Some(z_e) = z_e else {
+        return 1.0;
+    };
+    if soft {
+        // smoothstep(e0, e1, x) with t = clamp((x − e0)/(e1 − e0), 0, 1) and t²(3 − 2t),
+        // the cubic Hermite step.
+        let t = ((z_f - (z_e - delta_m)) / (2.0 * delta_m)).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    } else if z_f <= z_e + delta_m {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// R(q/‖q‖) in float64: glam's matrix of a unit quaternion is openftgs E5's R(w, x, y, z).
