@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `SplatDevice`: the wgpu device the passes run on, its validation collector (§1.13) and
-//! the memory budget uploads are checked against (§1.12, D-13, Q-66).
+//! the memory budget its models' uploads share (§1.12, D-13, Q-66, Q-74).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use bevy::log::{info, warn};
@@ -24,7 +25,8 @@ pub enum BudgetSource {
     Tier,
 }
 
-/// The static model bytes an upload may take, and where the figure came from (Q-66).
+/// The static model bytes a device's live models may take together, and where the figure
+/// came from (Q-66, Q-74).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryBudget {
     /// The budget in bytes.
@@ -51,8 +53,12 @@ impl MemoryBudget {
 }
 
 /// The GPU the passes run on (§2.1 `SplatDevice`): the device, its queue, limits and
-/// features, the memory budget `GpuModel::upload` checks (D-13, Q-66), and the collector
-/// of validation messages (§1.13, R-16).
+/// features, the memory budget its models share (D-13, Q-66, Q-74), and the collector of
+/// validation messages (§1.13, R-16).
+///
+/// Every upload reserves its model's static bytes on the device and the model returns
+/// them when dropped (Q-74): `model_bytes_in_use` is the sum over the live models, and an
+/// upload is refused when it would take that sum over the budget.
 ///
 /// The collector is the device's uncaptured-error handler: every validation, out-of-memory
 /// or internal error wgpu reports is logged and kept until `take_validation_messages`.
@@ -65,7 +71,28 @@ pub struct SplatDevice {
     limits: wgpu::Limits,
     features: wgpu::Features,
     budget: MemoryBudget,
+    /// The static bytes of the live models, which each gives back when dropped (Q-74).
+    in_use: Arc<AtomicU64>,
     messages: Arc<Mutex<Vec<String>>>,
+}
+
+/// One model's static bytes reserved on its device's budget (Q-74), returned when dropped.
+pub(crate) struct Reservation {
+    bytes: u64,
+    in_use: Arc<AtomicU64>,
+}
+
+impl Reservation {
+    /// The bytes reserved.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.in_use.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
 }
 
 /// Features the later passes use where the adapter offers them: timestamp queries for the
@@ -173,6 +200,7 @@ impl SplatDevice {
             queue,
             adapter_name: adapter_info.name,
             budget,
+            in_use: Arc::default(),
             messages,
         }
     }
@@ -204,14 +232,42 @@ impl SplatDevice {
         self.features
     }
 
-    /// The budget `GpuModel::upload` checks a model's static bytes against (D-13, Q-66).
+    /// The budget the static bytes of the device's live models share: `GpuModel::upload`
+    /// is refused when a model's bytes exceed what is left of it (D-13, Q-66, Q-74).
     pub fn memory_budget(&self) -> MemoryBudget {
         self.budget
     }
 
-    /// Replaces the budget, with a tier's fixed figure, say (Q-74).
+    /// Replaces the budget, with a tier's fixed figure, say (Q-74). The bytes in use stay:
+    /// a budget below them evicts nothing and refuses later uploads.
     pub fn set_memory_budget(&mut self, budget: MemoryBudget) {
         self.budget = budget;
+    }
+
+    /// The static bytes of the device's live models (Q-74): each `GpuModel`, or upload in
+    /// progress, counts once until dropped, however many instances draw it.
+    pub fn model_bytes_in_use(&self) -> u64 {
+        self.in_use.load(Ordering::Acquire)
+    }
+
+    /// Reserves `bytes` of the budget for one model (Q-74), or `RenderError::Budget` with
+    /// the bytes left when they do not fit. One atomic update, so two uploads cannot both
+    /// take the last bytes.
+    pub(crate) fn reserve(&self, bytes: u64) -> Result<Reservation, RenderError> {
+        // Q-74: cumulative over the device's live models.
+        let budget = self.budget.bytes;
+        self.in_use
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (bytes <= budget.saturating_sub(used)).then_some(used + bytes)
+            })
+            .map(|_| Reservation {
+                bytes,
+                in_use: Arc::clone(&self.in_use),
+            })
+            .map_err(|used| RenderError::Budget {
+                needed: bytes,
+                budget: budget.saturating_sub(used),
+            })
     }
 
     /// The validation messages collected since the last call, oldest first; taking them

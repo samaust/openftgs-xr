@@ -6,7 +6,7 @@
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
 use ftgsxr_core::{GpuArrays, RenderConventions, TemporalIndex};
 
-use super::device::SplatDevice;
+use super::device::{Reservation, SplatDevice};
 use super::error::RenderError;
 use super::readback::half_to_f32;
 
@@ -96,7 +96,8 @@ pub struct GpuModel {
     /// the scale of the speed colormap (§1.4 stage 6). // Q-93
     pub(crate) speed_p99: f32,
     n: u32,
-    bytes: u64,
+    /// The model's static bytes, reserved on its device until the model is dropped (Q-74).
+    reservation: Reservation,
 }
 
 /// The bytes `arrays` holds: §1.12's static bytes per primitive times N (Q-23).
@@ -180,9 +181,10 @@ impl GpuModel {
     /// Uploads `arrays` (packed by `pack_for_gpu` in the order `index` was built for) with
     /// the model's conventions in its uniform block (D-39).
     ///
-    /// The static bytes are checked against the device's memory budget before anything is
-    /// allocated on the GPU (§2.4 rule 4, §1.2 load option 4, D-13): a model that does not
-    /// fit is `RenderError::Budget`.
+    /// The static bytes are reserved on the device's memory budget before anything is
+    /// allocated on the GPU (§2.4 rule 4, §1.2 load option 4, D-13), and given back when
+    /// the model is dropped (Q-74): a model that does not fit in what the device's live
+    /// models leave of the budget is `RenderError::Budget`, its `budget` the bytes left.
     ///
     /// # Panics
     ///
@@ -198,15 +200,8 @@ impl GpuModel {
             arrays.n,
             "the temporal index is built for the packed rows"
         );
-        // Q-74: the model's own static bytes against the device's budget, per model.
-        let bytes = static_bytes(arrays);
-        let budget = dev.memory_budget().bytes;
-        if bytes > budget {
-            return Err(RenderError::Budget {
-                needed: bytes,
-                budget,
-            });
-        }
+        // Q-74: the model's static bytes against what the device's live models leave.
+        let reservation = dev.reserve(static_bytes(arrays))?;
         let uniform = dev.device().create_buffer(&BufferDescriptor {
             label: Some("ftgsxr model uniform"),
             size: MODEL_UNIFORM_BYTES as u64,
@@ -235,7 +230,7 @@ impl GpuModel {
             conventions: conv.clone(),
             speed_p99: speed_percentile_99(arrays),
             n: arrays.n,
-            bytes,
+            reservation,
         })
     }
 
@@ -243,7 +238,7 @@ impl GpuModel {
     /// holds them (Q-23); the word padding at the ends of half-precision buffers (at most
     /// 2 bytes each, Q-22) and the 48-byte uniform block are not counted.
     pub fn memory_bytes(&self) -> u64 {
-        self.bytes
+        self.reservation.bytes()
     }
 
     /// N, the rows uploaded.
@@ -311,9 +306,10 @@ fn field_buffer(b: &ModelBuffers, i: usize) -> &wgpu::Buffer {
 }
 
 /// A model being uploaded in chunks (§1.5 Loading, §2.4 rule 1: at most 64 MB per
-/// frame), for the Bevy adapter: the buffers are made and the budget checked at `begin`,
+/// frame), for the Bevy adapter: the budget is reserved and the buffers made at `begin`,
 /// the rows are written by `step` through the queue, a budget of bytes at a time, and the
-/// model is usable once `step` reports the last chunk written.
+/// model is usable once `step` reports the last chunk written. The reservation passes to
+/// the model at `finish`; an upload dropped before it gives the bytes back (Q-74).
 pub(crate) struct ModelUpload {
     arrays: std::sync::Arc<GpuArrays>,
     model: GpuModel,
@@ -323,7 +319,7 @@ pub(crate) struct ModelUpload {
 }
 
 impl ModelUpload {
-    /// The budget check of `GpuModel::upload` (Q-74), then the model's buffers, unfilled
+    /// The budget reservation of `GpuModel::upload` (Q-74), then the model's buffers, unfilled
     /// (zeros), and its uniform block; `speed_p99` is the 99th percentile of the rows'
     /// speeds, computed with the packing off the main thread (Q-93).
     ///
@@ -342,15 +338,8 @@ impl ModelUpload {
             arrays.n,
             "the temporal index is built for the packed rows"
         );
-        // Q-74: the model's own static bytes against the device's budget, per model.
-        let bytes = static_bytes(&arrays);
-        let budget = dev.memory_budget().bytes;
-        if bytes > budget {
-            return Err(RenderError::Budget {
-                needed: bytes,
-                budget,
-            });
-        }
+        // Q-74: the model's static bytes against what the device's live models leave.
+        let reservation = dev.reserve(static_bytes(&arrays))?;
         let buffer = |label: &str, len: usize| {
             dev.device().create_buffer(&BufferDescriptor {
                 label: Some(label),
@@ -388,7 +377,7 @@ impl ModelUpload {
             conventions: conv.clone(),
             speed_p99,
             n: arrays.n,
-            bytes,
+            reservation,
         };
         Ok(ModelUpload {
             arrays,
@@ -497,6 +486,31 @@ mod tests {
         }
     }
 
+    /// The temporal index of a single-timestamp model of `n` rows: every row persistent.
+    fn persistent_index(n: u32) -> TemporalIndex {
+        let model = ftgsxr_core::Model {
+            position: vec![[0.0; 3]; n as usize],
+            time_center: vec![0.0; n as usize],
+            duration: vec![1.0; n as usize],
+            velocity: vec![[0.0; 3]; n as usize],
+            scale: vec![[1.0; 3]; n as usize],
+            rotation: vec![[1.0, 0.0, 0.0, 0.0]; n as usize],
+            opacity: vec![0.5; n as usize],
+            sh: vec![0.0; 3 * n as usize],
+            sh_degree: 0,
+            time: ftgsxr_core::TimeSpan {
+                tau0: 0.0,
+                tau1: 0.0,
+                time_unit: "s".into(),
+            },
+            conventions: RenderConventions::default(),
+            producer: String::new(),
+            identity: [0; 32],
+            kind: ftgsxr_core::ModelKind::ExchangeFile,
+        };
+        TemporalIndex::build(&model).0
+    }
+
     fn read_buffer(dev: &SplatDevice, buffer: &wgpu::Buffer) -> Vec<u8> {
         let staging = dev.device().create_buffer(&BufferDescriptor {
             label: None,
@@ -525,28 +539,7 @@ mod tests {
         let dev = SplatDevice::headless().expect("an adapter");
         let n = 1000;
         let arrays = std::sync::Arc::new(patterned_arrays(n));
-        // A single-timestamp model of n rows: every row persistent.
-        let model = ftgsxr_core::Model {
-            position: vec![[0.0; 3]; n as usize],
-            time_center: vec![0.0; n as usize],
-            duration: vec![1.0; n as usize],
-            velocity: vec![[0.0; 3]; n as usize],
-            scale: vec![[1.0; 3]; n as usize],
-            rotation: vec![[1.0, 0.0, 0.0, 0.0]; n as usize],
-            opacity: vec![0.5; n as usize],
-            sh: vec![0.0; 3 * n as usize],
-            sh_degree: 0,
-            time: ftgsxr_core::TimeSpan {
-                tau0: 0.0,
-                tau1: 0.0,
-                time_unit: "s".into(),
-            },
-            conventions: RenderConventions::default(),
-            producer: String::new(),
-            identity: [0; 32],
-            kind: ftgsxr_core::ModelKind::ExchangeFile,
-        };
-        let (index, _) = TemporalIndex::build(&model);
+        let index = persistent_index(n);
         let conv = RenderConventions::default();
         let whole = GpuModel::upload(&dev, &arrays, index.clone(), &conv).expect("fits");
         let mut chunked =
@@ -577,6 +570,68 @@ mod tests {
             read_buffer(&dev, &chunked.buffers.uniform),
             read_buffer(&dev, &whole.buffers.uniform)
         );
+        assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
+    }
+
+    /// Q-74 (#174): the chunked upload reserves its bytes at `begin` like `GpuModel::upload`;
+    /// an upload dropped before `finish` gives them back, and after `finish` the model
+    /// holds them until it is dropped.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_model_upload_in_chunks_reserves_the_budget_until_dropped() {
+        use crate::gpu::device::{BudgetSource, MemoryBudget};
+
+        let mut dev = SplatDevice::headless().expect("an adapter");
+        let n = 64;
+        let arrays = std::sync::Arc::new(patterned_arrays(n));
+        let index = persistent_index(n);
+        let conv = RenderConventions::default();
+        // `patterned_arrays(64)`: float32 position, time center and duration take
+        // 12 + 4 + 4 bytes a row; velocity, scale and sh 6 a row plus 2, rotation 8 a row,
+        // opacity 2 a row plus 2: 48 · 64 + 8 = 3 080 bytes.
+        let one = 3080;
+        let limit = one * 3 / 2;
+        dev.set_memory_budget(MemoryBudget {
+            bytes: limit,
+            source: BudgetSource::Tier,
+        });
+        let begin = |dev: &SplatDevice| {
+            ModelUpload::begin(
+                dev,
+                std::sync::Arc::clone(&arrays),
+                index.clone(),
+                &conv,
+                0.0,
+            )
+        };
+        let first = begin(&dev).expect("fits alone");
+        assert_eq!(dev.model_bytes_in_use(), one);
+        match begin(&dev) {
+            Err(RenderError::Budget { needed, budget }) => {
+                assert_eq!((needed, budget), (one, limit - one));
+            }
+            Err(e) => panic!("expected E-MEM-BUDGET, got {e:?}"),
+            Ok(_) => panic!("two uploads over the budget together both began"),
+        }
+        assert_eq!(dev.model_bytes_in_use(), one);
+        drop(first);
+        assert_eq!(
+            dev.model_bytes_in_use(),
+            0,
+            "an unfinished upload gives its bytes back"
+        );
+        let mut second = begin(&dev).expect("fits now");
+        let mut frame = u64::MAX;
+        while !second.step(&dev, &mut frame) {}
+        let model = second.finish();
+        assert_eq!(
+            dev.model_bytes_in_use(),
+            one,
+            "the model keeps the reservation"
+        );
+        assert_eq!(model.memory_bytes(), one);
+        drop(model);
+        assert_eq!(dev.model_bytes_in_use(), 0);
         assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
     }
 

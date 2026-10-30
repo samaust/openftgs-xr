@@ -14,12 +14,12 @@ pub enum RenderError {
     NoAdapter,
     /// E-GPU-LOST: the graphics device is lost.
     DeviceLost,
-    /// E-MEM-BUDGET: the model's static bytes exceed the tier's budget (§1.2 load option 4,
-    /// D-13); both figures in bytes.
+    /// E-MEM-BUDGET: the model's static bytes exceed what the device's live models leave of
+    /// its budget (§1.2 load option 4, D-13, Q-74); both figures in bytes.
     Budget {
         /// The static GPU bytes the model needs (§1.12).
         needed: u64,
-        /// The budget it was checked against.
+        /// The budget left: the device's budget less its live models' bytes (Q-74).
         budget: u64,
     },
     /// E-GPU-SHADER: a shader fails to compile or a pipeline cannot be created; the

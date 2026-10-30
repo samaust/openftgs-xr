@@ -125,9 +125,9 @@ impl HeadlessRenderer {
     /// Loads `model` with the tier's load options (§1.2): the SH cap min(tier's cap,
     /// `sh_degree`), where `None` is the model's L and a degree above L keeps L (the request
     /// check E-REQ-DEGREE is the `render` command's, Q-86); the tier's half-precision
-    /// fields; time rebased to τ − τ₀; the memory check against the budget (E-MEM-BUDGET);
-    /// the temporal ordering (E3). A convention rendered as openftgs's instead is logged as
-    /// a warning (E6, D-39, Q-110).
+    /// fields; time rebased to τ − τ₀; the memory check against what the loaded models
+    /// leave of the budget (E-MEM-BUDGET, Q-74); the temporal ordering (E3). A convention
+    /// rendered as openftgs's instead is logged as a warning (E6, D-39, Q-110).
     pub fn load(&mut self, model: &Model, sh_degree: Option<u8>) -> Result<ModelId, RenderError> {
         // D-39, Q-110
         for w in model.conventions.warnings() {
