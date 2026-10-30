@@ -12,7 +12,9 @@ The probes:
   `PROBES[k].build(32)`, so the sweeps and their margins are openftgs's, not restated here;
 - R2_overlap_deg3, R2_white_background, R2_single_timestamp, R2_epoch_time, R2_random: R-2's
   additional probes (Q-10, Q-11);
-- R19_transmittance: D-7's bound (R-19, Q-10).
+- R19_transmittance: D-7's bound (R-19, Q-10);
+- R10_deg2: P5's model and items with the request's `sh_degree` at 2, R-10's degree-2 reference
+  (Q-70).
 """
 
 import argparse
@@ -196,6 +198,20 @@ def r19_transmittance():
     return exchange_model(stack(near, far), 0, TAU0, TAU1), items
 
 
+# Q-70: R-10's degree-2 reference: P5 (degree-3 SH seen from a 360° ring), the request at
+# `sh_degree` 2, so openftgs's reference renders it at that degree.
+R10_PROBE, R10_SH_DEGREE = "P5", 2
+
+
+def r10_deg2():
+    """P5's model and items, as the harness builds them (the request's degree is set at writing,
+    `REQUEST_SH_DEGREE`)."""
+    return dict(l1_probes())[R10_PROBE]
+
+
+# The request's `sh_degree` of the probes rendered below their model's degree; null elsewhere.
+REQUEST_SH_DEGREE = {"R10_deg2": R10_SH_DEGREE}
+
 ADDITIONAL = {
     "R2_overlap_deg3": r2_overlap_deg3,
     "R2_white_background": r2_white_background,
@@ -203,6 +219,7 @@ ADDITIONAL = {
     "R2_epoch_time": r2_epoch_time,
     "R2_random": r2_random,
     "R19_transmittance": r19_transmittance,
+    "R10_deg2": r10_deg2,
 }
 
 
@@ -221,15 +238,16 @@ def l1_probes():
         )
 
 
-def write_probe(name: str, model, items: list) -> None:
-    """The probe's model, request and reference renders."""
+def write_probe(name: str, model, items: list, sh_degree: int | None = None) -> None:
+    """The probe's model, request (at `sh_degree`, null for the model's own) and reference
+    renders."""
     from ftgs_harness.formats import write_request
 
     path = PROBES_DIR / f"{name}.safetensors"
     request = PROBES_DIR / f"{name}.request.json"
     renders = PROBES_DIR / f"{name}.renders.safetensors"
     write_model(path, model)
-    write_request(request, items, time_unit=model.time_unit)
+    write_request(request, items, time_unit=model.time_unit, sh_degree=sh_degree)
     render_reference(path, request, renders)
 
 
@@ -265,7 +283,7 @@ def main() -> None:
         if args.only and name not in args.only:
             continue
         print(f"probe {name}: N = {model.arrays['position'].shape[0]}, {len(items)} items")
-        write_probe(name, model, items)
+        write_probe(name, model, items, REQUEST_SH_DEGREE.get(name))
     if not args.only or PLY_PROBE in args.only:
         write_probe_ply()
     save_commands(WORK / "commands.jsonl")
