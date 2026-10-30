@@ -464,6 +464,38 @@ help = "F1"
     );
 }
 
+/// U-29 speed (Q-50, E9): any finite speed in \[−4, 4\] other than 0 loads as given with
+/// no warning, not only §1.6's presets.
+#[test]
+fn u29_speed_in_e9s_range_loads_as_given() {
+    for (text, speed) in [("1.5", 1.5), ("-3.7", -3.7), ("4", 4.0)] {
+        let (_, s, warnings) = load_text(
+            "speed_in_range",
+            &format!("format = \"ftgsxr-settings\"\nversion = 1\n[playback]\nspeed = {text}\n"),
+        );
+        assert_eq!(s.playback.speed, speed, "speed = {text}");
+        assert!(warnings.is_empty(), "speed = {text}: {warnings:?}");
+    }
+}
+
+/// U-29 speed (Q-50, E9): 0 and a speed outside \[−4, 4\] warn naming `speed` and load
+/// the default 1.
+#[test]
+fn u29_speed_outside_e9s_range_takes_the_default_with_a_warning() {
+    for text in ["0", "4.5", "-5"] {
+        let (_, s, warnings) = load_text(
+            "speed_out_of_range",
+            &format!("format = \"ftgsxr-settings\"\nversion = 1\n[playback]\nspeed = {text}\n"),
+        );
+        assert_eq!(s.playback.speed, 1.0, "speed = {text}");
+        assert_eq!(warnings.len(), 1, "speed = {text}: {warnings:?}");
+        assert!(
+            warnings[0].contains("`playback.speed`"),
+            "speed = {text}: {warnings:?}"
+        );
+    }
+}
+
 /// Today's UTC date as `YYYY-MM-DD`, counted day by day from 1970-01-01 (an oracle
 /// independent of the crate's date arithmetic).
 fn utc_today() -> String {
