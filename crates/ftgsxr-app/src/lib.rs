@@ -8,8 +8,10 @@
 
 pub mod headless;
 
+// Q-67: `BenchReport` and `cmd_bench`.
 pub use headless::{
-    HeadlessError, cmd_export, cmd_import, cmd_info, cmd_render, cmd_validate, exit_code,
+    BenchReport, HeadlessError, cmd_bench, cmd_export, cmd_import, cmd_info, cmd_render,
+    cmd_validate, exit_code,
 };
 // Q-89: the tier `cmd_render` (and M-4's `AppPlugin`) takes, for callers that depend on
 // the app alone (§2.1's `ftgsxr-desktop`).
