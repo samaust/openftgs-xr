@@ -9,7 +9,7 @@ ones and are covered by `SHA256SUMS` too. After adding or changing one without r
 script, rewrite the sums from this directory, in the script's own order, with
 
 ```sh
-find . -type f ! -name SHA256SUMS -printf '%P\n' | LC_ALL=C sort \
+find . -type f ! -path ./SHA256SUMS -printf '%P\n' | LC_ALL=C sort \
   | xargs -d '\n' sha256sum > SHA256SUMS
 ```
 
@@ -161,7 +161,10 @@ package versions, a rerun changes none.
   `snapshot.ply` (a copy of the probe PLY), `tiny/` (copies of the checkpoint's `manifest.json`
   and `params.safetensors`; its index size is their sum) and `notes.txt` (not a model). The nginx
   and Apache bodies also list `.hidden.safetensors`, which does not exist; the Apache body has
-  the parent link `/listing/` and the column-sort links.
+  the parent link `/listing/` and the column-sort links. Beside the models, unlisted, are the
+  digest files of U-31's sidecar fetches (Q-47): `probe p1.sha256` (the probe's digest) and
+  `listing/models/SHA256SUMS`, a fixture and not this directory's checksum list (a wrong digest
+  for `snapshot.ply`, a line for `notes.txt`, a malformed line, none for the probe).
 - `settings/v1.toml`: a sample `settings.toml` (`ftgsxr-settings` v1, §1.11, the only version
   so far), **written by hand** with every key away from its default (U-29; the shapes and
   spellings of Q-49 and Q-50); no script writes or removes it.
