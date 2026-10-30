@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
 use url::Url;
 
+use crate::http::status_error;
 use crate::listing::{checked_header_len, header_info};
 use crate::{
     Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
@@ -264,14 +265,17 @@ impl ModelSource for HttpIndex {
 
 impl HttpIndex {
     /// `Auto`'s detection at the directory URL `dir` (D-31, Q-48): `index` when it
-    /// answers 2xx, then `dir` once, as nginx JSON, then as HTML anchors.
+    /// answers 2xx, then `dir` once, as nginx JSON, then as HTML anchors. A `dir` answering
+    /// 404 or 403 has no listing (E-NET-LISTING); any other failure status is E-NET-FETCH.
     // Q-48
     fn detect(&self, dir: &Url, index: &Url) -> Result<Vec<Entry>, IoError> {
         if let Ok(body) = self.client.get_text_or_status(index)? {
             return parse_index_manifest(&body, dir);
         }
-        let Ok(body) = self.client.get_text_or_status(dir)? else {
-            return Err(IoError::Listing(dir.to_string()));
+        let body = match self.client.get_text_or_status(dir)? {
+            Ok(body) => body,
+            Err(404 | 403) => return Err(IoError::Listing(dir.to_string())),
+            Err(status) => return Err(status_error(dir, status)),
         };
         parse_nginx_json(&body, dir)
             .or_else(|_| parse_html_listing(&body, dir))

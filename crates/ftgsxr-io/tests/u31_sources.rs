@@ -383,6 +383,47 @@ fn u31_http_index_auto_without_a_listing_is_e_net_listing() {
 }
 
 #[test]
+fn u31_http_index_auto_tells_a_server_failure_from_no_listing() {
+    // Q-48: past a missing `index.json`, a base answering 403 has no listing
+    // (E-NET-LISTING, as a 404 does), and any other failure status is the server's,
+    // E-NET-FETCH naming the status (§1.15: "HTTP status").
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let http = client("auto-status");
+    server.serve_listing(ServedListing::NginxJson);
+    let source = HttpIndex::new(base.clone(), ListingFlavor::Auto, http);
+    server.status_for("/listing/models/", 403);
+    assert_eq!(source.list("").unwrap_err().code(), "E-NET-LISTING");
+    server.status_for("/listing/models/", 503);
+    let error = source.list("").unwrap_err();
+    assert_eq!(error.code(), "E-NET-FETCH");
+    assert!(error.to_string().contains("503"), "{error}");
+    // Each answer took the index, then the base, once.
+    assert_eq!(
+        paths(&server),
+        ["/listing/models/index.json", "/listing/models/"].repeat(2)
+    );
+    // A 2xx body that is neither nginx JSON nor HTML anchors has no listing either: a
+    // subdirectory is listed where it is named (Q-47), here a text file.
+    let count = server.requests().len();
+    assert_eq!(
+        source.list("notes.txt").unwrap_err().code(),
+        "E-NET-LISTING"
+    );
+    let seen: Vec<_> = server.requests()[count..]
+        .iter()
+        .map(|r| (r.path.clone(), r.status))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("/listing/models/index.json".to_owned(), 404),
+            ("/listing/models/notes.txt".to_owned(), 200)
+        ]
+    );
+}
+
+#[test]
 fn u31_http_index_lists_a_subdirectory_on_demand() {
     let server = serve_fixtures();
     let base = listing_base(&server);
