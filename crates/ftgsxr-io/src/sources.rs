@@ -16,7 +16,7 @@ use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
 use url::Url;
 
 use crate::http::status_error;
-use crate::listing::{as_directory, checked_header_len, header_info};
+use crate::listing::{as_directory, checked_header_len, header_info, percent_decode};
 use crate::util::cancelled;
 use crate::{
     Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
@@ -133,6 +133,8 @@ pub struct SourceSpec {
 
 /// The player's own listing under an HTTP index's base (§1.5, §1.11).
 const INDEX: &str = "index.json";
+/// The `sha256sum` list a model's digest may be read from, beside the model (§1.5, Q-47).
+const SUMS: &str = "SHA256SUMS";
 /// The bytes a local or document file is read in between two cancel checks (Q-47).
 const CHUNK: usize = 1 << 20;
 
@@ -258,9 +260,14 @@ impl ModelSource for HttpIndex {
     ) -> Result<(ModelRef, ModelBytes), IoError> {
         fetchable(entry)?;
         let url = self.entry_url(entry)?;
+        // Q-47: an entry without the index's digest may have one beside the model.
+        let expected = match &entry.sha256 {
+            Some(digest) => Some(digest.clone()),
+            None => self.sidecar_digest(entry, &url)?,
+        };
         let path = self
             .client
-            .download(&url, entry.sha256.as_deref(), progress, cancel)?;
+            .download(&url, expected.as_deref(), progress, cancel)?;
         let bytes = read_local(&path, &mut |_| {}, &AtomicBool::new(false))?;
         Ok((ModelRef::Http(url), bytes))
     }
@@ -283,6 +290,41 @@ impl HttpIndex {
         parse_nginx_json(&body, dir)
             .or_else(|_| parse_html_listing(&body, dir))
             .map_err(|_| IoError::Listing(dir.to_string()))
+    }
+
+    /// The digest a file beside the model at `url` gives (§1.5 Download cache, Q-47): the
+    /// first whitespace-separated token of `<name>.sha256`, else the line of `SHA256SUMS`
+    /// for the model's file name. A 404, or no such line, is no digest there; any other
+    /// answer is E-NET-FETCH. The token is returned as found, an empty `.sha256` giving an
+    /// empty one, so that `download` refuses one that is not a digest with E-NET-CHECKSUM
+    /// (Q-43).
+    // Q-47
+    fn sidecar_digest(&self, entry: &Entry, url: &Url) -> Result<Option<String>, IoError> {
+        let named = beside(url, &format!("{}.sha256", entry.name));
+        if let Some(body) = named.map_or(Ok(None), |named| self.sidecar(&named))? {
+            return Ok(Some(
+                body.split_whitespace().next().unwrap_or("").to_owned(),
+            ));
+        }
+        let Some(body) = beside(url, SUMS).map_or(Ok(None), |sums| self.sidecar(&sums))? else {
+            return Ok(None);
+        };
+        let file = url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .map(percent_decode)
+            .unwrap_or_default();
+        Ok(sums_digest(&body, &file))
+    }
+
+    /// The body of the sidecar at `url`; `None` when it answers 404, E-NET-FETCH for any
+    /// other failure (Q-47).
+    fn sidecar(&self, url: &Url) -> Result<Option<String>, IoError> {
+        match self.client.get_text_or_status(url)? {
+            Ok(body) => Ok(Some(body)),
+            Err(404) => Ok(None),
+            Err(status) => Err(status_error(url, status)),
+        }
     }
 
     /// The URL of an entry this index listed: its absolute `location` (Q-36), or one
@@ -343,8 +385,9 @@ pub fn open_source(
         })),
         "http" => {
             let client = client.ok_or_else(|| unsupported("an HTTP source without a client"))?;
+            // Q-47: a location that is not a URL is a setting to fix, E-IO.
             let base = Url::parse(&spec.location)
-                .map_err(|e| IoError::Fetch(format!("{} (not a URL: {e})", spec.location)))?;
+                .map_err(|e| invalid(format!("{} (not a URL: {e})", spec.location)))?;
             let flavor = spec.flavor.unwrap_or(ListingFlavor::Auto);
             Ok(Arc::new(HttpIndex::new(base, flavor, client)))
         }
@@ -388,6 +431,28 @@ pub fn open_ref(
             read_document(provider, uri, &mut |_| {}, &cancel)
         }
     }
+}
+
+/// The file `name` in the directory of `url`, `name` percent-encoded as one path segment;
+/// `None` for a URL without a path (Q-47).
+fn beside(url: &Url, name: &str) -> Option<Url> {
+    let mut out = url.clone();
+    out.set_query(None);
+    out.set_fragment(None);
+    out.path_segments_mut().ok()?.pop().push(name);
+    Some(out)
+}
+
+/// The digest of the `sha256sum` line of `sums` whose file name is `file`: `<64 hex>`, a
+/// space, a space or `*`, the name. Other lines and malformed ones are ignored (Q-47).
+fn sums_digest(sums: &str, file: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (digest, rest) = line.split_at_checked(64)?;
+        let name = rest
+            .strip_prefix("  ")
+            .or_else(|| rest.strip_prefix(" *"))?;
+        (name == file && digest.bytes().all(|b| b.is_ascii_hexdigit())).then(|| digest.to_owned())
+    })
 }
 
 /// Refuses an entry of a kind `info` has no header-only read for (Q-33, Q-47).
@@ -505,4 +570,38 @@ fn invalid(message: String) -> IoError {
         std::io::ErrorKind::InvalidInput,
         message,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sums_digest_reads_the_line_of_the_file() {
+        let a = "a".repeat(64);
+        let b = "B".repeat(64);
+        let sums = format!(
+            "{a}  other.ply\nnot a line\n{}  m p.ply\n{b} *m p.ply\r\n{a}  m p.ply\n",
+            "z".repeat(64)
+        );
+        // The first well-formed line naming the file, in text or binary mode, CRLF or not.
+        assert_eq!(sums_digest(&sums, "m p.ply"), Some(b.clone()));
+        assert_eq!(sums_digest(&sums, "other.ply"), Some(a));
+        assert_eq!(sums_digest(&sums, "m"), None);
+        assert_eq!(sums_digest("", "m p.ply"), None);
+        assert_eq!(sums_digest(&format!("{b} m p.ply"), "m p.ply"), None);
+    }
+
+    #[test]
+    fn beside_replaces_the_last_segment_as_one() {
+        let url = Url::parse("http://h/d/a%20b.ply?x=1#y").unwrap();
+        assert_eq!(
+            beside(&url, "a b?#/.sha256").unwrap().as_str(),
+            "http://h/d/a%20b%3F%23%2F.sha256"
+        );
+        assert_eq!(
+            beside(&url, SUMS).unwrap().as_str(),
+            "http://h/d/SHA256SUMS"
+        );
+    }
 }
