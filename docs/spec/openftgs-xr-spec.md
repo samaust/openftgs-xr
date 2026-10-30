@@ -525,7 +525,7 @@ The player never crashes on a bad input; every error below has a code, a user te
 | E-FILE-VALUE | a non-finite value, a non-positive duration or scale, an opacity outside (0, 1), a rotation of norm ≤ 10⁻⁸, τ₁ < τ₀, a background outside \[0, 1\], a metadata number that does not parse | "K has an invalid value" | skipped |
 | E-FILE-SINGLE | τ₀ = τ₁ with a time center ≠ τ₀ or a velocity ≠ 0 | "Single-timestamp model with moving primitives" | skipped |
 | E-FILE-SH | `sh_degree` not in 0–3 or disagreeing with the `sh` shape | "Unsupported SH degree" | skipped |
-| E-FILE-CHECKSUM | a checkpoint's `files` digest disagrees with `params.safetensors` | "Checkpoint checksum mismatch" | the checkpoint is not loaded |
+| E-FILE-CHECKSUM | a checkpoint's `files` digest disagrees with `params.safetensors`, or a renders file's `request_sha256` with the request's digest | "Checksum mismatch (K)" | the checkpoint is not loaded; the renders are refused |
 | E-NET-CHECKSUM | a downloaded file's digest disagrees with the index entry, `SHA256SUMS` or the `.sha256` file | "Download checksum mismatch" | the download is discarded; retry offered |
 | E-IO | a file cannot be read or written (permissions, a missing directory, a full disk) | "Could not read/write PATH" | the operation is abandoned; settings keep their last good file |
 | E-JSON | a player file or a request is not well-formed JSON | "PATH is not valid JSON" | skipped |
