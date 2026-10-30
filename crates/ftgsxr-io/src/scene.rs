@@ -12,7 +12,7 @@ use serde_json::{Map, Number, Value};
 
 use crate::settings::{
     ENVIRONMENT_MODES, LIGHTING_MODES, LOOP_MODES, RENDER_MODES, SOURCE_KINDS, flavor_name,
-    flavor_of,
+    flavor_of, loop_mode_name, loop_mode_of,
 };
 use crate::util::{version_is_1, write_atomic};
 use crate::{EnvironmentSettings, IoError, ManualLighting, SourceSpec};
@@ -443,11 +443,8 @@ fn model_of(v: &Value, at: &str) -> Result<SceneModel, IoError> {
 fn clock_of(v: &Value, at: &str) -> Result<ClockState, IoError> {
     let map = object(v, at)?;
     let sub = |key: &str| format!("{at}.{key}");
-    let loop_mode = match choice(field(map, "loop", at)?, &sub("loop"), LOOP_MODES)? {
-        "loop" => LoopMode::Loop,
-        "ping-pong" => LoopMode::PingPong,
-        _ => LoopMode::Once,
-    };
+    let loop_mode = loop_mode_of(choice(field(map, "loop", at)?, &sub("loop"), LOOP_MODES)?)
+        .unwrap_or(LoopMode::Loop);
     let range = match optional(map, "range") {
         Some(r) => {
             let r_at = sub("range");
@@ -730,12 +727,7 @@ fn clock_doc(c: &ClockState) -> Result<Value, IoError> {
     let mut map = Map::new();
     map.insert("t".into(), float64(c.t, "clock.t")?);
     map.insert("speed".into(), float64(c.speed, "clock.speed")?);
-    let loop_mode = match c.loop_mode {
-        LoopMode::Loop => "loop",
-        LoopMode::PingPong => "ping-pong",
-        LoopMode::Once => "once",
-    };
-    map.insert("loop".into(), loop_mode.into());
+    map.insert("loop".into(), loop_mode_name(c.loop_mode).into());
     let range = match c.range {
         Some((a, b)) => Value::Array(vec![
             float64(a, "clock.range[0]")?,

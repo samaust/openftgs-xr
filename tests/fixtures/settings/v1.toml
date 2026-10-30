@@ -57,9 +57,9 @@ grid = false
 
 [display.overlays]
 boxes = true
-velocity = true
+velocities = true
 velocity_every = 16
-time_slice = true
+time_tint = true
 
 [environment]
 mode = "passthrough"
