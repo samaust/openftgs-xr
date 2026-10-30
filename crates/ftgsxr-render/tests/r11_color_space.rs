@@ -12,7 +12,7 @@ use display_support::{
     Run, center_block, draw, flat_probe, linear_to_srgb, probe_camera, render, upload,
 };
 use ftgsxr_render::{ColorTransform, RenderMode};
-use ftgsxr_testkit::gpu_context;
+use ftgsxr_testkit::{gpu_context, layer_messages};
 
 const TOLERANCE: f32 = 1.0 / 255.0;
 
@@ -23,6 +23,7 @@ fn byte(v: u8) -> f32 {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r11_resolve_shows_the_files_color_on_an_srgb_target() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let dev = gpu_context();
     let color = [0.5, 0.25, 0.8];
     // The misreading would store encode(c): the tolerance tells the two apart.

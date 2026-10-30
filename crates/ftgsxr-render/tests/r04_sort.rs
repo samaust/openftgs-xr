@@ -12,7 +12,7 @@ mod cull_support;
 use cull_support::{Rng, draw, look_at, passes, prepare, sort_pose, upload, view};
 use ftgsxr_core::{Camera, Model, Pose, Quat, UVec2, Vec3, sort_key, sort_key16};
 use ftgsxr_render::{FrameBuffers, FrameContents, QualityTier, RenderMode, SortKey};
-use ftgsxr_testkit::{gpu_context, random_model};
+use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 /// R-4's size.
 const N: usize = 1_000_000;
@@ -114,6 +114,7 @@ fn assert_sorted(got: &FrameContents, keys: &[u32]) {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r04_sort_orders_a_million_random_keys_like_a_stable_cpu_sort() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let m = model(0x4_01, |rng| rng.range(2.0, 20.0) as f32);
     let got = frame(&m, &QualityTier::conformance());
     let k = keys(&got, |k| k);
@@ -123,6 +124,7 @@ fn gpu_r04_sort_orders_a_million_random_keys_like_a_stable_cpu_sort() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r04_sort_is_stable_on_repeated_keys() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     // 1000 distinct depths over 10⁶ rows: every key repeats about 1000 times.
     let m = model(0x4_02, |rng| 2.0 + (rng.next_u64() % 1000) as f32 * 0.018);
     let got = frame(&m, &QualityTier::conformance());
@@ -137,6 +139,7 @@ fn gpu_r04_sort_is_stable_on_repeated_keys() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r04_depth16_agrees_on_the_top_16_bits() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let tier = QualityTier {
         sort_key: SortKey::Depth16,
         ..QualityTier::conformance()

@@ -19,6 +19,7 @@ mod probe_support;
 use std::path::PathBuf;
 
 use ftgsxr_core::{open_model, read_renders, read_request};
+use ftgsxr_testkit::layer_messages;
 use probe_support::{check_items, render_items};
 
 /// R-3's item count per model (§3.2).
@@ -78,11 +79,13 @@ fn check_trained(name: &str) {
 #[test]
 #[ignore = "ds"]
 fn ds_r03_trained_tiny_passes_the_tier() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     check_trained("tiny");
 }
 
 #[test]
 #[ignore = "ds"]
 fn ds_r03_trained_tiny_unsync_passes_the_tier() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     check_trained("tiny_unsync");
 }

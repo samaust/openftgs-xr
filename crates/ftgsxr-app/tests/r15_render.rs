@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use ftgsxr_app::{HeadlessError, QualityTier, cmd_render, exit_code};
 use ftgsxr_core::{read_renders, read_request};
-use ftgsxr_testkit::{fixtures_dir, scratch_dir};
+use ftgsxr_testkit::{fixtures_dir, layer_messages, scratch_dir};
 
 const VERSION: &str = "0.1.0-test";
 
@@ -95,6 +95,7 @@ fn r15_a_request_degree_above_the_models_exits_2() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r15_p1_request_writes_the_renders_file() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let dir = scratch("p1");
     let out = dir.join("P1.renders.safetensors");
     cmd_render(

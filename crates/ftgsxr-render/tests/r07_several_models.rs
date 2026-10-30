@@ -9,11 +9,13 @@
 mod probe_support;
 
 use ftgsxr_render::{HeadlessRenderer, QualityTier};
+use ftgsxr_testkit::layer_messages;
 use probe_support::{check_items, posed_instances, probe, render_request};
 
 #[test]
 #[ignore = "gpu"]
 fn gpu_r07_two_instances_against_the_merged_model() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let instances = posed_instances("R7_poses.json");
     assert_eq!(instances.len(), 2, "P7's two rows as two instances");
     let (merged, request) = probe("R7_merged");

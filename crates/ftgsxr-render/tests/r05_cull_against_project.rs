@@ -17,7 +17,7 @@ use ftgsxr_core::{
     temporal_opacity,
 };
 use ftgsxr_render::{FrameBuffers, QualityTier, RecordView, RenderMode};
-use ftgsxr_testkit::{gpu_context, random_model};
+use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 /// R-5's tolerances. μ′ takes `MEAN_PX` plus float32's propagation
 /// `MEAN_ROUNDING`·f·2⁻²³(‖R_w μ^S‖ + ‖t_w‖)/z_c, the rounding of x_c = R_w μ^S + t_w's
@@ -116,6 +116,7 @@ fn pair(
 #[test]
 #[ignore = "gpu"]
 fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let dev = gpu_context();
     let tier = QualityTier::conformance();
     let model = random_model(0x5_05, 10_000, 3);
@@ -232,6 +233,7 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r05_bound_rows_agree_with_e3_and_effective_opacity() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let dev = gpu_context();
     let tier = QualityTier::conformance();
     let mut model = random_model(0x5_28, 3, 0);

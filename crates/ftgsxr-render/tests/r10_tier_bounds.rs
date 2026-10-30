@@ -10,7 +10,7 @@ mod probe_support;
 
 use ftgsxr_core::Pose;
 use ftgsxr_render::{HeadlessRenderer, QualityTier};
-use ftgsxr_testkit::{metrics, probe, random_model};
+use ftgsxr_testkit::{layer_messages, metrics, probe, random_model};
 use probe_support::{check_items, render_request};
 
 /// R-10's bound between the two storages.
@@ -29,6 +29,7 @@ fn conformance_with_storage_of(tier: QualityTier) -> QualityTier {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r10_quest_balanced_storage_within_50_db_of_conformance() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     let storage = conformance_with_storage_of(QualityTier::quest_balanced());
     assert!(storage.layout.half.sh && storage.layout.half.rotation);
     assert_eq!(storage.layout.sh_cap, Some(2));
@@ -72,6 +73,7 @@ fn gpu_r10_quest_balanced_storage_within_50_db_of_conformance() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_r10_degree_2_cap_against_the_degree_2_reference() {
+    let _layer = layer_messages(); // R-16, Q-T121.1
     // Q-70: P5's degree-3 model, capped at 2 by the tier (`GpuLayoutOptions::sh_cap`) and
     // loaded without a request degree, so the tier's cap alone sets L′ = 2.
     let (model, request) = probe("R10_deg2");
