@@ -522,6 +522,11 @@ fn gpu_bench_compares_neither_b6_nor_another_profile() {
     assert_eq!(o.status.code(), Some(0), "{stderr}");
     let note = format!("baseline not compared: profile {ours} against {theirs} (Q-103)");
     assert!(stderr.contains(&note), "{stderr}");
+    assert_eq!(
+        written["baseline"],
+        serde_json::Value::Null,
+        "not compared against"
+    );
     assert!(
         written["notes"]
             .as_array()

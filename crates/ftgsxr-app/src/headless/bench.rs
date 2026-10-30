@@ -192,9 +192,9 @@ pub(crate) fn compare_against(
 /// the setups of Q-102 or, with `model`, on that one model (any §1.2 input); compares
 /// its budgets with the stored baseline `<NAME>.json` when the baseline has the run's
 /// profile and GPU, else notes why not, in the file and on standard error (Q-103); and
-/// writes the file at `out` when given. A NAME the desktop does not run is `Input`; an invalid model is
-/// `Input` with its E-FILE code; no adapter, or no timestamp queries for B-3, is
-/// `Environment`; a malformed baseline is `Input` (E-JSON).
+/// writes the file at `out` when given. A NAME the desktop does not run is `Input`; an
+/// invalid model is `Input` with its E-FILE code; no adapter, or no timestamp queries for
+/// B-3, is `Environment`; a malformed baseline is `Input` (E-JSON).
 // Q-67, Q-102, Q-103
 pub fn cmd_bench(
     name: &str,
@@ -245,16 +245,16 @@ pub fn cmd_bench(
             HeadlessError::Input(format!("E-JSON: {}: {e}", baseline_path.display()))
         })?;
         let path = baseline_path.canonicalize().unwrap_or(baseline_path);
-        let regressions =
-            match compare_against(&measured.budgets, profile, gpu.dev.adapter_name(), &parsed) {
-                Ok(regressions) => regressions,
-                Err(note) => {
-                    eprintln!("ftgsxr: {name}: {note}");
-                    notes.push(Json::str(note));
-                    Vec::new()
-                }
-            };
-        (Json::str(path.display().to_string()), regressions)
+        // A baseline not compared against is not `baseline` (Q-103: "the path compared
+        // against, or null").
+        match compare_against(&measured.budgets, profile, gpu.dev.adapter_name(), &parsed) {
+            Ok(regressions) => (Json::str(path.display().to_string()), regressions),
+            Err(note) => {
+                eprintln!("ftgsxr: {name}: {note}");
+                notes.push(Json::str(note));
+                (Json::Null, Vec::new())
+            }
+        }
     } else {
         (Json::Null, Vec::new())
     };
