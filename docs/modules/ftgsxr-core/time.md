@@ -36,7 +36,7 @@ A model with τ₀ = τ₁ is static: no motion, a temporal opacity of one at ev
 - **`clock`.** `tau_at` returns τ₀ whatever the clock time and end rule, unflagged, so the instance never shows as extrapolating; its T_τ/r_m term in E9's T_len is zero, and when every instance is a single-timestamp model the clock is idle (E9). Its frame step is the default, there being one distinct time center (D-32), and §1.6 shows no time controls for it.
 - **`motion`.** E1 leaves positions where they are, since §1.2's reader rules require zero velocities and time centers equal to τ₀; E2's temporal opacity takes the single-timestamp flag and returns one at any τ (§2.1 `temporal_opacity`, D-9, U-7).
 - **`index`.** Every row is active at every τ, so the dispatch range at any τ must cover every row (E3, D-10, U-8's superset property); the index's margins are in units of T′, which §1.2 sets to one for a single timestamp.
-- **`layout`.** Rebasing gives every time center zero and the instance's τ_m − τ₀ is zero (§1.2 load option 3), so the GPU path sees the same static model the CPU does.
+- **`layout`.** Rebasing gives every time center zero and the instance's τ_m − τ₀ is zero (§1.2 load option 3), so the GPU path sees the same static model the CPU does. `GpuArrays` carries τ₁ = τ₀, and the time-center colormap's span is then zero: every center maps to its low end (Q-97).
 
 ## Q-n rows relied on
 

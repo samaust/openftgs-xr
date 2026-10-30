@@ -79,6 +79,8 @@ pub struct GpuModel {
     pub(crate) index: TemporalIndex,
     /// τ₀, the origin of the rebased time centers (§1.2 load option 3).
     pub(crate) tau0: f64,
+    /// τ₁, the end of the model's span, for the time-center colormap (§1.4 stage 6). // Q-97
+    pub(crate) tau1: f64,
     /// L′, the loaded SH degree.
     pub(crate) sh_degree: u8,
     /// The model's E6 and E7 constants (D-39), which the draw reads too.
@@ -221,6 +223,7 @@ impl GpuModel {
             buffers,
             index,
             tau0: arrays.tau0,
+            tau1: arrays.tau1,
             sh_degree: arrays.sh_degree,
             conventions: conv.clone(),
             speed_p99: speed_percentile_99(arrays),
@@ -252,6 +255,7 @@ mod tests {
             n: 0,
             sh_degree: 0,
             tau0: 0.0,
+            tau1: 1.0,
             single: false,
             half: HalfFields {
                 velocity: half,
@@ -315,6 +319,7 @@ mod tests {
             n: 7,
             sh_degree: 2,
             tau0: 0.0,
+            tau1: 0.0,
             single: true,
             half: HalfFields {
                 velocity: true,
