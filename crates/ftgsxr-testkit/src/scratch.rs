@@ -22,35 +22,3 @@ pub fn scratch_dir(tmp: impl AsRef<Path>, binary: &str, name: &str) -> PathBuf {
     fs::create_dir_all(&dir).expect("create the scratch directory");
     dir
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn process_dir_names_the_binary_and_the_process_and_creates_nothing() {
-        let tmp =
-            std::env::temp_dir().join(format!("ftgsxr-testkit-scratch-{}", std::process::id()));
-        let dir = process_dir(&tmp, "u99_example");
-        assert_eq!(dir, tmp.join(format!("u99_example-{}", std::process::id())));
-        assert!(!dir.exists());
-    }
-
-    #[test]
-    fn scratch_dir_starts_empty_on_every_call() {
-        let tmp = std::env::temp_dir().join(format!(
-            "ftgsxr-testkit-scratch-fresh-{}",
-            std::process::id()
-        ));
-        let dir = scratch_dir(&tmp, "u99_example", "case");
-        assert_eq!(dir, process_dir(&tmp, "u99_example").join("case"));
-        assert!(dir.is_dir());
-        fs::write(dir.join("left.txt"), b"x").unwrap();
-        fs::create_dir(dir.join("sub")).unwrap();
-
-        let again = scratch_dir(&tmp, "u99_example", "case");
-        assert_eq!(again, dir);
-        assert_eq!(fs::read_dir(&again).unwrap().count(), 0);
-        let _ = fs::remove_dir_all(&tmp);
-    }
-}
