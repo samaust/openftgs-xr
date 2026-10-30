@@ -14,8 +14,12 @@ use ftgsxr_io::{Entry, EntryKind, list_dir};
 use ftgsxr_testkit::fixtures_dir;
 
 /// A fresh, empty directory under Cargo's temporary directory for integration tests.
+/// Named after this test binary and the process, so no other binary and no overlapping run
+/// in another session or worktree shares it (#94).
 fn fresh_dir(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("u31_list_dir-{}", std::process::id()))
+        .join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir

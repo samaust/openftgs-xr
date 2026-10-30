@@ -12,8 +12,12 @@ use ftgsxr_testkit::fixtures_dir;
 use serde_json::Value;
 
 /// A scratch directory of this test binary's own, emptied first.
+/// Named after this test binary and the process, so no other binary and no overlapping run
+/// in another session or worktree shares it (#94).
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("u25_{name}"));
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("u25_renders-{}", std::process::id()))
+        .join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
