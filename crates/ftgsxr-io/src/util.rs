@@ -177,7 +177,8 @@ mod tests {
 
     #[test]
     fn write_atomic_replaces_the_file_and_leaves_no_temporary() {
-        let dir = std::env::temp_dir().join("ftgsxr-io-write-atomic");
+        let dir =
+            std::env::temp_dir().join(format!("ftgsxr-io-write-atomic-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.json");
