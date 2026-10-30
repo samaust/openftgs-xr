@@ -406,6 +406,8 @@ fn prepare_view(
     };
     let mut state = state;
     // §1.4, §2.4 rule 2, Q-T119.3: stages 1–4 only when an input changed.
+    // The key names GPU models by address: safe because `state.instances` still holds
+    // the previous frame's `Arc`s here, so no address can have been reused yet.
     state.prepare = state.key.as_ref() != Some(&new_key);
     state.key = Some(new_key);
     state.view = params;
