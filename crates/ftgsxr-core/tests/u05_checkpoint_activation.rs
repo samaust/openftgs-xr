@@ -165,6 +165,57 @@ fn u05_files_digest_mismatch() {
     assert_eq!(read_checkpoint(&dir).unwrap_err().code(), "E-FILE-CHECKSUM");
 }
 
+/// The tiny checkpoint read after `edit` changed its manifest.
+fn read_edited(name: &str, edit: impl FnOnce(&mut Value)) -> Model {
+    let dir = copy_tiny(name);
+    let mut m = manifest(&dir);
+    edit(&mut m);
+    fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    read_checkpoint(&dir).unwrap()
+}
+
+/// A manifest edit: its name and the edit.
+type Edit = (&'static str, fn(&mut Value));
+
+#[test]
+fn u05_producer_without_an_openftgs_version() {
+    // Q-34 (owner, #55): `openftgs <version>` when the manifest names one, else
+    // `openftgs`, as openftgs's own producer string falls back.
+    let named = read_edited("producer-named", |m| {
+        m["versions"] = serde_json::json!({"openftgs": "0.3.1"})
+    });
+    assert_eq!(named.producer, "openftgs 0.3.1");
+    let cases: [Edit; 4] = [
+        ("null", |m| m["versions"]["openftgs"] = Value::Null),
+        ("absent", |m| {
+            m.as_object_mut().unwrap().remove("versions");
+        }),
+        ("no-entry", |m| m["versions"] = serde_json::json!({})),
+        ("not-string", |m| {
+            m["versions"] = serde_json::json!({"openftgs": 3})
+        }),
+    ];
+    for (name, edit) in cases {
+        let ckpt = read_edited(&format!("producer-{name}"), edit);
+        assert_eq!(ckpt.producer, "openftgs", "{name}");
+    }
+    let ckpt = read_edited("producer-versions-not-object", |m| {
+        m["versions"] = "0.3.1".into()
+    });
+    assert_eq!(ckpt.producer, "openftgs");
+}
+
+#[test]
+fn u05_string_version_loads() {
+    // Q-34: `version` may be the string "1", as openftgs's `load_checkpoint` compares
+    // `str(version)`.
+    let ckpt = read_edited("version-string", |m| m["version"] = "1".into());
+    assert_eq!(
+        ckpt,
+        read_checkpoint(&fixtures_dir().join("checkpoint/tiny")).unwrap()
+    );
+}
+
 /// A manifest rule: its name, the edit that breaks it, the code expected.
 type Case = (&'static str, fn(&mut Value), &'static str);
 
