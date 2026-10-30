@@ -141,8 +141,10 @@ pub fn write_scene(path: &Path, scene: &SceneFile) -> Result<(), IoError> {
 
 impl PoseStore {
     /// Reads the pose store at `path` (`ftgsxr-poses` v1, §1.11); a missing file is an
-    /// empty store. E-JSON when the file is not JSON, E-SCENE-FORMAT when it breaks the
-    /// schema, E-IO when it cannot be read (Q-52, Q-53).
+    /// empty store. A key that is not a model identity (64 lowercase hexadecimal digits;
+    /// an identity spelled in uppercase hex is not one) is an unknown key: it is ignored,
+    /// and the next `save` drops it (Q-52). E-JSON when the file is not JSON, E-SCENE-FORMAT when it
+    /// breaks the schema, E-IO when it cannot be read (Q-52, Q-53).
     // Q-52, Q-53
     pub fn load(path: &Path) -> Result<PoseStore, IoError> {
         let bytes = match std::fs::read(path) {
@@ -470,31 +472,60 @@ fn clock_of(v: &Value, at: &str) -> Result<ClockState, IoError> {
     })
 }
 
-/// The `environment` (§1.9; every key of `EnvironmentSettings`, Q-52).
+/// The `environment` (§1.9, Q-52): the object is required, but each key of
+/// `EnvironmentSettings` (and of its `lighting_manual`) may be absent and then takes
+/// `EnvironmentSettings::default()`'s value (Q-50); a key present with the wrong type or
+/// spelling is E-SCENE-FORMAT (Q-53).
+// Q-50, Q-52, Q-53
 fn environment_of(v: &Value, at: &str) -> Result<EnvironmentSettings, IoError> {
     let map = object(v, at)?;
+    let d = EnvironmentSettings::default();
     let sub = |key: &str| format!("{at}.{key}");
-    let get = |key: &str| field(map, key, at);
-    let f = |key: &str| number32(get(key)?, &sub(key));
-    let b = |key: &str| boolean(get(key)?, &sub(key));
+    let f = |key: &str, default: f32| map.get(key).map_or(Ok(default), |v| number32(v, &sub(key)));
+    let b = |key: &str, default: bool| map.get(key).map_or(Ok(default), |v| boolean(v, &sub(key)));
+    let c = |key: &str, default: String, values: &[&str]| {
+        map.get(key).map_or(Ok(default), |v| {
+            choice(v, &sub(key), values).map(String::from)
+        })
+    };
+    let lighting_manual = match map.get("lighting_manual") {
+        None => d.lighting_manual,
+        Some(v) => {
+            let at = sub("lighting_manual");
+            let lighting = object(v, &at)?;
+            let d = d.lighting_manual;
+            let f = |key: &str, default: f32| {
+                lighting
+                    .get(key)
+                    .map_or(Ok(default), |v| number32(v, &format!("{at}.{key}")))
+            };
+            ManualLighting {
+                exposure_ev: f("exposure_ev", d.exposure_ev)?,
+                temperature: f("temperature", d.temperature)?,
+                tint: f("tint", d.tint)?,
+            }
+        }
+    };
     Ok(EnvironmentSettings {
-        mode: choice(get("mode")?, &sub("mode"), ENVIRONMENT_MODES)?.into(),
-        background: numbers32::<3>(get("background")?, &sub("background"))?,
-        passthrough_brightness: f("passthrough_brightness")?,
-        passthrough_contrast: f("passthrough_contrast")?,
-        passthrough_saturation: f("passthrough_saturation")?,
-        occlusion: b("occlusion")?,
-        occlusion_soft: b("occlusion_soft")?,
-        occlusion_delta_m: f("occlusion_delta_m")?,
-        hand_removal: b("hand_removal")?,
-        lighting_mode: choice(get("lighting_mode")?, &sub("lighting_mode"), LIGHTING_MODES)?.into(),
-        lighting_manual: lighting_of(get("lighting_manual")?, &sub("lighting_manual"))?,
-        lighting_gamma: f("lighting_gamma")?,
-        lighting_reference: match get("lighting_reference")? {
-            Value::Null => None,
-            r => Some(numbers32::<4>(r, &sub("lighting_reference"))?),
+        mode: c("mode", d.mode, ENVIRONMENT_MODES)?,
+        background: match map.get("background") {
+            None => d.background,
+            Some(v) => numbers32::<3>(v, &sub("background"))?,
         },
-        contact_shadows: b("contact_shadows")?,
+        passthrough_brightness: f("passthrough_brightness", d.passthrough_brightness)?,
+        passthrough_contrast: f("passthrough_contrast", d.passthrough_contrast)?,
+        passthrough_saturation: f("passthrough_saturation", d.passthrough_saturation)?,
+        occlusion: b("occlusion", d.occlusion)?,
+        occlusion_soft: b("occlusion_soft", d.occlusion_soft)?,
+        occlusion_delta_m: f("occlusion_delta_m", d.occlusion_delta_m)?,
+        hand_removal: b("hand_removal", d.hand_removal)?,
+        lighting_mode: c("lighting_mode", d.lighting_mode, LIGHTING_MODES)?,
+        lighting_manual,
+        lighting_gamma: f("lighting_gamma", d.lighting_gamma)?,
+        lighting_reference: optional(map, "lighting_reference")
+            .map(|r| numbers32::<4>(r, &sub("lighting_reference")))
+            .transpose()?,
+        contact_shadows: b("contact_shadows", d.contact_shadows)?,
     })
 }
 
@@ -740,7 +771,8 @@ fn clock_doc(c: &ClockState) -> Result<Value, IoError> {
     Ok(Value::Object(map))
 }
 
-/// The `environment`: every key of `EnvironmentSettings` (Q-52).
+/// The `environment`: every key of `EnvironmentSettings` written, though the reader
+/// lets any of them be absent (Q-52).
 fn environment_doc(e: &EnvironmentSettings) -> Result<Value, IoError> {
     let at = |key: &str| format!("environment.{key}");
     let mut map = Map::new();
