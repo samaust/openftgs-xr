@@ -446,7 +446,7 @@ fn u31_http_index_info_reads_8_plus_header_length_bytes() {
 /// tests/fixtures/README.md) is the server's 416, an empty prefix, so it fails as a broken
 /// file (E-FILE-FORMAT), like a file shorter than its prefix, not as an unreachable URL.
 #[test]
-fn u31_http_index_info_of_an_empty_file_is_e_format() {
+fn u31_http_index_info_of_an_empty_file_is_e_file_format() {
     let server = serve_fixtures();
     let source = HttpIndex::new(listing_base(&server), ListingFlavor::Index, client("empty"));
     let entry = Entry {

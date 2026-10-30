@@ -68,10 +68,9 @@ fn u28_header_only_read_fetches_8_plus_header_length_bytes() {
 fn u28_get_range_at_or_past_the_end_is_empty() {
     let server = serve_fixtures();
     let http = client("past-end");
-    let url = url_of(&server, "checkpoint/tiny.safetensors");
-    let size = std::fs::metadata(fixtures_dir().join("checkpoint/tiny.safetensors"))
-        .unwrap()
-        .len();
+    let name = "checkpoint/tiny.safetensors";
+    let url = url_of(&server, name);
+    let size = std::fs::metadata(fixtures_dir().join(name)).unwrap().len();
 
     for start in [size, size + 1, size + 1000] {
         let bytes = http.get_range(&url, start, 8);
