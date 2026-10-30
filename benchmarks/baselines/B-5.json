@@ -1,0 +1,125 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-5",
+  "machine": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  595.99.02  Wed Aug 26 05:24:08 UTC 2026",
+    "os": "Ubuntu 24.04.5 LTS (kernel 7.0.0-38-generic)",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+    "threads": 24
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "release",
+  "results": [
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 9999916,
+        "tier": "desktop"
+      },
+      "measure": "load_s",
+      "value": 0.011632813,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 9999916,
+        "tier": "desktop"
+      },
+      "measure": "s_per_100mb",
+      "value": 0.11632910716450019,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 99999940,
+        "tier": "desktop"
+      },
+      "measure": "load_s",
+      "value": 0.157230646,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 99999940,
+        "tier": "desktop"
+      },
+      "measure": "s_per_100mb",
+      "value": 0.1572307403384442,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 499999916,
+        "tier": "desktop"
+      },
+      "measure": "load_s",
+      "value": 0.883995756,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 499999916,
+        "tier": "desktop"
+      },
+      "measure": "s_per_100mb",
+      "value": 0.1767991809022624,
+      "unit": "s"
+    }
+  ],
+  "budgets": [
+    {
+      "id": "P-3",
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 9999916,
+        "tier": "desktop"
+      },
+      "measure": "s_per_100mb",
+      "rule": "at_most",
+      "limit": 1,
+      "value": 0.11632910716450019,
+      "pass": true
+    },
+    {
+      "id": "P-3",
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 99999940,
+        "tier": "desktop"
+      },
+      "measure": "s_per_100mb",
+      "rule": "at_most",
+      "limit": 1,
+      "value": 0.1572307403384442,
+      "pass": true
+    },
+    {
+      "id": "P-3",
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 499999916,
+        "tier": "desktop"
+      },
+      "measure": "s_per_100mb",
+      "rule": "at_most",
+      "limit": 1,
+      "value": 0.1767991809022624,
+      "pass": true
+    }
+  ],
+  "baseline": null,
+  "notes": [
+    "B-5 reads files the page cache may hold (a synthetic file was just written; a cold read needs the cache dropped), so its load times are a lower bound (Q-102)"
+  ]
+}

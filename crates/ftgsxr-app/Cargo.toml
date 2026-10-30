@@ -11,11 +11,16 @@ publish.workspace = true
 
 
 # M-2: the headless commands need the core (#117) and the render layer's headless renderer
-# for `render` (#118); bevy and the other crates of §2.1's row join with the modules that
-# use them.
+# for `render` (#118); `bench` (#122) drives the render layer's passes through Bevy's
+# re-exported wgpu descriptors (`bevy_render`) and clears the layer with `bevy_color`'s
+# wgpu conversion. The other crates of §2.1's row join with the modules that use them.
 [dependencies]
+bevy = { workspace = true, features = ["bevy_render", "bevy_color"] }
 ftgsxr-core.workspace = true
 ftgsxr-render.workspace = true
 
 [dev-dependencies]
 ftgsxr-testkit.workspace = true
+# An independent reader of the benchmark files `bench` writes (#122, Q-103), as
+# `ftgsxr-render` reads its fixture pose files.
+serde_json.workspace = true

@@ -1698,9 +1698,11 @@ dependencies = [
 name = "ftgsxr-app"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "ftgsxr-core",
  "ftgsxr-render",
  "ftgsxr-testkit",
+ "serde_json",
 ]
 
 [[package]]
@@ -1729,6 +1731,7 @@ dependencies = [
  "clap",
  "ftgsxr-app",
  "ftgsxr-testkit",
+ "serde_json",
 ]
 
 [[package]]
