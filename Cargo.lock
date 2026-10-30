@@ -309,6 +309,10 @@ dependencies = [
 [[package]]
 name = "ftgsxr-app"
 version = "0.1.0"
+dependencies = [
+ "ftgsxr-core",
+ "ftgsxr-testkit",
+]
 
 [[package]]
 name = "ftgsxr-core"
