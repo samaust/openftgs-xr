@@ -46,8 +46,6 @@ const TIERS: &[&str] = &[
 const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 /// §1.6's loop modes.
 pub(crate) const LOOP_MODES: &[&str] = &["loop", "ping-pong", "once"];
-/// §1.6's speed presets, in either direction.
-const SPEED_PRESETS: &[f64] = &[0.1, 0.25, 0.5, 1.0, 2.0, 4.0];
 /// §1.5's render modes.
 pub(crate) const RENDER_MODES: &[&str] = &["splats", "centers", "both", "hidden"];
 /// §1.4's colormaps (Q-50).
@@ -147,7 +145,7 @@ pub struct GeneralSettings {
 /// `[playback]` (§1.6, §1.11, Q-49).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackSettings {
-    /// The clock's speed, one of §1.6's presets in either direction.
+    /// The clock's speed, in E9's \[−4, 4\] \\ {0} (Q-50).
     pub speed: f64,
     /// The key `loop`, spelled `loop`, `ping-pong` or `once` (§1.6, Q-50).
     pub loop_mode: LoopMode,
@@ -535,15 +533,22 @@ fn range(lo: f64, hi: f64) -> Check<f32> {
     )
 }
 
-/// One of `values`, as f64 (`signed`: or its negative).
-fn one_of_numbers(values: &'static [f64], signed: bool) -> Check<f64> {
-    let list: Vec<String> = values.iter().map(f64::to_string).collect();
-    let sign = if signed { "±" } else { "" };
+/// A finite number in E9's \[−4, 4\] other than 0: the clock's speed, which §1.6's
+/// presets do not limit (Q-50).
+// Q-50
+fn speed() -> Check<f64> {
     (
-        format!("{sign}one of {}", list.join(", ")),
-        Box::new(move |v| {
-            number(v).filter(|x| values.contains(x) || (signed && values.contains(&-x)))
-        }),
+        "a number in [-4, 4] other than 0".into(),
+        Box::new(|v| number(v).filter(|x| (-4.0..=4.0).contains(x) && *x != 0.0)),
+    )
+}
+
+/// One of `values`, as f64.
+fn one_of_numbers(values: &'static [f64]) -> Check<f64> {
+    let list: Vec<String> = values.iter().map(f64::to_string).collect();
+    (
+        format!("one of {}", list.join(", ")),
+        Box::new(move |v| number(v).filter(|x| values.contains(x))),
     )
 }
 
@@ -781,9 +786,7 @@ impl Reader {
         self.unknown(t, p, &["speed", "loop"]);
         let d = PlaybackSettings::default();
         PlaybackSettings {
-            speed: self
-                .take(t, p, "speed", one_of_numbers(SPEED_PRESETS, true))
-                .unwrap_or(d.speed),
+            speed: self.take(t, p, "speed", speed()).unwrap_or(d.speed),
             loop_mode: self
                 .take(t, p, "loop", choice(LOOP_MODES))
                 .and_then(|m| loop_mode_of(&m))
@@ -954,7 +957,7 @@ impl Reader {
                 .unwrap_or(d.speed_mps),
             snap_turn: self.take(t, p, "snap_turn", flag()).unwrap_or(d.snap_turn),
             snap_deg: self
-                .take(t, p, "snap_deg", one_of_numbers(SNAP_ANGLES, false))
+                .take(t, p, "snap_deg", one_of_numbers(SNAP_ANGLES))
                 .map(|x| x as f32)
                 .unwrap_or(d.snap_deg),
             smooth_dps: self
