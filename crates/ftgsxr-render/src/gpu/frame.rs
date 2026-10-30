@@ -3,8 +3,8 @@
 //! `FrameBuffers`: one set of a view's per-frame buffers, sized once per tier and
 //! capacity (§1.4, §1.12 Memory, §2.4 rule 4 and GPU data layout, D-34).
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64};
+use std::sync::{Arc, Mutex};
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
 
@@ -118,6 +118,9 @@ pub struct FrameBuffers {
     pub(crate) set: FrameSet,
     pub(crate) mode: RecordMode,
     pub(crate) ring: StatsRing,
+    /// E7's constants per instance of the last `encode_prepare` (α_max, α_skip, the pixel
+    /// center offset; D-39), which the splat draw reads by each record's instance.
+    pub(crate) draw_constants: Mutex<Option<wgpu::Buffer>>,
     capacity: u32,
 }
 
@@ -200,6 +203,7 @@ impl FrameBuffers {
             set,
             mode,
             ring,
+            draw_constants: Mutex::new(None),
             capacity,
         }
     }

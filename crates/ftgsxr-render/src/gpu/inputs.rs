@@ -105,3 +105,23 @@ pub struct ModelDraw<'a> {
     /// The debug overlays (not drawn in M-2).
     pub overlays: Overlays,
 }
+
+/// E13's inputs: the environment depth of a view with its camera and planes.
+///
+/// The splat fragment stage samples it from M-6 on (R-12); in M-2 every tier has occlusion
+/// off and `encode_draw` reads none of it (w_occ = 1).
+#[derive(Clone, Copy, Debug)]
+pub struct OcclusionInput<'a> {
+    /// The environment depth image of the view.
+    pub depth: &'a wgpu::TextureView,
+    /// The depth image's camera, built as in E6.
+    pub camera: Camera,
+    /// The depth image's near plane, in metres.
+    pub near: f32,
+    /// Its far plane, in metres (infinite when below `near`).
+    pub far: f32,
+    /// Soft (smoothstep) rather than hard weights.
+    pub soft: bool,
+    /// δ, the margin in metres.
+    pub delta_m: f32,
+}

@@ -2,8 +2,8 @@
 
 //! `SplatPasses` (§2.1): the pipelines of §1.4's stages, compiled once per (formats, tier).
 //! This module holds stages 1–3 (prepare, cull, size) of `encode_prepare`, which then runs
-//! stage 4's sort (`sort.rs`), and stage 8's `encode_stats`; the draws join in later M-2
-//! tickets.
+//! stage 4's sort (`sort.rs`), the splat draw of stage 5 in `encode_draw`, and stage 8's
+//! `encode_stats`; the centers draw and the resolve join in #116.
 
 use std::sync::atomic::Ordering;
 
@@ -15,13 +15,22 @@ use super::error::RenderError;
 use super::frame::{
     FrameBuffers, RecordMode, SLOT_FREE, SLOT_PENDING, SLOT_READY, STATS_BYTES, TIMESTAMPS,
 };
-use super::inputs::{ColorTransform, ModelDraw, RenderMode, SortPose, ViewParams};
+use super::inputs::{ColorTransform, ModelDraw, OcclusionInput, RenderMode, SortPose, ViewParams};
 use super::model::MODEL_UNIFORM_BYTES;
 use super::sort::{RadixSort, SORT_BLOCK};
 use super::tier::QualityTier;
 
 /// `cull.wgsl`: stages 2 and 3 (§1.4).
 pub(crate) const CULL_WGSL: &str = include_str!("shaders/cull.wgsl");
+/// `splat.wgsl`: stage 5's splat draw (§1.4).
+pub(crate) const SPLAT_WGSL: &str = include_str!("shaders/splat.wgsl");
+/// One instance's E7 constants in the draw (`splat.wgsl`'s `InstanceConstants`).
+const DRAW_CONSTANTS_BYTES: usize = 16;
+/// The draw's view block (`splat.wgsl`'s `DrawView`).
+const DRAW_VIEW_BYTES: usize = 32;
+/// The engine's near plane for the other geometry (§1.7: 0.01 m), which the splats' reverse-Z
+/// depth test maps their depth with. // Q-T114.2
+const ENGINE_NEAR: f32 = 0.01;
 
 /// The cull's workgroup size (`cull.wgsl`).
 const WORKGROUP: u32 = 256;
@@ -52,15 +61,6 @@ enum Kind {
 pub struct SplatPasses {
     device: wgpu::Device,
     mode: RecordMode,
-    #[expect(
-        dead_code,
-        reason = "the draw pipelines of #114 and #116 (§1.4 stage 5)"
-    )]
-    layer_format: wgpu::TextureFormat,
-    #[expect(
-        dead_code,
-        reason = "the draw pipelines of #114 and #116 (§1.4 stage 5)"
-    )]
     depth_format: Option<wgpu::TextureFormat>,
     model_layout: wgpu::BindGroupLayout,
     frame_layout: wgpu::BindGroupLayout,
@@ -70,6 +70,8 @@ pub struct SplatPasses {
     cull_centers: wgpu::ComputePipeline,
     size: wgpu::ComputePipeline,
     sort: RadixSort,
+    draw_layout: wgpu::BindGroupLayout,
+    splat: wgpu::RenderPipeline,
 }
 
 fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -194,13 +196,13 @@ impl SplatPasses {
         let cull_centers = pipeline("ftgsxr cull centers", &cull_layout, "cull_centers");
         let size = pipeline("ftgsxr size", &size_pipeline_layout, "size");
         let sort = RadixSort::new(&device, tier.sort_key);
+        let (draw_layout, splat) = splat_pipeline(&device, layer_format, depth_format);
         if let Some(e) = bevy::tasks::block_on(scope.pop()) {
             return Err(RenderError::Shader(e.to_string()));
         }
         Ok(SplatPasses {
             device,
             mode,
-            layer_format,
             depth_format,
             model_layout,
             frame_layout,
@@ -210,6 +212,8 @@ impl SplatPasses {
             cull_centers,
             size,
             sort,
+            draw_layout,
+            splat,
         })
     }
 
@@ -292,6 +296,25 @@ impl SplatPasses {
             groups.push((kind, i, k, dispatch_groups(rows)));
         }
         let instances = self.uniform_buffer("ftgsxr instance uniforms", &blocks);
+        // E7's constants per instance for the draw (D-39), indexed by the records' instance.
+        // Q-T114.2
+        let mut constants = vec![0u8; models.len().max(1) * DRAW_CONSTANTS_BYTES];
+        for (i, draw) in models.iter().enumerate() {
+            let c = &draw.model.conventions;
+            let mut b = Block {
+                bytes: &mut constants[i * DRAW_CONSTANTS_BYTES..(i + 1) * DRAW_CONSTANTS_BYTES],
+                at: 0,
+            };
+            b.f32(c.alpha_max);
+            b.f32(c.alpha_skip);
+            b.f32(c.pixel_center_offset);
+        }
+        let constants =
+            self.buffer_with("ftgsxr draw constants", &constants, BufferUsages::STORAGE);
+        *frame
+            .draw_constants
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(constants);
         let instance_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ftgsxr instance"),
             layout: &self.instance_layout,
@@ -394,6 +417,62 @@ impl SplatPasses {
         }
     }
 
+    /// Stages 5 and 6 into the file-space layer, depth-tested against `depth` when given.
+    ///
+    /// Stage 5's splats (`splat.wgsl`): one indirect instanced draw of four-vertex strips
+    /// from stage 3's arguments, in the sort's order (pair 0's payloads), blended
+    /// `One, OneMinusSrcAlpha` on color and alpha into the pass's layer, which the caller
+    /// cleared to (0, 0, 0, 0). With the passes' depth format the splats test against the
+    /// pass's opaque depth (reverse Z, Q-T114.2) and write none. E13's weight is 1: every
+    /// M-2 tier has occlusion off, and `occlusion` is not read until M-6 (R-12). In
+    /// shared-center mode nothing is drawn until the per-eye projection of M-8 (R-9,
+    /// Q-T114.2). The draw writes no timestamps: the pass is the caller's (Q-T114.2). The
+    /// centers of stage 6 join in #116.
+    ///
+    /// # Panics
+    ///
+    /// When `frame` was made for another tier's record layout, or `encode_prepare` has not
+    /// run on it.
+    pub fn encode_draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frame: &FrameBuffers,
+        view: &ViewParams,
+        occlusion: Option<&OcclusionInput>,
+    ) {
+        assert_eq!(
+            frame.mode, self.mode,
+            "the frame buffers' record layout is the passes' tier's"
+        );
+        let _ = occlusion; // M-6 (R-12): E13's environment depth.
+        if self.mode != RecordMode::PerView {
+            // Q-T114.2: the shared-center vertex projection is M-8's (R-9).
+            return;
+        }
+        let set = &frame.set;
+        let constants = frame
+            .draw_constants
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("encode_prepare runs before encode_draw");
+        let block = draw_view_uniform(view, self.depth_format.is_some());
+        let view_buffer = self.uniform_buffer("ftgsxr draw view", &block);
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ftgsxr draw"),
+            layout: &self.draw_layout,
+            entries: &[
+                buffer_entry(0, &set.records),
+                buffer_entry(1, &set.payloads[0]),
+                buffer_entry(2, &constants),
+                buffer_entry(3, &view_buffer),
+            ],
+        });
+        pass.set_pipeline(&self.splat);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw_indirect(&set.indirect, 0);
+    }
+
     /// Stage 8: the statistics block to the staging buffer; `FrameStats::poll` reads it two frames later.
     ///
     /// The frame's timestamps are resolved into the block first. Each frame takes the next
@@ -439,10 +518,15 @@ impl SplatPasses {
     /// A uniform buffer holding `bytes`, written through its mapping at creation, so each
     /// call has its own (no queue write races an earlier, unsubmitted encoder).
     fn uniform_buffer(&self, label: &str, bytes: &[u8]) -> wgpu::Buffer {
+        self.buffer_with(label, bytes, BufferUsages::UNIFORM)
+    }
+
+    /// A buffer of `usage` holding `bytes`, written through its mapping at creation.
+    fn buffer_with(&self, label: &str, bytes: &[u8], usage: BufferUsages) -> wgpu::Buffer {
         let buffer = self.device.create_buffer(&BufferDescriptor {
             label: Some(label),
             size: bytes.len() as u64,
-            usage: BufferUsages::UNIFORM,
+            usage,
             mapped_at_creation: true,
         });
         buffer
@@ -452,6 +536,118 @@ impl SplatPasses {
         buffer.unmap();
         buffer
     }
+}
+
+/// Stage 5's splat pipeline and its bind group layout (`splat.wgsl`): the records, the
+/// sorted payloads and the instances' E7 constants as read-only storage, the view block.
+fn splat_pipeline(
+    device: &wgpu::Device,
+    layer_format: wgpu::TextureFormat,
+    depth_format: Option<wgpu::TextureFormat>,
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("ftgsxr splat.wgsl"),
+        source: wgpu::ShaderSource::Wgsl(SPLAT_WGSL.into()),
+    });
+    let stages = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
+    let storage = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: stages,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("ftgsxr draw"),
+        entries: &[
+            storage(0),
+            storage(1),
+            storage(2),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: stages,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("ftgsxr splat"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    // §1.4 stage 5: the premultiplied over operator on color and alpha.
+    let over = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    };
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("ftgsxr splat"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_splat"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            cull_mode: None,
+            ..Default::default()
+        },
+        // The depth test against the pass's opaque depth, no depth write (Q-T114.2).
+        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_splat"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: layer_format,
+                blend: Some(wgpu::BlendState {
+                    color: over,
+                    alpha: over,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    (layout, pipeline)
+}
+
+/// The draw's view block (`splat.wgsl`'s `DrawView`): the camera's W × H, the target's
+/// size, the engine's near plane when depth-tested (else 0), and E13's switches (off).
+fn draw_view_uniform(view: &ViewParams, depth_test: bool) -> [u8; DRAW_VIEW_BYTES] {
+    let mut out = [0u8; DRAW_VIEW_BYTES];
+    let mut b = Block {
+        bytes: &mut out,
+        at: 0,
+    };
+    b.f32(view.camera.width as f32);
+    b.f32(view.camera.height as f32);
+    b.f32(view.target_size.x as f32);
+    b.f32(view.target_size.y as f32);
+    b.f32(if depth_test { ENGINE_NEAR } else { 0.0 });
+    b.u32(0);
+    b.u32(0);
+    b.f32(0.0);
+    out
 }
 
 fn buffer_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -615,6 +811,46 @@ mod tests {
                 "entry point {entry}"
             );
         }
+    }
+
+    /// `splat.wgsl` parses and validates under naga, with both entry points.
+    #[test]
+    fn splat_wgsl_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(SPLAT_WGSL).expect("splat.wgsl parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("splat.wgsl validates");
+        for entry in ["vs_splat", "fs_splat"] {
+            assert!(
+                module.entry_points.iter().any(|e| e.name == entry),
+                "entry point {entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn draw_view_uniform_lays_out_the_sizes_and_the_depth_near() {
+        let cam = Camera {
+            width: 64,
+            height: 48,
+            k: DMat3::IDENTITY,
+            world_to_camera: DMat4::IDENTITY,
+        };
+        let view = ViewParams {
+            camera: cam,
+            target_size: ftgsxr_core::UVec2::new(128, 96),
+        };
+        let f = |b: &[u8], at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        let b = draw_view_uniform(&view, true);
+        assert_eq!(
+            [f(&b, 0), f(&b, 4), f(&b, 8), f(&b, 12), f(&b, 16)],
+            [64.0, 48.0, 128.0, 96.0, ENGINE_NEAR]
+        );
+        assert_eq!(&b[20..32], &[0u8; 12]);
+        assert_eq!(f(&draw_view_uniform(&view, false), 16), 0.0);
     }
 
     #[test]
