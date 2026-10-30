@@ -424,6 +424,50 @@ fn u31_http_index_auto_tells_a_server_failure_from_no_listing() {
 }
 
 #[test]
+fn u31_http_index_base_without_a_trailing_slash_is_the_directory() {
+    // Q-48: a base is a directory, so `listing/models` lists as `listing/models/` does,
+    // through the same requests, and `name` is the base with its `/`.
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let bare = Url::parse(&server.url_of("listing/models")).unwrap();
+    let http = client("bare-base");
+    for flavor in [FLAVORS.map(|(f, _)| f).to_vec(), vec![ListingFlavor::Auto]].concat() {
+        for (_, served) in FLAVORS {
+            server.serve_listing(served);
+            let listed = |url: &Url| {
+                let before = server.requests().len();
+                let source = HttpIndex::new(url.clone(), flavor, http.clone());
+                let name = source.name().to_owned();
+                let entries = source.list("").map(|e| summary(&e)).map_err(|e| e.code());
+                (name, entries, paths(&server)[before..].to_vec())
+            };
+            let (name, entries, seen) = listed(&bare);
+            assert_eq!(name, server.url_of("listing/models/"));
+            assert_eq!(
+                (entries, seen),
+                {
+                    let (_, entries, seen) = listed(&base);
+                    (entries, seen)
+                },
+                "{flavor:?} over {served:?}"
+            );
+        }
+    }
+    // A listed entry and a subdirectory resolve under the directory, not its parent.
+    server.serve_listing(ServedListing::NginxJson);
+    let source = HttpIndex::new(bare, ListingFlavor::NginxJson, http);
+    assert_eq!(
+        summary(&source.list("").unwrap()),
+        expected_entries(&base, ServedListing::NginxJson)
+    );
+    let _ = source.list("tiny/");
+    assert_eq!(
+        paths(&server).last().map(String::as_str),
+        Some("/listing/models/tiny/")
+    );
+}
+
+#[test]
 fn u31_http_index_lists_a_subdirectory_on_demand() {
     let server = serve_fixtures();
     let base = listing_base(&server);

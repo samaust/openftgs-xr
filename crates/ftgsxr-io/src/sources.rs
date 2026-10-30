@@ -93,7 +93,8 @@ pub struct LocalDir {
 /// An HTTP index (§1.5, D-31): a base URL listed in one of the three listing flavors,
 /// fetched through the shared `HttpClient`.
 pub struct HttpIndex {
-    /// The directory URL listed; `index.json` resolves against it, so it ends in `/`.
+    /// The directory URL listed, ending in `/` (`new` appends it, Q-48), so `index.json`,
+    /// subdirectories and relative entry locations resolve under it.
     pub base: Url,
     /// The listing read, or `Auto` to detect it on every listing (Q-48).
     pub flavor: ListingFlavor,
@@ -135,9 +136,14 @@ const INDEX: &str = "index.json";
 const CHUNK: usize = 1 << 20;
 
 impl HttpIndex {
-    /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-47).
-    // Q-47
-    pub fn new(base: Url, flavor: ListingFlavor, client: Arc<HttpClient>) -> HttpIndex {
+    /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-47). A base is a
+    /// directory: one whose path does not end in `/` gets one (Q-48).
+    // Q-47, Q-48
+    pub fn new(mut base: Url, flavor: ListingFlavor, client: Arc<HttpClient>) -> HttpIndex {
+        if !base.path().ends_with('/') {
+            let path = format!("{}/", base.path());
+            base.set_path(&path);
+        }
         HttpIndex {
             base,
             flavor,
