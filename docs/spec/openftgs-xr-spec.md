@@ -519,7 +519,7 @@ The player never crashes on a bad input; every error below has a code, a user te
 | Code | Condition | User text (abridged) | Recovery |
 | --- | --- | --- | --- |
 | E-FILE-FORMAT | `format` is not the expected one, or the container is not safetensors, JSON or PLY | "Not a ftgs-if file (format X)" | the file is skipped |
-| E-FILE-VERSION | an unknown major version | "Version X is newer than this player supports" | skipped |
+| E-FILE-VERSION | an unknown major version | "Version X is not supported by this player" | skipped |
 | E-FILE-KEYS | a required tensor or metadata key is missing | "Missing key K" | skipped |
 | E-FILE-SHAPE | a dtype or shape disagrees with §1.2 | "K has shape S, expected T" | skipped |
 | E-FILE-VALUE | a non-finite value, a non-positive duration or scale, an opacity outside (0, 1), a rotation of norm ≤ 10⁻⁸, τ₁ < τ₀, a background outside \[0, 1\], a metadata number that does not parse | "K has an invalid value" | skipped |
