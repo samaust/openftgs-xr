@@ -2,8 +2,8 @@
 
 //! `SplatPasses` (§2.1): the pipelines of §1.4's stages, compiled once per (formats, tier).
 //! This module holds stages 1–3 (prepare, cull, size) of `encode_prepare`, which then runs
-//! stage 4's sort (`sort.rs`), the splat draw of stage 5 in `encode_draw`, and stage 8's
-//! `encode_stats`; the centers draw and the resolve join in #116.
+//! stage 4's sort (`sort.rs`), the splat and centers draws of stages 5 and 6 in
+//! `encode_draw`, stage 7's `encode_resolve` and stage 8's `encode_stats`.
 
 use std::sync::atomic::Ordering;
 
@@ -15,7 +15,9 @@ use super::error::RenderError;
 use super::frame::{
     FrameBuffers, RecordMode, SLOT_FREE, SLOT_PENDING, SLOT_READY, STATS_BYTES, TIMESTAMPS,
 };
-use super::inputs::{ColorTransform, ModelDraw, OcclusionInput, RenderMode, SortPose, ViewParams};
+use super::inputs::{
+    ColorTransform, Colormap, ModelDraw, OcclusionInput, RenderMode, SortPose, ViewParams,
+};
 use super::model::MODEL_UNIFORM_BYTES;
 use super::sort::{RadixSort, SORT_BLOCK};
 use super::tier::QualityTier;
@@ -24,8 +26,20 @@ use super::tier::QualityTier;
 pub(crate) const CULL_WGSL: &str = include_str!("shaders/cull.wgsl");
 /// `splat.wgsl`: stage 5's splat draw (§1.4).
 pub(crate) const SPLAT_WGSL: &str = include_str!("shaders/splat.wgsl");
-/// One instance's E7 constants in the draw (`splat.wgsl`'s `InstanceConstants`).
-const DRAW_CONSTANTS_BYTES: usize = 16;
+/// `centers.wgsl`: stage 6's centers draw (§1.4).
+pub(crate) const CENTERS_WGSL: &str = include_str!("shaders/centers.wgsl");
+/// `resolve.wgsl`: stage 7's resolve (§1.4, D-6).
+pub(crate) const RESOLVE_WGSL: &str = include_str!("shaders/resolve.wgsl");
+/// The view target's format the resolve is compiled for: Bevy's non-HDR view target,
+/// `TextureFormat::bevy_default()`. // Q-91
+pub(crate) const RESOLVE_TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// One instance's draw constants (`splat.wgsl`'s and `centers.wgsl`'s
+/// `InstanceConstants`): E7's, then the centers' colormap, ρ and scales.
+const DRAW_CONSTANTS_BYTES: usize = 32;
+/// The resolve's block (`resolve.wgsl`'s `Resolve`).
+const RESOLVE_BYTES: usize = 16;
+/// The byte offset of the centers draw's indirect arguments (`frame.rs`'s counters).
+const CENTERS_INDIRECT_OFFSET: u64 = 16;
 /// The draw's view block (`splat.wgsl`'s `DrawView`).
 const DRAW_VIEW_BYTES: usize = 32;
 /// The engine's near plane for the other geometry (§1.7: 0.01 m), which the splats' reverse-Z
@@ -72,6 +86,10 @@ pub struct SplatPasses {
     sort: RadixSort,
     draw_layout: wgpu::BindGroupLayout,
     splat: wgpu::RenderPipeline,
+    centers: wgpu::RenderPipeline,
+    resolve_layout: wgpu::BindGroupLayout,
+    resolve: wgpu::RenderPipeline,
+    resolve_sampler: wgpu::Sampler,
 }
 
 fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -197,6 +215,14 @@ impl SplatPasses {
         let size = pipeline("ftgsxr size", &size_pipeline_layout, "size");
         let sort = RadixSort::new(&device, tier.sort_key);
         let (draw_layout, splat) = splat_pipeline(&device, layer_format, depth_format);
+        let centers = centers_pipeline(&device, &draw_layout, layer_format, depth_format, mode);
+        let (resolve_layout, resolve) = resolve_pipeline(&device, RESOLVE_TARGET_FORMAT);
+        let resolve_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("ftgsxr resolve"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         if let Some(e) = bevy::tasks::block_on(scope.pop()) {
             return Err(RenderError::Shader(e.to_string()));
         }
@@ -214,6 +240,10 @@ impl SplatPasses {
             sort,
             draw_layout,
             splat,
+            centers,
+            resolve_layout,
+            resolve,
+            resolve_sampler,
         })
     }
 
@@ -296,18 +326,12 @@ impl SplatPasses {
             groups.push((kind, i, k, dispatch_groups(rows)));
         }
         let instances = self.uniform_buffer("ftgsxr instance uniforms", &blocks);
-        // E7's constants per instance for the draw (D-39), indexed by the records' instance.
-        // Q-87
+        // The draw's constants per instance (D-39, and stage 6's), indexed by the records'
+        // instance. Q-87
         let mut constants = vec![0u8; models.len().max(1) * DRAW_CONSTANTS_BYTES];
         for (i, draw) in models.iter().enumerate() {
-            let c = &draw.model.conventions;
-            let mut b = Block {
-                bytes: &mut constants[i * DRAW_CONSTANTS_BYTES..(i + 1) * DRAW_CONSTANTS_BYTES],
-                at: 0,
-            };
-            b.f32(c.alpha_max);
-            b.f32(c.alpha_skip);
-            b.f32(c.pixel_center_offset);
+            constants[i * DRAW_CONSTANTS_BYTES..(i + 1) * DRAW_CONSTANTS_BYTES]
+                .copy_from_slice(&draw_constants(draw));
         }
         let constants =
             self.buffer_with("ftgsxr draw constants", &constants, BufferUsages::STORAGE);
@@ -426,8 +450,12 @@ impl SplatPasses {
     /// pass's opaque depth (reverse Z, Q-87) and write none. E13's weight is 1: every
     /// M-2 tier has occlusion off, and `occlusion` is not read until M-6 (R-12). In
     /// shared-center mode nothing is drawn until the per-eye projection of M-8 (R-9,
-    /// Q-87). The draw writes no timestamps: the pass is the caller's (Q-87). The
-    /// centers of stage 6 join in #116.
+    /// Q-87). The draw writes no timestamps: the pass is the caller's (Q-87).
+    ///
+    /// Stage 6's centers (`centers.wgsl`), after the splats (Q-96): one indirect
+    /// instanced draw of discs of radius ρ camera pixels at the records' μ′ (Q-78), opaque,
+    /// colored by the instance's colormap (Q-92); with the passes' depth format they
+    /// test `GreaterEqual` and write the depth (reverse Z, Q-87).
     ///
     /// # Panics
     ///
@@ -471,6 +499,58 @@ impl SplatPasses {
         pass.set_pipeline(&self.splat);
         pass.set_bind_group(0, &group, &[]);
         pass.draw_indirect(&set.indirect, 0);
+
+        // Stage 6, the same bindings with the counters in place of the payloads.
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ftgsxr centers"),
+            layout: &self.draw_layout,
+            entries: &[
+                buffer_entry(0, &set.records),
+                buffer_entry(1, &set.indirect),
+                buffer_entry(2, &constants),
+                buffer_entry(3, &view_buffer),
+            ],
+        });
+        pass.set_pipeline(&self.centers);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw_indirect(&set.indirect, CENTERS_INDIRECT_OFFSET);
+    }
+
+    /// Stage 7: the layer over the engine target, decoded for display, with an optional opaque background.
+    ///
+    /// One full-screen triangle (`resolve.wgsl`, D-6) into `pass`, whose one color target
+    /// is the view target in `Rgba8UnormSrgb` with no depth attachment (Q-91): each
+    /// pixel of `layer` (sampled at the target pixel's center, Q-95) is un-premultiplied,
+    /// decoded from sRGB, re-premultiplied and composited over the target with the over
+    /// operator, so the target keeps the layer's alpha (passthrough, D-14). With
+    /// `background` (VR mode, a file-space color) E7's C + (1 − A)·c_bg is decoded and
+    /// written opaque (Q-94).
+    pub fn encode_resolve(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        layer: &wgpu::TextureView,
+        background: Option<[f32; 3]>,
+    ) {
+        let block = resolve_uniform(background);
+        let uniform = self.uniform_buffer("ftgsxr resolve", &block);
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ftgsxr resolve"),
+            layout: &self.resolve_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(layer),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.resolve_sampler),
+                },
+                buffer_entry(2, &uniform),
+            ],
+        });
+        pass.set_pipeline(&self.resolve);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// Stage 8: the statistics block to the staging buffer; `FrameStats::poll` reads it two frames later.
@@ -629,6 +709,206 @@ fn splat_pipeline(
         cache: None,
     });
     (layout, pipeline)
+}
+
+/// Stage 6's pipeline (`centers.wgsl`) on the splat draw's bind group layout: discs written
+/// opaque (no blending), the depth tested `GreaterEqual` and written (reverse Z, Q-87).
+fn centers_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    layer_format: wgpu::TextureFormat,
+    depth_format: Option<wgpu::TextureFormat>,
+    mode: RecordMode,
+) -> wgpu::RenderPipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("ftgsxr centers.wgsl"),
+        source: wgpu::ShaderSource::Wgsl(CENTERS_WGSL.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("ftgsxr centers"),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    let constants = [("RECORD_MODE", f64::from(mode.shader_value()))];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("ftgsxr centers"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_center"),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            },
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_center"),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            },
+            targets: &[Some(wgpu::ColorTargetState {
+                format: layer_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Stage 7's pipeline (`resolve.wgsl`) and its layout: the layer as a filterable float
+/// texture, its sampler, the resolve block; blended `One, OneMinusSrcAlpha` on color and
+/// alpha into `target_format`, no depth (Q-91).
+fn resolve_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("ftgsxr resolve.wgsl"),
+        source: wgpu::ShaderSource::Wgsl(RESOLVE_WGSL.into()),
+    });
+    let fragment = wgpu::ShaderStages::FRAGMENT;
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("ftgsxr resolve"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: fragment,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: fragment,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: fragment,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("ftgsxr resolve"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    // §1.4 stage 7: the over operator on color and alpha.
+    let over = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    };
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("ftgsxr resolve"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_resolve"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_resolve"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState {
+                    color: over,
+                    alpha: over,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    (layout, pipeline)
+}
+
+/// The resolve block (`resolve.wgsl`'s `Resolve`): the background and whether there is one.
+fn resolve_uniform(background: Option<[f32; 3]>) -> [u8; RESOLVE_BYTES] {
+    let mut out = [0u8; RESOLVE_BYTES];
+    let mut b = Block {
+        bytes: &mut out,
+        at: 0,
+    };
+    b.vec3(Vec3::from(background.unwrap_or([0.0; 3])));
+    b.u32(u32::from(background.is_some()));
+    out
+}
+
+/// One instance's draw constants (`InstanceConstants` of `splat.wgsl` and `centers.wgsl`):
+/// α_max, α_skip and the pixel center offset of its model (D-39), then the colormap
+/// (0 DC, 1 time center, 2 speed, 3 opacity), ρ, 1 / (τ₁ − τ₀) and 1 / the speeds' 99th
+/// percentile, 0 when that is 0 (Q-92, Q-93).
+fn draw_constants(draw: &ModelDraw) -> [u8; DRAW_CONSTANTS_BYTES] {
+    let c = &draw.model.conventions;
+    let (colormap, pixel_radius) = match draw.mode {
+        RenderMode::Centers {
+            pixel_radius,
+            colormap,
+        }
+        | RenderMode::Both {
+            pixel_radius,
+            colormap,
+        } => (colormap, pixel_radius),
+        RenderMode::Splats | RenderMode::Hidden => (Colormap::Dc, 0.0),
+    };
+    let colormap: u32 = match colormap {
+        Colormap::Dc => 0,
+        Colormap::TimeCenter => 1,
+        Colormap::Speed => 2,
+        Colormap::Opacity => 3,
+    };
+    let p99 = draw.model.speed_p99;
+    let mut out = [0u8; DRAW_CONSTANTS_BYTES];
+    let mut b = Block {
+        bytes: &mut out,
+        at: 0,
+    };
+    b.f32(c.alpha_max);
+    b.f32(c.alpha_skip);
+    b.f32(c.pixel_center_offset);
+    b.u32(colormap);
+    b.f32(pixel_radius);
+    // Q-97: τ₁ reaches neither `GpuArrays` nor `GpuModel` (§2.1), so the time-center
+    // colormap has no span yet and maps every center to its low end.
+    b.f32(0.0);
+    b.f32(if p99 > 0.0 { 1.0 / p99 } else { 0.0 });
+    out
 }
 
 /// The draw's view block (`splat.wgsl`'s `DrawView`): the camera's W × H, the target's
@@ -829,6 +1109,40 @@ mod tests {
                 "entry point {entry}"
             );
         }
+    }
+
+    /// `centers.wgsl` and `resolve.wgsl` parse and validate under naga, with their entry
+    /// points.
+    #[test]
+    fn centers_and_resolve_wgsl_are_valid_wgsl() {
+        for (name, source, entries) in [
+            ("centers.wgsl", CENTERS_WGSL, ["vs_center", "fs_center"]),
+            ("resolve.wgsl", RESOLVE_WGSL, ["vs_resolve", "fs_resolve"]),
+        ] {
+            let module = naga::front::wgsl::parse_str(source)
+                .unwrap_or_else(|e| panic!("{name} parses: {}", e.emit_to_string(source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name} validates: {e:?}"));
+            for entry in entries {
+                assert!(
+                    module.entry_points.iter().any(|e| e.name == entry),
+                    "{name}: entry point {entry}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_uniform_carries_the_background_and_its_switch() {
+        let f = |b: &[u8], at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        let b = resolve_uniform(Some([0.1, 0.2, 0.3]));
+        assert_eq!([f(&b, 0), f(&b, 4), f(&b, 8)], [0.1, 0.2, 0.3]);
+        assert_eq!(&b[12..16], &1u32.to_le_bytes());
+        assert_eq!(resolve_uniform(None), [0u8; RESOLVE_BYTES]);
     }
 
     #[test]
