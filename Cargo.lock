@@ -426,6 +426,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_core_pipeline"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2564f1ba766532e8eeb20059133ff6703e8dd5c3864b92378d0d1c541096ef12"
+dependencies = [
+ "bevy_app",
+ "bevy_asset",
+ "bevy_camera",
+ "bevy_color",
+ "bevy_derive",
+ "bevy_diagnostic",
+ "bevy_ecs",
+ "bevy_image",
+ "bevy_light",
+ "bevy_log",
+ "bevy_math",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_render",
+ "bevy_shader",
+ "bevy_transform",
+ "bevy_utils",
+ "bevy_window",
+ "bitflags",
+ "indexmap",
+ "nonmax",
+]
+
+[[package]]
 name = "bevy_derive"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -606,6 +635,7 @@ dependencies = [
  "bevy_asset",
  "bevy_camera",
  "bevy_color",
+ "bevy_core_pipeline",
  "bevy_derive",
  "bevy_diagnostic",
  "bevy_ecs",
@@ -625,6 +655,31 @@ dependencies = [
  "bevy_transform",
  "bevy_utils",
  "bevy_window",
+]
+
+[[package]]
+name = "bevy_light"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f91fb900c2412c5cb7ff5083d428d8361a1d39b605df86eb259aff82f7ac45"
+dependencies = [
+ "bevy_app",
+ "bevy_asset",
+ "bevy_camera",
+ "bevy_color",
+ "bevy_ecs",
+ "bevy_image",
+ "bevy_log",
+ "bevy_math",
+ "bevy_mesh",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_transform",
+ "bevy_utils",
+ "half",
+ "smallvec",
+ "tracing",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -1702,6 +1757,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "ftgsxr-core",
+ "ftgsxr-io",
  "ftgsxr-testkit",
  "naga",
  "serde_json",
