@@ -3,15 +3,18 @@
 //! U-31: `ftgsxr_io::sources` (§1.5 Library and Sources, D-31, D-49; `cpu` lane): `LocalDir`
 //! lists one level with kinds; `info` reads the header only; `HttpIndex` with the three
 //! flavors over the local server; `DocumentSource` over a stub provider; `open_ref` for every
-//! `ModelRef`. D-50 and D-51 (`ModelBytes`, checkpoints; the checkpoint clauses change in #77), Q-47 (the module's signatures and
-//! rules), Q-48 (`Auto`), over the fixture server of Q-39 with the listing choice of Q-6.
+//! `ModelRef`. D-50 and D-51 (`ModelBytes`; checkpoints travel by path, each route's
+//! directory read by `read_checkpoint` equal to the fixture checkpoint, U-5), Q-42 and
+//! Q-56 to Q-61 (a checkpoint's cache entry, its pruning, digest, accessor and progress),
+//! Q-47 (the module's signatures and rules), Q-48 (`Auto`), over the fixture server of Q-39
+//! with the listing choice of Q-6.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ftgsxr_core::{ModelInfo, ModelKind, read_exchange};
+use ftgsxr_core::{Model, ModelInfo, ModelKind, read_checkpoint, read_exchange};
 use ftgsxr_io::{
     DocumentProvider, DocumentSource, Entry, EntryKind, HttpClient, HttpIndex, IoError,
     ListingFlavor, LocalDir, ModelBytes, ModelRef, ModelSource, Progress, SourceSpec, TlsRoots,
@@ -204,7 +207,7 @@ fn u31_local_dir_fetch_reads_the_file_with_progress() {
         let whole = fs::read(&path).unwrap();
         let (r, bytes, reports) = fetch_all(&source, entry);
         assert_eq!(r, ModelRef::File(path));
-        assert_eq!(&*bytes, whole.as_slice());
+        assert_eq!(bytes.as_bytes(), Some(whole.as_slice()));
         let size = whole.len() as u64;
         assert_eq!(
             reports.last(),
@@ -221,21 +224,65 @@ fn u31_local_dir_fetch_reads_the_file_with_progress() {
     assert!(cancel.load(Ordering::Relaxed));
 }
 
+/// The fixture checkpoint read directly from its committed directory (U-5's reader).
+fn fixture_checkpoint() -> Model {
+    read_checkpoint(&fixtures_dir().join("checkpoint/tiny")).expect("the fixture checkpoint")
+}
+
+/// The model a fetched checkpoint names: its directory read by `read_checkpoint` (D-51).
+fn read_fetched(bytes: &ModelBytes) -> Model {
+    assert_eq!(
+        bytes.as_bytes(),
+        None,
+        "a checkpoint carries no bytes (Q-58)"
+    );
+    let dir = bytes.checkpoint_dir().expect("a checkpoint directory");
+    read_checkpoint(dir).expect("the fetched checkpoint reads")
+}
+
 #[test]
-fn u31_checkpoint_fetch_is_refused() {
-    // D-51: checkpoints load by path; this refusal is replaced in #77.
-    let dir = local_models("u31_checkpoint_fetch_is_refused");
+fn u31_open_ref_of_a_checkpoint_directory_returns_it() {
+    // D-51: a `File` naming a directory is a checkpoint, loaded by path.
+    let dir = local_models("u31_open_ref_of_a_checkpoint_directory_returns_it").join("tiny");
+    let bytes = open_ref(&ModelRef::File(dir.clone()), None, None).unwrap();
+    assert_eq!(bytes, ModelBytes::Checkpoint(dir.clone()));
+    assert_eq!(bytes.checkpoint_dir(), Some(dir.as_path()));
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+}
+
+#[test]
+fn u31_local_dir_fetch_of_a_checkpoint_returns_its_directory() {
+    // D-51: a local checkpoint loads from its directory; one progress report of the two
+    // files' size (Q-38, Q-59).
+    let dir = local_models("u31_local_dir_fetch_of_a_checkpoint_returns_its_directory");
     let source = LocalDir { root: dir.clone() };
     let entries = source.list("").unwrap();
     let tiny = entries
         .iter()
         .find(|e| e.kind == EntryKind::Checkpoint)
         .unwrap();
-    let cancel = AtomicBool::new(false);
-    let err = source.fetch(tiny, &mut |_| {}, &cancel).unwrap_err();
-    assert_eq!(err.code(), "E-IO");
-    let err = open_ref(&ModelRef::File(dir.join("tiny")), None, None).unwrap_err();
-    assert_eq!(err.code(), "E-IO");
+    let (r, bytes, reports) = fetch_all(&source, tiny);
+    let tiny_dir = dir.join("tiny");
+    assert_eq!(r, ModelRef::File(tiny_dir.clone()));
+    assert_eq!(bytes, ModelBytes::Checkpoint(tiny_dir.clone()));
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    let size = ["manifest.json", "params.safetensors"]
+        .iter()
+        .map(|f| fs::metadata(tiny_dir.join(f)).unwrap().len())
+        .sum::<u64>();
+    assert_eq!(
+        reports,
+        vec![Progress {
+            done: size,
+            total: Some(size)
+        }]
+    );
+    // A cancelled fetch is E-IO, as for a file (Q-47).
+    let cancel = AtomicBool::new(true);
+    assert_eq!(
+        source.fetch(tiny, &mut |_| {}, &cancel).unwrap_err().code(),
+        "E-IO"
+    );
 }
 
 /// The cache directory of `test`'s client.
@@ -563,7 +610,7 @@ fn u31_http_index_fetch_downloads_and_checks_the_index_digest() {
         let whole = fs::read(listing_models().join(file)).unwrap();
         let (r, bytes, reports) = fetch_all(&source, entry);
         assert_eq!(r, ModelRef::Http(Url::parse(&entry.location).unwrap()));
-        assert_eq!(&*bytes, whole.as_slice());
+        assert_eq!(bytes.as_bytes(), Some(whole.as_slice()));
         assert_eq!(reports.last().map(|p| p.done), Some(whole.len() as u64));
     }
     // A digest that disagrees is E-NET-CHECKSUM (§1.5).
@@ -572,15 +619,191 @@ fn u31_http_index_fetch_downloads_and_checks_the_index_digest() {
     let cancel = AtomicBool::new(false);
     let err = source.fetch(&wrong, &mut |_| {}, &cancel).unwrap_err();
     assert_eq!(err.code(), "E-NET-CHECKSUM");
-    // The index's checkpoint is refused (D-51; replaced in #77).
-    let tiny = entries
-        .iter()
+}
+
+/// The index's checkpoint entry `tiny` over the fixture server.
+fn http_checkpoint(source: &HttpIndex) -> Entry {
+    source
+        .list("")
+        .unwrap()
+        .into_iter()
         .find(|e| e.kind == EntryKind::Checkpoint)
-        .unwrap();
+        .expect("the index names the checkpoint")
+}
+
+#[test]
+fn u31_http_index_fetch_of_a_checkpoint_fills_one_cache_entry() {
+    // D-51: `manifest.json` and `params.safetensors` download into one cache entry, keyed by
+    // the directory's URL and holding each under its own name (Q-42), which `fetch` returns
+    // as `File(<entry dir>)` and `Checkpoint(<entry dir>)`.
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let source = HttpIndex::new(base.clone(), ListingFlavor::Index, client("checkpoint"));
+    let tiny = http_checkpoint(&source);
+    let before = server.requests().len();
+    let (r, bytes, reports) = fetch_all(&source, &tiny);
+    let dir = bytes.checkpoint_dir().expect("a checkpoint").to_path_buf();
+    assert_eq!(r, ModelRef::File(dir.clone()));
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    // The entry of the directory URL, trailing slash included (Q-42).
+    let key = ftgsxr_core::hex(&ftgsxr_core::sha256(format!("{base}tiny/").as_bytes()));
     assert_eq!(
-        source.fetch(tiny, &mut |_| {}, &cancel).unwrap_err().code(),
-        "E-IO"
+        dir.canonicalize().unwrap(),
+        cache_dir("checkpoint")
+            .join("http")
+            .join(key)
+            .canonicalize()
+            .unwrap()
     );
+    for name in ["manifest.json", "params.safetensors"] {
+        let served = fs::read(listing_models().join("tiny").join(name)).unwrap();
+        assert_eq!(fs::read(dir.join(name)).unwrap(), served, "{name}");
+        assert!(dir.join(format!("{name}.meta.json")).is_file(), "{name}");
+    }
+    // The manifest first, then the params, each once.
+    let base_path = "/listing/models/tiny/";
+    assert_eq!(
+        paths(&server)[before..].to_vec(),
+        vec![
+            format!("{base_path}manifest.json"),
+            format!("{base_path}params.safetensors")
+        ]
+    );
+    // Progress is cumulative over both files and ends at their sum (Q-59).
+    let size = tiny.size.expect("the index gives the checkpoint's size");
+    assert_eq!(
+        reports.last(),
+        Some(&Progress {
+            done: size,
+            total: Some(size)
+        })
+    );
+    assert!(reports.windows(2).all(|w| w[0].done <= w[1].done));
+
+    // A second fetch reuses the entry: the manifest is revalidated (a 304), and the params,
+    // whose recorded digest equals the manifest's, are reused without a request (Q-43).
+    let before = server.requests().len();
+    let (again, bytes, reports) = fetch_all(&source, &tiny);
+    assert_eq!(again, ModelRef::File(dir.clone()));
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    let seen: Vec<(String, u16)> = server.requests()[before..]
+        .iter()
+        .map(|r| (r.path.clone(), r.status))
+        .collect();
+    assert_eq!(seen, vec![(format!("{base_path}manifest.json"), 304)]);
+    assert_eq!(reports.last().map(|p| p.done), Some(size));
+}
+
+#[test]
+fn u31_http_checkpoint_params_against_the_manifest_digest() {
+    // Q-57: `params.safetensors` downloads against the manifest's digest for it. The
+    // fixture server serves the committed files as they are, so the cached manifest's
+    // digest is doctored instead (its size kept, so the server's 304 keeps it, Q-42): the
+    // params then disagree with it, which is E-NET-CHECKSUM, the download discarded.
+    let server = serve_fixtures();
+    let source = HttpIndex::new(
+        listing_base(&server),
+        ListingFlavor::Index,
+        client("checkpoint-digest"),
+    );
+    let tiny = http_checkpoint(&source);
+    let (_, bytes, _) = fetch_all(&source, &tiny);
+    let dir = bytes.checkpoint_dir().unwrap().to_path_buf();
+    let manifest = dir.join("manifest.json");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let digest = "5456b847ca9238c2c9f915e0ab034014ffe052842f0581c4e9c6e103ada2ed87";
+    assert!(text.contains(digest), "the manifest's params digest");
+    fs::write(&manifest, text.replace(digest, &"0".repeat(64))).unwrap();
+
+    let before = server.requests().len();
+    let cancel = AtomicBool::new(false);
+    let err = source.fetch(&tiny, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-CHECKSUM");
+    let seen: Vec<(String, u16)> = server.requests()[before..]
+        .iter()
+        .map(|r| (r.path.clone(), r.status))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("/listing/models/tiny/manifest.json".to_owned(), 304),
+            ("/listing/models/tiny/params.safetensors".to_owned(), 200),
+        ]
+    );
+    assert!(!dir.join("params.safetensors.part").exists());
+    assert!(!dir.join("params.safetensors.meta.part.json").exists());
+}
+
+#[test]
+fn u31_http_checkpoint_params_against_the_index_digest() {
+    // Q-57: an index `sha256` on a checkpoint entry is the params digest (§1.5: the
+    // downloaded file must match it) and wins over the manifest's. The committed index
+    // gives none, so the entry is given one here.
+    let server = serve_fixtures();
+    let source = HttpIndex::new(
+        listing_base(&server),
+        ListingFlavor::Index,
+        client("checkpoint-index-digest"),
+    );
+    let mut tiny = http_checkpoint(&source);
+    let cancel = AtomicBool::new(false);
+    tiny.sha256 = Some("0".repeat(64));
+    let err = source.fetch(&tiny, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-CHECKSUM");
+    let params = fs::read(listing_models().join("tiny/params.safetensors")).unwrap();
+    tiny.sha256 = Some(ftgsxr_core::hex(&ftgsxr_core::sha256(&params)).to_uppercase());
+    let (_, bytes, _) = fetch_all(&source, &tiny);
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+}
+
+/// The bytes of every file in a cache entry.
+fn entry_bytes(entry: &Path) -> u64 {
+    fs::read_dir(entry)
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len())
+        .sum()
+}
+
+#[test]
+fn u31_prune_never_evicts_a_checkpoint_in_use() {
+    // U-28's "never a loaded one" for a checkpoint's entry (Q-4, Q-56): the entry is kept
+    // while its directory, or a file in it, is in use, and it is ordered by the latest
+    // `fetched_at` of its members (Q-42).
+    let server = serve_fixtures();
+    let test = "checkpoint-prune";
+    let http = client(test);
+    let source = HttpIndex::new(listing_base(&server), ListingFlavor::Index, http.clone());
+    let entries = source.list("").unwrap();
+    let tiny = http_checkpoint(&source);
+    let probe = entries.iter().find(|e| e.name == "probe p1").unwrap();
+    let (_, bytes, _) = fetch_all(&source, &tiny);
+    let dir = bytes.checkpoint_dir().unwrap().to_path_buf();
+    let probe_url = Url::parse(&probe.location).unwrap();
+    let cancel = AtomicBool::new(false);
+    let probe_file = http
+        .download(&probe_url, None, &mut |_| {}, &cancel)
+        .unwrap();
+    let probe_dir = probe_file.parent().unwrap().to_path_buf();
+    // The checkpoint is used again (both members' fetch times refreshed, Q-42, Q-43), so the
+    // probe is now the least recently used.
+    fetch_all(&source, &tiny);
+    let (dir_bytes, probe_bytes) = (entry_bytes(&dir), entry_bytes(&probe_dir));
+
+    // Room for the checkpoint alone: the probe goes, the checkpoint stays.
+    let roomy = HttpClient::new(cache_dir(test), TlsRoots::WebPki, dir_bytes).unwrap();
+    assert_eq!(roomy.prune().unwrap(), probe_bytes);
+    assert!(dir.join("params.safetensors").exists() && !probe_file.exists());
+
+    // No room at all: kept while the entry directory, or one of its files, is in use.
+    let none = HttpClient::new(cache_dir(test), TlsRoots::WebPki, 0).unwrap();
+    none.set_in_use(std::slice::from_ref(&dir));
+    assert_eq!(none.prune().unwrap(), 0, "the directory in use");
+    none.set_in_use(&[dir.join("params.safetensors")]);
+    assert_eq!(none.prune().unwrap(), 0, "a member in use");
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    none.set_in_use(&[]);
+    assert_eq!(none.prune().unwrap(), dir_bytes);
+    assert!(!dir.exists());
 }
 
 /// The request targets of `fetch`ing `entry` from `source`, which must succeed; the bytes
@@ -593,7 +816,7 @@ fn fetch_paths(
 ) -> Vec<String> {
     let before = server.requests().len();
     let (_, bytes, _) = fetch_all(source, entry);
-    assert_eq!(&*bytes, fs::read(file).unwrap().as_slice());
+    assert_eq!(bytes.as_bytes(), Some(fs::read(file).unwrap().as_slice()));
     paths(server)[before..].to_vec()
 }
 
@@ -858,8 +1081,11 @@ fn u31_document_source_over_a_stub_provider() {
         let file = StubProvider::file_of(&entry.location).unwrap();
         let (r, bytes, reports) = fetch_all(source.as_ref(), entry);
         assert_eq!(r, ModelRef::Document(entry.location.clone()));
-        assert_eq!(&*bytes, fs::read(file).unwrap().as_slice());
-        assert_eq!(reports.last().map(|p| p.done), Some(bytes.len() as u64));
+        assert_eq!(bytes.as_bytes(), Some(fs::read(file).unwrap().as_slice()));
+        assert_eq!(
+            reports.last().map(|p| p.done),
+            bytes.as_bytes().map(|b| b.len() as u64)
+        );
     }
     // A subdirectory is a tree URI the provider is asked for (Q-47).
     assert!(source.list("content://stub/other").is_err());
@@ -890,7 +1116,10 @@ fn u31_open_ref_reads_every_model_ref() {
         assert_eq!(bytes, ModelBytes::Owned(whole.clone()), "{r:?}");
     }
     // Each reference needs only its own reader.
-    assert_eq!(open_ref(&file, None, None).unwrap().len(), whole.len());
+    assert_eq!(
+        open_ref(&file, None, None).unwrap().as_bytes(),
+        Some(whole.as_slice())
+    );
     assert_eq!(open_ref(&web, None, None).unwrap_err().code(), "E-IO");
     assert_eq!(
         open_ref(&document, Some(&http), None).unwrap_err().code(),
