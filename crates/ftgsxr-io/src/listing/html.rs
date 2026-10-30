@@ -186,7 +186,7 @@ fn decode_references(text: &str) -> String {
 
 /// `segment` with its `%XX` escapes decoded, as UTF-8 (invalid sequences replaced); a `%`
 /// not followed by two hexadecimal digits is kept, and `+` stays a plus in a path.
-fn percent_decode(segment: &str) -> String {
+pub(crate) fn percent_decode(segment: &str) -> String {
     let bytes = segment.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
