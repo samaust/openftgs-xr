@@ -586,9 +586,13 @@ mod tests {
         let arrays = std::sync::Arc::new(patterned_arrays(n));
         let index = persistent_index(n);
         let conv = RenderConventions::default();
-        let one = static_bytes(&arrays);
+        // `patterned_arrays(64)`: float32 position, time center and duration take
+        // 12 + 4 + 4 bytes a row; velocity, scale and sh 6 a row plus 2, rotation 8 a row,
+        // opacity 2 a row plus 2: 48 · 64 + 8 = 3 080 bytes.
+        let one = 3080;
+        let limit = one * 3 / 2;
         dev.set_memory_budget(MemoryBudget {
-            bytes: one * 3 / 2,
+            bytes: limit,
             source: BudgetSource::Tier,
         });
         let begin = |dev: &SplatDevice| {
@@ -604,7 +608,7 @@ mod tests {
         assert_eq!(dev.model_bytes_in_use(), one);
         match begin(&dev) {
             Err(RenderError::Budget { needed, budget }) => {
-                assert_eq!((needed, budget), (one, one - one / 2));
+                assert_eq!((needed, budget), (one, limit - one));
             }
             Err(e) => panic!("expected E-MEM-BUDGET, got {e:?}"),
             Ok(_) => panic!("two uploads over the budget together both began"),
