@@ -654,6 +654,27 @@ fn u31_http_index_fetch_refuses_a_wrong_sha256sums_digest() {
     assert_eq!(held, Vec::<PathBuf>::new());
 }
 
+#[test]
+fn u31_http_index_fetch_stops_on_a_sidecar_failure() {
+    // Q-47: a sidecar answering neither 2xx nor 404 is E-NET-FETCH, and the model is not
+    // asked for (the fixture server's chosen status, Q-55).
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    server.serve_listing(ServedListing::NginxJson);
+    let source = HttpIndex::new(base, ListingFlavor::NginxJson, client("sidecar-failure"));
+    let entries = source.list("").unwrap();
+    let snapshot = entries.iter().find(|e| e.name == "snapshot").unwrap();
+    server.status_for("/listing/models/snapshot.sha256", 500);
+    let before = server.requests().len();
+    let cancel = AtomicBool::new(false);
+    let err = source.fetch(snapshot, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-FETCH");
+    assert_eq!(
+        paths(&server)[before..].to_vec(),
+        vec!["/listing/models/snapshot.sha256".to_owned()]
+    );
+}
+
 /// Every file under `dir`, at any depth; none when `dir` does not exist.
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let Ok(read) = fs::read_dir(dir) else {
