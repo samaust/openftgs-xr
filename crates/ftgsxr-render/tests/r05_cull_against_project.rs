@@ -3,21 +3,79 @@
 //! R-5, the cull pass against `project` (§3.2; §1.4 stage 2, E1–E3, E5, E6, D-10): the
 //! visible set, μ′, the conics, the radii and the depths of the per-view records against
 //! the float64 oracle `ftgsxr_core::project`, and the 1/255 bound (Q-28, owner comment on
-//! PRD #76), read through the frame-buffer read back (Q-69).
+//! PRD #76), read through the frame-buffer read back (Q-69). The random views look at the
+//! model from inside it and from outside it, with the tolerances scaled to float32's
+//! propagation (Q-82).
 
 mod cull_support;
 
 use cull_support::{
     Rng, draw, look_at, oracle, passes, prepare, row_at, sort_pose, test_pose, upload, view,
 };
-use ftgsxr_core::{Pose, Projected, UVec2, Vec3, effective_opacity, temporal_opacity};
+use ftgsxr_core::{
+    Camera, DMat3, DVec3, Mat3, Pose, Projected, RenderConventions, UVec2, Vec3, effective_opacity,
+    temporal_opacity,
+};
 use ftgsxr_render::{FrameBuffers, QualityTier, RecordView, RenderMode};
 use ftgsxr_testkit::{gpu_context, random_model};
 
-/// R-5's tolerances.
-const MEAN_PX: f32 = 1e-3;
+/// R-5's tolerances. μ′ takes `MEAN_PX` plus float32's propagation
+/// `MEAN_ROUNDING`·f·2⁻²³(‖R_w μ^S‖ + ‖t_w‖)/z_c, the rounding of x_c = R_w μ^S + t_w's
+/// operands, which nearly cancel inside the model, magnified by f/z_c; and a radius whose
+/// pre-ceiling value lies within `CEIL_REL` relative of an integer may differ by 1 (Q-82).
+// Q-82
+const MEAN_PX: f64 = 1e-3;
+// Q-82
+const MEAN_ROUNDING: f64 = 8.0;
 const CONIC_REL: f32 = 1e-4;
 const DEPTH: f32 = 1e-5;
+// Q-82
+const CEIL_REL: f64 = 1e-5;
+
+/// The oracle's quantities that `Projected` does not carry, from the same float64 path as
+/// `project` (E6): the camera-space depth z_c, the magnitude ‖R_w μ^S‖ + ‖t_w‖ of x_c's
+/// operands, and the radii before their ceiling, extent·√Σ′₀₀ and extent·√Σ′₁₁ (Q-82).
+// Q-82
+fn pre_ceiling(
+    mean: Vec3,
+    cov: Mat3,
+    sigma_eff: f32,
+    cam: &Camera,
+    conv: &RenderConventions,
+) -> (f64, f64, [f64; 2]) {
+    let k = cam.k;
+    let (fx, fy, cx, cy) = (k.x_axis.x, k.y_axis.y, k.z_axis.x, k.z_axis.y);
+    let (w, h) = (f64::from(cam.width), f64::from(cam.height));
+    let r_w = DMat3::from_mat4(cam.world_to_camera);
+    let (rotated, t_w) = (r_w * mean.as_dvec3(), cam.world_to_camera.w_axis.truncate());
+    let x_c = rotated + t_w;
+    let z = x_c.z;
+    let (u, v) = (x_c.x / z, x_c.y / z);
+    let m = f64::from(conv.jacobian_clamp_margin);
+    let (mx, my) = (m * w / fx, m * h / fy);
+    let tx = u.clamp(-(cx / fx + mx), (w - cx) / fx + mx);
+    let ty = v.clamp(-(cy / fy + my), (h - cy) / fy + my);
+    let j0 = DVec3::new(fx / z, 0.0, -fx * tx / z);
+    let j1 = DVec3::new(0.0, fy / z, -fy * ty / z);
+    let sigma_c = r_w * cov.as_dmat3() * r_w.transpose();
+    let eps = f64::from(conv.eps2d);
+    let s00 = j0.dot(sigma_c * j0) + eps;
+    let s11 = j1.dot(sigma_c * j1) + eps;
+    let extent = (2.0 * (f64::from(sigma_eff) / f64::from(conv.alpha_skip)).ln())
+        .sqrt()
+        .min(f64::from(conv.screen_extent_max));
+    let operands = rotated.length() + t_w.length();
+    (z, operands, [extent * s00.sqrt(), extent * s11.sqrt()])
+}
+
+/// Q-82's radius test: exact, or within 1 where the pre-ceiling value lies within
+/// `CEIL_REL` relative of a positive integer, where float32 rounding can flip the ceiling.
+// Q-82
+fn radius_ok(got: u32, oracle: u32, pre: f64) -> bool {
+    let n = pre.round();
+    let near_integer = n > 0.0 && (pre - n).abs() <= CEIL_REL * n;
+    got == oracle || (near_integer && got.abs_diff(oracle) <= 1)
+}
 
 /// Pairs each oracle entry with the GPU record of the same depth (within `DEPTH`) and the
 /// nearest μ′: records carry no row, and the slots' order is the atomics'.
@@ -49,6 +107,12 @@ fn pair(
         .collect()
 }
 
+/// R-5 on 10⁴ random primitives and 20 random views, ten from inside the model and ten from
+/// outside it (Q-82): the visible set equal; μ′ within 10⁻³ px plus
+/// 8·f·2⁻²³(‖R_w μ^S‖ + ‖t_w‖)/z_c per axis, conics 10⁻⁴ relative, depths 10⁻⁵, radii
+/// exact but within 1 where the oracle's pre-ceiling value is within 10⁻⁵ relative of an
+/// integer.
+// Q-82
 #[test]
 #[ignore = "gpu"]
 fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
@@ -64,12 +128,17 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
     let mut failures = Vec::new();
     let mut compared = 0usize;
     for v in 0..20 {
-        // Views from outside the model, 3–6 m from its center: sizes, focal lengths and
-        // principal points vary, and τ includes times outside [τ₀, τ₁]. Views from inside
-        // the model (0.3–1.2 m) are left out: there float32 meets R-5's tolerances only
-        // up to its own rounding (a μ′ off by 2·10⁻³ px at z_c = 0.04, a radius whose
-        // pre-ceiling value lies within float32 rounding of an integer), Q-82.
-        let dist = rng.range(3.0, 6.0) as f32;
+        // Even views from inside the model, 0.3–1.2 m from its center, odd views from
+        // outside it, 3–6 m: sizes, focal lengths and principal points vary, and τ
+        // includes times outside [τ₀, τ₁] (Q-82).
+        // Q-82
+        let inside = v % 2 == 0;
+        let side = if inside { "inside" } else { "outside" };
+        let dist = if inside {
+            rng.range(0.3, 1.2)
+        } else {
+            rng.range(3.0, 6.0)
+        } as f32;
         let eye = center + rng.unit() * dist;
         let target = center + rng.unit() * rng.range(0.0, 0.5) as f32;
         let size = UVec2::new(rng.range(64.0, 400.0) as u32, rng.range(48.0, 300.0) as u32);
@@ -94,7 +163,7 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
         assert!(!got.overflow, "view {v}: C = N cannot overflow");
         if got.visible_splats as usize != cpu.len() {
             failures.push(format!(
-                "view {v} (τ = {tau}): {} records, the oracle keeps {}",
+                "view {v} ({side}, τ = {tau}): {} records, the oracle keeps {}",
                 got.visible_splats,
                 cpu.len()
             ));
@@ -103,19 +172,34 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
             compared += 1;
             let Some(r) = rec else {
                 failures.push(format!(
-                    "view {v}: row {row} kept by the oracle has no record: {p:?}"
+                    "view {v} ({side}): row {row} kept by the oracle has no record: {p:?}"
                 ));
                 continue;
             };
+            // Q-82: the tolerances scaled to float32's propagation.
+            let (sigma_eff, mu_s, cov) = row_at(&model, row, &pose, tau);
+            let (z_c, operands, pre) = pre_ceiling(mu_s, cov, sigma_eff, &cam, &model.conventions);
+            // The mirror must ceil to the oracle's radii, else it has drifted from `project`.
+            assert_eq!(
+                pre.map(|r| r.ceil() as u32),
+                p.radii,
+                "view {v}: row {row}: the test's pre-ceiling radii drifted from project"
+            );
+            let spread = MEAN_ROUNDING * 2f64.powi(-23) * operands / z_c;
+            let focal = [cam.k.x_axis.x, cam.k.y_axis.y];
+            let mean_ok = (0..2).all(|k| {
+                (f64::from(r.mean_px[k]) - f64::from(p.mean[k])).abs()
+                    <= MEAN_PX + focal[k] * spread
+            });
             let scale = p.conic.iter().fold(0f32, |m, c| m.max(c.abs()));
             let conic_ok = (0..3).all(|k| (r.conic[k] - p.conic[k]).abs() <= CONIC_REL * scale);
             let radii = [r.half_extent.x as u32, r.half_extent.y as u32];
-            if (r.mean_px - p.mean).abs().max_element() > MEAN_PX
-                || !conic_ok
-                || radii != p.radii
-                || (r.depth - p.depth).abs() > DEPTH
-            {
-                failures.push(format!("view {v}: row {row}: oracle {p:?}, record {r:?}"));
+            let radii_ok = (0..2).all(|k| radius_ok(radii[k], p.radii[k], pre[k]));
+            if !mean_ok || !conic_ok || !radii_ok || (r.depth - p.depth).abs() > DEPTH {
+                failures.push(format!(
+                    "view {v} ({side}): row {row}: oracle {p:?}, pre-ceiling {pre:?}, \
+                     record {r:?}"
+                ));
             }
         }
     }
