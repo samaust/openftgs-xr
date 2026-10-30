@@ -15,11 +15,16 @@
 // The per-view record (`cull.wgsl`, 12 words): μ′ (0–1), the conic (a, b, c) (2–4), z_c (5),
 // the radii (6–7), c·σ_eff and σ_eff as four half floats (8–9), the instance (10), 0 (11).
 
-// E7's constants of one instance's model (D-39).
+// E7's constants of one instance's model (D-39), then the centers' (`centers.wgsl`, read
+// by stage 6 only).
 struct InstanceConstants {
     alpha_max: f32,
     alpha_skip: f32,
     pixel_center_offset: f32,
+    colormap: u32,
+    pixel_radius: f32,
+    inv_span: f32,
+    inv_speed: f32,
     pad: f32,
 }
 

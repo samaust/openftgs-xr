@@ -20,3 +20,15 @@ openftgs (https://github.com/samaust/openftgs), commit 9362202,
 tests/real_sh.py
 Copyright 2026 Samuel Austin
 Licensed under the Apache License, Version 2.0.
+
+Adapted data
+------------
+
+crates/ftgsxr-render/src/gpu/shaders/centers.wgsl's VIRIDIS table holds 17 entries of the viridis
+colormap (Stéfan van der Walt and Nathaniel Smith), taken from matplotlib's colormap data, as its
+comment says. Change: 17 of the 256 entries, at indices round(k · 255 / 16), interpolated linearly.
+
+matplotlib (https://github.com/matplotlib/matplotlib), tag v3.9.2,
+lib/matplotlib/_cm_listed.py
+Copyright (c) 2012- Matplotlib Development Team; All Rights Reserved
+Licensed under the matplotlib license agreement (LICENSE/LICENSE in that repository).
