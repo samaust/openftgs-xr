@@ -6,7 +6,7 @@
 
 use ftgsxr_core::{GpuLayoutOptions, HalfFields, TemporalIndex, pack_for_gpu};
 use ftgsxr_render::{BudgetSource, GpuModel, MemoryBudget, RenderError, SplatDevice};
-use ftgsxr_testkit::{gpu_context, random_model};
+use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 const GIB: f64 = (1u64 << 30) as f64;
 
@@ -137,4 +137,68 @@ fn gpu_collector_fails_the_test_that_made_an_invalid_call() {
     let dev = gpu_context();
     invalid_call(&dev);
     drop(dev);
+}
+
+/// A call only the Vulkan validation layer catches, made past wgpu's own validation on the
+/// device's raw Vulkan handle: `vkCreateBuffer` with a zero `VkBufferCreateInfo` (size 0 and
+/// no usage, VUID-VkBufferCreateInfo-size-00912). A buffer the driver still makes is
+/// destroyed at once.
+fn call_only_the_layer_catches(dev: &SplatDevice) {
+    // SAFETY: `as_hal`'s guard is held only for this block and nothing wgpu owns is
+    // destroyed or mutated; `vkCreateBuffer` takes a fully initialized (zeroed) create info
+    // with no `pNext` chain and the device wgpu keeps alive for the guard's lifetime, and a
+    // buffer it returns is destroyed on that device before the guard is dropped, unused.
+    unsafe {
+        let hal = dev
+            .device()
+            .as_hal::<wgpu::hal::api::Vulkan>()
+            .expect("a Vulkan device");
+        let raw = hal.raw_device();
+        if let Ok(buffer) = raw.create_buffer(&Default::default(), None) {
+            raw.destroy_buffer(buffer, None);
+        }
+    }
+}
+
+// The layers are a debug build's (§1.13).
+#[cfg(debug_assertions)]
+#[test]
+#[ignore = "gpu"]
+fn gpu_validation_layer_is_active_and_reports_a_call_only_it_catches() {
+    // R-16's evidence that the layers are on in the same run (#121): the Khronos layer
+    // reports itself active when the instance is made, and it reports a call that wgpu's
+    // own validation never sees, which the device's collector therefore never gets.
+    let layer = layer_messages();
+    let dev = gpu_context();
+    assert!(
+        layer.take_active() >= 1,
+        "the Khronos validation layer did not report itself active"
+    );
+    assert!(layer.take().is_empty());
+    call_only_the_layer_catches(&dev);
+    let messages = layer.take();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.starts_with("ERROR") && m.contains("VUID-VkBufferCreateInfo-size-00912")),
+        "{messages:?}"
+    );
+    assert!(
+        dev.take_validation_messages().is_empty(),
+        "wgpu saw nothing"
+    );
+    assert!(layer.take().is_empty(), "taking clears");
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[ignore = "gpu"]
+#[should_panic(expected = "Vulkan validation layer message")]
+fn gpu_validation_layer_message_fails_the_test() {
+    // §1.13: the guard panics when dropped with a layer message nobody took (Q-T121.1).
+    let layer = layer_messages();
+    let dev = gpu_context();
+    call_only_the_layer_catches(&dev);
+    drop(dev);
+    drop(layer);
 }
