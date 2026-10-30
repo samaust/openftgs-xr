@@ -105,9 +105,9 @@ pub fn parse_html_listing(body: &str, base: &Url) -> Result<Vec<Entry>, IoError>
 /// says `format` `ftgs-if` (`Exchange`; the rest of the header is left to `info` and
 /// loading, so a broken `ftgs-if` file is listed), the directories whose `manifest.json`
 /// has `format` `ftgs-checkpoint` (`Checkpoint`) and the `*.ply` files (`Ply`), sorted by
-/// file name, dot-names skipped. `location` is the entry's path, `size` the file's size (a checkpoint's
-/// `manifest.json` and `params.safetensors` together). An entry that cannot be read is
-/// skipped; a `path` that cannot be listed is E-IO (Q-38).
+/// file name, dot-names skipped. `location` is the entry's path, `size` the file's size (a
+/// checkpoint's `manifest.json` and `params.safetensors` together). An entry that cannot be
+/// read is skipped; a `path` that cannot be listed is E-IO (Q-38).
 // Q-38
 pub fn list_dir(path: &Path) -> Result<Vec<Entry>, IoError> {
     local::list(path)

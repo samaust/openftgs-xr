@@ -105,20 +105,12 @@ pub(crate) fn checked_header_len(
 /// checked: `info` and loading report a broken file with its E-FILE code (Q-38).
 // Q-38
 fn is_exchange(path: &Path, len: u64) -> bool {
-    let Ok(mut file) = File::open(path) else {
+    let Some(header) = File::open(path)
+        .ok()
+        .and_then(|mut file| read_header(&mut file, len).ok())
+    else {
         return false;
     };
-    let mut prefix = [0u8; SAFETENSORS_PREFIX];
-    if file.read_exact(&mut prefix).is_err() {
-        return false;
-    }
-    let Ok(n) = checked_header_len(&prefix, len) else {
-        return false;
-    };
-    let mut header = vec![0u8; n as usize];
-    if file.read_exact(&mut header).is_err() {
-        return false;
-    }
     serde_json::from_slice::<Value>(&header).is_ok_and(|header| {
         header
             .get("__metadata__")
@@ -134,12 +126,20 @@ fn is_exchange(path: &Path, len: u64) -> bool {
 /// `MAX_HEADER` is E-FILE-FORMAT, a failed read E-IO.
 // Q-33
 pub(crate) fn header_info(reader: &mut impl Read, len: u64) -> Result<ModelInfo, IoError> {
+    let header = read_header(reader, len)?;
+    Ok(read_info(&header, len)?)
+}
+
+/// The header bytes of the safetensors file `reader` starts, a file of `len` bytes: its
+/// 8-byte prefix, then the header it gives (`checked_header_len`); nothing past the header
+/// is read. A failed read is E-IO.
+fn read_header(reader: &mut impl Read, len: u64) -> Result<Vec<u8>, IoError> {
     let mut prefix = [0u8; SAFETENSORS_PREFIX];
     reader.read_exact(&mut prefix)?;
     let n = checked_header_len(&prefix, len)?;
     let mut header = vec![0u8; n as usize];
     reader.read_exact(&mut header)?;
-    Ok(read_info(&header, len)?)
+    Ok(header)
 }
 
 /// The size of the checkpoint directory `dir` (its manifest and parameters files, Q-34),
