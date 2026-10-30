@@ -72,7 +72,8 @@ pub enum ListingFlavor {
 
 /// Parses an `ftgsxr-index` v1 manifest (§1.11) fetched from `base`: one entry per element
 /// of `entries`, in order, `location`, `thumbnail`, `audio` and `scene` resolved against
-/// `base`, `sha256` lowercase (Q-36). A body that is not JSON is E-JSON; one that breaks
+/// `base`, an `ftgs-checkpoint` entry's location given a trailing `/` when its path has
+/// none (its query and fragment kept), `sha256` lowercase (Q-36). A body that is not JSON is E-JSON; one that breaks
 /// the schema (format, major version, an entry's keys and types) is E-SCENE-FORMAT; unknown
 /// keys are ignored (Q-37).
 // Q-36, Q-37

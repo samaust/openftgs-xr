@@ -32,10 +32,19 @@ fn optional_string<'a>(
 }
 
 /// `path` resolved against `base`.
-fn resolve(base: &Url, path: &str) -> Result<String, IoError> {
+fn resolve(base: &Url, path: &str) -> Result<Url, IoError> {
     base.join(path)
-        .map(String::from)
         .map_err(|e| schema(base, format!("path {path:?} does not resolve ({e})")))
+}
+
+/// `url` with a `/` ending its path, its query and fragment kept: a checkpoint is a
+/// directory, so its two files resolve inside it (Q-36).
+fn as_directory(mut url: Url) -> Url {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url
 }
 
 /// One entry of `entries`.
@@ -73,12 +82,17 @@ fn entry(value: &Value, base: &Url) -> Result<Entry, IoError> {
     };
     let linked = |key: &str| -> Result<Option<String>, IoError> {
         optional_string(map, key, base)?
-            .map(|p| resolve(base, p))
+            .map(|p| resolve(base, p).map(String::from))
             .transpose()
+    };
+    let location = resolve(base, path)?;
+    let location = match kind {
+        EntryKind::Checkpoint => as_directory(location),
+        _ => location,
     };
     Ok(Entry {
         name: name.to_owned(),
-        location: resolve(base, path)?,
+        location: location.into(),
         kind,
         size,
         mtime: None,
@@ -89,7 +103,8 @@ fn entry(value: &Value, base: &Url) -> Result<Entry, IoError> {
     })
 }
 
-/// Parses an `ftgsxr-index` v1 manifest (§1.11) fetched from `base` (Q-36, Q-37).
+/// Parses an `ftgsxr-index` v1 manifest (§1.11) fetched from `base` (Q-36, Q-37): every
+/// path resolves against `base`, and a checkpoint's location ends in `/`.
 // Q-36, Q-37
 pub(super) fn parse(body: &str, base: &Url) -> Result<Vec<Entry>, IoError> {
     let value: Value = serde_json::from_str(body)
