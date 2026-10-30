@@ -208,6 +208,11 @@ fn single(seed: u64, n: usize) -> Model {
     model
 }
 
+/// The new row of file row `i`.
+fn new_row(order: &[u32], i: usize) -> u32 {
+    order.iter().position(|&f| f as usize == i).unwrap() as u32
+}
+
 /// The float32 just below `x`.
 fn below(x: f32) -> f32 {
     f32::from_bits(x.to_bits() - 1)
@@ -231,7 +236,7 @@ fn u08_index_superset_far_from_zero() {
 
 /// Q-28: in a random model, the rows with opacity exactly α_skip, which the cull keeps
 /// at their time center (σ_eff = α_skip is not < α_skip), are persistent, so `range`
-/// visits them at every τ; a row just below α_skip, never active, is transient.
+/// visits them there; a row just below α_skip, never active, is transient.
 #[test]
 fn u08_index_row_at_the_bound_is_visited_at_its_center() {
     let mut model = random_model(21, 2_000, 0);
@@ -274,11 +279,6 @@ fn persistent_but(seed: u64, n: usize, k: usize, opacity: f32) -> Model {
     model
 }
 
-/// The new row of file row `i`.
-fn new_row(order: &[u32], i: usize) -> u32 {
-    order.iter().position(|&f| f as usize == i).unwrap() as u32
-}
-
 /// Q-28: a row at opacity = α_skip, the only row whose window does not cover the span
 /// (so w_max = 0), is persistent, so `range` visits it at its center and at
 /// c ± 2⁻¹³·duration, inside the band where σt rounds to 1 in float32 and the cull keeps
@@ -289,6 +289,10 @@ fn u08_index_row_at_the_bound_is_persistent() {
     let model = persistent_but(51, 300, k, RenderConventions::default().alpha_skip);
     let (index, order) = TemporalIndex::build(&model);
     let new = new_row(&order, k);
+    assert_eq!(
+        new, k as u32,
+        "in file order with the other persistent rows"
+    );
     let (c, d) = (model.time_center[k], model.duration[k]);
     let step = d * 2f64.powi(-13);
     assert_eq!(1.0f32, (-0.5 * (step / d) * (step / d)).exp() as f32);
@@ -386,7 +390,7 @@ fn u08_index_widened_by_the_margins() {
         .filter_map(|i| unwidened(&model, i).map(|w| (w, i)))
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .unwrap();
-    let new = order.iter().position(|&f| f as usize == i).unwrap() as u32;
+    let new = new_row(&order, i);
     let t_prime = model.time.span();
     for tau in [
         model.time_center[i] + w + 0.5e-6 * t_prime,

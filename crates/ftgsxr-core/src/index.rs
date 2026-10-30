@@ -47,8 +47,8 @@ impl TemporalIndex {
     /// their windows widened with openftgs's margins (`temporal_window`, D-10). A row with
     /// opacity ≤ α_skip has no window and adds nothing to w_max. With more than one
     /// timestamp, a row with opacity exactly α_skip is persistent all the same, in file
-    /// order with the others: the cull keeps it wherever σt rounds to 1 in float32, a band
-    /// around its center that nothing ties to w_max. A row below α_skip passes the cull at
+    /// order with the others: the cull keeps it wherever σt rounds to 1 in float32, about
+    /// |τ − time_center| < 2⁻¹²·duration, a band that nothing ties to w_max. A row below α_skip passes the cull at
     /// no τ and is transient. With a single timestamp σt ≡ 1 (D-9), so no row's activity
     /// depends on τ: every row is persistent and the permutation is the identity.
     ///
