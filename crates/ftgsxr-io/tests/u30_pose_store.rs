@@ -4,8 +4,11 @@
 //! (`ftgsxr-poses` v1, §1.5 Poses, §1.11, D-23): get, set, forget; a save and load round
 //! trip; the version rules. The shape is Q-52's, the refusals Q-53's.
 
+mod common;
+
 use std::path::PathBuf;
 
+use common::{names, utc_today};
 use ftgsxr_core::{CoreError, Pose, Preset, Quat, Vec3};
 use ftgsxr_io::{IoError, PoseStore, SavedPose};
 
@@ -243,42 +246,6 @@ fn u30_pose_store_save_refuses_what_load_would() {
     assert_eq!(store.save(&path).expect_err("E-IO").code(), "E-IO");
 }
 
-/// The names of the files in `dir`, sorted.
-fn names(dir: &std::path::Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .expect("list the test directory")
-        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
-}
-
-/// Today's UTC date as `YYYY-MM-DD`, counted day by day from 1970-01-01 (an oracle
-/// independent of the crate's date arithmetic).
-fn utc_today() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("after 1970")
-        .as_secs();
-    let (mut days, mut year) = (secs / 86_400, 1970);
-    loop {
-        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-        let len = if leap { 366 } else { 365 };
-        if days < len {
-            let february = if leap { 29 } else { 28 };
-            let months = [31, february, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-            let mut month = 0;
-            while days >= months[month] {
-                days -= months[month];
-                month += 1;
-            }
-            return format!("{year:04}-{:02}-{:02}", month + 1, days + 1);
-        }
-        days -= len;
-        year += 1;
-    }
-}
-
 /// Q-53 (#74): a `poses.json` that `load` refuses (not JSON, breaking the schema, version
 /// 2) is renamed to `poses.json.unknown-<today UTC>` with its bytes unchanged, and `load`
 /// returns the matching error, its text naming the new file; a second refusal the same
@@ -342,7 +309,9 @@ fn u30_a_pose_store_that_cannot_be_set_aside_is_io() {
     let result = PoseStore::load(&path);
     mode(0o755).expect("restore the directory");
     if names(&dir).len() == 2 {
-        return; // Privileges that ignore the mode (root): nothing to check.
+        // Privileges that ignore the mode (root) let the rename succeed.
+        eprintln!("skipped: the read-only directory did not stop the rename (running as root?)");
+        return;
     }
     assert_eq!(result.expect_err("E-IO").code(), "E-IO");
     assert_eq!(names(&dir), ["poses.json"]);

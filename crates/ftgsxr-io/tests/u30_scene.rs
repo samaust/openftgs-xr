@@ -384,7 +384,8 @@ fn u30_scene_version_rules() {
     let read = read_scene(scene_json("1", unknown_source, extra).as_bytes());
     assert_eq!(read.expect("unknown keys"), plain);
 
-    for version in ["2", "\"2.1\"", "\"2.0\"", "0"] {
+    let huge = "99999999999999999999";
+    for version in ["2", "\"2.1\"", "\"2.0\"", "0", huge, &format!("\"{huge}\"")] {
         assert_eq!(
             refusal(&scene_json(version, SOURCE, "")),
             "E-FILE-VERSION",

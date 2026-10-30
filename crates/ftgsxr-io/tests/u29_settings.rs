@@ -5,9 +5,12 @@
 //! version 2 is set aside and defaults load; the write is atomic (a temporary file
 //! renamed). Values without a §1 default follow Q-49 to Q-51.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+mod common;
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use common::{names, utc_today};
 use ftgsxr_core::LoopMode;
 use ftgsxr_io::{
     AudioSettings, CacheSettings, DesktopSettings, DisplaySettings, EnvironmentSettings,
@@ -26,16 +29,6 @@ fn scratch(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the test directory");
     dir
-}
-
-/// The names of the files in `dir`, sorted.
-fn names(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .expect("list the test directory")
-        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
 }
 
 /// U-29 defaults: every key carries the default §1 gives (§1.4, §1.6–§1.13, E12–E14),
@@ -510,45 +503,6 @@ fn u29_speed_outside_e9s_range_takes_the_default_with_a_warning() {
             warnings[0].contains("`playback.speed`"),
             "speed = {text}: {warnings:?}"
         );
-    }
-}
-
-/// Today's UTC date as `YYYY-MM-DD`, counted day by day from 1970-01-01 (an oracle
-/// independent of the crate's date arithmetic).
-fn utc_today() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("after 1970")
-        .as_secs();
-    let mut days = secs / 86_400;
-    let mut year = 1970;
-    loop {
-        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-        let len = if leap { 366 } else { 365 };
-        if days < len {
-            let months = [
-                31,
-                if leap { 29 } else { 28 },
-                31,
-                30,
-                31,
-                30,
-                31,
-                31,
-                30,
-                31,
-                30,
-                31,
-            ];
-            let mut month = 0;
-            while days >= months[month] {
-                days -= months[month];
-                month += 1;
-            }
-            return format!("{year:04}-{:02}-{:02}", month + 1, days + 1);
-        }
-        days -= len;
-        year += 1;
     }
 }
 

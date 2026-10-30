@@ -14,7 +14,7 @@ use crate::settings::{
     ENVIRONMENT_MODES, LIGHTING_MODES, LOOP_MODES, RENDER_MODES, SOURCE_KINDS, flavor_name,
     flavor_of, loop_mode_name, loop_mode_of,
 };
-use crate::util::{set_aside, version_major, write_atomic};
+use crate::util::{check_version, set_aside, write_atomic};
 use crate::{EnvironmentSettings, IoError, ManualLighting, SourceSpec};
 
 /// A scene file's `format` (§1.11).
@@ -257,15 +257,8 @@ fn parse(bytes: &[u8], format: &str) -> Result<Value, IoError> {
         Some(other) => return Err(schema("format", format!("{other}, expected {format}"))),
         None => return Err(schema("format", "missing")),
     }
-    match map.get("version").map(|v| (v, version_major(v))) {
-        Some((_, Some(1))) => Ok(doc),
-        Some((v, Some(_))) => Err(CoreError::Version(v.to_string()).into()),
-        Some((v, None)) => Err(schema(
-            "version",
-            format!("{v}, expected an integer or a \"major.minor\" string"),
-        )),
-        None => Err(schema("version", "missing")),
-    }
+    check_version(map.get("version"), |detail| schema("version", detail))?;
+    Ok(doc)
 }
 
 /// `v` as an object.
