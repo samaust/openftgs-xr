@@ -85,6 +85,7 @@ fn result(file: &Value, measure: &str) -> f64 {
 #[test]
 #[ignore = "gpu"]
 fn gpu_b1_with_a_model_writes_a_well_formed_file() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     // Q-67's first detecting test: B-1 writes a well-formed file; with `--model` its one
     // setup carries P-2's budget (Q-102).
     let (path, model) = tiny_model("b1", 2000, 2);
@@ -107,6 +108,7 @@ fn gpu_b1_with_a_model_writes_a_well_formed_file() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_b3_with_a_model_reports_sort_times() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let (path, _) = tiny_model("b3", 5000, 0);
     let file = run("B-3", Some(&path), "b3-out");
     assert!(result(&file, "sort_ms") > 0.0);
@@ -119,6 +121,7 @@ fn gpu_b3_with_a_model_reports_sort_times() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_b5_with_a_model_reports_its_load_time() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let (path, _) = tiny_model("b5", 3000, 2);
     let bytes = std::fs::metadata(&path).unwrap().len();
     let file = run("B-5", Some(&path), "b5-out");
@@ -136,6 +139,7 @@ fn gpu_b5_with_a_model_reports_its_load_time() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_b6_matches_the_memory_table_within_1_percent() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     // §1.12 Memory: float32 storage 76, 112, 172, 256 bytes for L = 0 … 3; half precision
     // 48, 66, 96, 138; each tier's SH cap (§1.12's table: desktop 3, quest-high 3,
     // quest-balanced 2, quest-low 1, conformance the model's L) gives the loaded L′.

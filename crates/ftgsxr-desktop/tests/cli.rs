@@ -382,14 +382,31 @@ fn bench_refuses_a_name_the_desktop_does_not_run() {
     assert_eq!(o.status.code(), Some(2));
 }
 
-/// `ftgsxr bench` with the baselines' directory `baselines` (Q-103).
+/// `ftgsxr bench` with the baselines' directory `baselines` (Q-103), under the validation
+/// layer: as R-15's run, the layer's own log (a settings file beside `baselines`) has no
+/// error or warning and, in a debug build, its status message (R-16, Q-105).
 fn bench(args: &[&str], baselines: &std::path::Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
+    let dir = baselines
+        .parent()
+        .expect("the baselines' directory has a parent");
+    let log = dir.join("validation.log");
+    let settings = layer_settings(dir, &log);
+    let o = Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
         .arg("bench")
         .args(args)
         .env("FTGSXR_BENCH_BASELINES", baselines)
+        .env("VK_LAYER_SETTINGS_PATH", &settings)
         .output()
-        .expect("the binary runs")
+        .expect("the binary runs");
+    let (active, messages) = layer_log(&log);
+    if cfg!(debug_assertions) {
+        assert!(
+            active,
+            "the Khronos validation layer did not report itself active"
+        );
+    }
+    assert!(messages.is_empty(), "{messages:#?}");
+    o
 }
 
 #[test]
