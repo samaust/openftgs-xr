@@ -41,6 +41,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), IoError> {
 /// `-2`, `-3`, … appended when that name is taken, so that the next save cannot overwrite
 /// a file the reader refused; returns the new path. E-IO, the file left as it is, when the
 /// rename fails (Q-51, Q-53).
+// Q-51, Q-53
 pub(crate) fn set_aside(path: &Path) -> Result<PathBuf, IoError> {
     let now = now_rfc3339();
     let date = now.get(..10).unwrap_or(&now);
@@ -60,6 +61,7 @@ pub(crate) fn set_aside(path: &Path) -> Result<PathBuf, IoError> {
 /// version: a non-negative JSON integer, or a `"major[.minor]"` string of decimal parts
 /// without leading zeros. `None` when it is neither (malformed, E-SCENE-FORMAT); a
 /// major too large for `u64` is `u64::MAX`, still not 1 (Q-37, Q-53).
+// Q-37, Q-53
 pub(crate) fn version_major(version: &Value) -> Option<u64> {
     fn decimal(part: &str) -> Option<u64> {
         let digits = !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());

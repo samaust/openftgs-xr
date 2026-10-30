@@ -231,6 +231,7 @@ fn schema(at: &str, detail: impl std::fmt::Display) -> IoError {
 }
 
 /// The refusal `error` of a file set aside as `kept`, its text naming the new file (Q-53).
+// Q-53
 fn kept_as(error: IoError, kept: &Path) -> IoError {
     let note = format!("kept as {}", kept.display());
     match error {
@@ -246,6 +247,7 @@ fn kept_as(error: IoError, kept: &Path) -> IoError {
 /// The JSON document of `bytes`, checked to be an object of `format` and major version 1
 /// (§1.11's versioning rule): E-FILE-VERSION for a well-formed `version` of another
 /// major, E-SCENE-FORMAT for a missing or malformed one, after `format` (Q-53).
+// Q-53
 fn parse(bytes: &[u8], format: &str) -> Result<Value, IoError> {
     let doc: Value = serde_json::from_slice(bytes)
         .map_err(|e| CoreError::Json(format!("the {format} file ({e})")))?;
