@@ -10,12 +10,16 @@ repository.workspace = true
 publish.workspace = true
 
 
-# Bevy's render layer (§2.1 band table); `bevy_log` for the crate's logging (§2.6).
+# Bevy's render layer (§2.1 band table): `bevy_core_pipeline` for the 3D pass the plugin
+# adapter's two render nodes run in (§2.4 Frame loop hooks); `bevy_log` for the crate's
+# logging (§2.6).
 # wgpu itself for the types Bevy 0.19.1 does not re-export (`Instance`, `Adapter`,
 # `Device`, `Queue`, `wgpu::hal`): the same pin as Bevy's, one copy in the graph (Q-73).
 [dependencies]
-bevy = { workspace = true, features = ["bevy_render", "bevy_log"] }
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log"] }
 ftgsxr-core.workspace = true
+# `ModelBytes`, the input of `load_splat_asset` (§2.1, D-51).
+ftgsxr-io.workspace = true
 wgpu = { workspace = true, features = ["vulkan", "wgsl"] }
 
 [dev-dependencies]
