@@ -11,17 +11,12 @@ use std::path::PathBuf;
 use common::{names, utc_today};
 use ftgsxr_core::{CoreError, Pose, Preset, Quat, Vec3};
 use ftgsxr_io::{IoError, PoseStore, SavedPose};
+use ftgsxr_testkit::scratch_dir;
 
 /// A fresh, empty directory of this test binary's own under the target directory.
-/// Named after this test binary and the process, so no other binary and no overlapping run
-/// in another session or worktree shares it (#94).
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("u30_pose_store-{}", std::process::id()))
-        .join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create the test directory");
-    dir
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
 }
 
 /// A model identity of 64 lowercase hex digits.

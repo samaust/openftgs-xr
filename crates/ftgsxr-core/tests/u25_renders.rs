@@ -8,19 +8,13 @@
 use std::path::PathBuf;
 
 use ftgsxr_core::{CoreError, RenderImage, read_renders, read_request, write_renders};
-use ftgsxr_testkit::fixtures_dir;
+use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 use serde_json::Value;
 
 /// A scratch directory of this test binary's own, emptied first.
-/// Named after this test binary and the process, so no other binary and no overlapping run
-/// in another session or worktree shares it (#94).
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("u25_renders-{}", std::process::id()))
-        .join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
 }
 
 /// An image whose values count up from `start` by `step`, so every pixel differs.

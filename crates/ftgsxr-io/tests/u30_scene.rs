@@ -13,17 +13,12 @@ use ftgsxr_io::{
     CameraState, ClockState, EnvironmentSettings, IoError, ListingFlavor, ManualLighting,
     SceneFile, SceneModel, SourceSpec, read_scene, write_scene,
 };
+use ftgsxr_testkit::scratch_dir;
 
 /// A fresh, empty directory of this test binary's own under the target directory.
-/// Named after this test binary and the process, so no other binary and no overlapping run
-/// in another session or worktree shares it (#94).
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("u30_scene-{}", std::process::id()))
-        .join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("create the test directory");
-    dir
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
 }
 
 /// A pose away from the identity, its rotation (x, y, z, w) a unit quaternion.
