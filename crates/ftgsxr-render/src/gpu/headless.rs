@@ -213,7 +213,10 @@ impl HeadlessRenderer {
         if gpu.frame.as_ref().is_none_or(|f| f.capacity() != capacity) {
             gpu.frame = Some(FrameBuffers::new(&gpu.dev, &self.tier, capacity));
         }
-        let frame = gpu.frame.as_ref().expect("made above");
+        let frame = gpu
+            .frame
+            .as_ref()
+            .expect("invariant: the frame buffers were made above");
         let draws: Vec<ModelDraw> = models
             .iter()
             .map(|&(id, pose)| {

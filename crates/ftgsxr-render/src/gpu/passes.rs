@@ -483,7 +483,7 @@ impl SplatPasses {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
-            .expect("encode_prepare runs before encode_draw");
+            .expect("invariant: encode_prepare runs before encode_draw (# Panics above)");
         let block = draw_view_uniform(view, self.depth_format.is_some());
         let view_buffer = self.uniform_buffer("ftgsxr draw view", &block);
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {

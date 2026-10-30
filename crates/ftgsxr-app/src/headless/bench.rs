@@ -725,7 +725,8 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
             }
         };
         let (gpu_model, loaded) = gpu.upload(model, &gpu.tier)?;
-        let capacity = u32::try_from(c).expect("at most u32::MAX rows");
+        // C = N, the rows uploaded (at most u32::MAX, `GpuModel` counts them in u32).
+        let capacity = gpu_model.n();
         let frames = FrameBuffers::new(&gpu.dev, &gpu.tier, capacity);
         let camera = orbit(model)[0].0;
         let tau = (model.time.tau0 + model.time.tau1) / 2.0;
