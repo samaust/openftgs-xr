@@ -65,11 +65,14 @@ impl Rule {
         }
     }
 
-    /// Whether `value` is more than 10 % worse than `baseline` (§3.5).
+    /// Whether `value` is more than 10 % worse than `baseline` (§3.5). A
+    /// `within_1_percent` budget (B-6) never is: it is deterministic, and its own 1 %
+    /// budget is the check (Q-103).
     fn regressed(self, value: f64, baseline: f64) -> bool {
         match self {
             Rule::AtLeast => value < 0.9 * baseline,
-            Rule::AtMost | Rule::Within1Percent => value > 1.1 * baseline,
+            Rule::AtMost => value > 1.1 * baseline,
+            Rule::Within1Percent => false,
         }
     }
 }
@@ -114,7 +117,8 @@ impl Budget {
 
 /// The budgets of `budgets` more than 10 % worse than the baseline file's budget with the
 /// same id, setup and measure, one line each (§3.5, Q-103). A budget the baseline
-/// lacks is not compared.
+/// lacks is not compared, nor is a `within_1_percent` budget (B-6), whose own budget is
+/// the check.
 pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
     let old = baseline
         .get("budgets")
@@ -147,13 +151,50 @@ pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
         .collect()
 }
 
+/// `compare` against a baseline of the run's `profile` and `machine.gpu` only (Q-103):
+/// a baseline with another is not compared, and the error is the note saying which
+/// field differs.
+// Q-103
+pub(crate) fn compare_against(
+    budgets: &[Budget],
+    profile: &str,
+    gpu: &str,
+    baseline: &Json,
+) -> Result<Vec<String>, String> {
+    let fields = [
+        ("profile", profile, baseline.get("profile")),
+        (
+            "machine.gpu",
+            gpu,
+            baseline.get("machine").and_then(|m| m.get("gpu")),
+        ),
+    ];
+    let differ: Vec<String> = fields
+        .iter()
+        .filter_map(|&(field, ours, theirs)| {
+            let theirs = theirs.and_then(Json::as_str);
+            (theirs != Some(ours))
+                .then(|| format!("{field} {ours} against {}", theirs.unwrap_or("none")))
+        })
+        .collect();
+    if differ.is_empty() {
+        Ok(compare(budgets, baseline))
+    } else {
+        Err(format!(
+            "baseline not compared: {} (Q-103)",
+            differ.join(", ")
+        ))
+    }
+}
+
 /// `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5, Q-67): runs the
 /// desktop benchmark `name` (B-1, B-3, B-5 or B-6) on the high-performance adapter, with
 /// the setups of Q-102 or, with `model`, on that one model (any §1.2 input); compares
-/// its budgets with the stored baseline `<NAME>.json` (Q-103); and writes the file at
-/// `out` when given. A NAME the desktop does not run is `Input`; an invalid model is
-/// `Input` with its E-FILE code; no adapter, or no timestamp queries for B-3, is
-/// `Environment`; a malformed baseline is `Input` (E-JSON).
+/// its budgets with the stored baseline `<NAME>.json` when the baseline has the run's
+/// profile and GPU, else notes why not, in the file and on standard error (Q-103); and
+/// writes the file at `out` when given. A NAME the desktop does not run is `Input`; an
+/// invalid model is `Input` with its E-FILE code; no adapter, or no timestamp queries for
+/// B-3, is `Environment`; a malformed baseline is `Input` (E-JSON).
 // Q-67, Q-102, Q-103
 pub fn cmd_bench(
     name: &str,
@@ -190,6 +231,12 @@ pub fn cmd_bench(
         )));
     }
 
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let mut notes: Vec<Json> = measured.notes.iter().map(|n| Json::str(*n)).collect();
     let baseline_path = baseline_dir().join(format!("{name}.json"));
     let (baseline, regressions) = if baseline_path.is_file() {
         let text =
@@ -198,10 +245,16 @@ pub fn cmd_bench(
             HeadlessError::Input(format!("E-JSON: {}: {e}", baseline_path.display()))
         })?;
         let path = baseline_path.canonicalize().unwrap_or(baseline_path);
-        (
-            Json::str(path.display().to_string()),
-            compare(&measured.budgets, &parsed),
-        )
+        // A baseline not compared against is not `baseline` (Q-103: "the path compared
+        // against, or null").
+        match compare_against(&measured.budgets, profile, gpu.dev.adapter_name(), &parsed) {
+            Ok(regressions) => (Json::str(path.display().to_string()), regressions),
+            Err(note) => {
+                eprintln!("ftgsxr: {name}: {note}");
+                notes.push(Json::str(note));
+                (Json::Null, Vec::new())
+            }
+        }
     } else {
         (Json::Null, Vec::new())
     };
@@ -219,14 +272,7 @@ pub fn cmd_bench(
                 ("wgpu", Json::str(WGPU_VERSION)),
             ]),
         ),
-        (
-            "profile",
-            Json::str(if cfg!(debug_assertions) {
-                "debug"
-            } else {
-                "release"
-            }),
-        ),
+        ("profile", Json::str(profile)),
         (
             "results",
             Json::Arr(
@@ -249,10 +295,7 @@ pub fn cmd_bench(
             Json::Arr(measured.budgets.iter().map(Budget::to_json).collect()),
         ),
         ("baseline", baseline),
-        (
-            "notes",
-            Json::Arr(measured.notes.iter().map(|n| Json::str(*n)).collect()),
-        ),
+        ("notes", Json::Arr(notes)),
     ]);
     let mut json = file.pretty();
     json.push('\n');
@@ -963,13 +1006,11 @@ mod tests {
             1
         );
         // Lower is better: a baseline 20 % better is 0.8 × the value.
-        for rule in [Rule::AtMost, Rule::Within1Percent] {
-            let b = budget(rule, 100.0);
-            assert_eq!(
-                compare(std::slice::from_ref(&b), &baseline_of(&b, 80.0)).len(),
-                1
-            );
-        }
+        let b = budget(Rule::AtMost, 100.0);
+        assert_eq!(
+            compare(std::slice::from_ref(&b), &baseline_of(&b, 80.0)).len(),
+            1
+        );
     }
 
     #[test]
@@ -1007,6 +1048,57 @@ mod tests {
         let mut reordered = b.clone();
         reordered.setup = Json::obj([("sh_degree", Json::Num(2.0)), ("n", Json::Num(1e6))]);
         assert_eq!(compare(&[b], &baseline_of(&reordered, 1000.0)).len(), 1);
+    }
+
+    /// `baseline_of`'s file with `profile` and `machine.gpu` added.
+    fn baseline_from(b: &Budget, value: f64, profile: &str, gpu: &str) -> Json {
+        let mut old = b.clone();
+        old.value = value;
+        Json::obj([
+            ("machine", Json::obj([("gpu", Json::str(gpu))])),
+            ("profile", Json::str(profile)),
+            ("budgets", Json::Arr(vec![old.to_json()])),
+        ])
+    }
+
+    #[test]
+    fn compare_against_skips_a_baseline_of_another_profile() {
+        // Q-103 (#180): a baseline 20 % better from a release build lists nothing for a
+        // debug run, and the note says which field differs.
+        let b = budget(Rule::AtLeast, 100.0);
+        let base = baseline_from(&b, 120.0, "release", "GPU A");
+        assert_eq!(
+            compare_against(std::slice::from_ref(&b), "debug", "GPU A", &base),
+            Err("baseline not compared: profile debug against release (Q-103)".to_owned())
+        );
+        assert_eq!(
+            compare_against(std::slice::from_ref(&b), "release", "GPU A", &base).map(|r| r.len()),
+            Ok(1)
+        );
+    }
+
+    #[test]
+    fn compare_against_skips_a_baseline_of_another_gpu() {
+        // Q-103 (#180): the same with another `machine.gpu`.
+        let b = budget(Rule::AtLeast, 100.0);
+        let base = baseline_from(&b, 120.0, "release", "GPU A");
+        assert_eq!(
+            compare_against(std::slice::from_ref(&b), "release", "GPU B", &base),
+            Err("baseline not compared: machine.gpu GPU B against GPU A (Q-103)".to_owned())
+        );
+    }
+
+    #[test]
+    fn compare_skips_within_1_percent_budgets() {
+        // Q-103 (#180): B-6's own 1 % budget is its check; a baseline 20 % different,
+        // either way, lists nothing.
+        let b = budget(Rule::Within1Percent, 100.0);
+        for base in [80.0, 120.0] {
+            assert!(
+                compare(std::slice::from_ref(&b), &baseline_of(&b, base)).is_empty(),
+                "{base}"
+            );
+        }
     }
 
     #[test]
