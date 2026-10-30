@@ -35,7 +35,7 @@ use ftgsxr_render::{
     OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatLoad, SplatPlugin,
     SplatStats, SplatTime,
 };
-use ftgsxr_testkit::{fixtures_dir, metrics, probe, reference_render};
+use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe, reference_render};
 
 /// E15's tier.
 const MIN_PSNR: f64 = 45.0;
@@ -290,6 +290,7 @@ fn assert_stats(stats: SplatStats) {
 #[test]
 #[ignore = "gpu"]
 fn gpu_bevy_adapter_renders_p1_like_the_headless_renderer() {
+    let _layer = layer_messages(); // R-16, Q-105
     // The image target is 16-bit float RGBA, so the view's main texture is the layer's
     // format and `FileEncoded` holds the layer unrounded.
     let (data, stats) = render_p1(OutputSpace::FileEncoded, TextureFormat::Rgba16Float);
@@ -317,6 +318,7 @@ fn gpu_bevy_adapter_renders_p1_like_the_headless_renderer() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_bevy_adapter_resolves_p1_over_a_background_onto_an_srgb_target() {
+    let _layer = layer_messages(); // R-16, Q-105
     let background = [0.2, 0.4, 0.6];
     let (data, stats) = render_p1(
         OutputSpace::LinearOver {

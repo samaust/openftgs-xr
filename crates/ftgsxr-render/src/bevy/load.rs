@@ -263,7 +263,10 @@ pub(crate) fn upload_models(
         if !upload.step(dev, &mut budget) {
             break;
         }
-        let (id, upload) = models.uploading.pop_front().expect("the front");
+        let (id, upload) = models
+            .uploading
+            .pop_front()
+            .expect("invariant: front_mut just returned the front");
         models.ready.insert(id, Arc::new(upload.finish()));
     }
     for (entity, model, reported) in &instances {

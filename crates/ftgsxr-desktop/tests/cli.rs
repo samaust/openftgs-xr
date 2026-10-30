@@ -83,6 +83,71 @@ fn an_invalid_input_exits_2() {
 }
 
 #[test]
+fn validate_prints_each_valid_model_before_the_first_invalid_one() {
+    // §1.7: each model is read and validated and its line printed in turn; the first
+    // invalid file stops the run with exit 2, so the models after it are not printed.
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "validate_order",
+    );
+    let bad = dir.join("bad.safetensors");
+    fs::write(&bad, b"not a safetensors file").unwrap();
+    let p1 = fixtures_dir().join("probes/P1.safetensors");
+    let ckpt = fixtures_dir().join("checkpoint/tiny");
+    let o = ftgsxr(&[
+        "validate",
+        p1.to_str().unwrap(),
+        bad.to_str().unwrap(),
+        ckpt.to_str().unwrap(),
+    ]);
+    assert_eq!(o.status.code(), Some(2));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 1, "{out}");
+    assert!(
+        lines[0].starts_with(&format!("{}: kind ftgs-if, N ", p1.display())),
+        "{out}"
+    );
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert!(err.starts_with("ftgsxr: E-"), "{err}");
+    assert!(err.contains(bad.to_str().unwrap()), "{err}");
+}
+
+#[test]
+fn validate_warns_of_a_convention_rendered_as_openftgss() {
+    // E6, D-39: a `rasterize_mode` other than `classic` is reported as a warning (on
+    // standard error, Q-110) and the model still validates. P1's header with its
+    // `"classic"` replaced by a word of the same length, so the header keeps its size.
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "validate_warning",
+    );
+    let mut bytes = fs::read(fixtures_dir().join("probes/P1.safetensors")).unwrap();
+    let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+    let at = bytes[8..8 + n]
+        .windows(7)
+        .position(|w| w == b"classic")
+        .expect("P1's rasterize_mode")
+        + 8;
+    bytes[at..at + 7].copy_from_slice(b"stochas");
+    let model = dir.join("stochas.safetensors");
+    fs::write(&model, bytes).unwrap();
+    let o = ftgsxr(&["validate", model.to_str().unwrap()]);
+    let err = String::from_utf8(o.stderr.clone()).unwrap();
+    assert_eq!(o.status.code(), Some(0), "{err}");
+    assert_eq!(stdout(&o).lines().count(), 1);
+    assert_eq!(
+        err,
+        format!(
+            "ftgsxr: warning: {}: rasterize_mode \"stochas\" is not supported; rendering as \"classic\"\n",
+            model.display()
+        )
+    );
+}
+
+#[test]
 fn export_writes_the_file() {
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
@@ -317,14 +382,31 @@ fn bench_refuses_a_name_the_desktop_does_not_run() {
     assert_eq!(o.status.code(), Some(2));
 }
 
-/// `ftgsxr bench` with the baselines' directory `baselines` (Q-103).
+/// `ftgsxr bench` with the baselines' directory `baselines` (Q-103), under the validation
+/// layer: as R-15's run, the layer's own log (a settings file beside `baselines`) has no
+/// error or warning and, in a debug build, its status message (R-16, Q-105).
 fn bench(args: &[&str], baselines: &std::path::Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
+    let dir = baselines
+        .parent()
+        .expect("the baselines' directory has a parent");
+    let log = dir.join("validation.log");
+    let settings = layer_settings(dir, &log);
+    let o = Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
         .arg("bench")
         .args(args)
         .env("FTGSXR_BENCH_BASELINES", baselines)
+        .env("VK_LAYER_SETTINGS_PATH", &settings)
         .output()
-        .expect("the binary runs")
+        .expect("the binary runs");
+    let (active, messages) = layer_log(&log);
+    if cfg!(debug_assertions) {
+        assert!(
+            active,
+            "the Khronos validation layer did not report itself active"
+        );
+    }
+    assert!(messages.is_empty(), "{messages:#?}");
+    o
 }
 
 #[test]

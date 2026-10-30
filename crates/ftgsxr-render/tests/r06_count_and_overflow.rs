@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use cull_support::{draw, look_at, oracle, passes, prepare, sort_pose, test_pose, upload, view};
 use ftgsxr_core::{UVec2, Vec3};
-use ftgsxr_render::{Colormap, FrameBuffers, FrameStats, QualityTier, RenderMode};
+use ftgsxr_render::{Colormap, FrameBuffers, FrameStats, GpuModel, QualityTier, RenderMode};
 use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 /// The watchdog of R-6: no call of the frame loop may wait longer than this.
@@ -176,10 +176,41 @@ fn gpu_r06_centers_follow_the_splats_under_the_same_capacity() {
     assert!(dev.take_validation_messages().is_empty());
 }
 
+/// The frame loop's calls under R-6's watchdog: the slowest of each, by name.
+#[derive(Default)]
+struct Watchdog {
+    slowest: Vec<(&'static str, Duration, usize)>,
+}
+
+impl Watchdog {
+    /// Runs `f` as the frame loop's call `name` of frame `k`, keeping each name's slowest.
+    fn time<T>(&mut self, k: usize, name: &'static str, f: impl FnOnce() -> T) -> T {
+        let t = Instant::now();
+        let out = f();
+        let elapsed = t.elapsed();
+        match self.slowest.iter_mut().find(|(n, _, _)| *n == name) {
+            Some(entry) if elapsed > entry.1 => *entry = (name, elapsed, k),
+            Some(_) => {}
+            None => self.slowest.push((name, elapsed, k)),
+        }
+        out
+    }
+}
+
+/// The lagging run's model size: large enough that the GPU's frame may outlast the loop's.
+const LAGGING_ROWS: usize = 200_000;
+
 /// Stage 8 under R-6's watchdog: each frame encodes stages 1–3 and the statistics, is
-/// submitted, and the GPU is let finish outside the timed calls (a display period's
-/// stand-in); `FrameStats::poll` gives `None` at frames 0 and 1 and frame k − 2's
-/// statistics at frame k, and neither it nor `encode_stats` waits longer than 1 ms.
+/// submitted and polled, and each of those calls (`encode_prepare`, `encode_stats`, the
+/// submit, `FrameStats::poll`) is timed. In the first run the GPU is let finish after each
+/// frame outside the timed calls (a display period's stand-in), so `poll` gives `None` at
+/// frames 0 and 1 and frame k − 2's statistics at frame k. In the second the frames follow
+/// one another without waiting, so the GPU may lag the loop: `poll` may give `None` while
+/// frame k − 2 is still running, and whatever it gives is frame k − 2's. No call of either
+/// run may take longer than 1 ms; the submit's bound holds in a release build, and a debug
+/// build, where wgpu's submit spends about 1 ms of CPU without waiting on the GPU, times
+/// and reports it only (Q-111).
+// Q-111
 #[test]
 #[ignore = "gpu"]
 fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
@@ -191,29 +222,37 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
     let passes = passes(&dev, &tier);
     let pose = test_pose();
     let cam = camera();
-    let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
-    let mut counts = Vec::new();
-    let mut slowest = Duration::ZERO;
-    for k in 0..8usize {
-        // τ moves so that each frame's count differs.
-        let tau = 0.2 * k as f64;
-        let draws = [draw(&gpu_model, pose, tau, RenderMode::Splats)];
+    let mut watchdog = Watchdog::default();
+    // One frame of the loop at τ, timed call by call; the statistics `poll` gives.
+    let run_frame = |gpu_model: &GpuModel,
+                     frame: &FrameBuffers,
+                     watchdog: &mut Watchdog,
+                     k: usize,
+                     tau: f64| {
+        let draws = [draw(gpu_model, pose, tau, RenderMode::Splats)];
         let mut enc = dev
             .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        passes.encode_prepare(&mut enc, &frame, &draws, &sort_pose(&cam), &[view(cam)]);
-        let t = Instant::now();
-        passes.encode_stats(&mut enc, &frame);
-        slowest = slowest.max(t.elapsed());
-        dev.queue().submit([enc.finish()]);
+        watchdog.time(k, "encode_prepare", || {
+            passes.encode_prepare(&mut enc, frame, &draws, &sort_pose(&cam), &[view(cam)]);
+        });
+        watchdog.time(k, "encode_stats", || passes.encode_stats(&mut enc, frame));
+        watchdog.time(k, "submit", || dev.queue().submit([enc.finish()]));
+        watchdog.time(k, "poll", || FrameStats::poll(frame, &dev))
+    };
+
+    // The paced run.
+    let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
+    let mut counts = Vec::new();
+    for k in 0..8usize {
+        // τ moves so that each frame's count differs.
+        let tau = 0.2 * k as f64;
+        counts.push(oracle(&model, &pose, tau, &cam).len() as u32);
+        let stats = run_frame(&gpu_model, &frame, &mut watchdog, k, tau);
+        // The display period, outside the timed calls: the frame finishes before the next.
         dev.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("the frame completes");
-        counts.push(oracle(&model, &pose, tau, &cam).len() as u32);
-
-        let t = Instant::now();
-        let stats = FrameStats::poll(&frame, &dev);
-        slowest = slowest.max(t.elapsed());
         if k < 2 {
             assert_eq!(stats, None, "frame {k}: nothing two frames old yet");
             continue;
@@ -240,11 +279,59 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
         // Polling again in the same frame gives nothing new.
         assert_eq!(FrameStats::poll(&frame, &dev), None);
     }
-    counts.dedup();
+    let mut distinct = counts.clone();
+    distinct.dedup();
     assert!(
-        counts.len() > 4,
+        distinct.len() > 4,
         "the counts differ between frames: {counts:?}"
     );
-    assert!(slowest <= WATCHDOG, "a frame-loop call waited {slowest:?}");
+
+    // The lagging run: a model fifty times larger, so the GPU falls behind the loop, and
+    // the frames back to back; each frame's statistics are checked once the loop is done.
+    let big = random_model(0x6_09, LAGGING_ROWS, 0);
+    let big_gpu = upload(&dev, &big, &tier);
+    let frame = FrameBuffers::new(&dev, &tier, big.len() as u32);
+    let frames = 24usize;
+    let tau_of = |k: usize| 0.1 * k as f64;
+    let polled: Vec<Option<FrameStats>> = (0..frames)
+        .map(|k| run_frame(&big_gpu, &frame, &mut watchdog, k, tau_of(k)))
+        .collect();
+    dev.device()
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("the frames complete");
+    let mut arrived = 0usize;
+    for (k, stats) in polled.iter().enumerate() {
+        let Some(stats) = stats else {
+            continue;
+        };
+        assert!(k >= 2, "frame {k}: nothing two frames old yet");
+        assert_eq!(
+            stats.visible_splats,
+            oracle(&big, &pose, tau_of(k - 2), &cam).len() as u32,
+            "frame {k} reads frame {}",
+            k - 2
+        );
+        arrived += 1;
+    }
+    eprintln!(
+        "R-6: {arrived} of {} lagging frames had statistics",
+        frames - 2
+    );
+    for &(name, slowest, k) in &watchdog.slowest {
+        eprintln!("R-6: slowest {name}: {slowest:?} (frame {k})");
+    }
+    let over: Vec<String> = watchdog
+        .slowest
+        .iter()
+        // Q-111: the submit is bounded in a release build only.
+        .filter(|&&(name, slowest, _)| {
+            (name != "submit" || !cfg!(debug_assertions)) && slowest > WATCHDOG
+        })
+        .map(|(name, slowest, k)| format!("{name} took {slowest:?} at frame {k}"))
+        .collect();
+    assert!(
+        over.is_empty() && watchdog.slowest.len() == 4,
+        "a frame-loop call waited longer than {WATCHDOG:?}: {over:?}"
+    );
     assert!(dev.take_validation_messages().is_empty());
 }

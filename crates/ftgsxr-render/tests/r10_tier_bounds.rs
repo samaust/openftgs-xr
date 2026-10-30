@@ -16,21 +16,13 @@ use probe_support::{check_items, render_request};
 /// R-10's bound between the two storages.
 const MIN_STORAGE_PSNR: f64 = 50.0;
 
-/// `conformance` with `tier`'s storage (§1.2 load options 1 and 2) and nothing else: the
-/// headless renderer draws per view, and the Quest tiers' shared-center draw and E13's
-/// occlusion are M-6's and M-8's (R-9, R-12), so R-10 changes only the storage it bounds.
-fn conformance_with_storage_of(tier: QualityTier) -> QualityTier {
-    QualityTier {
-        layout: tier.layout,
-        ..QualityTier::conformance()
-    }
-}
-
 #[test]
 #[ignore = "gpu"]
 fn gpu_r10_quest_balanced_storage_within_50_db_of_conformance() {
     let _layer = layer_messages(); // R-16, Q-105
-    let storage = conformance_with_storage_of(QualityTier::quest_balanced());
+    // The tier itself: the headless renderer sorts per view in every tier (D-4, Q-109),
+    // and E13's occlusion is M-6's (R-12), so against `conformance` only the storage differs.
+    let storage = QualityTier::quest_balanced();
     assert!(storage.layout.half.sh && storage.layout.half.rotation);
     assert_eq!(storage.layout.sh_cap, Some(2));
     // A degree-2 random model of R-2's size, seen through R-2's random-model request

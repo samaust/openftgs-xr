@@ -26,6 +26,7 @@ fn upload(
 #[test]
 #[ignore = "gpu"]
 fn gpu_memory_bytes_equal_the_static_bytes_of_section_1_12() {
+    let _layer = layer_messages(); // R-16, Q-105
     // §1.12 Memory: float32 storage 76, 112, 172, 256 bytes per primitive for L = 0 … 3;
     // half-precision storage 48, 66, 96, 138.
     let float32 = [76u64, 112, 172, 256];
@@ -60,6 +61,7 @@ fn gpu_memory_bytes_equal_the_static_bytes_of_section_1_12() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_desktop_budget_on_the_rtx_4090_lies_between_15_and_18_5_gib() {
+    let _layer = layer_messages(); // R-16, Q-105
     // Q-66's detecting test: 75 % of the RTX 4090's 24 GiB device-local heap is 18 GiB.
     // The bounds are read in GiB (2³⁰ bytes): the card's 24 "GB" are 24 GiB, so 75 % of
     // them is 19.3 × 10⁹ bytes, outside a decimal 18.5 GB.
@@ -81,6 +83,7 @@ fn gpu_desktop_budget_on_the_rtx_4090_lies_between_15_and_18_5_gib() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_model_over_the_budget_is_refused_before_upload() {
+    let _layer = layer_messages(); // R-16, Q-105
     let mut dev = gpu_context();
     // §1.12: 64 rows at L = 3 in float32 take 64 · 256 = 16 384 bytes.
     let needed = 64 * 256;
@@ -118,6 +121,7 @@ fn invalid_call(dev: &SplatDevice) {
 #[test]
 #[ignore = "gpu"]
 fn gpu_collector_catches_a_deliberately_invalid_call() {
+    let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     assert!(dev.take_validation_messages().is_empty());
     invalid_call(&dev);
@@ -132,6 +136,7 @@ fn gpu_collector_catches_a_deliberately_invalid_call() {
 #[ignore = "gpu"]
 #[should_panic(expected = "GPU validation message")]
 fn gpu_collector_fails_the_test_that_made_an_invalid_call() {
+    let _layer = layer_messages(); // R-16, Q-105
     // §1.13: a validation error in a debug run of the test suite is a test failure; the
     // device panics when it is dropped with messages nobody took.
     let dev = gpu_context();

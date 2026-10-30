@@ -13,7 +13,7 @@
 #
 # Everything else (the converted frames, the frame cache, the initial points, the run
 # directory) goes to a work directory that is removed at the end: only the exports, requests and
-# renders are kept. `kitchen` (B-2's budgets) is left to M-8.
+# renders are kept. `kitchen` (B-2's budgets) is left to M-8 (Q-108).
 #
 # Usage: OPENFTGS_REPO=... OPENFTGS_DATASETS=... tools/fixtures/train_tiny.sh
 # Environment: THREADS (CPU threads of every command, default 3), XR_FIXTURES (the output

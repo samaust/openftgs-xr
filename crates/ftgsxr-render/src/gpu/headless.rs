@@ -21,7 +21,7 @@ use super::inputs::{ColorTransform, ModelDraw, Overlays, RenderMode, SortPose, V
 use super::model::GpuModel;
 use super::passes::SplatPasses;
 use super::readback::half_to_f32;
-use super::tier::{Capacity, DESKTOP_FALLBACK_BUDGET, QualityTier};
+use super::tier::{Capacity, DESKTOP_FALLBACK_BUDGET, QualityTier, SortMode};
 
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
 const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -104,7 +104,15 @@ pub struct HeadlessRenderer {
 impl HeadlessRenderer {
     /// A renderer for `tier` on the high-performance Vulkan adapter (Q-74); E-GPU-ADAPTER
     /// when there is none, E-GPU-SHADER when a pass does not compile.
+    ///
+    /// A headless render has one view (§1.4 Stereo) and sorts per view whatever the tier
+    /// (D-4, Q-109): a shared-center tier keeps its storage, SH cap, key width, capacity
+    /// and budget but not its stereo mode, and the render is at the camera's own size, so
+    /// the tier's `render_scale` and foveation (the swapchain's) do not apply.
     pub fn new(tier: QualityTier) -> Result<HeadlessRenderer, RenderError> {
+        // Q-109, D-4: "per-view sort on the desktop and in headless renders".
+        let mut tier = tier;
+        tier.sort_mode = SortMode::PerView;
         let gpu = Gpu::create(&tier, &[])?;
         Ok(HeadlessRenderer {
             tier,
@@ -118,8 +126,13 @@ impl HeadlessRenderer {
     /// `sh_degree`), where `None` is the model's L and a degree above L keeps L (the request
     /// check E-REQ-DEGREE is the `render` command's, Q-86); the tier's half-precision
     /// fields; time rebased to τ − τ₀; the memory check against the budget (E-MEM-BUDGET);
-    /// the temporal ordering (E3).
+    /// the temporal ordering (E3). A convention rendered as openftgs's instead is logged as
+    /// a warning (E6, D-39, Q-110).
     pub fn load(&mut self, model: &Model, sh_degree: Option<u8>) -> Result<ModelId, RenderError> {
+        // D-39, Q-110
+        for w in model.conventions.warnings() {
+            warn!("{w}");
+        }
         // Q-86
         let mut layout = self.tier.layout;
         layout.sh_cap = match (layout.sh_cap, sh_degree) {
@@ -213,7 +226,10 @@ impl HeadlessRenderer {
         if gpu.frame.as_ref().is_none_or(|f| f.capacity() != capacity) {
             gpu.frame = Some(FrameBuffers::new(&gpu.dev, &self.tier, capacity));
         }
-        let frame = gpu.frame.as_ref().expect("made above");
+        let frame = gpu
+            .frame
+            .as_ref()
+            .expect("invariant: the frame buffers were made above");
         let draws: Vec<ModelDraw> = models
             .iter()
             .map(|&(id, pose)| {

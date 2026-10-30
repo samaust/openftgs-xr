@@ -112,12 +112,15 @@ pub(crate) fn read_buffers(dev: &SplatDevice, sources: &[(&wgpu::Buffer, u64)]) 
         at += size;
     }
     dev.queue().submit([enc.finish()]);
+    // `read_back` returns `FrameContents` (Q-69), with no error to carry a lost device, and
+    // is a test and diagnostics hook: a lost device panics here rather than as
+    // `RenderError::DeviceLost`.
     staging.map_async(wgpu::MapMode::Read, .., |r| {
-        r.expect("the read-back buffer maps");
+        r.expect("invariant: the read-back buffer maps on a live device (Q-69)");
     });
     dev.device()
         .poll(wgpu::PollType::wait_indefinitely())
-        .expect("the device completes the read back");
+        .expect("invariant: a live device completes the read back (Q-69)");
     let out = {
         let view = staging.get_mapped_range(..);
         spans
@@ -133,6 +136,10 @@ impl FrameBuffers {
     /// The frame's counts, overflow flag, records and payloads, decoded (Q-69). It maps
     /// and waits: a test and diagnostics hook, never called in the frame loop (P-5).
     /// Submit the frame's encoder first.
+    ///
+    /// # Panics
+    ///
+    /// When the device is lost: the signature (Q-69) has no error to carry it.
     pub fn read_back(&self, dev: &SplatDevice) -> FrameContents {
         // Q-69
         let set = &self.set;

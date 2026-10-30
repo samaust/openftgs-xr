@@ -10,11 +10,12 @@ mod cull_support;
 use cull_support::{draw, look_at, oracle, passes, prepare, test_pose, upload, view};
 use ftgsxr_core::{UVec2, Vec3};
 use ftgsxr_render::{FrameBuffers, QualityTier, RenderMode, SortMode, SortPose};
-use ftgsxr_testkit::{gpu_context, random_model};
+use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 #[test]
 #[ignore = "gpu"]
 fn gpu_shared_center_records_keep_rows_visible_in_either_eye() {
+    let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let model = random_model(0x4_04, 20_000, 2);
     let pose = test_pose();

@@ -154,7 +154,16 @@ fn run(matches: &ArgMatches) -> Result<bool, HeadlessError> {
                 .expect("invariant: clap requires a model")
                 .cloned()
                 .collect();
-            for (path, info) in models.iter().zip(cmd_validate(&models)?) {
+            // Q-77: one model per call, so each valid model's line is printed as it is
+            // read and the first invalid one stops the run (§1.7).
+            for path in &models {
+                let info = cmd_validate(std::slice::from_ref(path))?
+                    .pop()
+                    .expect("invariant: cmd_validate returns one ModelInfo per model");
+                // Q-110, D-39: E6's conventions rendered as openftgs's instead.
+                for w in info.conventions.warnings() {
+                    eprintln!("ftgsxr: warning: {}: {w}", path.display());
+                }
                 // `ModelKind` is the core's; the desktop crate depends on the app only
                 // (§2.1), so the kind is told by its variant's name.
                 let kind = format!("{:?}", info.kind);
