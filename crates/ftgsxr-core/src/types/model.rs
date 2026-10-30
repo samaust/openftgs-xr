@@ -34,7 +34,8 @@ pub struct Model {
     pub time: TimeSpan,
     /// The `render_conventions` block (D-39).
     pub conventions: RenderConventions,
-    /// The producing software, empty when the file names none.
+    /// The producing software: empty when an exchange or PLY file names none, `openftgs`
+    /// for a checkpoint whose manifest names no openftgs version (Q-34).
     pub producer: String,
     /// The SHA-256 of the file's bytes (D-40).
     pub identity: [u8; 32],

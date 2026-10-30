@@ -62,22 +62,28 @@ impl Clock {
 
     /// Advances T by speed·`dt_s` while playing (E9).
     ///
-    /// Nothing happens while paused or when T_len = 0 (E9's idle clock). The loop mode then
-    /// maps T back into the active interval in closed form, whatever `dt_s` (Q-19).
+    /// Nothing happens while paused, when T_len = 0 (E9's idle clock) or for a negative or
+    /// non-finite `dt_s`, the direction coming from the speed alone. The loop mode then maps
+    /// T back into the active interval in closed form, however long the step (Q-19).
     pub fn advance(&mut self, dt_s: f64) {
-        if self.state == PlayState::Paused || self.length <= 0.0 || !dt_s.is_finite() {
+        // Q-19: a negative or non-finite Δt is ignored.
+        if self.state == PlayState::Paused
+            || self.length <= 0.0
+            || !(dt_s >= 0.0 && dt_s.is_finite())
+        {
             return;
         }
         let (a, b) = self.active_interval();
         // Q-19: a T outside the active interval is clamped into it first.
         let t = self.t.clamp(a, b) + self.speed * dt_s;
+        // T_len > 0 and a kept range has T_a < T_b (Q-19), so the interval is never empty.
         let width = b - a;
         self.t = match self.mode {
             // Q-19: the half-open [T_a, T_b); T_b exactly gives T_a.
-            LoopMode::Loop if width > 0.0 => a + (t - a).rem_euclid(width),
+            LoopMode::Loop => a + (t - a).rem_euclid(width),
             // Q-19: a triangle wave of period 2·width; an odd number of reflections
             // negates the speed, so `speed()` stays dT/dt.
-            LoopMode::PingPong if width > 0.0 => {
+            LoopMode::PingPong => {
                 let reflections = (t - a).div_euclid(width);
                 let within = (t - a).rem_euclid(width);
                 if reflections.rem_euclid(2.0) == 1.0 {
@@ -97,8 +103,6 @@ impl Clock {
                 a
             }
             LoopMode::Once => t,
-            // A degenerate range holds T at T_a.
-            LoopMode::Loop | LoopMode::PingPong => a,
         };
     }
 
@@ -132,21 +136,23 @@ impl Clock {
 
     /// Sets or clears the playback range [T_a, T_b] (§1.6).
     ///
-    /// The pair is ordered and clamped to [0, T_len]; a non-finite bound clears the range
-    /// (Q-19).
+    /// The pair is ordered and clamped to [0, T_len]; a non-finite bound, or bounds equal
+    /// after clamping, clear the range (Q-19).
     pub fn set_range(&mut self, range: Option<(f64, f64)>) {
         self.range = range
             .filter(|(a, b)| a.is_finite() && b.is_finite())
             .map(|(a, b)| {
                 let clamp = |x: f64| x.clamp(0.0, self.length);
                 (clamp(a.min(b)), clamp(a.max(b)))
-            });
+            })
+            // Q-19: a degenerate range is cleared.
+            .filter(|(a, b)| a < b);
     }
 
     /// Sets T_len (E9).
     ///
-    /// A negative or non-finite length is 0; T and the range are clamped to the new length
-    /// (Q-19).
+    /// A negative or non-finite length is 0; T and the range are clamped to the new length,
+    /// and a range the new length collapses is cleared (Q-19).
     pub fn set_length(&mut self, length_s: f64) {
         self.length = valid_length(length_s);
         self.t = self.t.clamp(0.0, self.length);

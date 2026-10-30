@@ -8,7 +8,7 @@
 //! α_skip are placed as Q-28 decides.
 
 use ftgsxr_core::motion::temporal_window;
-use ftgsxr_core::{DispatchRange, Model, TemporalIndex};
+use ftgsxr_core::{DispatchRange, Model, RenderConventions, TemporalIndex};
 use ftgsxr_testkit::random_model;
 use proptest::prelude::*;
 
@@ -103,6 +103,14 @@ fn covers_span(model: &Model, i: usize) -> bool {
     unwidened(model, i).is_some_and(|w| tc - model.time.tau0 <= w && model.time.tau1 - tc <= w)
 }
 
+/// Whether file row `i` is persistent: its window covers the span, or, with more than
+/// one timestamp, its opacity is exactly α_skip (Q-28); every row with a single timestamp.
+fn is_persistent(model: &Model, i: usize) -> bool {
+    model.time.is_single()
+        || model.opacity[i] == model.conventions.alpha_skip
+        || covers_span(model, i)
+}
+
 /// U-8's index clauses on `model` at `taus`.
 fn check(model: &Model, taus: &[f64]) -> Result<(), String> {
     let n = model.len();
@@ -127,11 +135,12 @@ fn check(model: &Model, taus: &[f64]) -> Result<(), String> {
     }
 
     let p = index.range(model.time.tau0).persistent.end as usize;
-    // Persistent rows first: exactly the rows whose window covers the span (every row
-    // with a single timestamp, Q-28), then the transient rows by time center.
+    // Persistent rows first: exactly the rows whose window covers the span, the rows at
+    // opacity = α_skip and, with a single timestamp, every row (Q-28); then the
+    // transient rows by time center.
     for (new, &file) in order.iter().enumerate() {
         let file = file as usize;
-        let persistent = model.time.is_single() || covers_span(model, file);
+        let persistent = is_persistent(model, file);
         if persistent != (new < p) {
             return Err(format!(
                 "file row {file} at new row {new}: persistent {persistent}, P = {p}"
@@ -199,6 +208,11 @@ fn single(seed: u64, n: usize) -> Model {
     model
 }
 
+/// The new row of file row `i`.
+fn new_row(order: &[u32], i: usize) -> u32 {
+    order.iter().position(|&f| f as usize == i).unwrap() as u32
+}
+
 /// The float32 just below `x`.
 fn below(x: f32) -> f32 {
     f32::from_bits(x.to_bits() - 1)
@@ -220,9 +234,9 @@ fn u08_index_superset_far_from_zero() {
     check(&model, &taus(&model, 11)).unwrap();
 }
 
-/// Q-28: a row with opacity exactly α_skip is kept by the cull at its time center
-/// (σ_eff = α_skip is not < α_skip), so `range` visits it there; a row just below α_skip
-/// is never active and only has to sit in the permutation.
+/// Q-28: in a random model, the rows with opacity exactly α_skip, which the cull keeps
+/// at their time center (σ_eff = α_skip is not < α_skip), are persistent, so `range`
+/// visits them there; a row just below α_skip, never active, is transient.
 #[test]
 fn u08_index_row_at_the_bound_is_visited_at_its_center() {
     let mut model = random_model(21, 2_000, 0);
@@ -232,19 +246,87 @@ fn u08_index_row_at_the_bound_is_visited_at_its_center() {
     }
     model.validate().unwrap();
     let (index, order) = TemporalIndex::build(&model);
+    let p = index.range(model.time.tau0).persistent.end;
     for i in [10usize, 12] {
         let tau = model.time_center[i];
         assert!(active(&model, i, tau));
-        let new = order.iter().position(|&f| f as usize == i).unwrap() as u32;
+        let new = new_row(&order, i);
         let range = index.range(tau);
         assert!(
-            range.persistent.contains(&new) || range.transient.contains(&new),
+            range.persistent.contains(&new),
             "row {i} (new {new}) at its center τ = {tau}: {range:?}"
         );
     }
+    assert!(new_row(&order, 11) >= p, "row 11 below α_skip is transient");
     let mut taus = taus(&model, 21);
     taus.extend([10, 11, 12].map(|i| model.time_center[i]));
     check(&model, &taus).unwrap();
+}
+
+/// `random_model(seed, n, 0)` with every row persistent (opacity 0.9, duration 3·T_τ, so
+/// E3's window covers the span) but row `k`, which takes `opacity`.
+fn persistent_but(seed: u64, n: usize, k: usize, opacity: f32) -> Model {
+    let mut model = random_model(seed, n, 0);
+    let span = model.time.span();
+    model.opacity.fill(0.9);
+    model.duration.fill(3.0 * span);
+    model.opacity[k] = opacity;
+    model.duration[k] = 0.05 * span;
+    model.validate().unwrap();
+    for i in (0..n).filter(|&i| i != k) {
+        assert!(covers_span(&model, i), "row {i} should cover the span");
+    }
+    model
+}
+
+/// Q-28: a row at opacity = α_skip, the only row whose window does not cover the span
+/// (so w_max = 0), is persistent, so `range` visits it at its center and at
+/// c ± 2⁻¹³·duration, inside the band where σt rounds to 1 in float32 and the cull keeps
+/// it, though w_max reaches no further than its center.
+#[test]
+fn u08_index_row_at_the_bound_is_persistent() {
+    let k = 17;
+    let model = persistent_but(51, 300, k, RenderConventions::default().alpha_skip);
+    let (index, order) = TemporalIndex::build(&model);
+    let new = new_row(&order, k);
+    assert_eq!(
+        new, k as u32,
+        "in file order with the other persistent rows"
+    );
+    let (c, d) = (model.time_center[k], model.duration[k]);
+    let step = d * 2f64.powi(-13);
+    assert_eq!(1.0f32, (-0.5 * (step / d) * (step / d)).exp() as f32);
+    for tau in [c, c - step, c + step] {
+        let range = index.range(tau);
+        assert!(
+            range.persistent.contains(&new),
+            "τ = {tau}: new row {new}, {range:?}"
+        );
+    }
+    assert_eq!(index.range(c).persistent, 0..300);
+    check(&model, &taus(&model, 51)).unwrap();
+}
+
+/// Q-28: a row just below α_skip, the only row whose window does not cover the span, is
+/// transient and adds nothing to w_max: w_max stays 0, so `range` visits it at its center
+/// alone, not at c ± 2⁻¹³·duration. It passes the cull at no τ (opacity·σt ≤ opacity).
+#[test]
+fn u08_index_row_below_the_bound_is_transient() {
+    let k = 17;
+    let model = persistent_but(52, 300, k, below(RenderConventions::default().alpha_skip));
+    let (index, order) = TemporalIndex::build(&model);
+    let new = new_row(&order, k);
+    assert_eq!(new, 299, "the one transient row comes last");
+    let (c, d) = (model.time_center[k], model.duration[k]);
+    let step = d * 2f64.powi(-13);
+    let at_center = index.range(c);
+    assert_eq!(at_center.persistent, 0..299);
+    assert_eq!(at_center.transient, 299..300);
+    for tau in [c - step, c + step] {
+        let range = index.range(tau);
+        assert!(range.transient.is_empty(), "τ = {tau}: {range:?}");
+    }
+    check(&model, &taus(&model, 52)).unwrap();
 }
 
 /// U-8 for a single-timestamp model: σt ≡ 1 (D-9), so a row's activity does not depend
@@ -308,7 +390,7 @@ fn u08_index_widened_by_the_margins() {
         .filter_map(|i| unwidened(&model, i).map(|w| (w, i)))
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .unwrap();
-    let new = order.iter().position(|&f| f as usize == i).unwrap() as u32;
+    let new = new_row(&order, i);
     let t_prime = model.time.span();
     for tau in [
         model.time_center[i] + w + 0.5e-6 * t_prime,
