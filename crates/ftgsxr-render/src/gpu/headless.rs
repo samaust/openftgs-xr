@@ -338,7 +338,7 @@ impl HeadlessRenderer {
 
 /// The camera's center −R_wᵀ t_w and forward axis R_wᵀ ẑ (E4's eye; per-view mode takes the
 /// depth from the camera itself, so the pose only fills the frame block).
-fn sort_pose(camera: &Camera) -> SortPose {
+pub(crate) fn sort_pose(camera: &Camera) -> SortPose {
     let r = DMat3::from_mat4(camera.world_to_camera);
     let t = camera.world_to_camera.w_axis.truncate();
     SortPose {

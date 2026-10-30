@@ -53,6 +53,23 @@ Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 a
 
 Stage 8 never waits (P-5). The three staging buffers form a ring: the n-th `encode_stats` (from 0) copies frame n's block into buffer n mod 3 and asks for its mapping on submission. A buffer still waiting for its mapping skips that frame's copy; a mapped buffer nobody polled is unmapped and reused. `FrameStats::poll` polls the device without blocking and returns frame n − 2's block, once, when its buffer is mapped, and `None` otherwise (Q-81). The counts it reports are the clamped ones, those the draws use. R-6 checks the arrival two frames late under a watchdog on the frame loop.
 
+## The Bevy adapter's render nodes
+
+`ftgsxr_render::bevy` (§2.1, §2.4 Frame loop hooks) runs the same calls inside each `SplatCamera`'s 3D pass. Bevy 0.19's render passes are systems of the per-camera `Core3d` schedule, so the adapter's two nodes are systems there too, in `Core3dSystems::MainPass` (Q-100):
+
+| Node | Runs | Encodes |
+| --- | --- | --- |
+| prepare | before `main_opaque_pass_3d` | `encode_prepare` on the context's encoder, unless the frame is skipped (below) |
+| draw | after `main_opaque_pass_3d`, before `main_transparent_pass_3d` | `encode_draw` in a pass that loads the view's opaque depth (`Depth32Float`, reverse Z, Q-87), then `encode_resolve` for `LinearOver`, then `encode_stats` |
+
+With `OutputSpace::FileEncoded` the draw writes straight into the view target, whose format the passes are compiled for: the target then holds the layer of a headless render, exactly on a 16-bit float target. With `LinearOver` the draw writes a per-view 16-bit float layer, cleared transparent, and the resolve composites it onto an `Rgba8UnormSrgb` view target (Q-91, Q-94). Each splat camera has its own `FrameBuffers`, of capacity C from the tier (`SumOfModels`: the drawn instances' total N, Q-86); the passes are shared by every view of a (layer format, sort mode). Adding `SplatCamera` turns MSAA and tonemapping off and clears the camera transparent (D-6). E6's camera of the view comes from Bevy's clip-from-view matrix and view transform, so splats and meshes see one view.
+
+The main world loads on the async compute task pool (`SplatLoad`, Q-99), uploads in chunks of at most 64 MB a frame, and reports `SplatEvent::Uploaded` or `Failed`; the render world extracts the visible instances whose models are on the GPU. The adapter's device is Bevy's, with Bevy's error handlers kept (Q-98).
+
+## Where the frame skips stages 1–4
+
+§1.4 and §2.4 rule 2: when nothing that stages 1–4 read has changed, they are skipped and the previous frame's records, sorted payloads, counters and draw constants are drawn again, identical by construction. The adapter compares, per view, the view's `ViewParams` (E6's camera and the target size) and each drawn instance's GPU model, pose, τ (bit for bit), render mode, color transform and degree with the previous frame's; a new frame buffer set (another capacity, sort mode or layer format) always prepares. The draw, the resolve and the statistics copy run every frame: stage 3's statistics block holds the skipped frame's counts already. The headless renderer prepares every render.
+
 ## What waits on later milestones
 
-E13's environment depth is not sampled yet (`occlusion` is unread, R-12); the shared-center vertex projection of splats and centers is R-9's (Q-87); the debug overlays are carried but not drawn (PRD #76).
+E13's environment depth is not sampled yet (`occlusion` is unread, R-12); the shared-center vertex projection of splats and centers is R-9's (Q-87); the debug overlays are carried but not drawn (PRD #76); the adapter applies no `RenderLayers`, render scale or foveation yet, and a shared-center camera prepares per view and draws no splats (Q-87).

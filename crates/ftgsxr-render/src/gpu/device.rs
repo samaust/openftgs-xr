@@ -127,6 +127,20 @@ impl SplatDevice {
         Ok(Self::build(device, queue, adapter.get_info(), budget))
     }
 
+    /// The Bevy adapter's device (Q-98): Bevy's own, whose uncaptured-error and
+    /// device-lost handlers stay Bevy's (its `RenderErrorHandler` decides what an error
+    /// does), so no collector is installed and `take_validation_messages` stays empty.
+    /// The budget is the caller's.
+    pub(crate) fn from_bevy(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_info: wgpu::AdapterInfo,
+        budget: MemoryBudget,
+    ) -> SplatDevice {
+        // Q-98
+        Self::with_messages(device, queue, adapter_info, budget, Arc::default())
+    }
+
     fn build(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -142,6 +156,16 @@ impl SplatDevice {
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(text);
         }));
+        Self::with_messages(device, queue, adapter_info, budget, messages)
+    }
+
+    fn with_messages(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_info: wgpu::AdapterInfo,
+        budget: MemoryBudget,
+        messages: Arc<Mutex<Vec<String>>>,
+    ) -> SplatDevice {
         SplatDevice {
             limits: device.limits(),
             features: device.features(),
@@ -214,7 +238,7 @@ const VK_MEMORY_HEAP_DEVICE_LOCAL_BIT: u32 = 0x1;
 
 /// The size of the adapter's largest device-local memory heap, through wgpu-hal's Vulkan
 /// adapter; `None` on another backend or with no such heap (Q-66).
-fn largest_device_local_heap(adapter: &wgpu::Adapter) -> Option<u64> {
+pub(crate) fn largest_device_local_heap(adapter: &wgpu::Adapter) -> Option<u64> {
     // SAFETY: `as_hal` requires that the hal adapter not be destroyed while wgpu uses it
     // and that wgpu-hal's rules hold: the guard is held only for this block, nothing is
     // destroyed or mutated, and `vkGetPhysicalDeviceMemoryProperties` only reads

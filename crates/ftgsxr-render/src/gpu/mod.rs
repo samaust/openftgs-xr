@@ -6,17 +6,17 @@
 //! of stages 5 and 6, the resolve of stage 7 and the statistics of stage 8), the frame
 //! buffers' read back and the headless renderer.
 
-mod device;
+pub(crate) mod device;
 mod error;
-mod frame;
-mod headless;
+pub(crate) mod frame;
+pub(crate) mod headless;
 mod inputs;
-mod model;
-mod passes;
+pub(crate) mod model;
+pub(crate) mod passes;
 mod readback;
 mod sort;
 mod stats;
-mod tier;
+pub(crate) mod tier;
 
 pub use device::{BudgetSource, MemoryBudget, SplatDevice}; // Q-68, Q-74
 pub use error::RenderError;
