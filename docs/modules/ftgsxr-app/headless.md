@@ -1,6 +1,6 @@
 # The headless commands in `ftgsxr-app`
 
-How `ftgsxr_app::headless` meets §1.7's command line and §2.1's signatures: the commands, their exit codes, the error they return, and the Q-n rows the module relies on. The spec items are §1.7 (command line), §1.15, §2.1 `ftgsxr_app::headless`, D-36 and U-33, U-34, R-15; this doc explains them and never overrides them. Begun in M-2 (#117) with the commands that need no GPU; `cmd_render` joined with #118.
+How `ftgsxr_app::headless` meets §1.7's command line and §2.1's signatures: the commands, their exit codes, the error they return, and the Q-n rows the module relies on. The spec items are §1.7 (command line), §1.15, §2.1 `ftgsxr_app::headless`, D-36 and U-33, U-34, R-15; this doc explains them and never overrides them. Begun in M-2 (#117) with the commands that need no GPU; `cmd_render` joined with #118 and `cmd_bench` with #122 (§3.5 B-1, B-3, B-5, B-6, §1.12 P-2 to P-4).
 
 ## The commands
 
@@ -11,6 +11,7 @@ How `ftgsxr_app::headless` meets §1.7's command line and §2.1's signatures: th
 | `ftgsxr validate MODEL ...` | `cmd_validate(models)` | one line of header information per model, exit 0 | the first invalid model, exit 2 |
 | `ftgsxr import IF OUT` | `cmd_import(input, out)` | writes `OUT`, prints nothing, exit 0 | exit 2, nothing written |
 | `ftgsxr export MODEL OUT` | `cmd_export(model, out)` | as `import` | as `import` |
+| `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` | `cmd_bench(name, out, model)` | writes the benchmark file at `OUT` or prints it, exit 0; exit 3 when a budget regressed against the baseline | an unknown NAME, an invalid model, a malformed baseline or no GPU, exit 2 |
 
 A usage error (a missing argument, an unknown subcommand) is clap's, and exits 2 too. The binary prints a failure as one line `ftgsxr: <code>: <user text>` on standard error and exits with `exit_code` (Q-77).
 
@@ -18,6 +19,26 @@ A usage error (a missing argument, an unknown subcommand) is clap's, and exits 2
 - **`info`.** The reply is built once (name, version, no query kinds, the rasterizer, openftgs's conventions with the transmittance stop null, D-7) and written two ways: with `--json` as `info_json`'s compact object, the form openftgs's harness reads; without it as one `key: value` line per field in the same order, the conventions flattened to `render_conventions.<key>` (Q-71), strings bare and other values as their JSON text (Q-77).
 - **`validate`.** Each model is read in full and validated (`open_model`), not only its header, so every reader rule of §1.2 applies. The `ModelInfo` it returns comes from the loaded model; its size is that of the file the model's identity hashes, `params.safetensors` for a checkpoint (D-40, Q-76). The signature returns one `Result`, so when a model fails, the binary prints no line for the models before it.
 - **`import` and `export`.** §1.7 gives the two commands one rule, so they share one private function. The input is validated first; then a `ftgs-if` input is copied byte for byte (the bytes copied are checked against the identity the validated read computed, so a file replaced between the two reads is refused), and a checkpoint or a PLY is written in its activated form through the core's `write_exchange`, which names the producer `openftgs-xr <version>` (Q-65, Q-72). Both writes go through a temporary sibling renamed over `OUT`, so a failed write leaves the old file, or none, and no temporary.
+
+## `bench`: the benchmarks, their file and the baselines
+
+`cmd_bench` (Q-67) is a thin command over four private benchmark functions in `headless/bench.rs`, one per desktop benchmark of §3.5; NAME selects one, and the binary's clap accepts only those four. The setups (sizes, the camera orbit, frame counts, what a frame's time is) are Q-T122.1's; the file and the comparison are Q-T122.2's. The module's own helpers sit beside it: `headless/synthetic.rs` (the generator) and `headless/json.rs` (the file's writer and reader).
+
+- **Order of the checks.** The name is checked first, then `--model` is read and validated (`open_model`, any §1.2 input), and only then does the command open the GPU, so a wrong argument is reported on any machine, as for `render`.
+- **No headless renderer.** `HeadlessRenderer::render` reads every frame back and composites it on the CPU, and never writes the statistics block, so it can time neither a display frame nor the sort. The benchmarks drive the render layer's passes themselves on a `SplatDevice::headless()` device: `encode_prepare`, the splat draw into the 16-bit layer, the resolve onto an 8-bit sRGB target and `encode_stats`, each frame submitted and waited for. The descriptors come from Bevy's re-exports of wgpu (`bevy::render::render_resource`), so the app needs no wgpu dependency of its own (§2.1's band row lists bevy). The draw's timestamps belong to the pass's owner (Q-87) and the app holds no query set, so a frame's time is the wall time and the sort's time the statistics block's `GpuTimes.sort` (Q-81).
+- **Synthetic models.** `synthetic_model` mirrors `ftgsxr_testkit::random_model` draw for draw, since the testkit is a dev-dependency only (§2.1); a private test checks the two agree. Its one addition, every row persistent, serves B-3, whose sort would otherwise see only the rows active at the frame's τ (Q-T122.1). The models are made one at a time and dropped after their setup, so a sweep holds one model on the GPU.
+- **`--model`** replaces the synthetic sweep by the given model; the setups name it by its identity (D-40) instead of `synthetic`, so its figures never match a synthetic baseline's.
+- **Validation.** The device's validation messages are taken after the run; any message fails the command (§1.13) rather than leaving a `SplatDevice` that panics on drop in a debug build.
+
+### The file
+
+The format is Q-67's top level with Q-T122.2's details: `format` `ftgsxr-bench`, `version` 1, `bench`, `machine` (`gpu`, `driver`, `os`, `cpu`, `threads`), `versions` (`ftgsxr`, `bevy`, `wgpu`), `profile` (`release` or `debug`: a debug build runs the validation layers, so only a release build's numbers are worth keeping), `results`, `budgets`, `baseline` (the file compared against, or null) and `notes`. A result is `{setup, measure, value, unit}`; a budget `{id, setup, measure, rule, limit, value, pass}`, its `rule` `at_least`, `at_most` or `within_1_percent`. Objects keep the writer's key order, two-space indented. The bevy and wgpu versions are constants beside the pin, which a test checks against `Cargo.lock`; no runtime API reports them. §2.1's row names no JSON crate for the app, so `json.rs` writes the file and reads a baseline back (the tests read the files with serde_json, a dev-dependency, as an independent reader).
+
+### Baselines
+
+A baseline is a stored benchmark file, `benchmarks/baselines/<NAME>.json` at the workspace root, committed after the owner's review of the first run on the reference machine (§3.5, Q-67); the path is the one the build saw, and the variable `FTGSXR_BENCH_BASELINES` names another directory (Q-T122.2), which the regression test uses. Without a baseline nothing is compared. With one, each budget of the run is matched with the baseline's budget of the same id, measure and setup (objects compared as sets of members, so a baseline rewritten by another tool still matches) and listed in `BenchReport.regressions` when it is more than 10 % worse in its rule's direction; the binary prints each on standard error and exits 3. Only budgets are compared, §3.5's "budgeted figure"; the other results are reported. A budget not met is `pass: false` and a line on standard error, but exits 0 (Q-T122.2).
+
+A baseline is a recorded timing: it is run alone on the machine, from a release build, with nothing else on the GPU. B-5's synthetic files are written just before they are read, so their reads come from the page cache; the file's notes say so (Q-T122.1).
 
 ## `HeadlessError` and the exit codes
 
@@ -27,4 +48,4 @@ A usage error (a missing argument, an unknown subcommand) is clap's, and exits 2
 
 ## Dependencies
 
-The module takes `ftgsxr-core` and, for `render`, `ftgsxr-render`'s `HeadlessRenderer` (§2.1's band table), which brings Bevy's render crates into the build. The binary depends on `ftgsxr-app` and clap alone (§2.1). So it cannot name the core's `ModelKind`, and it tells a model's kind by its variant's name when printing `validate`'s lines. `ftgsxr_app` re-exports `QualityTier`, the type `cmd_render` takes, so the binary can turn `--tier`'s name into a tier with `QualityTier::by_name` (Q-89).
+The module takes `ftgsxr-core` and, for `render`, `ftgsxr-render`'s `HeadlessRenderer` (§2.1's band table), which brings Bevy's render crates into the build; `bench` takes the render layer's passes and Bevy's re-exported wgpu descriptors (`bevy` with `bevy_render` and `bevy_color`, both in §2.1's row through bevy). The binary depends on `ftgsxr-app` and clap alone (§2.1). So it cannot name the core's `ModelKind`, and it tells a model's kind by its variant's name when printing `validate`'s lines. `ftgsxr_app` re-exports `QualityTier`, the type `cmd_render` takes, so the binary can turn `--tier`'s name into a tier with `QualityTier::by_name` (Q-89).
