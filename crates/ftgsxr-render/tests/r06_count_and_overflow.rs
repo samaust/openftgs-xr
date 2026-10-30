@@ -206,10 +206,10 @@ const LAGGING_ROWS: usize = 200_000;
 /// frame outside the timed calls (a display period's stand-in), so `poll` gives `None` at
 /// frames 0 and 1 and frame k − 2's statistics at frame k. In the second the frames follow
 /// one another without waiting, so the GPU may lag the loop: `poll` may give `None` while
-/// frame k − 2 is still running, and whatever it gives is frame k − 2's. No encode or poll
-/// of either run may take longer than 1 ms. The submit is timed and reported but not
-/// bounded: in a debug build wgpu's submit spends about 1 ms of CPU without waiting on the
-/// GPU (Q-T76.6).
+/// frame k − 2 is still running, and whatever it gives is frame k − 2's. No call of either
+/// run may take longer than 1 ms; the submit's bound holds in a release build, and a debug
+/// build, where wgpu's submit spends about 1 ms of CPU without waiting on the GPU, times
+/// and reports it only (Q-T76.6).
 // Q-T76.6
 #[test]
 #[ignore = "gpu"]
@@ -323,8 +323,10 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
     let over: Vec<String> = watchdog
         .slowest
         .iter()
-        // Q-T76.6: the submit is reported, not bounded.
-        .filter(|&&(name, slowest, _)| name != "submit" && slowest > WATCHDOG)
+        // Q-T76.6: the submit is bounded in a release build only.
+        .filter(|&&(name, slowest, _)| {
+            (name != "submit" || !cfg!(debug_assertions)) && slowest > WATCHDOG
+        })
         .map(|(name, slowest, k)| format!("{name} took {slowest:?} at frame {k}"))
         .collect();
     assert!(
