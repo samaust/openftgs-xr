@@ -238,9 +238,14 @@ fn u31_checkpoint_fetch_is_refused() {
     assert_eq!(err.code(), "E-IO");
 }
 
+/// The cache directory of `test`'s client.
+fn cache_dir(test: &str) -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31-cache-{test}"))
+}
+
 /// A client over a fresh cache directory for one test.
 fn client(test: &str) -> Arc<HttpClient> {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31-cache-{test}"));
+    let dir = cache_dir(test);
     let _ = fs::remove_dir_all(&dir);
     Arc::new(HttpClient::new(dir, TlsRoots::WebPki, 1 << 40).expect("a client"))
 }
@@ -578,6 +583,176 @@ fn u31_http_index_fetch_downloads_and_checks_the_index_digest() {
     );
 }
 
+/// The request targets of `fetch`ing `entry` from `source`, which must succeed; the bytes
+/// must be the fixture `file`'s.
+fn fetch_paths(
+    server: &LocalServer,
+    source: &HttpIndex,
+    entry: &Entry,
+    file: &Path,
+) -> Vec<String> {
+    let before = server.requests().len();
+    let (_, bytes, _) = fetch_all(source, entry);
+    assert_eq!(&*bytes, fs::read(file).unwrap().as_slice());
+    paths(server)[before..].to_vec()
+}
+
+#[test]
+fn u31_http_index_fetch_checks_a_sha256_sidecar() {
+    // §1.5 Download cache, Q-47: an nginx entry carries no digest; `probe p1.sha256` beside
+    // the model gives the right one, asked for before the model.
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    server.serve_listing(ServedListing::NginxJson);
+    let source = HttpIndex::new(base, ListingFlavor::NginxJson, client("sidecar-sha256"));
+    let entries = source.list("").unwrap();
+    let probe = entries.iter().find(|e| e.name == "probe p1").unwrap();
+    assert_eq!(probe.sha256, None);
+    let seen = fetch_paths(
+        &server,
+        &source,
+        probe,
+        &listing_models().join("probe p1.safetensors"),
+    );
+    assert_eq!(
+        seen,
+        vec![
+            "/listing/models/probe%20p1.sha256".to_owned(),
+            "/listing/models/probe%20p1.safetensors".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn u31_http_index_fetch_refuses_a_wrong_sha256sums_digest() {
+    // Q-47: no `snapshot.sha256`, so `SHA256SUMS` beside the model is read; its line for
+    // `snapshot.ply` is wrong, so the download is E-NET-CHECKSUM and leaves no cached file.
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    server.serve_listing(ServedListing::NginxJson);
+    let test = "sidecar-sums";
+    let source = HttpIndex::new(base, ListingFlavor::NginxJson, client(test));
+    let entries = source.list("").unwrap();
+    let snapshot = entries.iter().find(|e| e.name == "snapshot").unwrap();
+    let before = server.requests().len();
+    let cancel = AtomicBool::new(false);
+    let err = source.fetch(snapshot, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-CHECKSUM");
+    assert_eq!(
+        paths(&server)[before..].to_vec(),
+        vec![
+            "/listing/models/snapshot.sha256".to_owned(),
+            "/listing/models/SHA256SUMS".to_owned(),
+            "/listing/models/snapshot.ply".to_owned(),
+        ]
+    );
+    // Q-43: the file that failed its digest is discarded; no cache entry holds a file.
+    let held: Vec<PathBuf> = walk(&cache_dir(test))
+        .into_iter()
+        .filter(|p| p.file_name().is_some_and(|n| n == "file"))
+        .collect();
+    assert_eq!(held, Vec::<PathBuf>::new());
+}
+
+#[test]
+fn u31_http_index_fetch_stops_on_a_sidecar_failure() {
+    // Q-47: a sidecar answering neither 2xx nor 404 is E-NET-FETCH, and the model is not
+    // asked for (the fixture server's chosen status, Q-55).
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    server.serve_listing(ServedListing::NginxJson);
+    let source = HttpIndex::new(base, ListingFlavor::NginxJson, client("sidecar-failure"));
+    let entries = source.list("").unwrap();
+    let snapshot = entries.iter().find(|e| e.name == "snapshot").unwrap();
+    server.status_for("/listing/models/snapshot.sha256", 500);
+    let before = server.requests().len();
+    let cancel = AtomicBool::new(false);
+    let err = source.fetch(snapshot, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-FETCH");
+    assert_eq!(
+        paths(&server)[before..].to_vec(),
+        vec!["/listing/models/snapshot.sha256".to_owned()]
+    );
+}
+
+/// Every file under `dir`, at any depth; none when `dir` does not exist.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    read.flat_map(|e| {
+        let path = e.unwrap().path();
+        if path.is_dir() {
+            walk(&path)
+        } else {
+            vec![path]
+        }
+    })
+    .collect()
+}
+
+#[test]
+fn u31_http_index_fetch_without_a_sidecar_downloads_without_a_digest() {
+    // Q-47: beside `probes/P1.safetensors` both sidecars answer 404, so the model downloads
+    // with no digest to check.
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let source = HttpIndex::new(base, ListingFlavor::NginxJson, client("sidecar-none"));
+    let entry = Entry {
+        name: "P1".to_owned(),
+        location: server.url_of("probes/P1.safetensors"),
+        kind: EntryKind::Exchange,
+        size: None,
+        mtime: None,
+        sha256: None,
+        thumbnail: None,
+        audio: None,
+        scene: None,
+    };
+    let seen = fetch_paths(
+        &server,
+        &source,
+        &entry,
+        &fixtures_dir().join("probes/P1.safetensors"),
+    );
+    assert_eq!(
+        seen,
+        vec![
+            "/probes/P1.sha256".to_owned(),
+            "/probes/SHA256SUMS".to_owned(),
+            "/probes/P1.safetensors".to_owned(),
+        ]
+    );
+    let records = server.requests();
+    let statuses: Vec<u16> = records[records.len() - 3..]
+        .iter()
+        .map(|r| r.status)
+        .collect();
+    assert_eq!(statuses, vec![404, 404, 200]);
+}
+
+#[test]
+fn u31_http_index_fetch_with_an_index_digest_asks_for_no_sidecar() {
+    // Q-47: an entry whose `sha256` is set fetches no `.sha256` or `SHA256SUMS`, though
+    // `probe p1.sha256` and `SHA256SUMS` sit beside the models.
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let source = HttpIndex::new(base, ListingFlavor::Index, client("sidecar-index"));
+    let entries = source.list("").unwrap();
+    let before = server.requests().len();
+    for entry in entries.iter().filter(|e| e.kind != EntryKind::Checkpoint) {
+        assert!(entry.sha256.is_some());
+        fetch_all(&source, entry);
+    }
+    assert_eq!(
+        paths(&server)[before..].to_vec(),
+        vec![
+            "/listing/models/probe%20p1.safetensors".to_owned(),
+            "/listing/models/snapshot.ply".to_owned(),
+        ]
+    );
+}
+
 /// A stub of the Android document provider (§2.5, D-49): one tree, `content://stub/tree`,
 /// whose documents are the listing fixture's two model files; every call is recorded.
 struct StubProvider {
@@ -749,10 +924,11 @@ fn u31_open_source_refuses_what_it_cannot_serve() {
     assert_eq!(code(&spec("Dir", "x"), None), Some("E-IO"));
     assert_eq!(code(&spec("http", "http://127.0.0.1/"), None), Some("E-IO"));
     assert_eq!(code(&spec("documents", TREE), None), Some("E-IO"));
+    // A location that is not a URL is a setting to fix, not a fetch to retry (Q-47).
     let http = client("open-source");
-    assert_eq!(
-        code(&spec("http", "not a url"), Some(http.clone())),
-        Some("E-NET-FETCH")
-    );
+    match open_source(&spec("http", "not a url"), Some(http.clone()), None) {
+        Err(IoError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput),
+        other => panic!("not E-IO InvalidInput: {:?}", other.err()),
+    }
     assert_eq!(code(&spec("http", "http://127.0.0.1/m/"), Some(http)), None);
 }

@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use ftgsxr_core::LoopMode;
 use ftgsxr_io::{
     AudioSettings, CacheSettings, DesktopSettings, DisplaySettings, EnvironmentSettings,
     GeneralSettings, ListingFlavor, LocomotionSettings, ManualLighting, OverlaySettings,
@@ -59,7 +60,7 @@ fn u29_defaults_are_section_1s() {
         s.playback,
         PlaybackSettings {
             speed: 1.0,
-            loop_mode: "loop".into(),
+            loop_mode: LoopMode::Loop,
         }
     );
     assert_eq!(
@@ -71,9 +72,9 @@ fn u29_defaults_are_section_1s() {
             grid: true,
             overlays: OverlaySettings {
                 boxes: false,
-                velocity: false,
+                velocities: false,
                 velocity_every: 64,
-                time_slice: false,
+                time_tint: false,
             },
         }
     );
@@ -221,7 +222,7 @@ fn non_default() -> Settings {
         ],
         playback: PlaybackSettings {
             speed: -0.25,
-            loop_mode: "ping-pong".into(),
+            loop_mode: LoopMode::PingPong,
         },
         display: DisplaySettings {
             mode: "both".into(),
@@ -230,9 +231,9 @@ fn non_default() -> Settings {
             grid: false,
             overlays: OverlaySettings {
                 boxes: true,
-                velocity: true,
+                velocities: true,
                 velocity_every: 16,
-                time_slice: true,
+                time_tint: true,
             },
         },
         environment: EnvironmentSettings {
@@ -464,6 +465,20 @@ help = "F1"
     );
 }
 
+/// Q-49: a `[playback] loop` outside Q-50's spellings takes the default
+/// `LoopMode::Loop`, with one warning naming the key.
+#[test]
+fn u29_an_unknown_loop_spelling_takes_the_default_with_a_warning() {
+    let (_, s, warnings) = load_text(
+        "loop_sideways",
+        "format = \"ftgsxr-settings\"\nversion = 1\n\n[playback]\nloop = \"sideways\"\n",
+    );
+    assert_eq!(s.playback.loop_mode, LoopMode::Loop);
+    assert_eq!(s, Settings::default());
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("`playback.loop`"), "{warnings:?}");
+}
+
 /// U-29 speed (Q-50, E9): any finite speed in \[−4, 4\] other than 0 loads as given with
 /// no warning, not only §1.6's presets.
 #[test]
@@ -618,7 +633,7 @@ fn u29_a_minor_version_is_ignored() {
 #[test]
 fn u29_missing_format_and_version_warn_and_read_as_version_1() {
     let (_, s, warnings) = load_text("no_header", "[playback]\nloop = \"once\"\n");
-    assert_eq!(s.playback.loop_mode, "once");
+    assert_eq!(s.playback.loop_mode, LoopMode::Once);
     assert_eq!(warnings.len(), 2, "{warnings:?}");
     assert!(
         warnings.iter().any(|w| w.contains("`format`")),

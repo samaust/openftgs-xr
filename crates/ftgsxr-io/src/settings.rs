@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use ftgsxr_core::LoopMode;
 use toml::{Table, Value};
 
 use crate::util::{set_aside, write_atomic};
@@ -146,21 +147,22 @@ pub struct GeneralSettings {
 pub struct PlaybackSettings {
     /// The clock's speed, in E9's \[−4, 4\] \\ {0} (Q-50).
     pub speed: f64,
-    /// The key `loop`: `loop`, `ping-pong` or `once` (§1.6).
-    pub loop_mode: String,
+    /// The key `loop`, spelled `loop`, `ping-pong` or `once` (§1.6, Q-50).
+    pub loop_mode: LoopMode,
 }
 
-/// `[display.overlays]`: §1.4's optional overlays (Q-49).
+/// `[display.overlays]`: §1.4's optional overlays, named as §2.2's `OverlayToggle`
+/// (Q-49).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OverlaySettings {
     /// The bounding box at the current time.
     pub boxes: bool,
     /// Velocity vectors.
-    pub velocity: bool,
+    pub velocities: bool,
     /// The velocity vectors' k: one primitive in k.
     pub velocity_every: u32,
     /// The time-slice tint.
-    pub time_slice: bool,
+    pub time_tint: bool,
 }
 
 /// `[display]` (§1.4, §1.11, Q-49); its `background` key is
@@ -239,8 +241,9 @@ pub struct XrSettings {
     pub foveation: Option<String>,
     /// The render scale; `None` is the tier's.
     pub render_scale: Option<f32>,
-    /// The reference spaces D-24's chain may try, in order: `stage`, `local-floor`,
-    /// `local`.
+    /// The reference spaces D-24's chain may try, in order, from `stage`, `local-floor`
+    /// and `local`, stored as written; the chain always ends at LOCAL, with a warning,
+    /// even when the list leaves `local` out, which `ftgsxr_xr::session` applies (Q-49).
     pub reference_space: Vec<String>,
 }
 
@@ -342,22 +345,23 @@ impl Default for GeneralSettings {
 }
 
 impl Default for PlaybackSettings {
+    // Q-49
     fn default() -> Self {
         PlaybackSettings {
             speed: 1.0,
-            loop_mode: "loop".into(),
+            loop_mode: LoopMode::Loop,
         }
     }
 }
 
 impl Default for OverlaySettings {
-    // Q-50
+    // Q-49, Q-50
     fn default() -> Self {
         OverlaySettings {
             boxes: false,
-            velocity: false,
+            velocities: false,
             velocity_every: 64,
-            time_slice: false,
+            time_tint: false,
         }
     }
 }
@@ -755,6 +759,7 @@ impl Reader {
         out
     }
 
+    /// `[playback]`: `loop` read as a `LoopMode` (Q-49, Q-50).
     fn playback(&mut self, root: Option<&Table>) -> PlaybackSettings {
         let p = "playback";
         let t = self.table(root, "", p);
@@ -764,6 +769,7 @@ impl Reader {
             speed: self.take(t, p, "speed", speed()).unwrap_or(d.speed),
             loop_mode: self
                 .take(t, p, "loop", choice(LOOP_MODES))
+                .and_then(|m| loop_mode_of(&m))
                 .unwrap_or(d.loop_mode),
         }
     }
@@ -793,19 +799,21 @@ impl Reader {
         self.unknown(
             o,
             po,
-            &["boxes", "velocity", "velocity_every", "time_slice"],
+            &["boxes", "velocities", "velocity_every", "time_tint"],
         );
         let od = d.overlays;
         let overlays = OverlaySettings {
             boxes: self.take(o, po, "boxes", flag()).unwrap_or(od.boxes),
-            velocity: self.take(o, po, "velocity", flag()).unwrap_or(od.velocity),
+            velocities: self
+                .take(o, po, "velocities", flag())
+                .unwrap_or(od.velocities),
             velocity_every: self
                 .take(o, po, "velocity_every", integer(1))
                 .and_then(|n| u32::try_from(n).ok())
                 .unwrap_or(od.velocity_every),
-            time_slice: self
-                .take(o, po, "time_slice", flag())
-                .unwrap_or(od.time_slice),
+            time_tint: self
+                .take(o, po, "time_tint", flag())
+                .unwrap_or(od.time_tint),
         };
         let display = DisplaySettings {
             mode: self
@@ -1099,6 +1107,25 @@ fn positive(hi: f64) -> Check<f32> {
     )
 }
 
+/// The loop mode a `loop` spelling names (Q-50).
+pub(crate) fn loop_mode_of(name: &str) -> Option<LoopMode> {
+    match name {
+        "loop" => Some(LoopMode::Loop),
+        "ping-pong" => Some(LoopMode::PingPong),
+        "once" => Some(LoopMode::Once),
+        _ => None,
+    }
+}
+
+/// The `loop` spelling of a loop mode (Q-50).
+pub(crate) fn loop_mode_name(mode: LoopMode) -> &'static str {
+    match mode {
+        LoopMode::Loop => "loop",
+        LoopMode::PingPong => "ping-pong",
+        LoopMode::Once => "once",
+    }
+}
+
 /// The `flavor` spellings of §1.11, in `ListingFlavor`'s order.
 const FLAVORS: &[&str] = &["auto", "index", "nginx-json", "html"];
 
@@ -1249,7 +1276,7 @@ fn document(s: &Settings) -> Table {
             "playback",
             Value::Table(table([
                 ("speed", Value::Float(pb.speed)),
-                ("loop", Value::String(pb.loop_mode.clone())),
+                ("loop", Value::String(loop_mode_name(pb.loop_mode).into())),
             ])),
         ),
         (
@@ -1264,12 +1291,12 @@ fn document(s: &Settings) -> Table {
                     "overlays",
                     Value::Table(table([
                         ("boxes", Value::Boolean(d.overlays.boxes)),
-                        ("velocity", Value::Boolean(d.overlays.velocity)),
+                        ("velocities", Value::Boolean(d.overlays.velocities)),
                         (
                             "velocity_every",
                             Value::Integer(i64::from(d.overlays.velocity_every)),
                         ),
-                        ("time_slice", Value::Boolean(d.overlays.time_slice)),
+                        ("time_tint", Value::Boolean(d.overlays.time_tint)),
                     ])),
                 ),
             ])),

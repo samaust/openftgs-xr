@@ -34,7 +34,7 @@ and over a copy of the committed fixtures with one byte changed.
 | `checkpoint/tiny/`, `tiny.safetensors`, `tiny.tau0.ply`: D-29's tiny checkpoint, its exchange model and its PLY snapshot | `make_checkpoint.py`, running `ftgs train` and `ftgs export` on the CPU | U-5, U-33, the PLY reader (D-41) | none |
 | `checkpoint/single/`, `single.safetensors`: the same on one frame, a single-timestamp checkpoint | `make_checkpoint.py` | U-5's single-timestamp clause | none |
 | `checkpoint/scene/`: the scene manifest of the tiny training scene and its images | `make_checkpoint.py` | U-36; the input of the two training runs | none |
-| `listing/`: the three listing bodies and the files they list | written by hand from the documented formats; `make_listings.py` fills in sizes and digests | U-27; U-28 and U-31 through the fixture server | Q-6 |
+| `listing/`: the three listing bodies, the files they list and two unlisted digest sidecars beside them (`probe p1.sha256`, `SHA256SUMS`) | bodies written by hand from the documented formats, `make_listings.py` filling in sizes and digests; the sidecars written by `make_listings.py` | U-27; U-28 and U-31 through the fixture server, U-31's sidecar fetches | Q-6, Q-47 |
 | `scene/v1.ftgsxr-scene.json`, `poses/v1.json`: a sample scene file and pose store, every key away from its default | written by hand from §1.11's shapes | U-30 | Q-52 |
 | `README.md` | `make_all.py`, from its template | provenance: the openftgs commit, the package versions, the commands, the adapter reply | Q-13 |
 
