@@ -9,10 +9,10 @@
 //! pixels are rare in trained models, which R-3 measures. In a debug build the renderer's
 //! device fails the test on any GPU validation message (§1.13, R-16, Q-74).
 //!
-//! Without `$OPENFTGS_DATASETS`, or without its `xr-fixtures/` directory, the tests say so on
-//! standard error and return (§2.7 Lanes: the `ds` lane needs the dataset and the trained
-//! models). A directory that holds only some of a model's three files fails: a half-written
-//! fixture set is a fault, not an absent dataset.
+//! Without `$OPENFTGS_DATASETS`, or without its `xr-fixtures/` directory, the tests fail with
+//! the reason: running the `ds` lane is the request for the dataset and the trained models
+//! (§2.7 Lanes), so a missing one is a fault, not a pass. A directory that holds only some of
+//! a model's three files fails the same way.
 
 mod probe_support;
 
@@ -25,34 +25,32 @@ use probe_support::{check_items, render_items};
 /// R-3's item count per model (§3.2).
 const ITEMS: usize = 20;
 
-/// `$OPENFTGS_DATASETS/xr-fixtures/`, or `None`, with the reason on standard error, when
-/// the variable is unset or the directory is absent.
-fn xr_fixtures() -> Option<PathBuf> {
-    let Some(root) = std::env::var_os("OPENFTGS_DATASETS") else {
-        eprintln!(
-            "R-3 skipped: $OPENFTGS_DATASETS is unset; the ds lane reads the trained models \
-             that tools/fixtures/train_tiny.sh writes into $OPENFTGS_DATASETS/xr-fixtures/"
-        );
-        return None;
-    };
+/// `$OPENFTGS_DATASETS/xr-fixtures/`.
+///
+/// # Panics
+///
+/// When the variable is unset or the directory is absent, with the reason (§2.7 Lanes).
+fn xr_fixtures() -> PathBuf {
+    let root = std::env::var_os("OPENFTGS_DATASETS").unwrap_or_else(|| {
+        panic!(
+            "R-3: $OPENFTGS_DATASETS is unset; the ds lane reads the trained models that \
+             tools/fixtures/train_tiny.sh writes into $OPENFTGS_DATASETS/xr-fixtures/"
+        )
+    });
     let dir = PathBuf::from(root).join("xr-fixtures");
-    if !dir.is_dir() {
-        eprintln!(
-            "R-3 skipped: {} is absent; run tools/fixtures/train_tiny.sh to write it",
-            dir.display()
-        );
-        return None;
-    }
-    Some(dir)
+    assert!(
+        dir.is_dir(),
+        "R-3: {} is absent; run tools/fixtures/train_tiny.sh to write it",
+        dir.display()
+    );
+    dir
 }
 
 /// R-3 on the trained model `name`: `NAME.safetensors` read by `open_model`, its
 /// `NAME.request.json` and the reference renders `NAME.renders.safetensors`, checked to be
 /// made from that request (its SHA-256), every item through the tier.
 fn check_trained(name: &str) {
-    let Some(dir) = xr_fixtures() else {
-        return;
-    };
+    let dir = xr_fixtures();
     let file = |suffix: &str| dir.join(format!("{name}.{suffix}"));
     let model_path = file("safetensors");
     let model = open_model(&model_path).unwrap_or_else(|e| panic!("{}: {e}", model_path.display()));
