@@ -19,5 +19,7 @@ path = "src/main.rs"
 clap.workspace = true
 ftgsxr-app.workspace = true
 
+# The core for the tests alone: R-15's binary test reads the renders file back (#118).
 [dev-dependencies]
+ftgsxr-core.workspace = true
 ftgsxr-testkit.workspace = true

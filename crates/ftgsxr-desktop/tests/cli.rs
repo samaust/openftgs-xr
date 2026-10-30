@@ -107,3 +107,116 @@ fn a_usage_error_exits_2() {
     assert_eq!(ftgsxr(&["validate"]).status.code(), Some(2));
     assert_eq!(ftgsxr(&["frobnicate"]).status.code(), Some(2));
 }
+
+/// P1's request with `field`'s JSON value replaced by `value`, written into `dir`.
+fn altered_p1_request(dir: &std::path::Path, field: &str, value: &str) -> std::path::PathBuf {
+    let text = fs::read_to_string(fixtures_dir().join("probes/P1.request.json")).unwrap();
+    let needle = format!("\"{field}\": ");
+    let start = text.find(&needle).expect("the field") + needle.len();
+    let end = start + text[start..].find([',', '}']).unwrap();
+    let path = dir.join("request.json");
+    fs::write(&path, format!("{}{value}{}", &text[..start], &text[end..])).unwrap();
+    path
+}
+
+/// R-15 through the binary (§1.7): a request in another time unit and a request degree
+/// above the model's exit 2 with their codes and write no file (Q-T118.2).
+#[test]
+fn r15_render_refuses_a_request_with_exit_2() {
+    let model = fixtures_dir().join("probes/P1.safetensors");
+    for (name, field, value, code) in [
+        ("unit", "time_unit", "\"ms\"", "E-REQ-UNIT"),
+        ("degree", "sh_degree", "1", "E-REQ-DEGREE"),
+    ] {
+        let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name);
+        let request = altered_p1_request(&dir, field, value);
+        let out = dir.join("out.safetensors");
+        let o = ftgsxr(&[
+            "render",
+            model.to_str().unwrap(),
+            request.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ]);
+        assert_eq!(o.status.code(), Some(2), "{name}");
+        let err = String::from_utf8(o.stderr).unwrap();
+        assert!(
+            err.starts_with(&format!("ftgsxr: {code}: ")),
+            "{name}: {err}"
+        );
+        assert!(!out.exists(), "{name}");
+    }
+}
+
+/// `--tier` takes the five names of §1.12 and refuses any other as a usage error (exit 2,
+/// Q-T118.1).
+#[test]
+fn render_tier_names() {
+    let model = fixtures_dir().join("probes/P1.safetensors");
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "tier",
+    );
+    // A request the model refuses before the GPU, so each accepted tier exits 2 with
+    // E-REQ-UNIT rather than clap's usage error.
+    let request = altered_p1_request(&dir, "time_unit", "\"ms\"");
+    let out = dir.join("out.safetensors");
+    let args = |tier: &str| {
+        ftgsxr(&[
+            "render",
+            model.to_str().unwrap(),
+            request.to_str().unwrap(),
+            out.to_str().unwrap(),
+            "--tier",
+            tier,
+        ])
+    };
+    for tier in [
+        "conformance",
+        "desktop",
+        "quest-high",
+        "quest-balanced",
+        "quest-low",
+    ] {
+        let err = String::from_utf8(args(tier).stderr).unwrap();
+        assert!(err.starts_with("ftgsxr: E-REQ-UNIT: "), "{tier}: {err}");
+    }
+    let o = args("ultra");
+    assert_eq!(o.status.code(), Some(2));
+    assert!(!String::from_utf8(o.stderr).unwrap().contains("E-REQ-UNIT"));
+}
+
+/// R-15 through the binary (§1.7, `gpu` lane): P1's request writes a `ftgs-renders` file
+/// with every item's keys and the request's SHA-256, prints nothing and exits 0.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r15_render_writes_the_renders_file() {
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "render",
+    );
+    let model = fixtures_dir().join("probes/P1.safetensors");
+    let request_path = fixtures_dir().join("probes/P1.request.json");
+    let out = dir.join("P1.renders.safetensors");
+    let o = ftgsxr(&[
+        "render",
+        model.to_str().unwrap(),
+        request_path.to_str().unwrap(),
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(o.stdout.is_empty());
+    let request = ftgsxr_core::read_request(&fs::read(&request_path).unwrap()).unwrap();
+    let renders = ftgsxr_core::read_renders(&fs::read(&out).unwrap(), Some(request.sha256))
+        .expect("a ftgs-renders file made from the request");
+    let mut ids: Vec<&str> = request.items.iter().map(|i| i.id.as_str()).collect();
+    ids.sort_unstable();
+    let got: Vec<&str> = renders.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(got, ids);
+}
