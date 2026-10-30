@@ -970,7 +970,7 @@ pub enum Colormap { Dc, TimeCenter, Speed, Opacity }
 /// E14's transform: gains in linear light; identity = (1, 1, 1).
 pub struct ColorTransform { pub gain: Vec3 }
 pub struct ModelDraw<'a> { pub model: &'a GpuModel, pub pose: Pose, pub tau: f64, pub mode: RenderMode, pub transform: ColorTransform, pub sh_degree: u8, pub overlays: Overlays }
-pub struct Overlays { pub bounds: bool, pub velocities: Option<u32>, pub time_tint: bool }
+pub struct Overlays { pub boxes: bool, pub velocities: Option<u32>, pub time_tint: bool } // boxes: the box at the current τ (§1.4), not E10's B_m
 pub struct FrameBuffers { /* records, keys×2, payloads×2, histograms, indirect args, dispatch args, stats, staging */ }
 impl FrameBuffers { pub fn new(dev: &SplatDevice, tier: &QualityTier, capacity: u32) -> FrameBuffers; pub fn capacity(&self) -> u32; }
 /// E13's inputs: the environment depth of a view with its camera and planes.
