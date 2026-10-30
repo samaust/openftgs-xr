@@ -107,6 +107,58 @@ fn gpu_model_over_the_budget_is_refused_before_upload() {
     assert!(upload(&dev, 64, 3, &GpuLayoutOptions::default()).is_ok());
 }
 
+#[test]
+#[ignore = "gpu"]
+fn gpu_models_on_one_device_share_its_budget() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let mut dev = gpu_context();
+    // Q-74 (#174): the budget is one of the device's model buffers (§1.12), summed over
+    // every live model (§1.5: several at once). 64 rows at L = 3 in float32 take
+    // 64 · 256 = 16 384 bytes; a budget of 1.5 models leaves 8 192 after the first.
+    let one = 64 * 256;
+    dev.set_memory_budget(MemoryBudget {
+        bytes: one * 3 / 2,
+        source: BudgetSource::Tier,
+    });
+    assert_eq!(dev.model_bytes_in_use(), 0);
+    let first = upload(&dev, 64, 3, &GpuLayoutOptions::default()).expect("fits alone");
+    assert_eq!(dev.model_bytes_in_use(), one);
+    match upload(&dev, 64, 3, &GpuLayoutOptions::default()) {
+        Err(RenderError::Budget { needed, budget }) => {
+            assert_eq!(needed, one);
+            assert_eq!(budget, one / 2, "the budget left after the first model");
+        }
+        Err(e) => panic!("expected E-MEM-BUDGET, got {e:?}"),
+        Ok(_) => panic!("two models over the budget together were both uploaded"),
+    }
+    assert_eq!(
+        dev.model_bytes_in_use(),
+        one,
+        "a refused upload reserves nothing"
+    );
+    drop(first);
+    assert_eq!(
+        dev.model_bytes_in_use(),
+        0,
+        "a dropped model returns its bytes"
+    );
+    let second = upload(&dev, 64, 3, &GpuLayoutOptions::default()).expect("fits now");
+    assert_eq!(dev.model_bytes_in_use(), one);
+    // Lowering the budget below the bytes in use evicts nothing; later uploads are
+    // refused with nothing left.
+    dev.set_memory_budget(MemoryBudget {
+        bytes: one / 2,
+        source: BudgetSource::Tier,
+    });
+    assert_eq!(dev.model_bytes_in_use(), one);
+    match upload(&dev, 64, 3, &GpuLayoutOptions::default()) {
+        Err(RenderError::Budget { needed, budget }) => assert_eq!((needed, budget), (one, 0)),
+        other => panic!("expected E-MEM-BUDGET, got {:?}", other.map(|m| m.n())),
+    }
+    drop(second);
+    assert!(dev.take_validation_messages().is_empty());
+}
+
 /// A call wgpu's validation rejects: a buffer both mappable for reading and a storage
 /// buffer, which WebGPU forbids without `MAPPABLE_PRIMARY_BUFFERS`.
 fn invalid_call(dev: &SplatDevice) {
