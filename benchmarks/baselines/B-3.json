@@ -1,0 +1,157 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-3",
+  "machine": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  595.99.02  Wed Aug 26 05:24:08 UTC 2026",
+    "os": "Ubuntu 24.04.5 LTS (kernel 7.0.0-38-generic)",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+    "threads": 24
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "release",
+  "results": [
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 100000,
+        "tier": "desktop"
+      },
+      "measure": "sort_ms",
+      "value": 0.1945599988102913,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 100000,
+        "tier": "desktop"
+      },
+      "measure": "keys",
+      "value": 99999,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 250000,
+        "tier": "desktop"
+      },
+      "measure": "sort_ms",
+      "value": 0.39745599031448364,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 250000,
+        "tier": "desktop"
+      },
+      "measure": "keys",
+      "value": 249999,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 500000,
+        "tier": "desktop"
+      },
+      "measure": "sort_ms",
+      "value": 0.7476800084114075,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 500000,
+        "tier": "desktop"
+      },
+      "measure": "keys",
+      "value": 499999,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 1000000,
+        "tier": "desktop"
+      },
+      "measure": "sort_ms",
+      "value": 1.4619200229644775,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 1000000,
+        "tier": "desktop"
+      },
+      "measure": "keys",
+      "value": 999993,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 2000000,
+        "tier": "desktop"
+      },
+      "measure": "sort_ms",
+      "value": 2.8928639888763428,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 2000000,
+        "tier": "desktop"
+      },
+      "measure": "keys",
+      "value": 1999982,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 4000000,
+        "tier": "desktop"
+      },
+      "measure": "sort_ms",
+      "value": 5.702399969100952,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 4000000,
+        "tier": "desktop"
+      },
+      "measure": "keys",
+      "value": 3999969,
+      "unit": "keys"
+    }
+  ],
+  "budgets": [
+    {
+      "id": "P-4",
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 1000000,
+        "tier": "desktop"
+      },
+      "measure": "sort_ms",
+      "rule": "at_most",
+      "limit": 0.4,
+      "value": 1.4619200229644775,
+      "pass": false
+    }
+  ],
+  "baseline": null,
+  "notes": []
+}

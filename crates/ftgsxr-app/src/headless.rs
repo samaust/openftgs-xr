@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The headless commands (§1.7, §2.1 `ftgsxr_app::headless`): `render`, `info`,
-//! `validate`, `import` and `export`, and their errors with §1.15's codes and the exit
+//! `validate`, `import`, `export` and `bench` (Q-67), and their errors with §1.15's codes and the exit
 //! codes 2 and 3.
 
 use std::fmt;
@@ -14,6 +14,12 @@ use ftgsxr_core::{
     open_model, read_request, sha256, write_exchange, write_renders,
 };
 use ftgsxr_render::{HeadlessRenderer, QualityTier, RenderError};
+
+mod bench;
+// Q-67
+pub use bench::{BenchReport, cmd_bench};
+mod json;
+mod synthetic;
 
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their
 /// cause's §1.15 code in the message's leading `E-…: ` prefix (Q-64).

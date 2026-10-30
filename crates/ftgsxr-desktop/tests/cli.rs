@@ -250,3 +250,80 @@ fn gpu_r15_render_writes_the_renders_file() {
         "{producer}"
     );
 }
+
+#[test]
+fn bench_refuses_a_name_the_desktop_does_not_run() {
+    // Q-103: clap accepts B-1, B-3, B-5 and B-6 only; a usage error exits 2.
+    let o = ftgsxr(&["bench", "B-2"]);
+    assert_eq!(o.status.code(), Some(2));
+}
+
+/// `ftgsxr bench` with the baselines' directory `baselines` (Q-103).
+fn bench(args: &[&str], baselines: &std::path::Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
+        .arg("bench")
+        .args(args)
+        .env("FTGSXR_BENCH_BASELINES", baselines)
+        .output()
+        .expect("the binary runs")
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_bench_reports_a_regression_against_a_baseline_20_percent_better() {
+    // Q-67's detecting test: the first run, with no baseline, exits 0; a baseline whose
+    // budgeted figures are 20 % better (B-6's bytes per primitive × 0.8: lower is
+    // better) makes the second run list each budget as a regression and exit 3.
+    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), "cli", "bench-regression");
+    let baselines = dir.join("baselines");
+    fs::create_dir_all(&baselines).unwrap();
+    let model = dir.join("tiny.ftgs-if");
+    let tiny = ftgsxr_testkit::random_model(5, 1000, 3);
+    fs::write(&model, ftgsxr_testkit::exchange_bytes(&tiny)).unwrap();
+    let first = dir.join("first.json");
+    let args = ["B-6", "--model", model.to_str().unwrap(), "--out"];
+
+    let o = bench(
+        &[&args[..], &[first.to_str().unwrap()]].concat(),
+        &baselines,
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(stdout(&o).is_empty(), "the file goes to --out");
+    let mut file: serde_json::Value = serde_json::from_slice(&fs::read(&first).unwrap()).unwrap();
+    assert_eq!(file["baseline"], serde_json::Value::Null);
+    let budgets = file["budgets"].as_array_mut().unwrap();
+    assert_eq!(budgets.len(), 5, "five tiers");
+    for b in budgets.iter_mut() {
+        let better = b["value"].as_f64().unwrap() * 0.8;
+        b["value"] = better.into();
+    }
+    fs::write(
+        baselines.join("B-6.json"),
+        serde_json::to_vec_pretty(&file).unwrap(),
+    )
+    .unwrap();
+
+    let second = dir.join("second.json");
+    let o = bench(
+        &[&args[..], &[second.to_str().unwrap()]].concat(),
+        &baselines,
+    );
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(3), "{stderr}");
+    let regressions: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("ftgsxr: regression: B-6 bytes_per_primitive"))
+        .collect();
+    assert_eq!(regressions.len(), 5, "{stderr}");
+    let written: serde_json::Value = serde_json::from_slice(&fs::read(&second).unwrap()).unwrap();
+    assert!(
+        written["baseline"]
+            .as_str()
+            .is_some_and(|p| p.ends_with("B-6.json"))
+    );
+}
