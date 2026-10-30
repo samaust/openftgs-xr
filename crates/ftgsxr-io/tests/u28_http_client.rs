@@ -62,6 +62,46 @@ fn u28_header_only_read_fetches_8_plus_header_length_bytes() {
     assert!(fetched < whole.len() as u64);
 }
 
+/// Q-44 (changed, #87): "fewer bytes when the file ends first" holds down to zero bytes:
+/// a range starting at or past the end of the file (the server's 416) is an empty slice.
+#[test]
+fn u28_get_range_at_or_past_the_end_is_empty() {
+    let server = serve_fixtures();
+    let http = client("past-end");
+    let name = "checkpoint/tiny.safetensors";
+    let url = url_of(&server, name);
+    let size = std::fs::metadata(fixtures_dir().join(name)).unwrap().len();
+
+    for start in [size, size + 1, size + 1000] {
+        let bytes = http.get_range(&url, start, 8);
+        assert_eq!(bytes.map_err(|e| e.code()), Ok(vec![]), "start {start}");
+    }
+    let records = server.requests();
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|r| r.status == 416));
+}
+
+/// Q-44, unchanged by #87: a 206 that ends with the file gives fewer than `len` bytes, and
+/// a status other than 206, 200 or 416 is E-NET-FETCH.
+#[test]
+fn u28_get_range_short_206_and_404() {
+    let server = serve_fixtures();
+    let http = client("short-range");
+    let url = url_of(&server, "checkpoint/tiny.safetensors");
+    let whole = std::fs::read(fixtures_dir().join("checkpoint/tiny.safetensors")).unwrap();
+    let start = whole.len() as u64 - 4;
+
+    let tail = http
+        .get_range(&url, start, 100)
+        .expect("the file's last bytes");
+    assert_eq!(tail, whole[whole.len() - 4..]);
+    assert_eq!(server.requests()[0].status, 206);
+
+    let missing = http.get_range(&url_of(&server, "checkpoint/absent.safetensors"), 0, 8);
+    assert_eq!(missing.map_err(|e| e.code()), Err("E-NET-FETCH"));
+    assert_eq!(server.requests()[1].status, 404);
+}
+
 #[test]
 fn u28_get_text_reads_a_listing_body_and_refuses_a_missing_one() {
     let server = serve_fixtures();

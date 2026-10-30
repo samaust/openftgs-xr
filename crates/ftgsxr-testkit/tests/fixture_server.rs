@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! §2.7 `serve_fixtures`, Q-1, Q-6, Q-39, Q-40: the fixture server answers whole-file,
-//! 304 and 206 requests, records them, truncates on demand and serves the chosen listing
-//! body, as U-28's clauses and §1.5's cache paragraph need. Driven over a raw socket, so
-//! every header and byte on the wire is visible.
+//! §2.7 `serve_fixtures`, Q-1, Q-6, Q-39, Q-40, Q-55: the fixture server answers
+//! whole-file, 304 and 206 requests, records them, truncates on demand, serves the chosen
+//! listing body and answers a chosen status at a path, as U-28's and U-31's clauses and
+//! §1.5's cache paragraph need. Driven over a raw socket, so every header and byte on the
+//! wire is visible.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -442,6 +443,43 @@ fn the_listed_entries_resolve_under_the_listing_base() {
     assert_eq!(
         send(&server, "GET", "/listing/models/.hidden.safetensors", &[]).status,
         404
+    );
+}
+
+#[test]
+fn status_for_answers_the_chosen_status_at_its_path() {
+    // Q-55: from the call on, the target as sent answers the status with an empty body,
+    // whatever it served before; other paths are unchanged, a later call replaces it.
+    let server = serve_fixtures();
+    server.serve_listing(ServedListing::NginxJson);
+    let base = "/listing/models/";
+    server.status_for(base, 403);
+    for _ in 0..2 {
+        let reply = send(&server, "GET", base, &[]);
+        assert_eq!((reply.status, reply.body.len()), (403, 0));
+    }
+    assert_eq!(
+        send(&server, "GET", "/listing/models/?sort=name", &[]).status,
+        403
+    );
+    assert_eq!(send(&server, "HEAD", base, &[]).status, 403);
+    server.status_for(MODEL_TARGET, 503);
+    let reply = send(&server, "GET", MODEL_TARGET, &[]);
+    assert_eq!((reply.status, reply.body.len()), (503, 0));
+    assert_eq!(reply.header("ETag"), None);
+    assert_eq!(
+        send(&server, "GET", "/listing/models/snapshot.ply", &[]).status,
+        200
+    );
+    server.status_for(base, 503);
+    assert_eq!(send(&server, "GET", base, &[]).status, 503);
+    let reply = send(&server, "POST", base, &[("Content-Length", "0")]);
+    assert_eq!(reply.status, 405);
+    // Recorded as any other request, with no body bytes.
+    let last = server.requests().into_iter().nth_back(1).unwrap();
+    assert_eq!(
+        (last.path.as_str(), last.status, last.body_bytes),
+        (base, 503, 0)
     );
 }
 
