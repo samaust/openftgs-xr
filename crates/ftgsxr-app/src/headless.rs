@@ -240,25 +240,17 @@ pub fn cmd_info(version: &str, json: bool) -> String {
     lines.join("\n")
 }
 
-/// The entries of a flat compact JSON object as `RenderConventions::to_json` writes it, in
-/// its order: each key, and its value's JSON text with a string's quotes removed. The
-/// object's values are numbers, `null`, strings without commas or escapes, and one array
-/// of numbers, so an entry ends at the next `,"`.
+/// The entries of the JSON object `RenderConventions::to_json` writes, in its order: each
+/// key, a string's value unquoted and unescaped, and any other value's JSON text as
+/// written (Q-77).
+// Q-77
 fn json_entries(object: &str) -> Vec<(String, String)> {
-    let inner = object
-        .strip_prefix('{')
-        .and_then(|s| s.strip_suffix('}'))
-        .unwrap_or(object);
-    inner
-        .split(",\"")
-        .filter_map(|entry| {
-            let (key, value) = entry.split_once("\":")?;
-            let key = key.trim_start_matches('"');
-            let value = value
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .unwrap_or(value);
-            Some((key.to_owned(), value.to_owned()))
+    json::members(object)
+        .expect("invariant: RenderConventions::to_json writes a JSON object")
+        .into_iter()
+        .map(|(key, value, text)| match value {
+            json::Json::Str(s) => (key, s),
+            _ => (key, text.to_owned()),
         })
         .collect()
 }
@@ -379,4 +371,25 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_entries_keeps_string_values_that_hold_a_comma_or_a_quote() {
+        // `"a,"` holds the `,"` that splitting by hand took for an entry's end.
+        let entries = json_entries(r#"{"a":0.0,"rule":"a,","mode":"x\"y","b":[1.0,2.0],"c":null}"#);
+        assert_eq!(
+            entries,
+            vec![
+                ("a".to_owned(), "0.0".to_owned()),
+                ("rule".to_owned(), "a,".to_owned()),
+                ("mode".to_owned(), "x\"y".to_owned()),
+                ("b".to_owned(), "[1.0,2.0]".to_owned()),
+                ("c".to_owned(), "null".to_owned()),
+            ]
+        );
+    }
 }

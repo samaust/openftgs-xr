@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A small JSON value for the benchmark files (Q-67, Q-103): written in a fixed key
-//! order and read back for the baseline comparison. §2.1's row for `ftgsxr-app` names no
+//! order and read back for the baseline comparison; `cmd_info` reads its conventions'
+//! members with it (Q-77). §2.1's row for `ftgsxr-app` names no
 //! JSON crate, so the module writes and parses the subset the files use (RFC 8259 without
 //! surrogate-pair escapes beyond the basic plane's `\uXXXX`).
 
@@ -154,6 +155,50 @@ impl Json {
         }
         Ok(value)
     }
+}
+
+/// The members of the JSON object `text`, in order: each key, its parsed value, and the
+/// value's own text as written (a number keeps its spelling, `0.0` stays `0.0`).
+pub(crate) fn members(text: &str) -> Result<Vec<(String, Json, &str)>, String> {
+    let mut p = Parser {
+        bytes: text.as_bytes(),
+        at: 0,
+    };
+    p.space();
+    p.expect("{")?;
+    let mut out = Vec::new();
+    p.space();
+    if p.bytes.get(p.at) == Some(&b'}') {
+        p.at += 1;
+    } else {
+        loop {
+            p.space();
+            if p.bytes.get(p.at) != Some(&b'"') {
+                return Err(p.error("expected a key"));
+            }
+            let key = p.string()?;
+            p.space();
+            p.expect(":")?;
+            p.space();
+            let start = p.at;
+            let value = p.value()?;
+            out.push((key, value, &text[start..p.at]));
+            p.space();
+            match p.bytes.get(p.at) {
+                Some(b',') => p.at += 1,
+                Some(b'}') => {
+                    p.at += 1;
+                    break;
+                }
+                _ => return Err(p.error("expected , or }")),
+            }
+        }
+    }
+    p.space();
+    if p.at != p.bytes.len() {
+        return Err(format!("trailing characters at byte {}", p.at));
+    }
+    Ok(out)
 }
 
 fn write_string(out: &mut String, s: &str) {
