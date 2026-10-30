@@ -172,7 +172,7 @@ fn u36_the_header_is_checked() {
     assert!(matches!(read(&raw), Err(CoreError::Version(_))));
     assert!(matches!(
         read_scene_manifest(b"[1, 2"),
-        Err(CoreError::Json(_))
+        Err(CoreError::Format(_))
     ));
 }
 

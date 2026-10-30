@@ -21,6 +21,11 @@ const ORTHONORMAL_TOLERANCE: f64 = 1e-5;
 pub(crate) fn parse_object(bytes: &[u8], what: &str) -> Result<Map<String, Value>, CoreError> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|e| CoreError::Json(format!("the {what} file ({e})")))?;
+    object(value, what)
+}
+
+/// `value` as a JSON object, else not a file of the format `what` (E-FILE-FORMAT). Q-25
+pub(crate) fn object(value: Value, what: &str) -> Result<Map<String, Value>, CoreError> {
     match value {
         Value::Object(map) => Ok(map),
         _ => Err(CoreError::Format(format!(

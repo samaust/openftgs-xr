@@ -35,9 +35,10 @@ pub enum CoreError {
     /// gives the degree and the shape.
     #[error("Unsupported SH degree ({0})")]
     Sh(String),
-    /// E-FILE-CHECKSUM: a checkpoint's `files` digest disagrees with `params.safetensors`;
-    /// the payload names the file.
-    #[error("Checkpoint checksum mismatch ({0})")]
+    /// E-FILE-CHECKSUM: a checkpoint's `files` digest disagrees with `params.safetensors`,
+    /// or a renders file's `request_sha256` with the request's digest; the payload names
+    /// the file and the two digests.
+    #[error("Checksum mismatch ({0})")]
     Checksum(String),
     /// E-REQ-UNIT: a request's `time_unit` differs from the model's.
     #[error("Request time unit {request}, model {model}")]

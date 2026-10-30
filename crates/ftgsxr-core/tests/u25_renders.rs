@@ -3,7 +3,7 @@
 //! U-25, the `ftgs-renders` writer and reader (§1.7, openftgs §2.2, `cpu` lane): a
 //! two-item round trip with the keys `rgb/<id>` and `alpha/<id>` and the metadata fields,
 //! ids sorted on read; an openftgs-written renders fixture reads; a `request_sha256`
-//! mismatch is refused (E-FILE-CHECKSUM, Q-25).
+//! mismatch is refused (E-FILE-CHECKSUM, §1.15).
 
 use std::path::PathBuf;
 

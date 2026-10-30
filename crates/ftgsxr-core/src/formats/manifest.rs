@@ -56,7 +56,8 @@ pub struct ManifestImage {
 /// `metadata`) are not checked, and unknown keys are ignored (Q-26). Codes of Q-25.
 // Q-25, Q-26
 pub fn read_scene_manifest(json: &[u8]) -> Result<SceneManifest, CoreError> {
-    let map = json::parse_object(json, FORMAT)?;
+    let value: Value = serde_json::from_slice(json).map_err(not_json)?;
+    let map = json::object(value, FORMAT)?;
     json::check_header(&map, FORMAT)?;
     let time_unit = json::time_unit(&map)?;
     let raw_cameras = required(&map, "cameras")?;
@@ -201,6 +202,12 @@ fn camera_order(json: &[u8]) -> Result<Vec<String>, CoreError> {
         }
     }
     let mut de = serde_json::Deserializer::from_slice(json);
-    de.deserialize_map(Top)
-        .map_err(|e| CoreError::Json(format!("the {FORMAT} file ({e})")))
+    de.deserialize_map(Top).map_err(not_json)
+}
+
+/// Text that is not JSON is not a `ftgs-scene` file (E-FILE-FORMAT): the manifest is an
+/// openftgs file, and §1.15's E-JSON names the player's files and requests (Q-25, as Q-31
+/// maps a checkpoint's `manifest.json`).
+fn not_json(error: serde_json::Error) -> CoreError {
+    CoreError::Format(format!("the {FORMAT} file is not JSON ({error})"))
 }
