@@ -260,6 +260,102 @@ fn u30_scene_naming_a_missing_file_reads() {
     assert_eq!(scene.camera, None);
 }
 
+/// `scene_json`'s minimal scene with its `environment` object replaced by `environment`.
+fn with_environment(environment: &str) -> String {
+    let good = scene_json("1", SOURCE, "");
+    let start = good.find(r#""environment": {"#).expect("an environment");
+    let end = good.find(r#""anchor""#).expect("an anchor");
+    format!(
+        r#"{}"environment": {environment},
+  {}"#,
+        &good[..start],
+        &good[end..]
+    )
+}
+
+/// Q-52 (#91): every key of the scene's `environment` may be absent; an empty object reads
+/// as `EnvironmentSettings::default()`.
+#[test]
+fn u30_scene_empty_environment_is_the_default() {
+    let scene = read_scene(with_environment("{}").as_bytes()).expect("the scene reads");
+    assert_eq!(scene.environment, EnvironmentSettings::default());
+}
+
+/// Q-52 (#91): a key missing from `environment` (`occlusion_delta_m`) and one missing
+/// from its `lighting_manual` (`tint`) take the default's values; every other field is
+/// read as written, each away from its default.
+#[test]
+fn u30_scene_missing_environment_keys_take_the_default() {
+    let environment = r#"{
+    "mode": "passthrough", "background": [0.25, 0.5, 0.75],
+    "passthrough_brightness": 10, "passthrough_contrast": -20, "passthrough_saturation": 30,
+    "occlusion": false, "occlusion_soft": false,
+    "hand_removal": true, "lighting_mode": "manual",
+    "lighting_manual": {"exposure_ev": 1.5, "temperature": -40},
+    "lighting_gamma": 0.25, "lighting_reference": [1, 2, 3, 4], "contact_shadows": false
+  }"#;
+    let scene = read_scene(with_environment(environment).as_bytes()).expect("the scene reads");
+    assert_eq!(
+        scene.environment,
+        EnvironmentSettings {
+            mode: "passthrough".into(),
+            background: [0.25, 0.5, 0.75],
+            passthrough_brightness: 10.0,
+            passthrough_contrast: -20.0,
+            passthrough_saturation: 30.0,
+            occlusion: false,
+            occlusion_soft: false,
+            // Q-50's default (D-16's δ).
+            occlusion_delta_m: 0.05,
+            hand_removal: true,
+            lighting_mode: "manual".into(),
+            lighting_manual: ManualLighting {
+                exposure_ev: 1.5,
+                temperature: -40.0,
+                // Q-50's default, the identity transform's.
+                tint: 0.0,
+            },
+            lighting_gamma: 0.25,
+            lighting_reference: Some([1.0, 2.0, 3.0, 4.0]),
+            contact_shadows: false,
+        }
+    );
+    let absent = with_environment(r#"{"lighting_mode": "manual"}"#);
+    let scene = read_scene(absent.as_bytes()).expect("the scene reads");
+    assert_eq!(scene.environment.lighting_reference, None);
+    assert_eq!(scene.environment.lighting_manual, ManualLighting::default());
+}
+
+/// Q-52, Q-53 (#91): only absence falls back to the default. A key present with the wrong
+/// type is still E-SCENE-FORMAT naming its path, in `environment` and in its
+/// `lighting_manual`, and a scene without `environment` at all is E-SCENE-FORMAT.
+#[test]
+fn u30_scene_environment_wrong_type_or_missing_object_is_scene_format() {
+    let cases = [
+        (r#"{"occlusion": 1}"#, "environment.occlusion"),
+        (
+            r#"{"lighting_manual": {"tint": "warm"}}"#,
+            "environment.lighting_manual.tint",
+        ),
+        (r#"{"lighting_manual": 0}"#, "environment.lighting_manual"),
+        (r#"{"mode": "ar"}"#, "environment.mode"),
+        (r#"{"background": null}"#, "environment.background"),
+        ("[]", "environment"),
+    ];
+    for (environment, path) in cases {
+        let err = read_scene(with_environment(environment).as_bytes()).expect_err(environment);
+        assert_eq!(err.code(), "E-SCENE-FORMAT", "{environment}");
+        assert!(err.to_string().contains(path), "{environment}: {err}");
+    }
+    let good = scene_json("1", SOURCE, "");
+    let start = good.find(r#""environment": {"#).expect("an environment");
+    let end = good.find(r#""anchor""#).expect("an anchor");
+    let without = format!("{}{}", &good[..start], &good[end..]);
+    let err = read_scene(without.as_bytes()).expect_err("no environment");
+    assert_eq!(err.code(), "E-SCENE-FORMAT");
+    assert!(err.to_string().contains("environment"), "{err}");
+}
+
 /// The §1.15 code of `read_scene`'s refusal of `json`.
 fn refusal(json: &str) -> &'static str {
     read_scene(json.as_bytes())
