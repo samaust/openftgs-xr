@@ -5,7 +5,7 @@
 //! flavors over the local server; `DocumentSource` over a stub provider; `open_ref` for every
 //! `ModelRef`. D-50 and D-51 (`ModelBytes`; checkpoints travel by path, each route's
 //! directory read by `read_checkpoint` equal to the fixture checkpoint, U-5), Q-42 and
-//! Q-55 to Q-60 (a checkpoint's cache entry, its pruning, digest, accessor and progress),
+//! Q-56 to Q-61 (a checkpoint's cache entry, its pruning, digest, accessor and progress),
 //! Q-47 (the module's signatures and rules), Q-48 (`Auto`), over the fixture server of Q-39
 //! with the listing choice of Q-6.
 
@@ -234,7 +234,7 @@ fn read_fetched(bytes: &ModelBytes) -> Model {
     assert_eq!(
         bytes.as_bytes(),
         None,
-        "a checkpoint carries no bytes (Q-57)"
+        "a checkpoint carries no bytes (Q-58)"
     );
     let dir = bytes.checkpoint_dir().expect("a checkpoint directory");
     read_checkpoint(dir).expect("the fetched checkpoint reads")
@@ -253,7 +253,7 @@ fn u31_open_ref_of_a_checkpoint_directory_returns_it() {
 #[test]
 fn u31_local_dir_fetch_of_a_checkpoint_returns_its_directory() {
     // D-51: a local checkpoint loads from its directory; one progress report of the two
-    // files' size (Q-38, Q-58).
+    // files' size (Q-38, Q-59).
     let dir = local_models("u31_local_dir_fetch_of_a_checkpoint_returns_its_directory");
     let source = LocalDir { root: dir.clone() };
     let entries = source.list("").unwrap();
@@ -430,6 +430,76 @@ fn u31_http_index_auto_without_a_listing_is_e_net_listing() {
 }
 
 #[test]
+fn u31_http_index_auto_tells_a_server_failure_from_no_listing() {
+    // Q-48: past a missing `index.json`, a base answering 403 has no listing
+    // (E-NET-LISTING, as a 404 does), and any other failure status is the server's,
+    // E-NET-FETCH naming the status (§1.15: "HTTP status").
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let http = client("auto-status");
+    server.serve_listing(ServedListing::NginxJson);
+    let source = HttpIndex::new(base.clone(), ListingFlavor::Auto, http);
+    server.status_for("/listing/models/", 403);
+    assert_eq!(source.list("").unwrap_err().code(), "E-NET-LISTING");
+    server.status_for("/listing/models/", 503);
+    let error = source.list("").unwrap_err();
+    assert_eq!(error.code(), "E-NET-FETCH");
+    assert!(error.to_string().contains("503"), "{error}");
+    // Each answer took the index, then the base, once.
+    assert_eq!(
+        paths(&server),
+        ["/listing/models/index.json", "/listing/models/"].repeat(2)
+    );
+    // A 2xx body that is neither nginx JSON nor HTML anchors (here an empty one) has no
+    // listing either.
+    server.status_for("/listing/models/", 200);
+    assert_eq!(source.list("").unwrap_err().code(), "E-NET-LISTING");
+    assert_eq!(server.requests().last().map(|r| r.status), Some(200));
+}
+
+#[test]
+fn u31_http_index_base_without_a_trailing_slash_is_the_directory() {
+    // Q-48: a base is a directory, so `listing/models` lists as `listing/models/` does,
+    // through the same requests, and `name` is the base with its `/`.
+    let server = serve_fixtures();
+    let base = listing_base(&server);
+    let bare = Url::parse(&server.url_of("listing/models")).unwrap();
+    let http = client("bare-base");
+    for flavor in [FLAVORS.map(|(f, _)| f).to_vec(), vec![ListingFlavor::Auto]].concat() {
+        for (_, served) in FLAVORS {
+            server.serve_listing(served);
+            let listed = |url: &Url| {
+                let before = server.requests().len();
+                let source = HttpIndex::new(url.clone(), flavor, http.clone());
+                let name = source.name().to_owned();
+                let entries = source.list("").map(|e| summary(&e)).map_err(|e| e.code());
+                (name, entries, paths(&server)[before..].to_vec())
+            };
+            let (bare_name, bare_entries, bare_seen) = listed(&bare);
+            let (_, slashed_entries, slashed_seen) = listed(&base);
+            assert_eq!(bare_name, server.url_of("listing/models/"));
+            assert_eq!(
+                (bare_entries, bare_seen),
+                (slashed_entries, slashed_seen),
+                "{flavor:?} over {served:?}"
+            );
+        }
+    }
+    // A listed entry and a subdirectory resolve under the directory, not its parent.
+    server.serve_listing(ServedListing::NginxJson);
+    let source = HttpIndex::new(bare, ListingFlavor::NginxJson, http);
+    assert_eq!(
+        summary(&source.list("").unwrap()),
+        expected_entries(&base, ServedListing::NginxJson)
+    );
+    let _ = source.list("tiny/");
+    assert_eq!(
+        paths(&server).last().map(String::as_str),
+        Some("/listing/models/tiny/")
+    );
+}
+
+#[test]
 fn u31_http_index_lists_a_subdirectory_on_demand() {
     let server = serve_fixtures();
     let base = listing_base(&server);
@@ -487,6 +557,36 @@ fn u31_http_index_info_reads_8_plus_header_length_bytes() {
         assert_eq!(fetched, 8 + n, "8 + header-length bytes on the wire");
         assert!(fetched < whole.len() as u64);
     }
+}
+
+/// Q-44 (changed, #87): the header-only read of an empty model file (`http/empty.safetensors`,
+/// tests/fixtures/README.md) is the server's 416, an empty prefix, so it fails as a broken
+/// file (E-FILE-FORMAT), like a file shorter than its prefix, not as an unreachable URL.
+#[test]
+fn u31_http_index_info_of_an_empty_file_is_e_file_format() {
+    let server = serve_fixtures();
+    let source = HttpIndex::new(listing_base(&server), ListingFlavor::Index, client("empty"));
+    let entry = Entry {
+        name: "empty".into(),
+        location: server.url_of("http/empty.safetensors"),
+        kind: EntryKind::Exchange,
+        size: None,
+        mtime: None,
+        sha256: None,
+        thumbnail: None,
+        audio: None,
+        scene: None,
+    };
+    let err = source.info(&entry).unwrap_err();
+    assert_eq!(err.code(), "E-FILE-FORMAT");
+    assert!(
+        err.to_string().contains("shorter than its length prefix"),
+        "{err}"
+    );
+    let records = server.requests();
+    assert_eq!(records.len(), 1, "the prefix's request only");
+    assert_eq!(records[0].header("Range"), Some("bytes=0-7"));
+    assert_eq!(records[0].status, 416);
 }
 
 #[test]
@@ -569,7 +669,7 @@ fn u31_http_index_fetch_of_a_checkpoint_fills_one_cache_entry() {
             format!("{base_path}params.safetensors")
         ]
     );
-    // Progress is cumulative over both files and ends at their sum (Q-58).
+    // Progress is cumulative over both files and ends at their sum (Q-59).
     let size = tiny.size.expect("the index gives the checkpoint's size");
     assert_eq!(
         reports.last(),
@@ -580,22 +680,23 @@ fn u31_http_index_fetch_of_a_checkpoint_fills_one_cache_entry() {
     );
     assert!(reports.windows(2).all(|w| w[0].done <= w[1].done));
 
-    // A second fetch revalidates each file: two 304s, the same entry.
+    // A second fetch reuses the entry: the manifest is revalidated (a 304), and the params,
+    // whose recorded digest equals the manifest's, are reused without a request (Q-43).
     let before = server.requests().len();
     let (again, bytes, reports) = fetch_all(&source, &tiny);
     assert_eq!(again, ModelRef::File(dir.clone()));
     assert_eq!(read_fetched(&bytes), fixture_checkpoint());
-    let statuses: Vec<u16> = server.requests()[before..]
+    let seen: Vec<(String, u16)> = server.requests()[before..]
         .iter()
-        .map(|r| r.status)
+        .map(|r| (r.path.clone(), r.status))
         .collect();
-    assert_eq!(statuses, vec![304, 304]);
+    assert_eq!(seen, vec![(format!("{base_path}manifest.json"), 304)]);
     assert_eq!(reports.last().map(|p| p.done), Some(size));
 }
 
 #[test]
 fn u31_http_checkpoint_params_against_the_manifest_digest() {
-    // Q-56: `params.safetensors` downloads against the manifest's digest for it. The
+    // Q-57: `params.safetensors` downloads against the manifest's digest for it. The
     // fixture server serves the committed files as they are, so the cached manifest's
     // digest is doctored instead (its size kept, so the server's 304 keeps it, Q-42): the
     // params then disagree with it, which is E-NET-CHECKSUM, the download discarded.
@@ -643,7 +744,7 @@ fn entry_bytes(entry: &Path) -> u64 {
 
 #[test]
 fn u31_prune_never_evicts_a_checkpoint_in_use() {
-    // U-28's "never a loaded one" for a checkpoint's entry (Q-4, Q-55): the entry is kept
+    // U-28's "never a loaded one" for a checkpoint's entry (Q-4, Q-56): the entry is kept
     // while its directory, or a file in it, is in use, and it is ordered by the latest
     // `fetched_at` of its members (Q-42).
     let server = serve_fixtures();
@@ -661,7 +762,8 @@ fn u31_prune_never_evicts_a_checkpoint_in_use() {
         .download(&probe_url, None, &mut |_| {}, &cancel)
         .unwrap();
     let probe_dir = probe_file.parent().unwrap().to_path_buf();
-    // The checkpoint is used again (two 304s), so the probe is now the least recently used.
+    // The checkpoint is used again (both members' fetch times refreshed, Q-42, Q-43), so the
+    // probe is now the least recently used.
     fetch_all(&source, &tiny);
     let (dir_bytes, probe_bytes) = (entry_bytes(&dir), entry_bytes(&probe_dir));
 
@@ -672,7 +774,7 @@ fn u31_prune_never_evicts_a_checkpoint_in_use() {
 
     // No room at all: kept while the entry directory, or one of its files, is in use.
     let none = HttpClient::new(cache_of(test), TlsRoots::WebPki, 0).unwrap();
-    none.set_in_use(&[dir.clone()]);
+    none.set_in_use(std::slice::from_ref(&dir));
     assert_eq!(none.prune().unwrap(), 0, "the directory in use");
     none.set_in_use(&[dir.join("params.safetensors")]);
     assert_eq!(none.prune().unwrap(), 0, "a member in use");

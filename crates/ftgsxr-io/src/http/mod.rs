@@ -130,14 +130,15 @@ impl HttpClient {
 
     /// At most `len` bytes of the file at `url` from byte `start` on, through one `Range`
     /// request (§1.5's header-only reads: the first 8 + header-length bytes, never the
-    /// whole file). Fewer bytes when the file ends first; a server that ignores `Range` is
-    /// read only up to `start + len` bytes (Q-44). E-NET-FETCH on any other answer.
+    /// whole file). Fewer bytes when the file ends first, none when `start` is at or past
+    /// its end (a 416); a server that ignores `Range` is read only up to `start + len` bytes
+    /// (Q-44). E-NET-FETCH on any other answer.
     pub fn get_range(&self, url: &Url, start: u64, len: u64) -> Result<Vec<u8>, IoError> {
         self.get_range_sized(url, start, len)
             .map(|(bytes, _)| bytes)
     }
 
-    /// `get_range`, with the whole file's size when the answer states it: a 206's
+    /// `get_range`, with the whole file's size when the answer states it: a 206's or a 416's
     /// `Content-Range` total, a 200's `Content-Length` (the header-only information's
     /// file size for a listing that gives none, Q-47). `len` 0 sends no request and
     /// knows no size.
@@ -167,6 +168,8 @@ impl HttpClient {
                 start,
                 header(&response, "Content-Length").and_then(|v| v.trim().parse().ok()),
             ),
+            // Q-44 (changed, #87): `start` is at or past the end of the file, so no byte.
+            416 => return Ok((Vec::new(), unsatisfied_size(&response))),
             status => return Err(status_error(url, status)),
         };
         let mut body = Vec::new();
@@ -186,7 +189,7 @@ fn fetch_error(url: &Url, error: &ureq::Error) -> IoError {
 }
 
 /// E-NET-FETCH for an unexpected status (§1.15: "Could not reach URL (status)").
-fn status_error(url: &Url, status: u16) -> IoError {
+pub(crate) fn status_error(url: &Url, status: u16) -> IoError {
     IoError::Fetch(format!("{url} (status {status})"))
 }
 
@@ -207,6 +210,12 @@ fn content_range<B>(response: &Response<B>) -> Option<(u64, Option<u64>)> {
     Some((first.trim().parse().ok()?, size))
 }
 
+/// A 416's `Content-Range: bytes */<size>` as the file's size.
+fn unsatisfied_size<B>(response: &Response<B>) -> Option<u64> {
+    let value = header(response, "Content-Range")?.trim();
+    value.strip_prefix("bytes */")?.trim().parse().ok()
+}
+
 /// The guarded value, whether or not a thread panicked while holding it.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -219,5 +228,22 @@ mod tests {
     fn http_client_is_send_and_sync() {
         fn shared<T: Send + Sync>() {}
         shared::<super::HttpClient>();
+    }
+
+    /// Q-44 (#87): a 416 gives no byte and the size its `Content-Range: bytes */<size>`
+    /// states (the fixture server's, Q-39).
+    #[test]
+    fn get_range_sized_416_gives_the_stated_size() {
+        let server = ftgsxr_testkit::serve_fixtures();
+        let dir = std::env::temp_dir().join(format!("ftgsxr-http-unit-416-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let http = super::HttpClient::new(dir, super::TlsRoots::WebPki, 1 << 30).unwrap();
+        let name = "checkpoint/tiny.safetensors";
+        let size = std::fs::metadata(ftgsxr_testkit::fixtures_dir().join(name))
+            .unwrap()
+            .len();
+        let url = url::Url::parse(&server.url_of(name)).unwrap();
+        let answer = http.get_range_sized(&url, size, 8).map_err(|e| e.code());
+        assert_eq!(answer, Ok((Vec::new(), Some(size))));
     }
 }

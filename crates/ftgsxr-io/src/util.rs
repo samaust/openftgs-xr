@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! What the player's own files share (§1.11): the atomic write, the clock their times
-//! come from and the versioning rule's `version` check. Placed before every module of
-//! §2.1, which may all use it.
+//! come from and the versioning rule's `version` check, and the cancel error every source
+//! gives. Placed before every module of §2.1, which may all use it.
 
 use std::fs::File;
 use std::io::Write;
@@ -12,6 +12,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::IoError;
+
+/// The error of a cancelled read or download of `what`: E-IO of kind `Interrupted`, one
+/// for every source, recognised by its kind (Q-43, Q-47).
+pub(crate) fn cancelled(what: impl std::fmt::Display) -> IoError {
+    IoError::Io(std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        format!("{what}: cancelled"),
+    ))
+}
 
 /// Writes `bytes` to `<path>.tmp`, flushes it to the disk and renames it over `path`, so a
 /// crash leaves the old file intact (§1.11 Locations).
@@ -168,7 +177,8 @@ mod tests {
 
     #[test]
     fn write_atomic_replaces_the_file_and_leaves_no_temporary() {
-        let dir = std::env::temp_dir().join("ftgsxr-io-write-atomic");
+        let dir =
+            std::env::temp_dir().join(format!("ftgsxr-io-write-atomic-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a.json");

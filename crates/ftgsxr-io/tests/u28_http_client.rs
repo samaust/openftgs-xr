@@ -11,10 +11,10 @@ use ftgsxr_io::http::{HttpClient, Progress, TlsRoots};
 use ftgsxr_testkit::{fixtures_dir, serve_fixtures};
 use url::Url;
 
-/// A fresh, empty cache directory for one test, named after it so tests sharing the process
-/// never meet and a rerun replaces the last run's.
+/// A fresh, empty cache directory for one test, named after it and the process so that
+/// neither tests sharing the process nor runs in other worktrees or sessions ever meet (#93).
 fn cache_dir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ftgsxr-u28-{test}"));
+    let dir = std::env::temp_dir().join(format!("ftgsxr-u28-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("a temporary cache directory");
     dir
@@ -60,6 +60,46 @@ fn u28_header_only_read_fetches_8_plus_header_length_bytes() {
     let fetched: u64 = records.iter().map(|r| r.body_bytes).sum();
     assert_eq!(fetched, 8 + n, "8 + header-length bytes on the wire");
     assert!(fetched < whole.len() as u64);
+}
+
+/// Q-44 (changed, #87): "fewer bytes when the file ends first" holds down to zero bytes:
+/// a range starting at or past the end of the file (the server's 416) is an empty slice.
+#[test]
+fn u28_get_range_at_or_past_the_end_is_empty() {
+    let server = serve_fixtures();
+    let http = client("past-end");
+    let name = "checkpoint/tiny.safetensors";
+    let url = url_of(&server, name);
+    let size = std::fs::metadata(fixtures_dir().join(name)).unwrap().len();
+
+    for start in [size, size + 1, size + 1000] {
+        let bytes = http.get_range(&url, start, 8);
+        assert_eq!(bytes.map_err(|e| e.code()), Ok(vec![]), "start {start}");
+    }
+    let records = server.requests();
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|r| r.status == 416));
+}
+
+/// Q-44, unchanged by #87: a 206 that ends with the file gives fewer than `len` bytes, and
+/// a status other than 206, 200 or 416 is E-NET-FETCH.
+#[test]
+fn u28_get_range_short_206_and_404() {
+    let server = serve_fixtures();
+    let http = client("short-range");
+    let url = url_of(&server, "checkpoint/tiny.safetensors");
+    let whole = std::fs::read(fixtures_dir().join("checkpoint/tiny.safetensors")).unwrap();
+    let start = whole.len() as u64 - 4;
+
+    let tail = http
+        .get_range(&url, start, 100)
+        .expect("the file's last bytes");
+    assert_eq!(tail, whole[whole.len() - 4..]);
+    assert_eq!(server.requests()[0].status, 206);
+
+    let missing = http.get_range(&url_of(&server, "checkpoint/absent.safetensors"), 0, 8);
+    assert_eq!(missing.map_err(|e| e.code()), Err("E-NET-FETCH"));
+    assert_eq!(server.requests()[1].status, 404);
 }
 
 #[test]
@@ -256,6 +296,88 @@ fn u28_a_checksum_mismatch_discards_the_download() {
     assert_eq!(std::fs::read(path).unwrap(), whole);
 }
 
+/// Q-43: an expected digest equal to the cached file's record proves the bytes current, so
+/// `download` returns the cached file without a request, refreshing its fetch time as a 304
+/// does (Q-42), even beside an unrelated partial; without a digest it still revalidates.
+#[test]
+fn u28_a_digest_matching_the_cached_record_sends_no_request() {
+    let server = serve_fixtures();
+    let cache = cache_dir("digest-hit");
+    let http = HttpClient::new(cache.clone(), TlsRoots::WebPki, 1 << 40).unwrap();
+    let url = url_of(&server, "probes/P9.renders.safetensors");
+    let whole = std::fs::read(fixtures_dir().join("probes/P9.renders.safetensors")).unwrap();
+    let digest = ftgsxr_core::hex(&ftgsxr_core::sha256(&whole));
+    let cancel = AtomicBool::new(false);
+
+    let path = http
+        .download(&url, Some(&digest), &mut |_| {}, &cancel)
+        .expect("the first download");
+    assert_eq!(server.requests().len(), 1);
+    let entry = entry_dir(&cache, &url);
+    let meta = entry.join("meta.json");
+    let fetched_at = |m: &std::path::Path| -> String {
+        let record: serde_json::Value = serde_json::from_slice(&std::fs::read(m).unwrap()).unwrap();
+        record["fetched_at"].as_str().unwrap().to_owned()
+    };
+    let first_fetch = fetched_at(&meta);
+
+    // An unrelated partial for the same URL, with a validator a resume would use.
+    std::fs::write(entry.join("file.part"), &whole[..1000]).unwrap();
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&meta).unwrap()).unwrap();
+    record["sha256"] = serde_json::Value::Null;
+    std::fs::write(
+        entry.join("meta.part.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+
+    let mut reports = Vec::new();
+    let hit = http
+        .download(&url, Some(&digest), &mut |p| reports.push(p), &cancel)
+        .expect("the cached file");
+    assert_eq!(hit, path);
+    assert_eq!(std::fs::read(&hit).unwrap(), whole, "identical bytes");
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "no request for a digest-matched hit"
+    );
+    let size = whole.len() as u64;
+    assert_eq!(
+        reports,
+        vec![Progress {
+            done: size,
+            total: Some(size)
+        }],
+        "one report with the file's size"
+    );
+    assert!(
+        fetched_at(&meta) > first_fetch,
+        "the fetch time, the entry's last use, is refreshed (Q-42)"
+    );
+    std::fs::remove_file(entry.join("file.part")).unwrap();
+    std::fs::remove_file(entry.join("meta.part.json")).unwrap();
+
+    // Without an expected digest the cached file is revalidated as before.
+    let (again, _) = fetch(&http, &url);
+    assert_eq!(again.expect("the revalidated download"), path);
+    let records = server.requests();
+    assert_eq!(records.len(), 2, "one request");
+    assert_eq!((records[1].status, records[1].body_bytes), (304, 0));
+}
+
+/// A cancel is E-IO of kind `Interrupted`, as a cancelled local or document `fetch` is
+/// (Q-43, Q-47).
+fn assert_cancelled(result: Result<PathBuf, ftgsxr_io::IoError>) {
+    let err = result.expect_err("a cancelled download");
+    assert_eq!(err.code(), "E-IO");
+    assert!(
+        matches!(&err, ftgsxr_io::IoError::Io(e) if e.kind() == std::io::ErrorKind::Interrupted),
+        "a cancel is recognised by its kind: {err:?}"
+    );
+}
+
 #[test]
 fn u28_cancel_stops_within_one_chunk() {
     let server = serve_fixtures();
@@ -267,7 +389,7 @@ fn u28_cancel_stops_within_one_chunk() {
     // Cancelled before it starts: no request at all.
     let cancel = AtomicBool::new(true);
     let early = http.download(&url, None, &mut |_| {}, &cancel);
-    assert_eq!(early.map_err(|e| e.code()), Err("E-NET-FETCH"));
+    assert_cancelled(early);
     assert!(server.requests().is_empty());
 
     // Cancelled at the first chunk's report: no further chunk is read or reported.
@@ -282,7 +404,7 @@ fn u28_cancel_stops_within_one_chunk() {
         },
         &cancel,
     );
-    assert_eq!(result.map_err(|e| e.code()), Err("E-NET-FETCH"));
+    assert_cancelled(result);
     assert_eq!(
         reports.len(),
         1,

@@ -14,7 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
 use url::Url;
 
-use crate::listing::{checked_header_len, header_info};
+use crate::http::status_error;
+use crate::listing::{as_directory, checked_header_len, header_info};
+use crate::util::cancelled;
 use crate::{
     Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
     parse_nginx_json,
@@ -47,9 +49,9 @@ pub enum ModelBytes {
     Checkpoint(PathBuf),
 }
 
-// Q-57
+// Q-58
 impl ModelBytes {
-    /// The file's bytes; `None` for a checkpoint, which is read by path (Q-57).
+    /// The file's bytes; `None` for a checkpoint, which is read by path (Q-58).
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             ModelBytes::Owned(bytes) => Some(bytes),
@@ -57,7 +59,7 @@ impl ModelBytes {
         }
     }
 
-    /// The checkpoint's directory; `None` for a file's bytes (Q-57).
+    /// The checkpoint's directory; `None` for a file's bytes (Q-58).
     pub fn checkpoint_dir(&self) -> Option<&Path> {
         match self {
             ModelBytes::Owned(_) => None,
@@ -88,7 +90,7 @@ pub trait ModelSource: Send + Sync {
     /// The entry's file, read into memory, with the reference it was read from; `progress`
     /// hears as it arrives and `cancel` stops it (§1.5, Q-47). A checkpoint comes back as
     /// its directory on disk, `ModelBytes::Checkpoint`, referenced by `ModelRef::File` of it
-    /// (D-51, Q-58); a document source refuses one (Q-60).
+    /// (D-51, Q-59); a document source refuses one (Q-61).
     fn fetch(
         &self,
         entry: &Entry,
@@ -107,7 +109,8 @@ pub struct LocalDir {
 /// An HTTP index (§1.5, D-31): a base URL listed in one of the three listing flavors,
 /// fetched through the shared `HttpClient`.
 pub struct HttpIndex {
-    /// The directory URL listed; `index.json` resolves against it, so it ends in `/`.
+    /// The directory URL listed, ending in `/` (`new` appends it, Q-48), so `index.json`,
+    /// subdirectories and relative entry locations resolve under it.
     pub base: Url,
     /// The listing read, or `Auto` to detect it on every listing (Q-48).
     pub flavor: ListingFlavor,
@@ -152,11 +155,12 @@ const PARAMS: &str = "params.safetensors";
 const CHUNK: usize = 1 << 20;
 
 impl HttpIndex {
-    /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-47).
-    // Q-47
+    /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-47). A base is a
+    /// directory: one whose path does not end in `/` gets one (Q-48).
+    // Q-47, Q-48
     pub fn new(base: Url, flavor: ListingFlavor, client: Arc<HttpClient>) -> HttpIndex {
         HttpIndex {
-            base,
+            base: as_directory(base),
             flavor,
             client,
         }
@@ -292,14 +296,17 @@ impl ModelSource for HttpIndex {
 
 impl HttpIndex {
     /// `Auto`'s detection at the directory URL `dir` (D-31, Q-48): `index` when it
-    /// answers 2xx, then `dir` once, as nginx JSON, then as HTML anchors.
+    /// answers 2xx, then `dir` once, as nginx JSON, then as HTML anchors. A `dir` answering
+    /// 404 or 403 has no listing (E-NET-LISTING); any other failure status is E-NET-FETCH.
     // Q-48
     fn detect(&self, dir: &Url, index: &Url) -> Result<Vec<Entry>, IoError> {
         if let Ok(body) = self.client.get_text_or_status(index)? {
             return parse_index_manifest(&body, dir);
         }
-        let Ok(body) = self.client.get_text_or_status(dir)? else {
-            return Err(IoError::Listing(dir.to_string()));
+        let body = match self.client.get_text_or_status(dir)? {
+            Ok(body) => body,
+            Err(404 | 403) => return Err(IoError::Listing(dir.to_string())),
+            Err(status) => return Err(status_error(dir, status)),
         };
         parse_nginx_json(&body, dir)
             .or_else(|_| parse_html_listing(&body, dir))
@@ -354,7 +361,7 @@ impl ModelSource for DocumentSource {
         cancel: &AtomicBool,
     ) -> Result<(ModelRef, ModelBytes), IoError> {
         fetchable(entry)?;
-        // Q-60: a picked checkpoint waits on the shim's document provider (M-5).
+        // Q-61: a picked checkpoint waits on the shim's document provider (M-5).
         if entry.kind == EntryKind::Checkpoint {
             return Err(unsupported(&format!(
                 "{}: a checkpoint cannot be read from picked documents yet",
@@ -400,9 +407,9 @@ pub fn open_source(
 
 /// The model `r` names (§1.5): a local file read into memory, a local directory as the
 /// checkpoint it holds, loaded by path (D-51), a download through `client` with no expected
-/// digest (an `Http` reference names a file, Q-59), or a document through `provider`
+/// digest (an `Http` reference names a file, Q-60), or a document through `provider`
 /// (Q-47).
-// D-51, Q-47, Q-59
+// D-51, Q-47, Q-60
 pub fn open_ref(
     r: &ModelRef,
     client: Option<&HttpClient>,
@@ -453,8 +460,8 @@ fn fetchable(entry: &Entry) -> Result<(), IoError> {
 }
 
 /// The local checkpoint `dir`, returned by path (D-51): nothing is read, so `progress`
-/// hears once, with the two files' size (Q-38, Q-58), unless `cancel` is already set (Q-47).
-// D-51, Q-58
+/// hears once, with the two files' size (Q-38, Q-59), unless `cancel` is already set (Q-47).
+// D-51, Q-59
 fn local_checkpoint(
     dir: &Path,
     progress: &mut dyn FnMut(Progress),
@@ -518,10 +525,7 @@ fn read_chunked(
     let mut bytes = Vec::with_capacity(total.map_or(0, |t| t as usize));
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(IoError::Io(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                format!("{what}: cancelled"),
-            )));
+            return Err(cancelled(what));
         }
         let read = (&mut reader).take(CHUNK as u64).read_to_end(&mut bytes)?;
         if read == 0 {

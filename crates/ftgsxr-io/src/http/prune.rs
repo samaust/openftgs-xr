@@ -23,7 +23,7 @@ struct Candidate {
 
 impl HttpClient {
     /// Replaces the set of cached files `prune` must keep, the paths `download` returned for
-    /// the models now loaded, or a fetched checkpoint's entry directory (Q-4, Q-55); the
+    /// the models now loaded, or a fetched checkpoint's entry directory (Q-4, Q-56); the
     /// application calls it before pruning.
     pub fn set_in_use(&self, paths: &[PathBuf]) {
         *lock(&self.in_use) = paths.iter().map(|p| canonical(p)).collect();
@@ -31,7 +31,7 @@ impl HttpClient {
 
     /// Evicts whole cache entries, least recently used first, until the download cache holds
     /// at most `max_bytes`, never one whose directory or one of whose files is in use (§1.5,
-    /// §1.11, Q-4, Q-45, Q-55);
+    /// §1.11, Q-4, Q-45, Q-56);
     /// returns the bytes freed.
     pub fn prune(&self) -> Result<u64, IoError> {
         let _guard = lock(&self.cache_lock);
@@ -64,7 +64,7 @@ impl HttpClient {
             }
             let dir = dir.path();
             let mut bytes = 0;
-            // Q-55: the entry's directory, or any file in it.
+            // Q-56: the entry's directory, or any file in it.
             let mut used_now = in_use.contains(&canonical(&dir));
             for file in std::fs::read_dir(&dir)? {
                 let file = file?;

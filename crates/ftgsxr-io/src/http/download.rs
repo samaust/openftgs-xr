@@ -16,7 +16,7 @@ use url::Url;
 use super::cache::{Entry, Record, remove_if_present};
 use super::{HttpClient, Progress, content_range, fetch_error, header, lock, status_error};
 use crate::IoError;
-use crate::util::now_rfc3339;
+use crate::util::{cancelled, now_rfc3339};
 
 /// The bytes read from the body between two cancel checks and progress reports: "one
 /// chunk" of U-28's cancel clause.
@@ -37,12 +37,16 @@ impl HttpClient {
     ///
     /// The file lands in its cache entry `<cache dir>/http/<sha256 of the URL>/file`
     /// (§1.11, Q-42), written to a temporary sibling and renamed on completion. A
-    /// complete entry is revalidated with `If-None-Match` and `If-Modified-Since` and reused
-    /// on a 304; a partial one is resumed with `Range` and `If-Range`, or restarted when its
-    /// validators no longer match (§1.5, Q-43). With `expected_sha256` the finished file
-    /// must have that digest, or it is discarded with E-NET-CHECKSUM (§1.5, §1.15).
-    /// `progress` hears after every chunk; `cancel` is read before every chunk, and a
-    /// cancelled download keeps its partial file and returns E-NET-FETCH (Q-43).
+    /// complete entry whose recorded digest equals `expected_sha256` is returned without any
+    /// request, its fetch time refreshed as on a 304 (Q-43); any other complete entry is
+    /// revalidated with `If-None-Match` and `If-Modified-Since` and reused on a 304, or
+    /// fetched again when its recorded digest differs from `expected_sha256`; a partial one is
+    /// resumed with `Range` and `If-Range`, or restarted when its validators no longer match
+    /// (§1.5, Q-43). With `expected_sha256` the finished file must have that digest, or it is
+    /// discarded with E-NET-CHECKSUM (§1.5, §1.15).
+    /// `progress` hears after every chunk; `cancel` is read before the request and before
+    /// every chunk, and a cancelled download keeps its partial file and returns E-IO of kind
+    /// `Interrupted`, as a cancelled local or document `fetch` does (Q-43, Q-47).
     pub fn download(
         &self,
         url: &Url,
@@ -77,6 +81,14 @@ impl HttpClient {
             .complete(Some(url))
             // Q-43: a digest from the index wins over the cache's record.
             .filter(|record| expected.is_none() || record.sha256 == expected);
+        if expected.is_some()
+            && let Some(record) = &complete
+        {
+            // Q-43: an expected digest equal to the record (`complete` holds no other)
+            // proves the cached bytes current, whatever partial the entry also holds; no
+            // request is sent.
+            return reuse(entry, record.clone(), progress);
+        }
         let mut ask = match (entry.partial(Some(url)), complete) {
             (Some((record, held)), _)
                 if held > 0 && (record.etag.is_some() || record.last_modified.is_some()) =>
@@ -94,17 +106,7 @@ impl HttpClient {
             let response = self.send(url, &ask)?;
             let status = response.status().as_u16();
             match (status, ask) {
-                (304, Ask::Revalidate(mut record)) => {
-                    // Q-42: a 304 refreshes the fetch time, the entry's last use.
-                    record.fetched_at = now_rfc3339();
-                    record.write(&entry.meta)?;
-                    let size = record.size;
-                    progress(Progress {
-                        done: size.unwrap_or(0),
-                        total: size,
-                    });
-                    return Ok(entry.file.clone());
-                }
+                (304, Ask::Revalidate(record)) => return reuse(entry, record, progress),
                 (206, Ask::Resume(record, held)) => match content_range(&response) {
                     Some((first, total)) if first == held => {
                         let transfer = Transfer {
@@ -176,6 +178,23 @@ impl HttpClient {
         }
         request.call().map_err(|e| fetch_error(url, &e))
     }
+}
+
+/// Reuses the complete cached file of `entry`, whose record is `record`: refreshes its
+/// fetch time, the entry's last use (Q-42), and reports its size once.
+fn reuse(
+    entry: &Entry,
+    mut record: Record,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<PathBuf, IoError> {
+    record.fetched_at = now_rfc3339();
+    record.write(&entry.meta)?;
+    let size = record.size;
+    progress(Progress {
+        done: size.unwrap_or(0),
+        total: size,
+    });
+    Ok(entry.file.clone())
 }
 
 /// A download under way: what travels from the answered request to the completed entry.
@@ -267,11 +286,6 @@ fn receive(
     record.write(&entry.meta)?;
     remove_if_present(&entry.part_meta)?;
     Ok(entry.file.clone())
-}
-
-/// The cancel error (Q-43).
-fn cancelled(url: &Url) -> IoError {
-    IoError::Fetch(format!("{url}: cancelled"))
 }
 
 /// A SHA-256 given as 64 hex digits in either case, lowercased (Q-43).
