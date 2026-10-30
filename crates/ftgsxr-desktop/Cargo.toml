@@ -12,3 +12,15 @@ publish.workspace = true
 [[bin]]
 name = "ftgsxr"
 path = "src/main.rs"
+
+# M-2 (#117): the headless commands that need no GPU. `ftgsxr-xr` (feature `xr`) and rfd
+# join with `play` in M-4. clap's builder API, so no derive macro is needed.
+[dependencies]
+clap.workspace = true
+ftgsxr-app.workspace = true
+
+[dev-dependencies]
+ftgsxr-testkit.workspace = true
+# An independent reader of the benchmark files `bench` writes (#122, Q-103), as
+# `ftgsxr-render` reads its fixture pose files.
+serde_json.workspace = true # Q-104

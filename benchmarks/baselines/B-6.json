@@ -1,0 +1,564 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-6",
+  "machine": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  595.99.02  Wed Aug 26 05:24:08 UTC 2026",
+    "os": "Ubuntu 24.04.5 LTS (kernel 7.0.0-38-generic)",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+    "threads": 24
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "release",
+  "results": [
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 76,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 76,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 48,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 48,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 48,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 112,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 112,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 66,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 66,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 66,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 172,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 172,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 96,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 96,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 1,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 66,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 3,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 256,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 3,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 256,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 3,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 138,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 2,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 96,
+      "unit": "bytes"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 1,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "value": 66,
+      "unit": "bytes"
+    }
+  ],
+  "budgets": [
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 76,
+      "value": 76,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 76,
+      "value": 76,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 48,
+      "value": 48,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 48,
+      "value": 48,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 0,
+        "loaded_degree": 0,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 48,
+      "value": 48,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 112,
+      "value": 112,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 112,
+      "value": 112,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 66,
+      "value": 66,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 66,
+      "value": 66,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 1,
+        "loaded_degree": 1,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 66,
+      "value": 66,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 172,
+      "value": 172,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 172,
+      "value": 172,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 96,
+      "value": 96,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 2,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 96,
+      "value": 96,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 2,
+        "loaded_degree": 1,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 66,
+      "value": 66,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 3,
+        "tier": "conformance"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 256,
+      "value": 256,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 3,
+        "tier": "desktop"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 256,
+      "value": 256,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 3,
+        "tier": "quest-high"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 138,
+      "value": 138,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 2,
+        "tier": "quest-balanced"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 96,
+      "value": 96,
+      "pass": true
+    },
+    {
+      "id": "B-6",
+      "setup": {
+        "model": "synthetic",
+        "n": 100000,
+        "sh_degree": 3,
+        "loaded_degree": 1,
+        "tier": "quest-low"
+      },
+      "measure": "bytes_per_primitive",
+      "rule": "within_1_percent",
+      "limit": 66,
+      "value": 66,
+      "pass": true
+    }
+  ],
+  "baseline": null,
+  "notes": []
+}

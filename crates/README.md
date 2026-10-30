@@ -29,5 +29,14 @@ Every test belongs to one lane, by what it needs (§2.7, D-28; "Test lane" in
 | `ds` | `$OPENFTGS_DATASETS` and the trained tiny models | `#[ignore = "ds"]`, prefix `ds_` |
 
 A lane other than `cpu` runs with `cargo test -- --ignored <prefix>`; the `gpu`, `xr`
-and `dv` lanes add `--test-threads 1` (§2.7, Lanes). CI runs the `cpu` lane and the
-skeleton test on every push (`.github/workflows/ci.yml`).
+and `dv` lanes add `--test-threads 1` (§2.7, Lanes). A `gpu` (or `ds`) test under
+`crates/<crate>/tests/` starts with `let _layer = ftgsxr_testkit::layer_messages();`,
+before its first device, so a Vulkan validation layer warning or error fails it in a
+debug build (§1.13, R-16, Q-105). A test that runs the binary `ftgsxr` instead points
+`VK_LAYER_SETTINGS_PATH` at a layer settings file and fails on an error or warning in
+the layer's log (R-15's and `bench`'s runs in `ftgsxr-desktop/tests/cli.rs`), since the
+child process's messages never reach the test's subscriber. The `gpu` unit tests in a
+crate's `src/` (`#[cfg(test)]` blocks of `ftgsxr-render`) are the exception: the testkit
+depends on `ftgsxr-render`, so they cannot use it, and they rely on the device's own
+validation collector (Q-74). CI runs the `cpu` lane and the skeleton test on every push
+(`.github/workflows/ci.yml`).
