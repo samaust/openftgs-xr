@@ -149,6 +149,51 @@ fn u14_range_is_ordered_and_clamped() {
 }
 
 #[test]
+fn u14_degenerate_range_is_cleared() {
+    // Q-19: equal bounds after ordering and clamping leave no range; loop acts on [0, T_len).
+    let mut clock = playing(LoopMode::Loop);
+    clock.set_range(Some((1.0, 1.0)));
+    clock.advance(0.25); // 0 + 0.5, not held at 1
+    assert_abs_diff_eq!(clock.time(), 0.5, epsilon = TOL);
+    clock.advance(1.0); // 0.5 + 2.0 = 2.5 → 0.5 over [0, 2)
+    assert_abs_diff_eq!(clock.time(), 0.5, epsilon = TOL);
+    assert_eq!(clock.state(), PlayState::Playing);
+}
+
+#[test]
+fn u14_range_collapsed_by_a_shorter_length_is_cleared() {
+    // Q-19: set_length re-clamps the range to (1, 1), which is cleared, so T still moves.
+    let mut clock = playing(LoopMode::Loop);
+    clock.set_range(Some((1.5, 1.8)));
+    clock.seek(0.5);
+    clock.set_length(1.0);
+    clock.advance(0.1); // 0.5 + 0.2, not held at 1
+    assert_abs_diff_eq!(clock.time(), 0.7, epsilon = TOL);
+    clock.advance(0.25); // 0.7 + 0.5 = 1.2 → 0.2 over [0, 1)
+    assert_abs_diff_eq!(clock.time(), 0.2, epsilon = TOL);
+    assert_eq!(clock.state(), PlayState::Playing);
+}
+
+#[test]
+fn u14_negative_dt_is_ignored() {
+    // Q-19: the direction comes from the speed alone; a negative Δt moves nothing.
+    for (mode, speed) in [
+        (LoopMode::Loop, 2.0),
+        (LoopMode::Loop, -1.0),
+        (LoopMode::PingPong, 2.0),
+        (LoopMode::Once, -1.0),
+    ] {
+        let mut clock = playing(mode);
+        clock.set_speed(speed).expect("a valid speed");
+        clock.seek(1.0);
+        clock.advance(-0.1);
+        assert_eq!(clock.time(), 1.0, "{mode:?} at speed {speed}");
+        assert_eq!(clock.speed(), speed);
+        assert_eq!(clock.state(), PlayState::Playing);
+    }
+}
+
+#[test]
 fn u14_speed_zero_refused() {
     let mut clock = Clock::new(2.0);
     let err = clock.set_speed(0.0).expect_err("speed 0 is refused");
@@ -252,10 +297,12 @@ proptest::proptest! {
         clock.set_range(range.map(|(a, b)| (a * length, b * length)));
         clock.seek(start * length);
         clock.set_state(PlayState::Playing);
-        // Hand-derived bounds of the active interval (Q-19).
+        // Hand-derived bounds of the active interval (Q-19); equal bounds leave no range.
         let (a, b) = match (mode, range) {
-            (LoopMode::Once, _) | (_, None) => (0.0, length),
-            (_, Some((x, y))) => ((x.min(y)) * length, (x.max(y)) * length),
+            (_, Some((x, y))) if mode != LoopMode::Once && x * length != y * length => {
+                ((x.min(y)) * length, (x.max(y)) * length)
+            }
+            _ => (0.0, length),
         };
         let t0 = (start * length).clamp(a, b);
         let mut total = 0.0;
