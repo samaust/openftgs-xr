@@ -16,7 +16,7 @@ use url::Url;
 use super::cache::{Entry, Record, remove_if_present};
 use super::{HttpClient, Progress, content_range, fetch_error, header, lock, status_error};
 use crate::IoError;
-use crate::util::now_rfc3339;
+use crate::util::{cancelled, now_rfc3339};
 
 /// The bytes read from the body between two cancel checks and progress reports: "one
 /// chunk" of U-28's cancel clause.
@@ -37,13 +37,13 @@ impl HttpClient {
     ///
     /// The file lands in its cache entry `<cache dir>/http/<sha256 of the URL>/file`
     /// (§1.11, Q-42), written to a temporary sibling and renamed on completion. A
-    /// complete entry is revalidated with `If-None-Match` and `If-Modified-Since` and reused
-    /// on a 304; a partial one is resumed with `Range` and `If-Range`, or restarted when its
-    /// validators no longer match (§1.5, Q-43). With `expected_sha256` the finished file
-    /// must have that digest, or it is discarded with E-NET-CHECKSUM (§1.5, §1.15); a
-    /// complete entry whose recorded digest equals it is returned without any request, its
-    /// fetch time refreshed as on a 304, and one whose digest differs is fetched again
-    /// (Q-43).
+    /// complete entry whose recorded digest equals `expected_sha256` is returned without any
+    /// request, its fetch time refreshed as on a 304 (Q-43); any other complete entry is
+    /// revalidated with `If-None-Match` and `If-Modified-Since` and reused on a 304, or
+    /// fetched again when its recorded digest differs from `expected_sha256`; a partial one is
+    /// resumed with `Range` and `If-Range`, or restarted when its validators no longer match
+    /// (§1.5, Q-43). With `expected_sha256` the finished file must have that digest, or it is
+    /// discarded with E-NET-CHECKSUM (§1.5, §1.15).
     /// `progress` hears after every chunk; `cancel` is read before the request and before
     /// every chunk, and a cancelled download keeps its partial file and returns E-IO of kind
     /// `Interrupted`, as a cancelled local or document `fetch` does (Q-43, Q-47).
@@ -68,9 +68,12 @@ impl HttpClient {
             .complete(Some(url))
             // Q-43: a digest from the index wins over the cache's record.
             .filter(|record| expected.is_none() || record.sha256 == expected);
-        if let Some(record) = complete.as_ref().filter(|_| expected.is_some()) {
-            // Q-43: a digest equal to the record proves the cached bytes current, whatever
-            // partial the entry also holds; no request is sent.
+        if expected.is_some()
+            && let Some(record) = &complete
+        {
+            // Q-43: an expected digest equal to the record (`complete` holds no other)
+            // proves the cached bytes current, whatever partial the entry also holds; no
+            // request is sent.
             return reuse(&entry, record.clone(), progress);
         }
         let mut ask = match (entry.partial(Some(url)), complete) {
@@ -270,14 +273,6 @@ fn receive(
     record.write(&entry.meta)?;
     remove_if_present(&entry.part_meta)?;
     Ok(entry.file.clone())
-}
-
-/// The cancel error: E-IO of kind `Interrupted`, the one every source gives (Q-43, Q-47).
-fn cancelled(url: &Url) -> IoError {
-    IoError::Io(std::io::Error::new(
-        std::io::ErrorKind::Interrupted,
-        format!("{url}: cancelled"),
-    ))
 }
 
 /// A SHA-256 given as 64 hex digits in either case, lowercased (Q-43).
