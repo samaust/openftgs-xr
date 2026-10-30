@@ -7,7 +7,6 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,28 +35,43 @@ pub enum ModelRef {
     Document(String),
 }
 
-/// A model file's bytes, read into memory (D-50): what the readers of §1.2 take. Where they
-/// came from is the `ModelRef` beside them. Deref gives the bytes (D-50).
-// D-50
+/// A fetched model (D-50, D-51): a file's bytes read into memory, what the readers of §1.2
+/// take, or a checkpoint directory on disk, loaded by path with `read_checkpoint`. Where it
+/// came from is the `ModelRef` beside it.
+// D-50, D-51
 #[derive(Clone, PartialEq, Eq)]
 pub enum ModelBytes {
     /// The whole file, owned.
     Owned(Vec<u8>),
+    /// A checkpoint directory holding `manifest.json` and `params.safetensors`.
+    Checkpoint(PathBuf),
 }
 
-impl Deref for ModelBytes {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
+// Q-57
+impl ModelBytes {
+    /// The file's bytes; `None` for a checkpoint, which is read by path (Q-57).
+    pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
-            ModelBytes::Owned(bytes) => bytes,
+            ModelBytes::Owned(bytes) => Some(bytes),
+            ModelBytes::Checkpoint(_) => None,
+        }
+    }
+
+    /// The checkpoint's directory; `None` for a file's bytes (Q-57).
+    pub fn checkpoint_dir(&self) -> Option<&Path> {
+        match self {
+            ModelBytes::Owned(_) => None,
+            ModelBytes::Checkpoint(dir) => Some(dir),
         }
     }
 }
 
 impl std::fmt::Debug for ModelBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ModelBytes({} bytes)", self.len())
+        match self {
+            ModelBytes::Owned(bytes) => write!(f, "ModelBytes::Owned({} bytes)", bytes.len()),
+            ModelBytes::Checkpoint(dir) => write!(f, "ModelBytes::Checkpoint({})", dir.display()),
+        }
     }
 }
 
@@ -72,8 +86,9 @@ pub trait ModelSource: Send + Sync {
     /// 8-byte prefix and the header and nothing else; other kinds are E-IO (Q-47).
     fn info(&self, entry: &Entry) -> Result<ModelInfo, IoError>;
     /// The entry's file, read into memory, with the reference it was read from; `progress`
-    /// hears as it arrives and `cancel` stops it (§1.5, Q-47). A checkpoint is refused
-    /// (D-51; replaced in #77).
+    /// hears as it arrives and `cancel` stops it (§1.5, Q-47). A checkpoint comes back as
+    /// its directory on disk, `ModelBytes::Checkpoint`, referenced by `ModelRef::File` of it
+    /// (D-51, Q-58); a document source refuses one (Q-60).
     fn fetch(
         &self,
         entry: &Entry,
@@ -130,6 +145,9 @@ pub struct SourceSpec {
 
 /// The player's own listing under an HTTP index's base (§1.5, §1.11).
 const INDEX: &str = "index.json";
+/// A checkpoint's two files, the ones `read_checkpoint` reads (§1.2, D-51).
+const MANIFEST: &str = "manifest.json";
+const PARAMS: &str = "params.safetensors";
 /// The bytes a local or document file is read in between two cancel checks (Q-47).
 const CHUNK: usize = 1 << 20;
 
@@ -192,6 +210,10 @@ impl ModelSource for LocalDir {
     ) -> Result<(ModelRef, ModelBytes), IoError> {
         fetchable(entry)?;
         let path = PathBuf::from(&entry.location);
+        if entry.kind == EntryKind::Checkpoint {
+            let bytes = local_checkpoint(&path, progress, cancel)?;
+            return Ok((ModelRef::File(path), bytes));
+        }
         let bytes = read_local(&path, progress, cancel)?;
         Ok((ModelRef::File(path), bytes))
     }
@@ -254,6 +276,12 @@ impl ModelSource for HttpIndex {
     ) -> Result<(ModelRef, ModelBytes), IoError> {
         fetchable(entry)?;
         let url = self.entry_url(entry)?;
+        if entry.kind == EntryKind::Checkpoint {
+            let dir = self
+                .client
+                .download_checkpoint(&dir_url(url), progress, cancel)?;
+            return Ok((ModelRef::File(dir.clone()), ModelBytes::Checkpoint(dir)));
+        }
         let path = self
             .client
             .download(&url, entry.sha256.as_deref(), progress, cancel)?;
@@ -287,6 +315,16 @@ impl HttpIndex {
     }
 }
 
+/// `url` as a directory URL, ending in `/`, so a checkpoint's files resolve inside it and
+/// its cache entry has one key (Q-36, Q-42).
+fn dir_url(mut url: Url) -> Url {
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url
+}
+
 // Q-47
 impl ModelSource for DocumentSource {
     fn name(&self) -> &str {
@@ -316,6 +354,13 @@ impl ModelSource for DocumentSource {
         cancel: &AtomicBool,
     ) -> Result<(ModelRef, ModelBytes), IoError> {
         fetchable(entry)?;
+        // Q-60: a picked checkpoint waits on the shim's document provider (M-5).
+        if entry.kind == EntryKind::Checkpoint {
+            return Err(unsupported(&format!(
+                "{}: a checkpoint cannot be read from picked documents yet",
+                entry.location
+            )));
+        }
         let bytes = read_document(self.provider.as_ref(), &entry.location, progress, cancel)?;
         Ok((ModelRef::Document(entry.location.clone()), bytes))
     }
@@ -353,10 +398,11 @@ pub fn open_source(
     }
 }
 
-/// The bytes `r` names (§1.5), read into memory: a local file, a download through `client`
-/// with no expected digest, or a document through `provider` (Q-47). A checkpoint
-/// directory is refused (D-51; replaced in #77).
-// D-51 (the refusal is replaced in #77), Q-47
+/// The model `r` names (§1.5): a local file read into memory, a local directory as the
+/// checkpoint it holds, loaded by path (D-51), a download through `client` with no expected
+/// digest (an `Http` reference names a file, Q-59), or a document through `provider`
+/// (Q-47).
+// D-51, Q-47, Q-59
 pub fn open_ref(
     r: &ModelRef,
     client: Option<&HttpClient>,
@@ -366,7 +412,7 @@ pub fn open_ref(
     match r {
         ModelRef::File(path) => {
             if path.is_dir() {
-                return Err(checkpoint_refused(&path.display().to_string()));
+                return Ok(ModelBytes::Checkpoint(path.clone()));
             }
             read_local(path, &mut |_| {}, &cancel)
         }
@@ -395,12 +441,10 @@ fn header_only(entry: &Entry) -> Result<(), IoError> {
     }
 }
 
-/// Refuses an entry `fetch` cannot read into one buffer: a checkpoint (D-51; replaced in #77), a
-/// directory or a file that is not a model.
+/// Refuses an entry that is not a model: a plain directory or another file.
 fn fetchable(entry: &Entry) -> Result<(), IoError> {
     match entry.kind {
-        EntryKind::Exchange | EntryKind::Ply => Ok(()),
-        EntryKind::Checkpoint => Err(checkpoint_refused(&entry.location)),
+        EntryKind::Exchange | EntryKind::Ply | EntryKind::Checkpoint => Ok(()),
         EntryKind::Dir | EntryKind::Other => Err(invalid(format!(
             "{}: a {:?} entry is not a model file",
             entry.location, entry.kind
@@ -408,12 +452,29 @@ fn fetchable(entry: &Entry) -> Result<(), IoError> {
     }
 }
 
-/// E-IO for a checkpoint asked for as bytes (D-51; replaced in #77).
-// D-50
-fn checkpoint_refused(location: &str) -> IoError {
-    unsupported(&format!(
-        "{location}: a checkpoint directory cannot be fetched as one file yet"
-    ))
+/// The local checkpoint `dir`, returned by path (D-51): nothing is read, so `progress`
+/// hears once, with the two files' size (Q-38, Q-58), unless `cancel` is already set (Q-47).
+// D-51, Q-58
+fn local_checkpoint(
+    dir: &Path,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<ModelBytes, IoError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(IoError::Io(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            format!("{}: cancelled", dir.display()),
+        )));
+    }
+    let mut size = 0;
+    for name in [MANIFEST, PARAMS] {
+        size += open_file(&dir.join(name))?.metadata()?.len();
+    }
+    progress(Progress {
+        done: size,
+        total: Some(size),
+    });
+    Ok(ModelBytes::Checkpoint(dir.to_path_buf()))
 }
 
 /// The local file `path`, read in chunks with progress and cancel (Q-47).

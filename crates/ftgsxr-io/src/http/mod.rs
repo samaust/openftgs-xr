@@ -4,6 +4,7 @@
 //! cached, resumable, validated downloads (§1.5, §1.11, D-20).
 
 mod cache;
+mod checkpoint;
 mod download;
 mod prune;
 

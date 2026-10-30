@@ -16,7 +16,8 @@ const FORMAT: &str = "ftgsxr-cache-entry";
 /// The version the writer writes (Q-42); the reader takes major version 1, any minor.
 const VERSION: u64 = 1;
 
-/// The files of one URL's cache entry, `<cache dir>/http/<sha256 of the URL>/` (§1.11).
+/// The files of one URL's cache entry, `<cache dir>/http/<sha256 of the URL>/` (§1.11), or
+/// of one member of a checkpoint's entry (Q-42).
 pub(crate) struct Entry {
     /// The entry's directory.
     pub(crate) dir: PathBuf,
@@ -34,8 +35,7 @@ impl Entry {
     /// The entry of `url` under the cache's `http/` directory; the key is the SHA-256 of the
     /// URL's serialization by the url crate (Q-42).
     pub(crate) fn of(entries: &Path, url: &Url) -> Entry {
-        let key = ftgsxr_core::hex(&ftgsxr_core::sha256(url.as_str().as_bytes()));
-        Entry::at(entries.join(key))
+        Entry::at(entry_dir(entries, url))
     }
 
     /// The entry whose directory is `dir`.
@@ -46,6 +46,20 @@ impl Entry {
             part: dir.join("file.part"),
             part_meta: dir.join("meta.part.json"),
             dir,
+        }
+    }
+
+    /// The member `name` of a checkpoint's entry `dir` (Q-42, D-51): the file under its own
+    /// name, its record `<name>.meta.json`, and while it downloads `<name>.part` and
+    /// `<name>.meta.part.json`.
+    // Q-42
+    pub(crate) fn member(dir: &Path, name: &str) -> Entry {
+        Entry {
+            file: dir.join(name),
+            meta: dir.join(format!("{name}.meta.json")),
+            part: dir.join(format!("{name}.part")),
+            part_meta: dir.join(format!("{name}.meta.part.json")),
+            dir: dir.to_path_buf(),
         }
     }
 
@@ -133,6 +147,14 @@ impl Record {
         let bytes = serde_json::to_vec_pretty(&value).map_err(std::io::Error::other)?;
         write_atomic(path, &bytes)
     }
+}
+
+/// The directory of `url`'s entry under the cache's `http/` directory: the SHA-256 of the
+/// URL's serialization by the url crate, a checkpoint's trailing slash included (Q-42).
+pub(crate) fn entry_dir(entries: &Path, url: &Url) -> PathBuf {
+    entries.join(ftgsxr_core::hex(&ftgsxr_core::sha256(
+        url.as_str().as_bytes(),
+    )))
 }
 
 /// Whether `s` is 64 lowercase hex digits.

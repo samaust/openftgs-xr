@@ -59,6 +59,19 @@ impl HttpClient {
         };
         let _guard = lock(&self.cache_lock);
         let entry = Entry::of(&self.entries, url);
+        self.download_into(&entry, url, expected, progress, cancel)
+    }
+
+    /// `download`'s work on `entry`, a single file's entry or a checkpoint member (Q-42),
+    /// with `expected` already parsed; the caller holds the cache lock.
+    pub(super) fn download_into(
+        &self,
+        entry: &Entry,
+        url: &Url,
+        expected: Option<String>,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<PathBuf, IoError> {
         std::fs::create_dir_all(&entry.dir)?;
         let complete = entry
             .complete(Some(url))
@@ -90,13 +103,13 @@ impl HttpClient {
                         done: size.unwrap_or(0),
                         total: size,
                     });
-                    return Ok(entry.file);
+                    return Ok(entry.file.clone());
                 }
                 (206, Ask::Resume(record, held)) => match content_range(&response) {
                     Some((first, total)) if first == held => {
                         let transfer = Transfer {
                             url,
-                            entry: &entry,
+                            entry,
                             total: total.or(record.size),
                             record,
                             held,
@@ -125,7 +138,7 @@ impl HttpClient {
                     record.write(&entry.part_meta)?;
                     let transfer = Transfer {
                         url,
-                        entry: &entry,
+                        entry,
                         total: record.size,
                         record,
                         held: 0,
@@ -262,7 +275,7 @@ fn cancelled(url: &Url) -> IoError {
 }
 
 /// A SHA-256 given as 64 hex digits in either case, lowercased (Q-43).
-fn parse_digest(digest: &str) -> Option<String> {
+pub(super) fn parse_digest(digest: &str) -> Option<String> {
     let digest = digest.trim();
     (digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
         .then(|| digest.to_ascii_lowercase())
