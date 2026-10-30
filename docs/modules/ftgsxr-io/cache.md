@@ -29,20 +29,21 @@ Every record is written to a temporary sibling and renamed (§1.11). A record th
 
 ## Three states
 
-- **Complete**: `file` with a `meta.json` that carries its digest. `download` revalidates it with `If-None-Match` and `If-Modified-Since` (§1.5). A 304 reuses it and refreshes `fetched_at`; a 200 means the server's file changed, and the new one is downloaded beside the old one, which stays usable until the new one is complete (Q-42, §1.15 E-NET-FETCH: "cached file kept if complete").
+- **Complete**: `file` with a `meta.json` that carries its digest. Given an expected digest equal to that one, `download` returns it without any request (Q-43); otherwise it revalidates it with `If-None-Match` and `If-Modified-Since` (§1.5). A 304 reuses it and refreshes `fetched_at`; a 200 means the server's file changed, and the new one is downloaded beside the old one, which stays usable until the new one is complete (Q-42, §1.15 E-NET-FETCH: "cached file kept if complete").
 - **Partial**: `file.part` with its own record. `download` resumes it with `Range` from the bytes held and `If-Range` with the record's ETag, or its Last-Modified date when the server gave no ETag (§1.5). A 206 that starts where the partial ends appends; a 200, which is what a server answers when the validator no longer matches, restarts from the first byte; a 416 or a 206 starting elsewhere discards the partial and asks once more from scratch (Q-43). A partial without any validator cannot be resumed safely and restarts: this is §1.5's "a file whose server supports neither is downloaded whole".
 - **Absent**: a plain GET.
 
-When an entry has both, the partial wins: it was started after the complete file was found out of date.
+When an entry has both, the partial wins: it was started after the complete file was found out of date. The one exception is an expected digest equal to the complete file's, which proves that file current (Q-43).
 
 ## A download's life
 
 The body is streamed into `file.part` chunk by chunk. Before each chunk `cancel` is read, and after each one `progress` hears the bytes held and the size the server announced, counting the bytes a resume started from. The SHA-256 is computed while streaming; a resume first hashes the bytes already held, since a digest in progress cannot survive the process that started it.
 
-The download ends in one of four ways:
+The download ends in one of five ways:
 
 - **Complete.** The size must agree with the server's; then, when the caller gave an `expected_sha256` (from the index entry, a `SHA256SUMS` or a `<name>.sha256`, §1.5), the digest must match, compared without regard to case. `file.part` is renamed over `file` and the record over `meta.json`, in that order, and the partial's record is removed. The returned path is always the entry's `file`.
 - **Checksum mismatch.** The partial and its record are deleted and the call returns E-NET-CHECKSUM (§1.5, §1.15). A complete cached file whose recorded digest disagrees with the expected one is not offered for revalidation in the first place: the expected digest wins and the file is fetched again (Q-43).
+- **Digest-matched cache hit.** A complete cached file whose recorded digest equals the expected one is current by proof, so `download` returns its path without sending any request, even when the server cannot be reached. As on a 304 it refreshes the record's `fetched_at`, the entry's last use for `prune`, and reports one `Progress` with the file's size; a partial left in the same entry does not change this (Q-43, Q-42). Without an expected digest the file is revalidated as above.
 - **Failure part-way.** A body that breaks off keeps every byte received in `file.part`, and the call returns E-NET-FETCH without retrying itself; the next call resumes. That is §1.15's retry button, and what U-28's truncation exercises through the fixture server's broken chunk (Q-40).
 - **Cancel.** `cancel` is read before the request and before every chunk read. The partial is kept for a later resume and the call returns E-IO, an `IoError::Io` of kind `Interrupted` with the URL in its text, as a cancelled local or document `fetch` does, so a caller recognises every cancel by its kind (Q-43, Q-47); a cancel already set before the call sends no request.
 

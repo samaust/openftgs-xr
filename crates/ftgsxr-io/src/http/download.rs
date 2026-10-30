@@ -40,7 +40,10 @@ impl HttpClient {
     /// complete entry is revalidated with `If-None-Match` and `If-Modified-Since` and reused
     /// on a 304; a partial one is resumed with `Range` and `If-Range`, or restarted when its
     /// validators no longer match (§1.5, Q-43). With `expected_sha256` the finished file
-    /// must have that digest, or it is discarded with E-NET-CHECKSUM (§1.5, §1.15).
+    /// must have that digest, or it is discarded with E-NET-CHECKSUM (§1.5, §1.15); a
+    /// complete entry whose recorded digest equals it is returned without any request, its
+    /// fetch time refreshed as on a 304, and one whose digest differs is fetched again
+    /// (Q-43).
     /// `progress` hears after every chunk; `cancel` is read before the request and before
     /// every chunk, and a cancelled download keeps its partial file and returns E-IO of kind
     /// `Interrupted`, as a cancelled local or document `fetch` does (Q-43, Q-47).
@@ -65,6 +68,11 @@ impl HttpClient {
             .complete(Some(url))
             // Q-43: a digest from the index wins over the cache's record.
             .filter(|record| expected.is_none() || record.sha256 == expected);
+        if let Some(record) = complete.as_ref().filter(|_| expected.is_some()) {
+            // Q-43: a digest equal to the record proves the cached bytes current, whatever
+            // partial the entry also holds; no request is sent.
+            return reuse(&entry, record.clone(), progress);
+        }
         let mut ask = match (entry.partial(Some(url)), complete) {
             (Some((record, held)), _)
                 if held > 0 && (record.etag.is_some() || record.last_modified.is_some()) =>
@@ -82,17 +90,7 @@ impl HttpClient {
             let response = self.send(url, &ask)?;
             let status = response.status().as_u16();
             match (status, ask) {
-                (304, Ask::Revalidate(mut record)) => {
-                    // Q-42: a 304 refreshes the fetch time, the entry's last use.
-                    record.fetched_at = now_rfc3339();
-                    record.write(&entry.meta)?;
-                    let size = record.size;
-                    progress(Progress {
-                        done: size.unwrap_or(0),
-                        total: size,
-                    });
-                    return Ok(entry.file);
-                }
+                (304, Ask::Revalidate(record)) => return reuse(&entry, record, progress),
                 (206, Ask::Resume(record, held)) => match content_range(&response) {
                     Some((first, total)) if first == held => {
                         let transfer = Transfer {
@@ -164,6 +162,23 @@ impl HttpClient {
         }
         request.call().map_err(|e| fetch_error(url, &e))
     }
+}
+
+/// Reuses the complete cached file of `entry`, whose record is `record`: refreshes its
+/// fetch time, the entry's last use (Q-42), and reports its size once.
+fn reuse(
+    entry: &Entry,
+    mut record: Record,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<PathBuf, IoError> {
+    record.fetched_at = now_rfc3339();
+    record.write(&entry.meta)?;
+    let size = record.size;
+    progress(Progress {
+        done: size.unwrap_or(0),
+        total: size,
+    });
+    Ok(entry.file.clone())
 }
 
 /// A download under way: what travels from the answered request to the completed entry.
