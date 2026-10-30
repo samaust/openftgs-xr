@@ -2,11 +2,9 @@
 
 //! U-12 (E7's CPU mirror `covariance::alpha_at`, `cpu` lane): α at μ′ equals
 //! min(α_max, σ_eff); α at the quadratic form 2 ln 255 is 1/255 and beyond it 0; a negative
-//! form gives 0. 10⁻⁶.
-//!
-//! The row's last clause, "the occlusion weight multiplies", is not tested: §2.1's
-//! `alpha_at` takes no weight (w_occ = 1), and the spec question on PRD #1 ("U-12 and
-//! `alpha_at`") is unanswered.
+//! form gives 0; the occlusion weight w_occ multiplies after the skip test (0.5 halves α; a
+//! term skipped at w_occ = 1 stays skipped). 10⁻⁶. The clauses before the weight's pass
+//! w_occ = 1, occlusion off (E7, E13).
 //!
 //! The quadratic form is (p − μ′)ᵀ Σ′⁻¹ (p − μ′) with the conic (a, b, c) of Q-21, and
 //! p is the pixel center the caller passes.
@@ -31,17 +29,21 @@ fn projected(mean: Vec2, conic: [f32; 3]) -> Projected {
 fn u12_alpha_at_the_mean_is_sigma_eff_capped_at_alpha_max() {
     let conv = RenderConventions::default();
     let p = projected(Vec2::new(10.25, 7.5), [1.0, 0.0, 1.0]);
-    assert_relative_eq!(alpha_at(p.mean, &p, 1.0, &conv), 0.999, epsilon = TOL);
-    assert_relative_eq!(alpha_at(p.mean, &p, 0.5, &conv), 0.5, epsilon = TOL);
-    assert_relative_eq!(alpha_at(p.mean, &p, 0.9995, &conv), 0.999, epsilon = TOL);
+    assert_relative_eq!(alpha_at(p.mean, &p, 1.0, 1.0, &conv), 0.999, epsilon = TOL);
+    assert_relative_eq!(alpha_at(p.mean, &p, 0.5, 1.0, &conv), 0.5, epsilon = TOL);
+    assert_relative_eq!(
+        alpha_at(p.mean, &p, 0.9995, 1.0, &conv),
+        0.999,
+        epsilon = TOL
+    );
     // The model's α_max (D-39).
     let low = RenderConventions {
         alpha_max: 0.9,
         ..RenderConventions::default()
     };
-    assert_relative_eq!(alpha_at(p.mean, &p, 0.95, &low), 0.9, epsilon = TOL);
+    assert_relative_eq!(alpha_at(p.mean, &p, 0.95, 1.0, &low), 0.9, epsilon = TOL);
     // σ_eff below α_skip is skipped even at the mean.
-    assert_eq!(alpha_at(p.mean, &p, 0.5 / 255.0, &conv), 0.0);
+    assert_eq!(alpha_at(p.mean, &p, 0.5 / 255.0, 1.0, &conv), 0.0);
 }
 
 #[test]
@@ -50,7 +52,7 @@ fn u12_alpha_follows_the_quadratic_form_of_the_conic() {
     // = 0.22, so α = 0.8 e^(−0.11).
     let conv = RenderConventions::default();
     let p = projected(Vec2::new(4.0, 6.0), [2.0, 0.5, 1.0]);
-    let alpha = alpha_at(Vec2::new(4.3, 5.6), &p, 0.8, &conv);
+    let alpha = alpha_at(Vec2::new(4.3, 5.6), &p, 0.8, 1.0, &conv);
     assert_relative_eq!(alpha, 0.8 * (-0.11f32).exp(), epsilon = TOL);
 }
 
@@ -64,21 +66,21 @@ fn u12_alpha_at_the_form_2_ln_255_is_one_over_255_and_beyond_it_0() {
     let p = projected(Vec2::ZERO, [1.0, 0.0, 1.0]);
     let bound = 2.0 * 255f64.ln();
     let at = |form: f64| Vec2::new(form.sqrt() as f32, 0.0);
-    let inside = alpha_at(at(bound - 1e-4), &p, 1.0, &conv);
+    let inside = alpha_at(at(bound - 1e-4), &p, 1.0, 1.0, &conv);
     assert_relative_eq!(inside, 1.0 / 255.0, epsilon = TOL);
     assert!(inside > 0.0);
-    assert_eq!(alpha_at(at(bound + 1e-3), &p, 1.0, &conv), 0.0);
-    assert_eq!(alpha_at(at(bound + 1.0), &p, 1.0, &conv), 0.0);
+    assert_eq!(alpha_at(at(bound + 1e-3), &p, 1.0, 1.0, &conv), 0.0);
+    assert_eq!(alpha_at(at(bound + 1.0), &p, 1.0, 1.0, &conv), 0.0);
     // The same bound along y and along a diagonal.
     let r = (bound - 1e-4).sqrt() as f32;
     let diag = r / 2f32.sqrt();
     assert_relative_eq!(
-        alpha_at(Vec2::new(0.0, -r), &p, 1.0, &conv),
+        alpha_at(Vec2::new(0.0, -r), &p, 1.0, 1.0, &conv),
         1.0 / 255.0,
         epsilon = TOL
     );
     assert_relative_eq!(
-        alpha_at(Vec2::new(diag, diag), &p, 1.0, &conv),
+        alpha_at(Vec2::new(diag, diag), &p, 1.0, 1.0, &conv),
         1.0 / 255.0,
         epsilon = TOL
     );
@@ -90,13 +92,46 @@ fn u12_negative_quadratic_form_gives_0() {
     // e^(−form/2) exceeds 1.
     let conv = RenderConventions::default();
     let p = projected(Vec2::new(5.0, 5.0), [-1.0, 0.0, -1.0]);
-    assert_eq!(alpha_at(Vec2::new(5.5, 5.0), &p, 0.5, &conv), 0.0);
+    assert_eq!(alpha_at(Vec2::new(5.5, 5.0), &p, 0.5, 1.0, &conv), 0.0);
     // An indefinite conic: negative along x, positive along y.
     let q = projected(Vec2::new(5.0, 5.0), [-1.0, 0.0, 1.0]);
-    assert_eq!(alpha_at(Vec2::new(6.0, 5.0), &q, 0.5, &conv), 0.0);
+    assert_eq!(alpha_at(Vec2::new(6.0, 5.0), &q, 0.5, 1.0, &conv), 0.0);
     assert_relative_eq!(
-        alpha_at(Vec2::new(5.0, 6.0), &q, 0.5, &conv),
+        alpha_at(Vec2::new(5.0, 6.0), &q, 0.5, 1.0, &conv),
         0.5 * (-0.5f32).exp(),
         epsilon = TOL
     );
+}
+
+#[test]
+fn u12_the_occlusion_weight_multiplies_after_the_skip_test() {
+    let conv = RenderConventions::default();
+    let p = projected(Vec2::new(3.0, 2.0), [1.0, 0.0, 1.0]);
+    // 0.5 halves α, at the mean and away from it (form 0.25: α = 0.8 e^(−0.125)).
+    assert_relative_eq!(alpha_at(p.mean, &p, 0.6, 0.5, &conv), 0.3, epsilon = TOL);
+    let off = Vec2::new(3.5, 2.0);
+    assert_relative_eq!(
+        alpha_at(off, &p, 0.8, 0.5, &conv),
+        0.4 * (-0.125f32).exp(),
+        epsilon = TOL
+    );
+    // The cap applies before the weight: 0.999 · 0.5.
+    assert_relative_eq!(alpha_at(p.mean, &p, 1.0, 0.5, &conv), 0.4995, epsilon = TOL);
+    // The skip is tested before the weight: σ_eff = 2/255 is drawn at w_occ = 1, and its
+    // weighted α, 2/255 · 0.25 = 0.5/255, is below α_skip yet not skipped.
+    assert_relative_eq!(
+        alpha_at(p.mean, &p, 2.0 / 255.0, 0.25, &conv),
+        0.5 / 255.0,
+        epsilon = TOL
+    );
+    assert!(alpha_at(p.mean, &p, 2.0 / 255.0, 0.25, &conv) > 0.0);
+    // A term skipped at w_occ = 1 stays skipped at any weight.
+    assert_eq!(alpha_at(p.mean, &p, 0.5 / 255.0, 1.0, &conv), 0.0);
+    assert_eq!(alpha_at(p.mean, &p, 0.5 / 255.0, 0.5, &conv), 0.0);
+    let far = Vec2::new(3.0 + (2.0 * 255f32.ln()).sqrt() + 0.1, 2.0);
+    assert_eq!(alpha_at(far, &p, 1.0, 1.0, &conv), 0.0);
+    assert_eq!(alpha_at(far, &p, 1.0, 0.5, &conv), 0.0);
+    // w_occ = 0 removes the term; w_occ = 1 leaves it unchanged.
+    assert_eq!(alpha_at(p.mean, &p, 0.6, 0.0, &conv), 0.0);
+    assert_relative_eq!(alpha_at(p.mean, &p, 0.6, 1.0, &conv), 0.6, epsilon = TOL);
 }

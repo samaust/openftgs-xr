@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::cache::Entry;
 use super::{HttpClient, lock};
+use super::{MANIFEST, PARAMS};
 use crate::IoError;
 
 /// One cache entry as `prune` sees it.
@@ -22,13 +23,15 @@ struct Candidate {
 
 impl HttpClient {
     /// Replaces the set of cached files `prune` must keep, the paths `download` returned for
-    /// the models now loaded (Q-4); the application calls it before pruning.
+    /// the models now loaded, or a fetched checkpoint's entry directory (Q-4, Q-56); the
+    /// application calls it before pruning.
     pub fn set_in_use(&self, paths: &[PathBuf]) {
         *lock(&self.in_use) = paths.iter().map(|p| canonical(p)).collect();
     }
 
     /// Evicts whole cache entries, least recently used first, until the download cache holds
-    /// at most `max_bytes`, never one whose file is in use (§1.5, §1.11, Q-4, Q-45);
+    /// at most `max_bytes`, never one whose directory or one of whose files is in use (§1.5,
+    /// §1.11, Q-4, Q-45, Q-56);
     /// returns the bytes freed.
     pub fn prune(&self) -> Result<u64, IoError> {
         let _guard = lock(&self.cache_lock);
@@ -59,25 +62,38 @@ impl HttpClient {
             if !dir.file_type()?.is_dir() {
                 continue;
             }
-            let entry = Entry::at(dir.path());
+            let dir = dir.path();
             let mut bytes = 0;
-            for file in std::fs::read_dir(&entry.dir)? {
-                let metadata = file?.metadata()?;
+            // Q-56: the entry's directory, or any file in it.
+            let mut entry_in_use = in_use.contains(&canonical(&dir));
+            for file in std::fs::read_dir(&dir)? {
+                let file = file?;
+                let metadata = file.metadata()?;
                 if metadata.is_file() {
                     bytes += metadata.len();
+                    entry_in_use |= in_use.contains(&canonical(&file.path()));
                 }
             }
-            let used = entry
-                .complete(None)
-                .map(|r| r.fetched_at)
-                .or_else(|| entry.partial(None).map(|(r, _)| r.fetched_at))
-                .unwrap_or_default();
-            let in_use = entry.file.exists() && in_use.contains(&canonical(&entry.file));
+            // Q-42: the latest use of a single file's entry or of a checkpoint's members.
+            let last_used = [
+                Entry::at(dir.clone()),
+                Entry::member(&dir, MANIFEST),
+                Entry::member(&dir, PARAMS),
+            ]
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .complete(None)
+                    .map(|r| r.fetched_at)
+                    .or_else(|| entry.partial(None).map(|(r, _)| r.fetched_at))
+            })
+            .max()
+            .unwrap_or_default();
             candidates.push(Candidate {
-                dir: entry.dir,
+                dir,
                 bytes,
-                used,
-                in_use,
+                used: last_used,
+                in_use: entry_in_use,
             });
         }
         Ok(candidates)

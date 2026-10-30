@@ -63,6 +63,19 @@ impl HttpClient {
         };
         let _guard = lock(&self.cache_lock);
         let entry = Entry::of(&self.entries, url);
+        self.download_into(&entry, url, expected, progress, cancel)
+    }
+
+    /// `download`'s work on `entry`, a single file's entry or a checkpoint member (Q-42),
+    /// with `expected` already parsed; the caller holds the cache lock.
+    pub(super) fn download_into(
+        &self,
+        entry: &Entry,
+        url: &Url,
+        expected: Option<String>,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<PathBuf, IoError> {
         std::fs::create_dir_all(&entry.dir)?;
         let complete = entry
             .complete(Some(url))
@@ -74,7 +87,7 @@ impl HttpClient {
             // Q-43: an expected digest equal to the record (`complete` holds no other)
             // proves the cached bytes current, whatever partial the entry also holds; no
             // request is sent.
-            return reuse(&entry, record.clone(), progress);
+            return reuse(entry, record.clone(), progress);
         }
         let mut ask = match (entry.partial(Some(url)), complete) {
             (Some((record, held)), _)
@@ -93,12 +106,12 @@ impl HttpClient {
             let response = self.send(url, &ask)?;
             let status = response.status().as_u16();
             match (status, ask) {
-                (304, Ask::Revalidate(record)) => return reuse(&entry, record, progress),
+                (304, Ask::Revalidate(record)) => return reuse(entry, record, progress),
                 (206, Ask::Resume(record, held)) => match content_range(&response) {
                     Some((first, total)) if first == held => {
                         let transfer = Transfer {
                             url,
-                            entry: &entry,
+                            entry,
                             total: total.or(record.size),
                             record,
                             held,
@@ -127,7 +140,7 @@ impl HttpClient {
                     record.write(&entry.part_meta)?;
                     let transfer = Transfer {
                         url,
-                        entry: &entry,
+                        entry,
                         total: record.size,
                         record,
                         held: 0,
@@ -276,7 +289,7 @@ fn receive(
 }
 
 /// A SHA-256 given as 64 hex digits in either case, lowercased (Q-43).
-fn parse_digest(digest: &str) -> Option<String> {
+pub(super) fn parse_digest(digest: &str) -> Option<String> {
     let digest = digest.trim();
     (digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
         .then(|| digest.to_ascii_lowercase())
