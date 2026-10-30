@@ -4,6 +4,7 @@
 //! cached, resumable, validated downloads (§1.5, §1.11, D-20).
 
 mod cache;
+mod checkpoint;
 mod download;
 mod prune;
 
@@ -19,6 +20,8 @@ use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 use url::Url;
 
 use crate::IoError;
+
+pub(crate) use checkpoint::{MANIFEST, PARAMS};
 
 /// How long a connection (with its TLS handshake) may take before E-NET-FETCH (Q-43).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
