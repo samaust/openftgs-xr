@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn get_range_sized_416_gives_the_stated_size() {
         let server = ftgsxr_testkit::serve_fixtures();
-        let dir = std::env::temp_dir().join("ftgsxr-http-unit-416");
+        let dir = std::env::temp_dir().join(format!("ftgsxr-http-unit-416-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let http = super::HttpClient::new(dir, super::TlsRoots::WebPki, 1 << 30).unwrap();
         let name = "checkpoint/tiny.safetensors";
