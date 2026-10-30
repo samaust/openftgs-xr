@@ -17,6 +17,7 @@ use url::Url;
 
 use crate::http::status_error;
 use crate::listing::{as_directory, checked_header_len, header_info};
+use crate::util::cancelled;
 use crate::{
     Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
     parse_nginx_json,
@@ -463,10 +464,7 @@ fn read_chunked(
     let mut bytes = Vec::with_capacity(total.map_or(0, |t| t as usize));
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(IoError::Io(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                format!("{what}: cancelled"),
-            )));
+            return Err(cancelled(what));
         }
         let read = (&mut reader).take(CHUNK as u64).read_to_end(&mut bytes)?;
         if read == 0 {
