@@ -20,7 +20,7 @@ sha2.workspace = true
 thiserror.workspace = true
 # `settings.toml` (§1.11, D-23).
 toml.workspace = true
-# The `TlsRoots::Platform` fallback's warning (Q-5).
+# Logging (§1.13).
 tracing.workspace = true
 # HTTP listings and downloads over rustls with the `ring` provider and webpki-roots (D-20).
 ureq = { workspace = true, features = ["rustls"] }

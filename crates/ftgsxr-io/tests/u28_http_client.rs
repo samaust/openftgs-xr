@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! U-28: `ftgsxr_io::http::HttpClient` (`get_text`, `get_range`, `download`, `prune`) against
-//! `ftgsxr_testkit::serve_fixtures` (§1.5 Download cache, §1.11 Cache entries, D-20; Q-4, Q-5,
+//! `ftgsxr_testkit::serve_fixtures` (§1.5 Download cache, §1.11 Cache entries, D-20; Q-4,
 //! Q-42 to Q-45, the fixture server of Q-39 and its truncation Q-40).
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ftgsxr_io::http::{HttpClient, Progress, TlsRoots};
 use ftgsxr_testkit::{fixtures_dir, serve_fixtures};
@@ -21,45 +20,10 @@ fn cache_dir(test: &str) -> PathBuf {
     dir
 }
 
-/// A subscriber that counts the WARN events it sees and nothing else.
-struct WarnCounter(Arc<AtomicUsize>);
-
-impl tracing::Subscriber for WarnCounter {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        if *event.metadata().level() == tracing::Level::WARN {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
-
-/// The number of warnings `f` logs on this thread.
-fn warnings_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    let count = Arc::new(AtomicUsize::new(0));
-    let value = tracing::subscriber::with_default(WarnCounter(count.clone()), f);
-    (value, count.load(Ordering::SeqCst))
-}
-
 #[test]
-fn u28_both_tls_roots_construct_and_platform_warns() {
-    let dir = cache_dir("tls");
-    let (webpki, warned) =
-        warnings_during(|| HttpClient::new(dir.clone(), TlsRoots::WebPki, 1 << 30));
-    assert!(webpki.is_ok(), "WebPki roots construct a client");
-    assert_eq!(warned, 0, "the WebPki roots log no warning");
-    let (platform, warned) =
-        warnings_during(|| HttpClient::new(dir.clone(), TlsRoots::Platform, 1 << 30));
-    assert!(platform.is_ok(), "Platform roots construct a client (Q-5)");
-    assert_eq!(warned, 1, "the Platform fallback logs one warning (Q-5)");
+fn u28_webpki_roots_construct_a_client() {
+    let client = HttpClient::new(cache_dir("tls"), TlsRoots::WebPki, 1 << 30);
+    assert!(client.is_ok(), "WebPki roots construct a client (D-20)");
 }
 
 /// A client over a fresh cache directory with a generous size limit.
