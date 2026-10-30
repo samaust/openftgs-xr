@@ -87,16 +87,18 @@ fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) 
 }
 
 // E13's weight (`ftgsxr_core::occlusion_weight`, Q-63): hard, 1 up to z_e + δ; soft,
-// 1 − smoothstep(z_e − δ, z_e + δ, z_f), the hard step at δ ≤ 0; 1 without a valid sample.
+// 1 − smoothstep(z_e − δ, z_e + δ, z_f); at δ ≤ 0, in both modes, the hard step at z_e;
+// 1 without a valid sample.
 fn occlusion_weight(z_f: f32, z_e: f32, valid: bool, delta_m: f32, soft: bool) -> f32 {
     if !valid {
         return 1.0;
     }
-    if soft && delta_m > 0.0 {
-        let t = clamp((z_f - (z_e - delta_m)) / (2.0 * delta_m), 0.0, 1.0);
+    let delta = max(delta_m, 0.0);
+    if soft && delta > 0.0 {
+        let t = clamp((z_f - (z_e - delta)) / (2.0 * delta), 0.0, 1.0);
         return 1.0 - t * t * (3.0 - 2.0 * t);
     }
-    if z_f <= z_e + delta_m {
+    if z_f <= z_e + delta {
         return 1.0;
     }
     return 0.0;

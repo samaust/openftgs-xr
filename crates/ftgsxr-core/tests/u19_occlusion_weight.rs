@@ -2,7 +2,7 @@
 
 //! U-19 (E13's weight, its CPU mirror `covariance::occlusion_weight` of Q-63, `cpu` lane):
 //! hard: 1 up to z_e + δ and 0 beyond; soft: 1, 0.5 and 0 at z_e − δ, z_e and z_e + δ; an
-//! invalid sample gives 1. 10⁻⁶.
+//! invalid sample gives 1. 10⁻⁶. At δ ≤ 0 both modes are the hard step at z_e (Q-63).
 //!
 //! The depths are exact binary fractions (z_e = 1 m, δ = 0.25 m), so z_e ± δ is exact in f32
 //! and the hard edge is tested at the edge itself and one ulp beyond it.
@@ -84,6 +84,29 @@ fn u19_soft_weight_at_zero_delta_is_the_hard_step() {
             w,
             "z_f = {z_f}"
         );
+    }
+}
+
+#[test]
+fn u19_a_negative_delta_is_the_hard_step_at_z_e_in_both_modes() {
+    // Q-63: at δ ≤ 0 the weight is the hard step at z_e itself, 1 for z_f ≤ z_e and 0
+    // beyond, in hard and soft mode alike; a negative δ does not move the edge to z_e + δ.
+    let beyond = f32::from_bits(Z_E.to_bits() + 1);
+    for soft in [false, true] {
+        for (z_f, w) in [
+            (0.5, 1.0),
+            (Z_E - DELTA, 1.0),
+            (0.9, 1.0),
+            (Z_E, 1.0),
+            (beyond, 0.0),
+            (2.0, 0.0),
+        ] {
+            assert_eq!(
+                occlusion_weight(z_f, Some(Z_E), -DELTA, soft),
+                w,
+                "z_f = {z_f}, soft = {soft}"
+            );
+        }
     }
 }
 
