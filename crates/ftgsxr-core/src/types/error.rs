@@ -13,7 +13,7 @@ pub enum CoreError {
     #[error("Not a supported model file ({0})")]
     Format(String),
     /// E-FILE-VERSION: an unknown major version; the payload is the version found.
-    #[error("Version {0} is newer than this player supports")]
+    #[error("Version {0} is not supported by this player")]
     Version(String),
     /// E-FILE-KEYS: a required tensor or metadata key is missing; the payload is the key.
     #[error("Missing key {0}")]

@@ -90,6 +90,15 @@ fn u34_every_core_error_has_its_code_and_a_user_text() {
 }
 
 #[test]
+fn u34_file_version_user_text_is_the_catalog_text() {
+    // §1.15 E-FILE-VERSION (revision 9): "Version X is not supported by this player".
+    assert_eq!(
+        CoreError::Version("2".into()).user_text(),
+        "Version 2 is not supported by this player"
+    );
+}
+
+#[test]
 fn u34_every_core_error_variant_is_covered() {
     // A variant added without a row here fails to compile: the match is exhaustive.
     for (error, _) in every_variant() {
