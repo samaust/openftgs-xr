@@ -83,6 +83,38 @@ fn an_invalid_input_exits_2() {
 }
 
 #[test]
+fn validate_prints_each_valid_model_before_the_first_invalid_one() {
+    // §1.7: each model is read and validated and its line printed in turn; the first
+    // invalid file stops the run with exit 2, so the models after it are not printed.
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        env!("CARGO_CRATE_NAME"),
+        "validate_order",
+    );
+    let bad = dir.join("bad.safetensors");
+    fs::write(&bad, b"not a safetensors file").unwrap();
+    let p1 = fixtures_dir().join("probes/P1.safetensors");
+    let ckpt = fixtures_dir().join("checkpoint/tiny");
+    let o = ftgsxr(&[
+        "validate",
+        p1.to_str().unwrap(),
+        bad.to_str().unwrap(),
+        ckpt.to_str().unwrap(),
+    ]);
+    assert_eq!(o.status.code(), Some(2));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 1, "{out}");
+    assert!(
+        lines[0].starts_with(&format!("{}: kind ftgs-if, N ", p1.display())),
+        "{out}"
+    );
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert!(err.starts_with("ftgsxr: E-"), "{err}");
+    assert!(err.contains(bad.to_str().unwrap()), "{err}");
+}
+
+#[test]
 fn export_writes_the_file() {
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
