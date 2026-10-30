@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The in-process fixture server of the `cpu` lane's listing and download tests (§2.7,
-//! Q-1, Q-6, Q-39, Q-40), over tiny_http (§2.3).
+//! Q-1, Q-6, Q-39, Q-40, Q-55), over tiny_http (§2.3).
 
 mod http;
 
+use std::collections::HashMap;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +91,7 @@ struct State {
     root: PathBuf,
     listing: Mutex<ServedListing>,
     truncate: Mutex<Option<u64>>,
+    statuses: Mutex<HashMap<String, u16>>,
     records: Mutex<Vec<RequestRecord>>,
 }
 
@@ -112,6 +114,7 @@ pub fn serve_fixtures() -> LocalServer {
         root,
         listing: Mutex::new(ServedListing::default()),
         truncate: Mutex::new(None),
+        statuses: Mutex::new(HashMap::new()),
         records: Mutex::new(Vec::new()),
     });
     let stop = Arc::new(AtomicBool::new(false));
@@ -169,6 +172,15 @@ impl LocalServer {
     /// (Q-6, Q-39).
     pub fn serve_listing(&self, kind: ServedListing) {
         *lock(&self.state.listing) = kind;
+    }
+
+    /// Makes every later GET or HEAD of the request target `path` (as sent, percent-encoded,
+    /// its query ignored: `/listing/models/`) answer `status` with an empty body, before
+    /// the listing routes and the files; a later call for `path` replaces the status
+    /// (Q-55).
+    // Q-55
+    pub fn status_for(&self, path: &str, status: u16) {
+        lock(&self.state.statuses).insert(path.to_owned(), status);
     }
 }
 
@@ -289,6 +301,14 @@ fn respond_to(state: &State, request: &Request) -> Answer {
     }
     let target = request.url();
     let path = target.split_once('?').map_or(target, |(path, _)| path);
+    // Q-55
+    if let Some(&status) = lock(&state.statuses).get(path) {
+        return Answer {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+    }
     let Some(file) = percent_decode(path).and_then(|path| resolve(state, &path)) else {
         return Answer::text(404, "not found\n");
     };
