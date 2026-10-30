@@ -141,9 +141,9 @@ pub fn write_scene(path: &Path, scene: &SceneFile) -> Result<(), IoError> {
 
 impl PoseStore {
     /// Reads the pose store at `path` (`ftgsxr-poses` v1, §1.11); a missing file is an
-    /// empty store. A key that is not a model identity (64 lowercase hexadecimal digits,
-    /// so an identity in uppercase hex too) is an unknown key: it is ignored, and the next
-    /// `save` drops it (Q-52). E-JSON when the file is not JSON, E-SCENE-FORMAT when it
+    /// empty store. A key that is not a model identity (64 lowercase hexadecimal digits;
+    /// an identity spelled in uppercase hex is not one) is an unknown key: it is ignored,
+    /// and the next `save` drops it (Q-52). E-JSON when the file is not JSON, E-SCENE-FORMAT when it
     /// breaks the schema, E-IO when it cannot be read (Q-52, Q-53).
     // Q-52, Q-53
     pub fn load(path: &Path) -> Result<PoseStore, IoError> {

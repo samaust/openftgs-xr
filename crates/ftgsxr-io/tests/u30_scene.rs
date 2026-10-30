@@ -353,7 +353,7 @@ fn u30_scene_environment_wrong_type_or_missing_object_is_scene_format() {
     let without = format!("{}{}", &good[..start], &good[end..]);
     let err = read_scene(without.as_bytes()).expect_err("no environment");
     assert_eq!(err.code(), "E-SCENE-FORMAT");
-    assert!(err.to_string().contains("environment"), "{err}");
+    assert!(err.to_string().contains("environment: missing"), "{err}");
 }
 
 /// The §1.15 code of `read_scene`'s refusal of `json`.
