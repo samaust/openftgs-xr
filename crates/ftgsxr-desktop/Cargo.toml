@@ -23,4 +23,4 @@ ftgsxr-app.workspace = true
 ftgsxr-testkit.workspace = true
 # An independent reader of the benchmark files `bench` writes (#122, Q-103), as
 # `ftgsxr-render` reads its fixture pose files.
-serde_json.workspace = true
+serde_json.workspace = true # Q-104
