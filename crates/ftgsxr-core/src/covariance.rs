@@ -139,9 +139,16 @@ pub fn project(
 /// E7's α at pixel center p for a projected primitive, 0 when skipped.
 ///
 /// α = min(α_max, σ_eff e^(−form/2)) with form = (p − μ′)ᵀ Σ′⁻¹ (p − μ′), skipped when the
-/// form is negative or α < α_skip. The occlusion weight w_occ is 1: §2.1's signature takes
-/// none (U-12's weight clause waits on the owner, PRD #1).
-pub fn alpha_at(p: Vec2, projected: &Projected, sigma_eff: f32, conv: &RenderConventions) -> f32 {
+/// form is negative or α < α_skip, then multiplied by E13's occlusion weight w_occ (1 when
+/// occlusion is off): the skip is tested before the weight, so a weighted α below α_skip is
+/// kept and a skipped term stays skipped.
+pub fn alpha_at(
+    p: Vec2,
+    projected: &Projected,
+    sigma_eff: f32,
+    w_occ: f32,
+    conv: &RenderConventions,
+) -> f32 {
     let d = (p - projected.mean).as_dvec2();
     let [a, b, c] = projected.conic.map(f64::from);
     let form = a * d.x * d.x + 2.0 * b * d.x * d.y + c * d.y * d.y;
@@ -154,7 +161,11 @@ pub fn alpha_at(p: Vec2, projected: &Projected, sigma_eff: f32, conv: &RenderCon
         return 0.0;
     }
     let alpha = raw.min(f64::from(conv.alpha_max)) as f32;
-    if alpha < conv.alpha_skip { 0.0 } else { alpha }
+    if alpha < conv.alpha_skip {
+        0.0
+    } else {
+        alpha * w_occ
+    }
 }
 
 /// E8's key k̄ = 2³² − 1 − bits(z) for a finite depth z > 0, `None` otherwise: the CPU
