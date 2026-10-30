@@ -1183,7 +1183,7 @@ fn u31_open_ref_of_an_http_checkpoint_directory_downloads_it() {
     let url = Url::parse(&server.url_of("listing/models/tiny/")).unwrap();
     let http = client("open-ref-checkpoint");
     let bytes = open_ref(&ModelRef::Http(url.clone()), Some(&http), None).unwrap();
-    let dir = bytes.checkpoint_dir().expect("a checkpoint").to_path_buf();
+    let dir = checkpoint(&bytes).to_path_buf();
     for name in ["manifest.json", "params.safetensors"] {
         assert!(dir.join(name).is_file(), "{name}");
     }
