@@ -8,6 +8,7 @@ use ftgsxr_core::{GpuArrays, RenderConventions, TemporalIndex};
 
 use super::device::SplatDevice;
 use super::error::RenderError;
+use super::readback::half_to_f32;
 
 /// The model's uniform block: every E6 and E7 constant of its `render_conventions` (D-39,
 /// §2.6: never a literal in a shader) and the layout facts the shaders read. Little-endian
@@ -82,6 +83,9 @@ pub struct GpuModel {
     pub(crate) sh_degree: u8,
     /// The model's E6 and E7 constants (D-39), which the draw reads too.
     pub(crate) conventions: RenderConventions,
+    /// The 99th percentile of the rows' speeds ‖velocity‖ in model units per unit of τ,
+    /// the scale of the speed colormap (§1.4 stage 6). // Q-93
+    pub(crate) speed_p99: f32,
     n: u32,
     bytes: u64,
 }
@@ -122,6 +126,45 @@ fn f32_buffer(dev: &SplatDevice, label: &str, values: &[f32]) -> wgpu::Buffer {
 
 fn byte_buffer(dev: &SplatDevice, label: &str, bytes: &[u8]) -> wgpu::Buffer {
     storage_buffer(dev, label, bytes.to_vec())
+}
+
+/// The rows' speeds ‖velocity‖ as the GPU reads them (float32 or half, Q-22).
+fn speeds(arrays: &GpuArrays) -> Vec<f32> {
+    let values: Vec<f32> = if arrays.half.velocity {
+        arrays
+            .velocity
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|h| half_to_f32(u16::from_le_bytes(*h)))
+            .collect()
+    } else {
+        arrays
+            .velocity
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| f32::from_le_bytes(*w))
+            .collect()
+    };
+    values
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+        .collect()
+}
+
+/// The 99th percentile of the speeds by nearest rank, the ⌈0.99 N⌉-th smallest; 0 for no
+/// rows. // Q-93
+fn speed_percentile_99(arrays: &GpuArrays) -> f32 {
+    let mut s = speeds(arrays);
+    if s.is_empty() {
+        return 0.0;
+    }
+    s.sort_by(f32::total_cmp);
+    let rank = (s.len() * 99).div_ceil(100).max(1);
+    s[rank - 1]
 }
 
 impl GpuModel {
@@ -180,6 +223,7 @@ impl GpuModel {
             tau0: arrays.tau0,
             sh_degree: arrays.sh_degree,
             conventions: conv.clone(),
+            speed_p99: speed_percentile_99(arrays),
             n: arrays.n,
             bytes,
         })
@@ -202,6 +246,57 @@ impl GpuModel {
 mod tests {
     use super::*;
     use ftgsxr_core::HalfFields;
+
+    fn arrays_with_velocity(velocity: Vec<u8>, half: bool) -> GpuArrays {
+        GpuArrays {
+            n: 0,
+            sh_degree: 0,
+            tau0: 0.0,
+            single: false,
+            half: HalfFields {
+                velocity: half,
+                scale: false,
+                rotation: false,
+                opacity: false,
+                sh: false,
+            },
+            position: vec![],
+            time_center: vec![],
+            duration: vec![],
+            velocity,
+            scale: vec![],
+            rotation: vec![],
+            opacity: vec![],
+            sh: vec![],
+        }
+    }
+
+    /// Q-93: the nearest-rank 99th percentile of ‖velocity‖, from float32 or half rows.
+    #[test]
+    fn speed_percentile_is_the_nearest_rank_99th() {
+        // Speeds 1..=200 along x: ⌈0.99 · 200⌉ = 198.
+        let bytes: Vec<u8> = (1..=200)
+            .flat_map(|i| [i as f32, 0.0, 0.0])
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        assert_eq!(
+            speed_percentile_99(&arrays_with_velocity(bytes, false)),
+            198.0
+        );
+        // One row (3, 4, 0) in halves: speed 5.
+        let halves: Vec<u8> = [0x4200u16, 0x4400, 0x0000]
+            .iter()
+            .flat_map(|h| h.to_le_bytes())
+            .collect();
+        assert_eq!(
+            speed_percentile_99(&arrays_with_velocity(halves, true)),
+            5.0
+        );
+        assert_eq!(
+            speed_percentile_99(&arrays_with_velocity(vec![], false)),
+            0.0
+        );
+    }
 
     #[test]
     fn model_uniform_carries_the_conventions_in_order() {
