@@ -1644,6 +1644,7 @@ name = "ftgsxr-app"
 version = "0.1.0"
 dependencies = [
  "ftgsxr-core",
+ "ftgsxr-render",
  "ftgsxr-testkit",
 ]
 
@@ -1703,6 +1704,7 @@ dependencies = [
  "ftgsxr-core",
  "ftgsxr-testkit",
  "naga",
+ "serde_json",
  "wgpu",
 ]
 
