@@ -612,6 +612,16 @@ fn draw(model: &GpuModel, sh_degree: u8, tau: f64) -> ModelDraw<'_> {
     }
 }
 
+/// B-1's and B-3's synthetic model (seed 1) of `n` rows at `degree`, every row
+/// persistent, so every row is active at every τ (E3), with its setup label (Q-102).
+// Q-102
+fn persistent_synthetic(n: usize, degree: u8) -> (Model, Json) {
+    (
+        synthetic_model(1, n, degree, Persistence::All),
+        Json::str("synthetic, every row persistent"),
+    )
+}
+
 /// B-1's synthetic sizes (§3.5).
 const B1_N: [usize; 5] = [250_000, 500_000, 1_000_000, 2_000_000, 3_000_000];
 
@@ -634,8 +644,9 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
         let (model, label) = match given {
             Some(g) => (&g.model, g.label()),
             None => {
-                synthetic = synthetic_model(1, n, degree, Persistence::Few);
-                (&synthetic, Json::str("synthetic"))
+                let setup_label;
+                (synthetic, setup_label) = persistent_synthetic(n, degree);
+                (&synthetic, setup_label)
             }
         };
         let (gpu_model, loaded) = gpu.upload(model, &gpu.tier)?;
@@ -720,8 +731,9 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
         let (model, label) = match given {
             Some(g) => (&g.model, g.label()),
             None => {
-                synthetic = synthetic_model(1, c, 0, Persistence::All);
-                (&synthetic, Json::str("synthetic, every row persistent"))
+                let setup_label;
+                (synthetic, setup_label) = persistent_synthetic(c, 0);
+                (&synthetic, setup_label)
             }
         };
         let (gpu_model, loaded) = gpu.upload(model, &gpu.tier)?;
@@ -1050,6 +1062,22 @@ mod tests {
             // y up in stage space is −y in the camera's OpenCV axes (§1.14).
             let up = DMat3::from_mat4(camera.world_to_camera) * DVec3::Y;
             assert!(up.y < 0.0, "{up}");
+        }
+    }
+
+    #[test]
+    fn persistent_synthetic_has_every_row_persistent() {
+        for (n, degree) in [(1, 0), (300, 2), (1000, 3)] {
+            let (model, label) = persistent_synthetic(n, degree);
+            assert_eq!((model.len(), model.sh_degree), (n, degree));
+            assert_eq!(label, Json::str("synthetic, every row persistent"));
+            // E3: every row is persistent, so every τ of the span visits all N and no
+            // transient row.
+            let (index, _) = TemporalIndex::build(&model);
+            for tau in [model.time.tau0, 0.5, model.time.tau1] {
+                let range = index.range(tau);
+                assert_eq!((range.persistent.len(), range.transient.len()), (n, 0));
+            }
         }
     }
 

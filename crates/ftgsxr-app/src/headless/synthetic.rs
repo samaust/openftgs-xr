@@ -2,7 +2,8 @@
 
 //! The benchmarks' synthetic models (§3.5 B-1, B-3, B-5, B-6): a private generator that
 //! mirrors `ftgsxr_testkit::random_model` (§2.7, Q-1), since the testkit is a
-//! dev-dependency only (§2.1). Q-102 adds one option, every row persistent, for B-3.
+//! dev-dependency only (§2.1). Q-102 adds one option, every row persistent, for B-1 and
+//! B-3.
 
 use ftgsxr_core::{Model, ModelKind, RenderConventions, TimeSpan, encode_exchange, sha256};
 
@@ -19,8 +20,9 @@ pub(crate) enum Persistence {
     /// Up to four rows, as `ftgsxr_testkit::random_model`: the same model for the same
     /// arguments.
     Few,
-    /// Every row (Q-102, B-3): every row is visible at every τ of the span from a
-    /// camera that sees the whole model, so the sort takes N keys.
+    /// Every row (Q-102, B-1, B-3): every row is visible at every τ of the span from a
+    /// camera that sees the whole model, so a frame draws N splats and the sort takes N
+    /// keys.
     All,
 }
 
