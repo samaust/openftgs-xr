@@ -8,10 +8,10 @@
 
 use std::path::{Path, PathBuf};
 
-use ftgsxr_core::{EndRule, LoopMode, Pose, Quat, Vec3};
+use ftgsxr_core::{CoreError, EndRule, LoopMode, Pose, Quat, Vec3};
 use ftgsxr_io::{
-    CameraState, ClockState, EnvironmentSettings, ListingFlavor, ManualLighting, SceneFile,
-    SceneModel, SourceSpec, read_scene, write_scene,
+    CameraState, ClockState, EnvironmentSettings, IoError, ListingFlavor, ManualLighting,
+    SceneFile, SceneModel, SourceSpec, read_scene, write_scene,
 };
 
 /// A fresh, empty directory of this test binary's own under the target directory.
@@ -369,13 +369,13 @@ fn refusal(json: &str) -> &'static str {
 const SOURCE: &str = r#"{"kind": "dir", "location": "a.safetensors"}"#;
 
 /// U-30 version rules (§1.11): a minor version is ignored and so are unknown keys, at
-/// the top level and inside an instance; an unknown major version, another or a missing
-/// `format` or a missing `version` is E-SCENE-FORMAT (Q-53); bytes that are not JSON
-/// are E-JSON.
+/// the top level and inside an instance; a well-formed `version` of another major is
+/// E-FILE-VERSION; another or a missing `format`, or a missing or malformed `version`,
+/// is E-SCENE-FORMAT (Q-53); bytes that are not JSON are E-JSON.
 #[test]
 fn u30_scene_version_rules() {
     let plain = read_scene(scene_json("1", SOURCE, "").as_bytes()).expect("version 1");
-    for version in ["\"1.3\"", "\"1\""] {
+    for version in ["\"1.3\"", "\"1\"", "\"1.7\""] {
         let read = read_scene(scene_json(version, SOURCE, "").as_bytes());
         assert_eq!(read.expect(version), plain, "{version}");
     }
@@ -384,11 +384,27 @@ fn u30_scene_version_rules() {
     let read = read_scene(scene_json("1", unknown_source, extra).as_bytes());
     assert_eq!(read.expect("unknown keys"), plain);
 
-    assert_eq!(refusal(&scene_json("2", SOURCE, "")), "E-SCENE-FORMAT");
-    assert_eq!(
-        refusal(&scene_json("\"2.0\"", SOURCE, "")),
-        "E-SCENE-FORMAT"
+    for version in ["2", "\"2.1\"", "\"2.0\"", "0"] {
+        assert_eq!(
+            refusal(&scene_json(version, SOURCE, "")),
+            "E-FILE-VERSION",
+            "{version}"
+        );
+    }
+    let newer = read_scene(scene_json("\"2.1\"", SOURCE, "").as_bytes()).expect_err("2.1");
+    assert!(
+        matches!(&newer, IoError::Core(CoreError::Version(v)) if v == "\"2.1\""),
+        "{newer:?}"
     );
+    for version in ["true", "1.5", "\"v1\"", "-1", "\"01\"", "\"1.\"", "null"] {
+        assert_eq!(
+            refusal(&scene_json(version, SOURCE, "")),
+            "E-SCENE-FORMAT",
+            "{version}"
+        );
+    }
+    let other_major_format = scene_json("2", SOURCE, "").replace("ftgsxr-scene", "ftgsxr-poses");
+    assert_eq!(refusal(&other_major_format), "E-SCENE-FORMAT");
     let other_format = scene_json("1", SOURCE, "").replace("ftgsxr-scene", "ftgsxr-poses");
     assert_eq!(refusal(&other_format), "E-SCENE-FORMAT");
     let no_format = scene_json("1", SOURCE, "").replace(r#""format": "ftgsxr-scene","#, "");
