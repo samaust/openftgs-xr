@@ -132,9 +132,11 @@ fn read_manifest(bytes: &[u8]) -> Result<Manifest, CoreError> {
         None | Some(Value::Null) => Ok(RenderConventions::default()),
         Some(bg) => RenderConventions::from_json(&format!("{{\"background\":{bg}}}")),
     };
+    // Q-34 (owner, #55): without a version, `openftgs`, as openftgs's own producer string
+    // falls back when `save_checkpoint` writes `versions.openftgs` as null.
     let producer = match map.get("versions").and_then(|v| v.get("openftgs")) {
         Some(Value::String(v)) => format!("openftgs {v}"),
-        _ => String::new(),
+        _ => "openftgs".to_owned(),
     };
     Ok(Manifest {
         time: TimeSpan {
