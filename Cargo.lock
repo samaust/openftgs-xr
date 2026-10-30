@@ -1644,6 +1644,7 @@ name = "ftgsxr-app"
 version = "0.1.0"
 dependencies = [
  "ftgsxr-core",
+ "ftgsxr-render",
  "ftgsxr-testkit",
 ]
 
@@ -1672,6 +1673,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ftgsxr-app",
+ "ftgsxr-core",
  "ftgsxr-testkit",
 ]
 
