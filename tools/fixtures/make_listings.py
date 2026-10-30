@@ -11,11 +11,15 @@ which holds the listed files:
 - `snapshot.ply`: a copy of the probe PLY snapshot;
 - `tiny/`: a checkpoint directory holding copies of checkpoint/tiny/manifest.json and
   params.safetensors (the two files the player fetches);
-- `notes.txt`: a stray file that is not a model.
+- `notes.txt`: a stray file that is not a model;
+- `probe p1.sha256`: the probe's digest, a `<name>.sha256` sidecar (§1.5 Download cache; Q-47);
+- `SHA256SUMS`: a `sha256sum` sidecar with a wrong digest for `snapshot.ply`, a line for
+  `notes.txt`, a malformed line and no line for the probe (Q-47).
 
 The nginx and Apache bodies also list `.hidden.safetensors`, a dot-name a listing client skips
 (no such file exists), and the Apache body has its parent-directory link and column-sort links.
-The bodies are listing/index.json, listing/nginx.json and listing/apache.html.
+The bodies are listing/index.json, listing/nginx.json and listing/apache.html. They do not list
+the two sidecars, so the listings U-27 reads are unchanged by them.
 """
 
 import hashlib
@@ -48,6 +52,21 @@ def copy_files() -> None:
     (MODELS / "notes.txt").write_text(
         "Not a model: a stray file of the listing fixture.\n", encoding="utf-8"
     )
+    write_sidecars()
+
+
+def write_sidecars() -> None:
+    """The digest files beside the models (§1.5 Download cache; Q-47): the probe's right digest
+    in `probe p1.sha256`, and in `SHA256SUMS` the probe's digest given for `snapshot.ply` (a
+    wrong one, in binary mode), with a line for another file and a malformed line."""
+    probe = sha256(MODELS / "probe p1.safetensors")
+    (MODELS / "probe p1.sha256").write_text(f"{probe}  probe p1.safetensors\n", encoding="utf-8")
+    lines = [
+        f"{sha256(MODELS / 'notes.txt')}  notes.txt",
+        "not a sha256sum line",
+        f"{probe} *snapshot.ply",
+    ]
+    (MODELS / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def size(name: str) -> int:
