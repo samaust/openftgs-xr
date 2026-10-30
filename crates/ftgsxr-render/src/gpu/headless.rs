@@ -21,7 +21,7 @@ use super::inputs::{ColorTransform, ModelDraw, Overlays, RenderMode, SortPose, V
 use super::model::GpuModel;
 use super::passes::SplatPasses;
 use super::readback::half_to_f32;
-use super::tier::{Capacity, DESKTOP_FALLBACK_BUDGET, QualityTier};
+use super::tier::{Capacity, DESKTOP_FALLBACK_BUDGET, QualityTier, SortMode};
 
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
 const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -104,7 +104,15 @@ pub struct HeadlessRenderer {
 impl HeadlessRenderer {
     /// A renderer for `tier` on the high-performance Vulkan adapter (Q-74); E-GPU-ADAPTER
     /// when there is none, E-GPU-SHADER when a pass does not compile.
+    ///
+    /// A headless render has one view (§1.4 Stereo) and sorts per view whatever the tier
+    /// (D-4, Q-T76.4): a shared-center tier keeps its storage, SH cap, key width, capacity
+    /// and budget but not its stereo mode, and the render is at the camera's own size, so
+    /// the tier's `render_scale` and foveation (the swapchain's) do not apply.
     pub fn new(tier: QualityTier) -> Result<HeadlessRenderer, RenderError> {
+        // Q-T76.4, D-4: "per-view sort on the desktop and in headless renders".
+        let mut tier = tier;
+        tier.sort_mode = SortMode::PerView;
         let gpu = Gpu::create(&tier, &[])?;
         Ok(HeadlessRenderer {
             tier,

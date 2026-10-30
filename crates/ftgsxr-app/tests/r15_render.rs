@@ -133,3 +133,32 @@ fn gpu_r15_p1_request_writes_the_renders_file() {
         .unwrap_or_else(|| panic!("producer {producer:?}"));
     assert!(!adapter.is_empty(), "producer {producer:?}");
 }
+
+/// The Quest tiers through `ftgsxr render` (§1.7 `--tier`): a headless render has one view
+/// (§1.4 Stereo) and sorts per view (D-4) whatever the tier, so `quest-balanced` on P1
+/// draws P1's primitive on every item rather than the background alone (Q-T76.4).
+#[test]
+#[ignore = "gpu"]
+fn gpu_r15_a_quest_tier_renders_the_splats() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dir = scratch("quest_balanced");
+    let out = dir.join("P1.renders.safetensors");
+    cmd_render(
+        &p1("safetensors"),
+        &p1("request.json"),
+        &out,
+        QualityTier::quest_balanced(),
+        VERSION,
+    )
+    .expect("P1 renders in quest-balanced");
+    let request = read_request(&fs::read(p1("request.json")).unwrap()).unwrap();
+    let renders = read_renders(&fs::read(&out).unwrap(), Some(request.sha256)).unwrap();
+    assert_eq!(renders.len(), request.items.len());
+    for (id, image) in &renders {
+        let peak = image.alpha.iter().fold(0f32, |m, &a| m.max(a));
+        assert!(
+            peak > 0.1,
+            "{id}: P1's primitive is drawn (peak alpha {peak})"
+        );
+    }
+}
