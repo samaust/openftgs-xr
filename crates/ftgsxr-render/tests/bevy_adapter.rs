@@ -6,7 +6,9 @@
 //! one `SplatModel` of P1 at the request's first item, read back, meets E15's tier
 //! (PSNR ≥ 45 dB, s ≤ 0.5 %, s_α ≤ 0.5 %) against the reference render. It catches a broken
 //! plugin wiring (loads, uploads, extraction, the two render nodes, the camera's
-//! conversion to E6's camera); window and swapchain behaviour are M-4's I-n.
+//! conversion to E6's camera); window and swapchain behaviour are M-4's I-n. The other
+//! tests here check `LinearOver`'s resolve onto an sRGB target (Q-94) and that
+//! `FileEncoded` is not drawn onto one (Q-100, #178).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -362,4 +364,27 @@ fn gpu_bevy_adapter_resolves_p1_over_a_background_onto_an_srgb_target() {
         "E15's tier: {m:?}"
     );
     assert_stats(stats);
+}
+
+/// `FileEncoded` on an sRGB target is not drawn (D-6, Q-100): the hardware would store
+/// encode(file value), the linear-light misreading R-11 rules out. Every pixel keeps the
+/// camera's transparent clear, where a drawn P1 covers pixels.
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_does_not_draw_file_encoded_onto_an_srgb_target() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let (data, _) = render_p1(OutputSpace::FileEncoded, TextureFormat::Rgba8UnormSrgb);
+    let (_, request) = probe("P1");
+    let (w, h) = (
+        request.items[0].camera.width as usize,
+        request.items[0].camera.height as usize,
+    );
+    let row = data.len() / h;
+    for y in 0..h {
+        let pixels = &data[y * row..y * row + 4 * w];
+        assert!(
+            pixels.iter().all(|&b| b == 0),
+            "row {y} holds only the clear value (0, 0, 0, 0)"
+        );
+    }
 }

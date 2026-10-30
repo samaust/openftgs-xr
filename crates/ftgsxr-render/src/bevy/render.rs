@@ -300,6 +300,24 @@ fn capacity(tier: &QualityTier, instances: &[Instance]) -> u32 {
     }
 }
 
+/// Whether `FileEncoded` draws into a view target of `format`: exactly on 16-bit float,
+/// rounded on another format (the warning), or not at all on sRGB, whose encode on store
+/// and decode for blending would turn the file's values into linear light (the reason).
+// Q-100
+fn file_encoded_rule(format: TextureFormat) -> Result<Option<&'static str>, &'static str> {
+    if format.is_srgb() {
+        Err(
+            "FileEncoded needs a target that is not sRGB; an sRGB target would encode the file's values (D-6, Q-100)",
+        )
+    } else if format != LAYER_FORMAT {
+        Ok(Some(
+            "FileEncoded on a target that is not 16-bit float rounds the layer",
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "one view's inputs, gathered by the system above"
@@ -333,11 +351,8 @@ fn prepare_view(
     }
     let layer_format = match camera.output {
         OutputSpace::FileEncoded => {
-            if view.target_format != LAYER_FORMAT {
-                views.warn_once(
-                    entity,
-                    "FileEncoded on a target that is not 16-bit float rounds the layer",
-                );
+            if let Some(warning) = file_encoded_rule(view.target_format)? {
+                views.warn_once(entity, warning);
             }
             view.target_format
         }
@@ -574,6 +589,31 @@ fn poll_stats(views: Res<Views>, inbox: Res<StatsInbox>) {
     for entity in entities {
         if let Some(stats) = FrameStats::poll(&views.states[entity].frame, dev) {
             inbox.push(stats);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_encoded_draws_unwarned_on_a_16_bit_float_target() {
+        assert_eq!(file_encoded_rule(TextureFormat::Rgba16Float), Ok(None));
+    }
+
+    #[test]
+    fn file_encoded_draws_warned_on_an_8_bit_linear_target() {
+        assert!(matches!(
+            file_encoded_rule(TextureFormat::Rgba8Unorm),
+            Ok(Some(_))
+        ));
+    }
+
+    #[test]
+    fn file_encoded_is_refused_on_srgb_targets() {
+        for format in [TextureFormat::Rgba8UnormSrgb, TextureFormat::Bgra8UnormSrgb] {
+            assert!(file_encoded_rule(format).is_err(), "{format:?}");
         }
     }
 }

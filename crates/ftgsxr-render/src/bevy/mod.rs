@@ -88,7 +88,8 @@ pub enum OutputSpace {
     },
     /// No resolve: the splats are blended, file-encoded and premultiplied, straight into
     /// the view target, which then holds the layer of a headless render (§1.7); exact on a
-    /// 16-bit float target (Q-100).
+    /// 16-bit float target, rounded on another target that is not sRGB, and not drawn on
+    /// an sRGB target, which would encode the file's values (Q-100).
     FileEncoded,
 }
 
