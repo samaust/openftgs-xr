@@ -895,7 +895,7 @@ pub fn list_dir(path: &Path) -> Result<Vec<Entry>, IoError>;                    
 pub fn classify_name(name: &str) -> EntryKind;
 
 // ftgsxr_io::http
-pub enum TlsRoots { WebPki, Platform }
+pub enum TlsRoots { WebPki }
 pub struct Progress { pub done: u64, pub total: Option<u64> }
 pub struct HttpClient { /* agent, cache dir, limits */ }
 impl HttpClient {
@@ -1563,7 +1563,7 @@ Forty-nine rows record the decisions this specification makes where the owner's 
 | D-17 | Stick locomotion in passthrough mode | Off: the sticks keep only their other roles; the user walks; recenter and fit bring the content (owner decision, 2026-10-29, replacing the proposal to move the content group) | the real room cannot move; moving the content was judged confusing | move the content group; a setting | U-17; U-32 |
 | D-18 | Android activity and packaging | GameActivity subclassed by the Kotlin `MainActivity`, cargo-ndk and Gradle, minSdk 32, targetSdk 34; NativeActivity subclassed if the pinned XR crate forces that backend | Bevy's documented path; the shim needs an Activity subclass anyway; Meta's SDK levels | NativeActivity with cargo-apk (deprecated) | Dv-1 |
 | D-19 | The OpenXR loader on Android | The Khronos loader from Maven, version pinned in `android/`, never Meta's | Apache-2.0; Meta requires the Khronos loader ≥ 1.0.34 | an AAR fetched by a build script | Dv-1 |
-| D-20 | TLS and roots | ureq with rustls, the `ring` provider and webpki-roots (CDLA-Permissive-2.0, accepted by the owner, 2026-10-29); the platform verifier as a desktop-only option | one code path, no JNI initialisation on Android, no compound-license crypto build | rustls-platform-verifier (needs a Gradle component); reqwest | U-28; I-21 |
+| D-20 | TLS and roots | ureq with rustls, the `ring` provider and webpki-roots (CDLA-Permissive-2.0, accepted by the owner, 2026-10-29) on both builds; `TlsRoots` has the one variant `WebPki`, and a platform verifier is deferred until a user need for the system store appears (owner, 2026-10-29; Q-5) | one code path, no JNI initialisation on Android, no compound-license crypto build; no setting or panel would choose another root set | rustls-platform-verifier as a desktop-only `TlsRoots::Platform` (needs a §2.3 row, a settings key and a §3 row; on Android a Gradle component); reqwest | U-28; I-21 |
 | D-21 | The UI stack | bevy\_egui, on screen on the desktop and rendered to a texture on a world quad in XR, with the player's ray-to-pointer mapping | immediate-mode widgets with little code; render-to-image is documented; no XR UI crate exists | Bevy UI rendered to a texture; a custom UI | U-32; I-11; A-4, A-8 |
 | D-22 | Audio | bevy\_kira\_audio for its seek and position; soundtracks play at speed 1 forward only | seeking and rate are what synchronization needs; silence elsewhere avoids artefacts | Bevy's audio (seek support source-dependent); pitch-shifted playback | I-5; A-9 |
 | D-23 | The player's file formats | TOML settings; JSON poses, scenes and index; every file with `format` and `version`, written atomically | editable settings; JSON like openftgs's files | RON for everything | U-29, U-30 |

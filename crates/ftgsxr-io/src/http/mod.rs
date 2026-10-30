@@ -33,11 +33,8 @@ const TEXT_LIMIT: u64 = 64 << 20;
 /// The root certificates TLS connections are verified against (D-20).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TlsRoots {
-    /// Mozilla's roots, bundled through webpki-roots (D-20); both builds' default.
+    /// Mozilla's roots, bundled through webpki-roots (D-20); both builds' only roots.
     WebPki,
-    /// The platform's verifier, a desktop-only option (D-20). Until §2.3 lists a crate for
-    /// it, the client warns and uses the WebPki roots (Q-5).
-    Platform,
 }
 
 /// A download's progress (§1.5): the bytes of the file held so far, and its size when
@@ -70,15 +67,9 @@ impl HttpClient {
     /// A client whose download cache lives under `cache_dir/http/` (§1.11 Locations and
     /// Cache entries, Q-42), pruned to `max_bytes` by `prune` (§1.11 `[cache]`).
     ///
-    /// `TlsRoots::Platform` logs a warning and uses the WebPki roots (Q-5). E-IO when the
-    /// cache directory cannot be created.
+    /// E-IO when the cache directory cannot be created.
     pub fn new(cache_dir: PathBuf, roots: TlsRoots, max_bytes: u64) -> Result<HttpClient, IoError> {
-        if roots == TlsRoots::Platform {
-            // Q-5: no platform verifier until §2.3 lists one.
-            tracing::warn!(
-                "TLS: the platform verifier is not available in this build; using the WebPki roots"
-            );
-        }
+        let TlsRoots::WebPki = roots;
         // D-20: rustls (ureq's `rustls` feature: the `ring` provider) with the webpki roots.
         let tls = TlsConfig::builder()
             .provider(TlsProvider::Rustls)

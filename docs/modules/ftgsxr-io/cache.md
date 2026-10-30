@@ -4,7 +4,7 @@ How `HttpClient` keeps the download cache: the files of a cache entry, the three
 
 ## The client
 
-One `HttpClient` holds one ureq agent, shared by every request it makes, over rustls with the `ring` provider and the webpki roots (D-20). `TlsRoots::Platform` is accepted and logs a warning, then uses the same webpki roots, until §2.3 lists a platform verifier (Q-5). The agent treats every status as data, so each method decides what a 206, a 304 or a 416 means for it, and anything it did not ask for becomes E-NET-FETCH with the status in its text. It sends no `Accept-Encoding`: a compressed body would make byte offsets meaningless for a resume and for a header-only read.
+One `HttpClient` holds one ureq agent, shared by every request it makes, over rustls with the `ring` provider and the webpki roots (D-20). The agent treats every status as data, so each method decides what a 206, a 304 or a 416 means for it, and anything it did not ask for becomes E-NET-FETCH with the status in its text. It sends no `Accept-Encoding`: a compressed body would make byte offsets meaningless for a resume and for a header-only read.
 
 Three reads, three contracts:
 
@@ -55,7 +55,6 @@ It never removes an entry whose `file` is in the set `set_in_use` last gave (Q-4
 ## Q-n rows relied on
 
 - **Q-4** `set_in_use`, the public-API addition that tells `prune` which files are loaded.
-- **Q-5** the `TlsRoots::Platform` fallback to the webpki roots, with a warning.
 - **Q-42** the entry's files and records: the `<cache dir>` root, the URL's serialization as the key, `format` and `version` in the record, `fetched_at` as the last use, the partial and its own record.
 - **Q-43** what `download` does where §1.5 is silent: failures part-way, cancel, a resume answered with 200 or 416, the expected digest against the cache's record, a malformed digest, timeouts.
 - **Q-44** `get_range` on a short file or a server without ranges; `get_text` uncached.
