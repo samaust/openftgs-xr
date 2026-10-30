@@ -443,8 +443,9 @@ fn model_of(v: &Value, at: &str) -> Result<SceneModel, IoError> {
 fn clock_of(v: &Value, at: &str) -> Result<ClockState, IoError> {
     let map = object(v, at)?;
     let sub = |key: &str| format!("{at}.{key}");
-    let loop_mode = loop_mode_of(choice(field(map, "loop", at)?, &sub("loop"), LOOP_MODES)?)
-        .unwrap_or(LoopMode::Loop);
+    let spelled = choice(field(map, "loop", at)?, &sub("loop"), LOOP_MODES)?;
+    let loop_mode =
+        loop_mode_of(spelled).ok_or_else(|| schema(&sub("loop"), format!("{spelled:?}")))?;
     let range = match optional(map, "range") {
         Some(r) => {
             let r_at = sub("range");

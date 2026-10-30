@@ -153,8 +153,8 @@ pub struct PlaybackSettings {
     pub loop_mode: LoopMode,
 }
 
-/// `[display.overlays]`: §1.4's optional overlays, named as §2.2's `OverlayToggle` and
-/// `Overlays` (Q-49).
+/// `[display.overlays]`: §1.4's optional overlays, named as §2.2's `OverlayToggle`
+/// (Q-49).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OverlaySettings {
     /// The bounding box at the current time.
