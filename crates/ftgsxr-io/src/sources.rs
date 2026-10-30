@@ -41,33 +41,15 @@ pub enum ModelRef {
 
 /// A fetched model (D-50, D-51): a file's bytes read into memory, what the readers of §1.2
 /// take, or a checkpoint directory on disk, loaded by path with `read_checkpoint`. Where it
-/// came from is the `ModelRef` beside it.
-// D-50, D-51
+/// came from is the `ModelRef` beside it. It has no accessor: callers match on the two
+/// variants, so a new variant fails to compile where it is not handled (Q-58).
+// D-50, D-51, Q-58
 #[derive(Clone, PartialEq, Eq)]
 pub enum ModelBytes {
     /// The whole file, owned.
     Owned(Vec<u8>),
     /// A checkpoint directory holding `manifest.json` and `params.safetensors`.
     Checkpoint(PathBuf),
-}
-
-// Q-58
-impl ModelBytes {
-    /// The file's bytes; `None` for a checkpoint, which is read by path (Q-58).
-    pub fn as_bytes(&self) -> Option<&[u8]> {
-        match self {
-            ModelBytes::Owned(bytes) => Some(bytes),
-            ModelBytes::Checkpoint(_) => None,
-        }
-    }
-
-    /// The checkpoint's directory; `None` for a file's bytes (Q-58).
-    pub fn checkpoint_dir(&self) -> Option<&Path> {
-        match self {
-            ModelBytes::Owned(_) => None,
-            ModelBytes::Checkpoint(dir) => Some(dir),
-        }
-    }
 }
 
 impl std::fmt::Debug for ModelBytes {

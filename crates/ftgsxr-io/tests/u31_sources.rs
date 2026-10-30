@@ -204,6 +204,22 @@ fn u31_local_dir_info_of_a_kind_without_a_header_read_is_e_io() {
     }
 }
 
+/// A fetched file's bytes; panics on a checkpoint, which carries none (Q-58).
+fn owned(bytes: &ModelBytes) -> &[u8] {
+    match bytes {
+        ModelBytes::Owned(bytes) => bytes,
+        ModelBytes::Checkpoint(dir) => panic!("a file's bytes, not the checkpoint {dir:?}"),
+    }
+}
+
+/// A fetched checkpoint's directory; panics on a file's bytes (Q-58).
+fn checkpoint(bytes: &ModelBytes) -> &Path {
+    match bytes {
+        ModelBytes::Checkpoint(dir) => dir,
+        ModelBytes::Owned(bytes) => panic!("a checkpoint, not {} bytes", bytes.len()),
+    }
+}
+
 #[test]
 fn u31_local_dir_fetch_reads_the_file_with_progress() {
     let dir = local_models("u31_local_dir_fetch_reads_the_file_with_progress");
@@ -214,7 +230,7 @@ fn u31_local_dir_fetch_reads_the_file_with_progress() {
         let whole = fs::read(&path).unwrap();
         let (r, bytes, reports) = fetch_all(&source, entry);
         assert_eq!(r, ModelRef::File(path));
-        assert_eq!(bytes.as_bytes(), Some(whole.as_slice()));
+        assert_eq!(owned(&bytes), whole.as_slice());
         let size = whole.len() as u64;
         assert_eq!(
             reports.last(),
@@ -238,13 +254,7 @@ fn fixture_checkpoint() -> Model {
 
 /// The model a fetched checkpoint names: its directory read by `read_checkpoint` (D-51).
 fn read_fetched(bytes: &ModelBytes) -> Model {
-    assert_eq!(
-        bytes.as_bytes(),
-        None,
-        "a checkpoint carries no bytes (Q-58)"
-    );
-    let dir = bytes.checkpoint_dir().expect("a checkpoint directory");
-    read_checkpoint(dir).expect("the fetched checkpoint reads")
+    read_checkpoint(checkpoint(bytes)).expect("the fetched checkpoint reads")
 }
 
 #[test]
@@ -253,7 +263,7 @@ fn u31_open_ref_of_a_checkpoint_directory_returns_it() {
     let dir = local_models("u31_open_ref_of_a_checkpoint_directory_returns_it").join("tiny");
     let bytes = open_ref(&ModelRef::File(dir.clone()), None, None).unwrap();
     assert_eq!(bytes, ModelBytes::Checkpoint(dir.clone()));
-    assert_eq!(bytes.checkpoint_dir(), Some(dir.as_path()));
+    assert_eq!(checkpoint(&bytes), dir.as_path());
     assert_eq!(read_fetched(&bytes), fixture_checkpoint());
 }
 
@@ -618,7 +628,7 @@ fn u31_http_index_fetch_downloads_and_checks_the_index_digest() {
         let whole = fs::read(listing_models().join(file)).unwrap();
         let (r, bytes, reports) = fetch_all(&source, entry);
         assert_eq!(r, ModelRef::Http(Url::parse(&entry.location).unwrap()));
-        assert_eq!(bytes.as_bytes(), Some(whole.as_slice()));
+        assert_eq!(owned(&bytes), whole.as_slice());
         assert_eq!(reports.last().map(|p| p.done), Some(whole.len() as u64));
     }
     // A digest that disagrees is E-NET-CHECKSUM (§1.5).
@@ -650,7 +660,7 @@ fn u31_http_index_fetch_of_a_checkpoint_fills_one_cache_entry() {
     let tiny = http_checkpoint(&source);
     let before = server.requests().len();
     let (r, bytes, reports) = fetch_all(&source, &tiny);
-    let dir = bytes.checkpoint_dir().expect("a checkpoint").to_path_buf();
+    let dir = checkpoint(&bytes).to_path_buf();
     assert_eq!(r, ModelRef::File(dir.clone()));
     assert_eq!(read_fetched(&bytes), fixture_checkpoint());
     // The entry of the directory URL, trailing slash included (Q-42).
@@ -716,7 +726,7 @@ fn u31_http_checkpoint_params_against_the_manifest_digest() {
     );
     let tiny = http_checkpoint(&source);
     let (_, bytes, _) = fetch_all(&source, &tiny);
-    let dir = bytes.checkpoint_dir().unwrap().to_path_buf();
+    let dir = checkpoint(&bytes).to_path_buf();
     let manifest = dir.join("manifest.json");
     let text = fs::read_to_string(&manifest).unwrap();
     let digest = "5456b847ca9238c2c9f915e0ab034014ffe052842f0581c4e9c6e103ada2ed87";
@@ -804,7 +814,7 @@ fn u31_prune_never_evicts_a_checkpoint_in_use() {
     let tiny = http_checkpoint(&source);
     let probe = entries.iter().find(|e| e.name == "probe p1").unwrap();
     let (_, bytes, _) = fetch_all(&source, &tiny);
-    let dir = bytes.checkpoint_dir().unwrap().to_path_buf();
+    let dir = checkpoint(&bytes).to_path_buf();
     let probe_url = Url::parse(&probe.location).unwrap();
     let cancel = AtomicBool::new(false);
     let probe_file = http
@@ -843,7 +853,7 @@ fn fetch_paths(
 ) -> Vec<String> {
     let before = server.requests().len();
     let (_, bytes, _) = fetch_all(source, entry);
-    assert_eq!(bytes.as_bytes(), Some(fs::read(file).unwrap().as_slice()));
+    assert_eq!(owned(&bytes), fs::read(file).unwrap().as_slice());
     paths(server)[before..].to_vec()
 }
 
@@ -1108,10 +1118,10 @@ fn u31_document_source_over_a_stub_provider() {
         let file = StubProvider::file_of(&entry.location).unwrap();
         let (r, bytes, reports) = fetch_all(source.as_ref(), entry);
         assert_eq!(r, ModelRef::Document(entry.location.clone()));
-        assert_eq!(bytes.as_bytes(), Some(fs::read(file).unwrap().as_slice()));
+        assert_eq!(owned(&bytes), fs::read(file).unwrap().as_slice());
         assert_eq!(
             reports.last().map(|p| p.done),
-            bytes.as_bytes().map(|b| b.len() as u64)
+            Some(owned(&bytes).len() as u64)
         );
     }
     // A subdirectory is a tree URI the provider is asked for (Q-47).
@@ -1144,8 +1154,8 @@ fn u31_open_ref_reads_every_model_ref() {
     }
     // Each reference needs only its own reader.
     assert_eq!(
-        open_ref(&file, None, None).unwrap().as_bytes(),
-        Some(whole.as_slice())
+        open_ref(&file, None, None).unwrap(),
+        ModelBytes::Owned(whole.clone())
     );
     assert_eq!(open_ref(&web, None, None).unwrap_err().code(), "E-IO");
     assert_eq!(
