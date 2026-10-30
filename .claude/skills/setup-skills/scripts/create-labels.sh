@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
 # Create or update every GitHub label the skills apply, on the current repository.
 # --force makes this idempotent: an existing label is updated in place.
 # The triage-role strings must match docs/agents/triage-labels.md.
