@@ -7,7 +7,8 @@ use ftgsxr_core::RenderImage;
 /// E15's three numbers for two renders of one request item (Q-1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Metrics {
-    /// PSNR in dB over the H·W·3 clamped RGB values; `f64::INFINITY` when the MSE is 0.
+    /// PSNR in dB over the H·W·3 clamped RGB values; `f64::INFINITY` when the MSE is 0, NaN
+    /// when an RGB value is non-finite (Q-41).
     pub psnr: f64,
     /// s: the share of pixels whose largest RGB channel difference exceeds 1/255.
     pub share: f64,
@@ -18,11 +19,11 @@ pub struct Metrics {
 /// A difference above this counts a pixel in s or s_α (E15).
 const LEVEL: f64 = 1.0 / 255.0;
 
-/// E15 for renders `a` and `b`, computed in float64 after clamping every RGB and alpha value
-/// of both to [0, 1] (D-46): PSNR = 10 log10(1 / MSE) over the H·W·3 RGB values, infinite
-/// at MSE = 0; s and s_α count a pixel when its largest RGB difference, or its alpha
-/// difference, exceeds 1/255. A NaN value counts its pixel as differing and makes the PSNR
-/// NaN (Q-41).
+/// E15 for renders `a` and `b`, computed in float64 after clamping every finite RGB and
+/// alpha value of both to [0, 1] (D-46): PSNR = 10 log10(1 / MSE) over the H·W·3 RGB values,
+/// infinite at MSE = 0; s and s_α count a pixel when its largest RGB difference, or its
+/// alpha difference, exceeds 1/255. A non-finite value (NaN, +∞ or −∞) is not clamped: it
+/// counts its pixel as differing, and in RGB makes the PSNR NaN (Q-41).
 ///
 /// # Panics
 ///
@@ -81,12 +82,18 @@ pub fn metrics(a: &RenderImage, b: &RenderImage) -> Metrics {
     }
 }
 
-/// A value widened to float64 and clamped to [0, 1] (D-46); NaN stays NaN.
+/// A finite value widened to float64 and clamped to [0, 1] (D-46); a non-finite one becomes
+/// NaN, so that `exceeds` counts it (Q-41).
 fn unit(value: f32) -> f64 {
-    f64::from(value).clamp(0.0, 1.0)
+    if value.is_finite() {
+        f64::from(value).clamp(0.0, 1.0)
+    } else {
+        f64::NAN
+    }
 }
 
-/// Whether a difference counts its pixel: more than 1/255, or NaN (Q-41).
+/// Whether a difference counts its pixel: more than 1/255, or NaN, from a non-finite value
+/// (Q-41).
 fn exceeds(difference: f64) -> bool {
     difference.is_nan() || difference.abs() > LEVEL
 }
@@ -101,5 +108,13 @@ mod tests {
         assert!(!exceeds(-LEVEL));
         assert!(exceeds(LEVEL * (1.0 + 1e-12)));
         assert!(exceeds(f64::NAN));
+    }
+
+    #[test]
+    fn unit_clamps_finite_values_and_turns_the_rest_to_nan() {
+        assert_eq!((unit(1.5), unit(-0.5), unit(0.25)), (1.0, 0.0, 0.25));
+        assert!(unit(f32::INFINITY).is_nan());
+        assert!(unit(f32::NEG_INFINITY).is_nan());
+        assert!(unit(f32::NAN).is_nan());
     }
 }
