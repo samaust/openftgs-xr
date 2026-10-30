@@ -630,6 +630,14 @@ _Avoid_: autosave, intermediate checkpoint
 The player's per-URL store of fetched model files with their validators (ETag, Last-Modified), size, digest and fetch time, resumed with range requests and pruned least recently used, never of a loaded model's file. §1.5, §1.11
 _Avoid_: HTTP cache (the browser's sense), temp files, downloads folder
 
+**Cache entry**:
+The download cache's record of one fetched thing: a single model file with its record, or a checkpoint downloaded over HTTP, whose entry is itself a checkpoint directory; the download cache is pruned whole entries at a time. §1.11 Cache entries, D-51, Q-42
+_Avoid_: cached file (an entry may hold a checkpoint's two files), cache slot, cache record (the record is the entry's metadata)
+
+**Member**:
+One of the two files of a checkpoint's cache entry, its manifest or its parameters, each downloaded, revalidated and resumed on its own with its own record. §1.11 Cache entries, D-51, Q-42
+_Avoid_: part (reserved for a download in progress), chunk, child
+
 ### Evaluation
 
 **SSIM_k**:
