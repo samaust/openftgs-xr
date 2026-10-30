@@ -12,6 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+use ftgsxr_core::CoreError;
+
 use crate::IoError;
 
 /// The error of a cancelled read or download of `what`: E-IO of kind `Interrupted`, one
@@ -60,7 +62,8 @@ pub(crate) fn set_aside(path: &Path) -> Result<PathBuf, IoError> {
 /// The major version `version` names under §1.11's versioning rule, which ignores a minor
 /// version: a non-negative JSON integer, or a `"major[.minor]"` string of decimal parts
 /// without leading zeros. `None` when it is neither (malformed, E-SCENE-FORMAT); a
-/// major too large for `u64` is `u64::MAX`, still not 1 (Q-37, Q-53).
+/// major too large for `u64` is `u64::MAX`, still not 1, whether written as a string or
+/// as an integer, which serde_json reads as a float (Q-37, Q-53).
 // Q-37, Q-53
 pub(crate) fn version_major(version: &Value) -> Option<u64> {
     fn decimal(part: &str) -> Option<u64> {
@@ -69,7 +72,12 @@ pub(crate) fn version_major(version: &Value) -> Option<u64> {
         (digits && !leading_zero).then(|| part.parse().unwrap_or(u64::MAX))
     }
     match version {
-        Value::Number(n) => n.as_u64(),
+        Value::Number(n) => n.as_u64().or_else(|| {
+            let past_u64 = n
+                .as_f64()
+                .is_some_and(|x| x >= 18_446_744_073_709_551_616.0);
+            past_u64.then_some(u64::MAX)
+        }),
         Value::String(text) => {
             let mut parts = text.splitn(2, '.');
             let major = parts.next().and_then(decimal);
@@ -77,6 +85,25 @@ pub(crate) fn version_major(version: &Value) -> Option<u64> {
             major.filter(|_| minor_ok)
         }
         _ => None,
+    }
+}
+
+/// Checks a player file's `version` (§1.11's versioning rule): `Ok` for major 1;
+/// E-FILE-VERSION, the version as written, for a well-formed version of another major;
+/// for a missing or malformed one, the E-SCENE-FORMAT error `schema` makes of the detail
+/// (`missing`, or the value and the forms expected) (Q-37, Q-53).
+// Q-37, Q-53
+pub(crate) fn check_version(
+    version: Option<&Value>,
+    schema: impl FnOnce(String) -> IoError,
+) -> Result<(), IoError> {
+    match version.map(|v| (v, version_major(v))) {
+        Some((_, Some(1))) => Ok(()),
+        Some((v, Some(_))) => Err(CoreError::Version(v.to_string()).into()),
+        Some((v, None)) => Err(schema(format!(
+            "{v}, expected an integer or a \"major.minor\" string"
+        ))),
+        None => Err(schema("missing".into())),
     }
 }
 
@@ -221,6 +248,10 @@ mod tests {
             ("2.0".into(), 2),
             (Value::from(0), 0),
             ("99999999999999999999".into(), u64::MAX),
+            (
+                serde_json::from_str("99999999999999999999").unwrap(),
+                u64::MAX,
+            ),
         ] {
             assert_eq!(version_major(&v), Some(major), "{v}");
         }
