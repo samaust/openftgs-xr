@@ -15,6 +15,7 @@ use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
 use url::Url;
 
 use crate::http::status_error;
+use crate::http::{MANIFEST, PARAMS};
 use crate::listing::{as_directory, checked_header_len, header_info, percent_decode};
 use crate::util::cancelled;
 use crate::{
@@ -148,9 +149,6 @@ pub struct SourceSpec {
 
 /// The player's own listing under an HTTP index's base (§1.5, §1.11).
 const INDEX: &str = "index.json";
-/// A checkpoint's two files, the ones `read_checkpoint` reads (§1.2, D-51).
-const MANIFEST: &str = "manifest.json";
-const PARAMS: &str = "params.safetensors";
 /// The `sha256sum` list a model's digest may be read from, beside the model (§1.5, Q-47).
 const SUMS: &str = "SHA256SUMS";
 /// The bytes a local or document file is read in between two cancel checks (Q-47).
@@ -536,10 +534,7 @@ fn local_checkpoint(
     cancel: &AtomicBool,
 ) -> Result<ModelBytes, IoError> {
     if cancel.load(Ordering::Relaxed) {
-        return Err(IoError::Io(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            format!("{}: cancelled", dir.display()),
-        )));
+        return Err(cancelled(dir.display()));
     }
     let mut size = 0;
     for name in [MANIFEST, PARAMS] {

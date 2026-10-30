@@ -4,7 +4,7 @@
 //! entry, which is itself the checkpoint directory `read_checkpoint` reads (§1.5 Loading and
 //! unloading, §1.11 `index.json` and Cache entries, D-51, Q-42, Q-57, Q-59).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use serde_json::Value;
@@ -15,9 +15,10 @@ use super::download::parse_digest;
 use super::{HttpClient, Progress, lock};
 use crate::IoError;
 
-/// The members a checkpoint's entry holds, in download order (§1.11 `index.json`, D-51).
-pub(super) const MANIFEST: &str = "manifest.json";
-pub(super) const PARAMS: &str = "params.safetensors";
+/// The first member of a checkpoint's entry: its manifest (§1.11 `index.json`, D-51).
+pub(crate) const MANIFEST: &str = "manifest.json";
+/// The second member: its parameters, the file `read_checkpoint` activates (§1.2, D-51).
+pub(crate) const PARAMS: &str = "params.safetensors";
 
 /// The largest `manifest.json` read for the params digest; openftgs's are a few kilobytes.
 const MAX_MANIFEST: u64 = 16 << 20;
@@ -93,7 +94,7 @@ impl HttpClient {
 /// `None` when the manifest cannot be read or gives none: `read_checkpoint` then reports
 /// the fault (Q-34, Q-57).
 // Q-57
-fn params_digest(manifest: &std::path::Path) -> Option<String> {
+fn params_digest(manifest: &Path) -> Option<String> {
     if std::fs::metadata(manifest).ok()?.len() > MAX_MANIFEST {
         return None;
     }

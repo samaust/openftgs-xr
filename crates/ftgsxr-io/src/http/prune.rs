@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::cache::Entry;
-use super::checkpoint::{MANIFEST, PARAMS};
 use super::{HttpClient, lock};
+use super::{MANIFEST, PARAMS};
 use crate::IoError;
 
 /// One cache entry as `prune` sees it.
@@ -65,17 +65,17 @@ impl HttpClient {
             let dir = dir.path();
             let mut bytes = 0;
             // Q-56: the entry's directory, or any file in it.
-            let mut used_now = in_use.contains(&canonical(&dir));
+            let mut entry_in_use = in_use.contains(&canonical(&dir));
             for file in std::fs::read_dir(&dir)? {
                 let file = file?;
                 let metadata = file.metadata()?;
                 if metadata.is_file() {
                     bytes += metadata.len();
-                    used_now |= in_use.contains(&canonical(&file.path()));
+                    entry_in_use |= in_use.contains(&canonical(&file.path()));
                 }
             }
             // Q-42: the latest use of a single file's entry or of a checkpoint's members.
-            let used = [
+            let last_used = [
                 Entry::at(dir.clone()),
                 Entry::member(&dir, MANIFEST),
                 Entry::member(&dir, PARAMS),
@@ -92,8 +92,8 @@ impl HttpClient {
             candidates.push(Candidate {
                 dir,
                 bytes,
-                used,
-                in_use: used_now,
+                used: last_used,
+                in_use: entry_in_use,
             });
         }
         Ok(candidates)

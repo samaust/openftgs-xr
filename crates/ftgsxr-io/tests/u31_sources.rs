@@ -621,11 +621,6 @@ fn u31_http_index_fetch_downloads_and_checks_the_index_digest() {
     assert_eq!(err.code(), "E-NET-CHECKSUM");
 }
 
-/// The cache directory `client(test)` uses.
-fn cache_of(test: &str) -> PathBuf {
-    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31-cache-{test}"))
-}
-
 /// The index's checkpoint entry `tiny` over the fixture server.
 fn http_checkpoint(source: &HttpIndex) -> Entry {
     source
@@ -654,7 +649,7 @@ fn u31_http_index_fetch_of_a_checkpoint_fills_one_cache_entry() {
     let key = ftgsxr_core::hex(&ftgsxr_core::sha256(format!("{base}tiny/").as_bytes()));
     assert_eq!(
         dir.canonicalize().unwrap(),
-        cache_of("checkpoint")
+        cache_dir("checkpoint")
             .join("http")
             .join(key)
             .canonicalize()
@@ -795,12 +790,12 @@ fn u31_prune_never_evicts_a_checkpoint_in_use() {
     let (dir_bytes, probe_bytes) = (entry_bytes(&dir), entry_bytes(&probe_dir));
 
     // Room for the checkpoint alone: the probe goes, the checkpoint stays.
-    let roomy = HttpClient::new(cache_of(test), TlsRoots::WebPki, dir_bytes).unwrap();
+    let roomy = HttpClient::new(cache_dir(test), TlsRoots::WebPki, dir_bytes).unwrap();
     assert_eq!(roomy.prune().unwrap(), probe_bytes);
     assert!(dir.join("params.safetensors").exists() && !probe_file.exists());
 
     // No room at all: kept while the entry directory, or one of its files, is in use.
-    let none = HttpClient::new(cache_of(test), TlsRoots::WebPki, 0).unwrap();
+    let none = HttpClient::new(cache_dir(test), TlsRoots::WebPki, 0).unwrap();
     none.set_in_use(std::slice::from_ref(&dir));
     assert_eq!(none.prune().unwrap(), 0, "the directory in use");
     none.set_in_use(&[dir.join("params.safetensors")]);
