@@ -75,6 +75,19 @@ fn u19_soft_weight_is_one_minus_smoothstep_inside_and_clamped_outside() {
 }
 
 #[test]
+fn u19_soft_weight_at_zero_delta_is_the_hard_step() {
+    // Q-63 (owner answer): δ = 0 gives 1 for z_f ≤ z_e and 0 beyond, never NaN.
+    let beyond = f32::from_bits(Z_E.to_bits() + 1);
+    for (z_f, w) in [(0.5, 1.0), (Z_E, 1.0), (beyond, 0.0), (2.0, 0.0)] {
+        assert_eq!(
+            occlusion_weight(z_f, Some(Z_E), 0.0, true),
+            w,
+            "z_f = {z_f}"
+        );
+    }
+}
+
+#[test]
 fn u19_an_invalid_or_absent_sample_gives_one() {
     for soft in [false, true] {
         for z_f in [0.1, 1.0, 3.0] {

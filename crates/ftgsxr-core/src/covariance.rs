@@ -185,15 +185,18 @@ pub fn sort_key16(key: u32) -> u16 {
 
 /// E13's occlusion weight w_occ of a fragment at depth `z_f` in the depth camera against the
 /// environment depth `z_e` (m) with the margin `delta_m` (δ, m): hard, 1 for z_f ≤ z_e + δ
-/// and 0 beyond; soft, 1 − smoothstep(z_e − δ, z_e + δ, z_f). `z_e = None` is a fragment
-/// outside the depth image or an invalid sample, and gives 1. The CPU oracle that the splat
-/// fragment stage mirrors (Q-63).
+/// and 0 beyond; soft, 1 − smoothstep(z_e − δ, z_e + δ, z_f), and at δ ≤ 0 the hard step,
+/// its limit as δ → 0 (1 for z_f ≤ z_e, else 0). `z_e = None` is a fragment outside the
+/// depth image or an invalid sample, and gives 1. The CPU oracle that the splat fragment
+/// stage mirrors (Q-63).
 // Q-63
 pub fn occlusion_weight(z_f: f32, z_e: Option<f32>, delta_m: f32, soft: bool) -> f32 {
     let Some(z_e) = z_e else {
         return 1.0;
     };
-    if soft {
+    // Q-63: at δ ≤ 0 the smoothstep's band is empty (0/0 at z_f = z_e), so soft mode takes
+    // the hard step, which the hard branch gives for δ ≤ 0 too.
+    if soft && delta_m > 0.0 {
         // smoothstep(e0, e1, x) with t = clamp((x − e0)/(e1 − e0), 0, 1) and t²(3 − 2t),
         // the cubic Hermite step.
         let t = ((z_f - (z_e - delta_m)) / (2.0 * delta_m)).clamp(0.0, 1.0);
