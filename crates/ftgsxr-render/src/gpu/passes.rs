@@ -44,7 +44,7 @@ const CENTERS_INDIRECT_OFFSET: u64 = 16;
 const DRAW_VIEW_BYTES: usize = 32;
 /// The engine's near plane for the other geometry (§1.7: 0.01 m), which the splats' reverse-Z
 /// depth test maps their depth with. // Q-87
-const ENGINE_NEAR: f32 = 0.01;
+pub(crate) const ENGINE_NEAR: f32 = 0.01;
 
 /// The cull's workgroup size (`cull.wgsl`).
 const WORKGROUP: u32 = 256;

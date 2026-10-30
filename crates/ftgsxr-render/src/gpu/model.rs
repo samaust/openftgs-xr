@@ -32,6 +32,13 @@ use super::readback::half_to_f32;
 /// `transmittance_stop` is not applied (D-7), and the background is the view's (E7).
 pub(crate) const MODEL_UNIFORM_BYTES: usize = 48;
 
+/// The model buffers' extra usage in the crate's unit tests, which read them back.
+const TEST_READ: BufferUsages = if cfg!(test) {
+    BufferUsages::COPY_SRC
+} else {
+    BufferUsages::empty()
+};
+
 fn model_uniform(arrays: &GpuArrays, conv: &RenderConventions) -> [u8; MODEL_UNIFORM_BYTES] {
     let h = arrays.half;
     let flags = u32::from(h.velocity)
@@ -105,7 +112,7 @@ fn storage_buffer(dev: &SplatDevice, label: &str, mut bytes: Vec<u8>) -> wgpu::B
     let buffer = dev.device().create_buffer(&BufferDescriptor {
         label: Some(label),
         size: size as u64,
-        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | TEST_READ,
         mapped_at_creation: true,
     });
     buffer
@@ -201,7 +208,7 @@ impl GpuModel {
         let uniform = dev.device().create_buffer(&BufferDescriptor {
             label: Some("ftgsxr model uniform"),
             size: MODEL_UNIFORM_BYTES as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST | TEST_READ,
             mapped_at_creation: false,
         });
         dev.queue()
@@ -242,6 +249,192 @@ impl GpuModel {
     }
 }
 
+/// The eight `GpuArrays` fields in `ModelBuffers` order, as the bytes their buffers hold.
+enum FieldBytes<'a> {
+    /// Float32 values, written little-endian.
+    F32(&'a [f32]),
+    /// Packed bytes (float32 or half, Q-22).
+    Bytes(&'a [u8]),
+}
+
+impl FieldBytes<'_> {
+    fn len(&self) -> usize {
+        match self {
+            FieldBytes::F32(v) => v.len() * 4,
+            FieldBytes::Bytes(b) => b.len(),
+        }
+    }
+
+    /// Bytes `start..end`, zero-padded to whole words (`queue.write_buffer`'s alignment).
+    fn range(&self, start: usize, end: usize) -> Vec<u8> {
+        let mut out = match self {
+            FieldBytes::F32(v) => v[start / 4..end.div_ceil(4)]
+                .iter()
+                .flat_map(|x| x.to_le_bytes())
+                .collect(),
+            FieldBytes::Bytes(b) => b[start..end].to_vec(),
+        };
+        out.resize((end - start).div_ceil(4) * 4, 0);
+        out
+    }
+}
+
+const FIELDS: usize = 8;
+
+fn field(a: &GpuArrays, i: usize) -> FieldBytes<'_> {
+    match i {
+        0 => FieldBytes::F32(&a.position),
+        1 => FieldBytes::F32(&a.time_center),
+        2 => FieldBytes::F32(&a.duration),
+        3 => FieldBytes::Bytes(&a.velocity),
+        4 => FieldBytes::Bytes(&a.scale),
+        5 => FieldBytes::Bytes(&a.rotation),
+        6 => FieldBytes::Bytes(&a.opacity),
+        _ => FieldBytes::Bytes(&a.sh),
+    }
+}
+
+fn field_buffer(b: &ModelBuffers, i: usize) -> &wgpu::Buffer {
+    match i {
+        0 => &b.position,
+        1 => &b.time_center,
+        2 => &b.duration,
+        3 => &b.velocity,
+        4 => &b.scale,
+        5 => &b.rotation,
+        6 => &b.opacity,
+        _ => &b.sh,
+    }
+}
+
+/// A model being uploaded in chunks (§1.5 Loading, §2.4 rule 1: at most 64 MB per
+/// frame), for the Bevy adapter: the buffers are made and the budget checked at `begin`,
+/// the rows are written by `step` through the queue, a budget of bytes at a time, and the
+/// model is usable once `step` reports the last chunk written.
+pub(crate) struct ModelUpload {
+    arrays: std::sync::Arc<GpuArrays>,
+    model: GpuModel,
+    /// The field being written and the byte offset reached in it.
+    field: usize,
+    offset: usize,
+}
+
+impl ModelUpload {
+    /// The budget check of `GpuModel::upload` (Q-74), then the model's buffers, unfilled
+    /// (zeros), and its uniform block; `speed_p99` is the 99th percentile of the rows'
+    /// speeds, computed with the packing off the main thread (Q-93).
+    ///
+    /// # Panics
+    ///
+    /// When `index` does not hold `arrays.n` rows.
+    pub(crate) fn begin(
+        dev: &SplatDevice,
+        arrays: std::sync::Arc<GpuArrays>,
+        index: TemporalIndex,
+        conv: &RenderConventions,
+        speed_p99: f32,
+    ) -> Result<ModelUpload, RenderError> {
+        assert_eq!(
+            index.len(),
+            arrays.n,
+            "the temporal index is built for the packed rows"
+        );
+        // Q-74: the model's own static bytes against the device's budget, per model.
+        let bytes = static_bytes(&arrays);
+        let budget = dev.memory_budget().bytes;
+        if bytes > budget {
+            return Err(RenderError::Budget {
+                needed: bytes,
+                budget,
+            });
+        }
+        let buffer = |label: &str, len: usize| {
+            dev.device().create_buffer(&BufferDescriptor {
+                label: Some(label),
+                size: (len.div_ceil(4).max(1) * 4) as u64,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | TEST_READ,
+                mapped_at_creation: false,
+            })
+        };
+        let uniform = dev.device().create_buffer(&BufferDescriptor {
+            label: Some("ftgsxr model uniform"),
+            size: MODEL_UNIFORM_BYTES as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST | TEST_READ,
+            mapped_at_creation: false,
+        });
+        dev.queue()
+            .write_buffer(&uniform, 0, &model_uniform(&arrays, conv));
+        let len = |i| field(&arrays, i).len();
+        let buffers = ModelBuffers {
+            position: buffer("ftgsxr position", len(0)),
+            time_center: buffer("ftgsxr time center", len(1)),
+            duration: buffer("ftgsxr duration", len(2)),
+            velocity: buffer("ftgsxr velocity", len(3)),
+            scale: buffer("ftgsxr scale", len(4)),
+            rotation: buffer("ftgsxr rotation", len(5)),
+            opacity: buffer("ftgsxr opacity", len(6)),
+            sh: buffer("ftgsxr sh", len(7)),
+            uniform,
+        };
+        let model = GpuModel {
+            buffers,
+            index,
+            tau0: arrays.tau0,
+            sh_degree: arrays.sh_degree,
+            conventions: conv.clone(),
+            speed_p99,
+            n: arrays.n,
+            bytes,
+        };
+        Ok(ModelUpload {
+            arrays,
+            model,
+            field: 0,
+            offset: 0,
+        })
+    }
+
+    /// Writes the next chunks, at most `*budget` bytes (rounded down to whole words, the
+    /// last chunk of a field padded to one), and takes them off `*budget`; `true` once
+    /// every row is written.
+    pub(crate) fn step(&mut self, dev: &SplatDevice, budget: &mut u64) -> bool {
+        while self.field < FIELDS {
+            let data = field(&self.arrays, self.field);
+            let left = data.len() - self.offset;
+            if left == 0 {
+                self.field += 1;
+                self.offset = 0;
+                continue;
+            }
+            let room = (*budget / 4 * 4) as usize;
+            if room == 0 {
+                return false;
+            }
+            let take = left.min(room);
+            let bytes = data.range(self.offset, self.offset + take);
+            dev.queue().write_buffer(
+                field_buffer(&self.model.buffers, self.field),
+                self.offset as u64,
+                &bytes,
+            );
+            *budget = budget.saturating_sub(bytes.len() as u64);
+            self.offset += take;
+        }
+        true
+    }
+
+    /// The uploaded model, once `step` returned `true`.
+    pub(crate) fn finish(self) -> GpuModel {
+        debug_assert_eq!(self.field, FIELDS, "every chunk written");
+        self.model
+    }
+}
+
+/// The 99th percentile of the packed rows' speeds (Q-93), for `ModelUpload::begin`.
+pub(crate) fn packed_speed_p99(arrays: &GpuArrays) -> f32 {
+    speed_percentile_99(arrays)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +462,116 @@ mod tests {
             opacity: vec![],
             sh: vec![],
         }
+    }
+
+    /// Arrays of `n` rows, every field's bytes distinct and the half-precision fields of
+    /// odd lengths, so a misplaced or dropped chunk shows.
+    fn patterned_arrays(n: u32) -> GpuArrays {
+        let f = |k: usize, s: f32| (0..k).map(|i| i as f32 * s + 0.25).collect::<Vec<f32>>();
+        let b = |k: usize, s: u8| {
+            (0..k)
+                .map(|i| (i as u8).wrapping_mul(s).wrapping_add(1))
+                .collect()
+        };
+        let n_ = n as usize;
+        GpuArrays {
+            n,
+            sh_degree: 0,
+            tau0: 0.0,
+            single: false,
+            half: HalfFields::default(),
+            position: f(3 * n_, 1.0),
+            time_center: f(n_, 2.0),
+            duration: f(n_, 3.0),
+            velocity: b(6 * n_ + 2, 3),
+            scale: b(6 * n_ + 2, 5),
+            rotation: b(8 * n_, 7),
+            opacity: b(2 * n_ + 2, 11),
+            sh: b(6 * n_ + 2, 13),
+        }
+    }
+
+    fn read_buffer(dev: &SplatDevice, buffer: &wgpu::Buffer) -> Vec<u8> {
+        let staging = dev.device().create_buffer(&BufferDescriptor {
+            label: None,
+            size: buffer.size(),
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = dev.device().create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(buffer, 0, &staging, 0, buffer.size());
+        dev.queue().submit([enc.finish()]);
+        staging.map_async(wgpu::MapMode::Read, .., |r| r.expect("mapped"));
+        dev.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("polled");
+        let bytes = staging.get_mapped_range(..).to_vec();
+        staging.unmap();
+        bytes
+    }
+
+    /// §1.5, §2.4 rule 1: a chunked upload, a budget of 1000 bytes a frame, fills the
+    /// buffers byte for byte as the one-call upload does, never writes more than its budget
+    /// in a step, and reports done only after the last chunk.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_model_upload_in_chunks_equals_the_one_call_upload() {
+        let dev = SplatDevice::headless().expect("an adapter");
+        let n = 1000;
+        let arrays = std::sync::Arc::new(patterned_arrays(n));
+        // A single-timestamp model of n rows: every row persistent.
+        let model = ftgsxr_core::Model {
+            position: vec![[0.0; 3]; n as usize],
+            time_center: vec![0.0; n as usize],
+            duration: vec![1.0; n as usize],
+            velocity: vec![[0.0; 3]; n as usize],
+            scale: vec![[1.0; 3]; n as usize],
+            rotation: vec![[1.0, 0.0, 0.0, 0.0]; n as usize],
+            opacity: vec![0.5; n as usize],
+            sh: vec![0.0; 3 * n as usize],
+            sh_degree: 0,
+            time: ftgsxr_core::TimeSpan {
+                tau0: 0.0,
+                tau1: 0.0,
+                time_unit: "s".into(),
+            },
+            conventions: RenderConventions::default(),
+            producer: String::new(),
+            identity: [0; 32],
+            kind: ftgsxr_core::ModelKind::ExchangeFile,
+        };
+        let (index, _) = TemporalIndex::build(&model);
+        let conv = RenderConventions::default();
+        let whole = GpuModel::upload(&dev, &arrays, index.clone(), &conv).expect("fits");
+        let mut chunked =
+            ModelUpload::begin(&dev, std::sync::Arc::clone(&arrays), index, &conv, 0.0)
+                .expect("fits");
+        let total: usize = (0..FIELDS).map(|i| field(&arrays, i).len()).sum();
+        let mut steps = 0;
+        loop {
+            let mut budget = 1000;
+            let done = chunked.step(&dev, &mut budget);
+            assert!(budget <= 1000);
+            steps += 1;
+            if done {
+                break;
+            }
+            assert!(budget < 4, "a step stops only when its budget is spent");
+        }
+        assert!(steps >= total / 1000, "{steps} steps for {total} bytes");
+        let chunked = chunked.finish();
+        for i in 0..FIELDS {
+            assert_eq!(
+                read_buffer(&dev, field_buffer(&chunked.buffers, i)),
+                read_buffer(&dev, field_buffer(&whole.buffers, i)),
+                "field {i}"
+            );
+        }
+        assert_eq!(
+            read_buffer(&dev, &chunked.buffers.uniform),
+            read_buffer(&dev, &whole.buffers.uniform)
+        );
+        assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
     }
 
     /// Q-93: the nearest-rank 99th percentile of ‖velocity‖, from float32 or half rows.
