@@ -3,6 +3,9 @@
 //! `FrameBuffers`: one set of a view's per-frame buffers, sized once per tier and
 //! capacity (§1.4, §1.12 Memory, §2.4 rule 4 and GPU data layout, D-34).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64};
+
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
 
 use super::device::SplatDevice;
@@ -19,46 +22,106 @@ const HALF_SHARED_RECORD_BYTES: u64 = 48;
 const WORD: u64 = 4;
 /// The histograms' bytes per unit of capacity (Q-23: §1.12's "about C").
 const HISTOGRAM_BYTES_PER_RECORD: u64 = 1;
-/// Two indirect draws (splats and centers), four words each (§1.4 stages 5 and 6).
-const INDIRECT_BYTES: u64 = 2 * 4 * WORD;
+/// The counters (`cull.wgsl`): two indirect draws (splats and centers, §1.4 stages 5 and
+/// 6) of four words each, the overflow flag, the rows that passed E3's test (Q-79) and
+/// two spare words.
+pub(crate) const COUNTER_WORDS: u64 = 12;
+const INDIRECT_BYTES: u64 = COUNTER_WORDS * WORD;
 /// The sort passes' indirect dispatch (§1.4 stage 3), three words.
 const DISPATCH_BYTES: u64 = 3 * WORD;
-/// The statistics block (§1.4 stage 8).
-const STATS_BYTES: u64 = 64;
-/// Statistics are read two frames late (§1.4 stage 8, P-5): three staging slots.
-const STAGING_SLOTS: u64 = 3;
+/// The statistics block (§1.4 stage 8): the two counts, the overflow flag, C, and six
+/// 64-bit timestamps (Q-81).
+pub(crate) const STATS_BYTES: u64 = 64;
+/// Statistics are read two frames late (§1.4 stage 8, P-5): three staging buffers, since
+/// mapping is a whole buffer's state.
+pub(crate) const STAGING_SLOTS: usize = 3;
+/// The timestamps a frame writes (Q-81): the cull pass's begin and end, the sort's,
+/// the draw's.
+pub(crate) const TIMESTAMPS: u32 = 6;
 
-/// The buffers of one set (§2.1's list); the passes of later tickets bind them.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "bound by the passes of later M-2 tickets (§1.4 stages 2–8)"
-    )
-)]
+/// How the records of a set are laid out (`cull.wgsl`'s `RECORD_MODE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordMode {
+    /// 48-byte per-view records.
+    PerView,
+    /// 64-byte shared-center records.
+    Shared,
+    /// 48-byte shared-center records with Σ^S in half precision.
+    SharedHalf,
+}
+
+impl RecordMode {
+    pub(crate) fn of(tier: &QualityTier) -> RecordMode {
+        match (tier.sort_mode, tier.half_records) {
+            (SortMode::PerView, _) => RecordMode::PerView,
+            (SortMode::SharedCenter, false) => RecordMode::Shared,
+            (SortMode::SharedCenter, true) => RecordMode::SharedHalf,
+        }
+    }
+
+    /// The record's bytes (§1.4 stage 2, §1.12).
+    pub(crate) fn bytes(self) -> u64 {
+        match self {
+            RecordMode::PerView => VIEW_RECORD_BYTES,
+            RecordMode::Shared => SHARED_RECORD_BYTES,
+            RecordMode::SharedHalf => HALF_SHARED_RECORD_BYTES,
+        }
+    }
+
+    /// `cull.wgsl`'s `RECORD_MODE`.
+    pub(crate) fn shader_value(self) -> u32 {
+        match self {
+            RecordMode::PerView => 0,
+            RecordMode::Shared => 1,
+            RecordMode::SharedHalf => 2,
+        }
+    }
+}
+
+/// A staging buffer's state (§1.4 stage 8).
+pub(crate) const SLOT_FREE: u8 = 0;
+/// Copied into and waiting for its mapping, which follows the submission.
+pub(crate) const SLOT_PENDING: u8 = 1;
+/// Mapped and readable.
+pub(crate) const SLOT_READY: u8 = 2;
+
+/// The statistics ring (§1.4 stage 8, Q-81): which frame each staging buffer holds and
+/// whether it is mapped, and how many frames `encode_stats` has encoded.
+pub(crate) struct StatsRing {
+    pub(crate) state: [Arc<AtomicU8>; STAGING_SLOTS],
+    pub(crate) frame: [AtomicU64; STAGING_SLOTS],
+    /// The frames encoded so far: the next frame's number.
+    pub(crate) encoded: AtomicU64,
+    /// The timestamps written since the last `encode_stats`, a prefix of the query set.
+    pub(crate) written: AtomicU32,
+}
+
+/// The buffers of one set (§2.1's list); the passes bind them.
 pub(crate) struct FrameSet {
     pub(crate) records: wgpu::Buffer,
     pub(crate) keys: [wgpu::Buffer; 2],
     pub(crate) payloads: [wgpu::Buffer; 2],
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "bound by the sort of #113 (§1.4 stage 4)")
+    )]
     pub(crate) histograms: wgpu::Buffer,
+    /// The counters, whose first eight words are the indirect draw arguments.
     pub(crate) indirect: wgpu::Buffer,
     pub(crate) dispatch: wgpu::Buffer,
     pub(crate) stats: wgpu::Buffer,
-    pub(crate) staging: wgpu::Buffer,
+    pub(crate) staging: [wgpu::Buffer; STAGING_SLOTS],
+    /// The frame's timestamps, where the device offers timestamp queries (§1.13).
+    pub(crate) queries: Option<(wgpu::QuerySet, wgpu::Buffer)>,
 }
 
 /// One set of a view's frame buffers (§2.1): records, keys×2, payloads×2, histograms,
 /// indirect arguments, dispatch arguments, statistics and staging, shared by every model
 /// of the view (D-5); per-view mode holds one set per view.
 pub struct FrameBuffers {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "bound by the passes of later M-2 tickets (§1.4 stages 2–8)"
-        )
-    )]
-    set: FrameSet,
+    pub(crate) set: FrameSet,
+    pub(crate) mode: RecordMode,
+    pub(crate) ring: StatsRing,
     capacity: u32,
 }
 
@@ -71,23 +134,40 @@ fn buffer(dev: &SplatDevice, label: &str, size: u64, usage: BufferUsages) -> wgp
     })
 }
 
-/// The record size of `tier`'s mode (§1.4 stage 2, §1.12).
-fn record_bytes(tier: &QualityTier) -> u64 {
-    match (tier.sort_mode, tier.half_records) {
-        (SortMode::PerView, _) => VIEW_RECORD_BYTES,
-        (SortMode::SharedCenter, false) => SHARED_RECORD_BYTES,
-        (SortMode::SharedCenter, true) => HALF_SHARED_RECORD_BYTES,
-    }
-}
-
 impl FrameBuffers {
     /// One set for `capacity` records in `tier`'s record layout (§2.4 rule 4: sized once
     /// per tier and capacity). A capacity of 0 still allocates one record's worth.
     pub fn new(dev: &SplatDevice, tier: &QualityTier, capacity: u32) -> FrameBuffers {
         let c = u64::from(capacity.max(1));
+        let mode = RecordMode::of(tier);
         let storage = BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST;
+        let staging = |i: usize| {
+            buffer(
+                dev,
+                &format!("ftgsxr statistics staging {i}"),
+                STATS_BYTES,
+                BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            )
+        };
+        let queries = dev
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+            .then(|| {
+                let set = dev.device().create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some("ftgsxr timestamps"),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: TIMESTAMPS,
+                });
+                let resolve = buffer(
+                    dev,
+                    "ftgsxr timestamps resolve",
+                    u64::from(TIMESTAMPS) * 8,
+                    BufferUsages::QUERY_RESOLVE | BufferUsages::COPY_SRC,
+                );
+                (set, resolve)
+            });
         let set = FrameSet {
-            records: buffer(dev, "ftgsxr records", c * record_bytes(tier), storage),
+            records: buffer(dev, "ftgsxr records", c * mode.bytes(), storage),
             keys: [
                 buffer(dev, "ftgsxr keys 0", c * WORD, storage),
                 buffer(dev, "ftgsxr keys 1", c * WORD, storage),
@@ -115,14 +195,21 @@ impl FrameBuffers {
                 storage | BufferUsages::INDIRECT,
             ),
             stats: buffer(dev, "ftgsxr statistics", STATS_BYTES, storage),
-            staging: buffer(
-                dev,
-                "ftgsxr statistics staging",
-                STAGING_SLOTS * STATS_BYTES,
-                BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            ),
+            staging: [staging(0), staging(1), staging(2)],
+            queries,
         };
-        FrameBuffers { set, capacity }
+        let ring = StatsRing {
+            state: std::array::from_fn(|_| Arc::new(AtomicU8::new(SLOT_FREE))),
+            frame: std::array::from_fn(|_| AtomicU64::new(u64::MAX)),
+            encoded: AtomicU64::new(0),
+            written: AtomicU32::new(0),
+        };
+        FrameBuffers {
+            set,
+            mode,
+            ring,
+            capacity,
+        }
     }
 
     /// C, the records the set holds.
@@ -144,7 +231,9 @@ impl FrameBuffers {
             &s.indirect,
             &s.dispatch,
             &s.stats,
-            &s.staging,
+            &s.staging[0],
+            &s.staging[1],
+            &s.staging[2],
         ]
         .iter()
         .map(|b| b.size())
