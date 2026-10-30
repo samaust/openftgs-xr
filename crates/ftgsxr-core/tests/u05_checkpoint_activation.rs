@@ -142,6 +142,15 @@ fn copy_tiny(name: &str) -> PathBuf {
     dir
 }
 
+/// A copy of the tiny checkpoint whose manifest `edit` changed.
+fn edited_tiny(name: &str, edit: impl FnOnce(&mut Value)) -> PathBuf {
+    let dir = copy_tiny(name);
+    let mut m = manifest(&dir);
+    edit(&mut m);
+    fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    dir
+}
+
 #[test]
 fn u05_files_digest_mismatch() {
     // The other files are ignored: the copy without them loads.
@@ -149,10 +158,9 @@ fn u05_files_digest_mismatch() {
     assert!(read_checkpoint(&dir).is_ok());
 
     // The manifest's digest changed.
-    let dir = copy_tiny("manifest");
-    let mut m = manifest(&dir);
-    m["files"]["params.safetensors"] = Value::String(hex(&[7; 32]));
-    fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    let dir = edited_tiny("manifest", |m| {
+        m["files"]["params.safetensors"] = Value::String(hex(&[7; 32]))
+    });
     assert_eq!(read_checkpoint(&dir).unwrap_err().code(), "E-FILE-CHECKSUM");
 
     // One byte of the parameters changed, the file still a valid one.
@@ -167,11 +175,7 @@ fn u05_files_digest_mismatch() {
 
 /// The tiny checkpoint read after `edit` changed its manifest.
 fn read_edited(name: &str, edit: impl FnOnce(&mut Value)) -> Model {
-    let dir = copy_tiny(name);
-    let mut m = manifest(&dir);
-    edit(&mut m);
-    fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
-    read_checkpoint(&dir).unwrap()
+    read_checkpoint(&edited_tiny(name, edit)).unwrap()
 }
 
 /// A manifest edit: its name and the edit.
@@ -185,7 +189,7 @@ fn u05_producer_without_an_openftgs_version() {
         m["versions"] = serde_json::json!({"openftgs": "0.3.1"})
     });
     assert_eq!(named.producer, "openftgs 0.3.1");
-    let cases: [Edit; 4] = [
+    let cases: [Edit; 5] = [
         ("null", |m| m["versions"]["openftgs"] = Value::Null),
         ("absent", |m| {
             m.as_object_mut().unwrap().remove("versions");
@@ -194,15 +198,12 @@ fn u05_producer_without_an_openftgs_version() {
         ("not-string", |m| {
             m["versions"] = serde_json::json!({"openftgs": 3})
         }),
+        ("versions-not-object", |m| m["versions"] = "0.3.1".into()),
     ];
     for (name, edit) in cases {
         let ckpt = read_edited(&format!("producer-{name}"), edit);
         assert_eq!(ckpt.producer, "openftgs", "{name}");
     }
-    let ckpt = read_edited("producer-versions-not-object", |m| {
-        m["versions"] = "0.3.1".into()
-    });
-    assert_eq!(ckpt.producer, "openftgs");
 }
 
 #[test]
@@ -253,10 +254,7 @@ fn u05_manifest_rules() {
         ),
     ];
     for (name, edit, code) in cases {
-        let dir = copy_tiny(&format!("rule-{name}"));
-        let mut m = manifest(&dir);
-        edit(&mut m);
-        fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        let dir = edited_tiny(&format!("rule-{name}"), edit);
         assert_eq!(read_checkpoint(&dir).unwrap_err().code(), code, "{name}");
     }
     let dir = copy_tiny("not-json");
