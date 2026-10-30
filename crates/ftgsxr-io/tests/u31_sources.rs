@@ -23,9 +23,16 @@ use ftgsxr_io::{
 use ftgsxr_testkit::{LocalServer, ServedListing, fixtures_dir, serve_fixtures};
 use url::Url;
 
-/// A fresh, empty directory under Cargo's temporary directory for integration tests.
+/// This test binary's folder under Cargo's temporary directory, named after the binary and the
+/// process, so no other binary and no overlapping run in another session or worktree shares it
+/// (#94).
+fn binary_dir() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31_sources-{}", std::process::id()))
+}
+
+/// A fresh, empty directory in this binary's folder.
 fn fresh_dir(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let dir = binary_dir().join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -285,9 +292,10 @@ fn u31_local_dir_fetch_of_a_checkpoint_returns_its_directory() {
     );
 }
 
-/// The cache directory of `test`'s client.
+/// The cache directory of `test`'s client in this binary's folder, its `cache-` prefix keeping it
+/// apart from the directories of `fresh_dir`.
 fn cache_dir(test: &str) -> PathBuf {
-    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("u31-cache-{test}"))
+    binary_dir().join(format!("cache-{test}"))
 }
 
 /// A client over a fresh cache directory for one test.

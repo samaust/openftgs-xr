@@ -17,9 +17,11 @@ use ftgsxr_io::{
 };
 
 /// A fresh, empty directory of this test binary's own under the target directory.
+/// Named after this test binary and the process, so no other binary and no overlapping run
+/// in another session or worktree shares it (#94).
 fn scratch(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("u29")
+        .join(format!("u29_settings-{}", std::process::id()))
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the test directory");

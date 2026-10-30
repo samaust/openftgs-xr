@@ -20,8 +20,12 @@ fn sha256sum(name: &str) -> String {
 }
 
 /// A fresh scratch directory for this test.
+/// Named after this test binary and the process, so no other binary and no overlapping run
+/// in another session or worktree shares it (#94).
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("u04-{name}"));
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("u04_model_identity-{}", std::process::id()))
+        .join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir

@@ -131,8 +131,12 @@ fn u05_single_timestamp_checkpoint_uses_the_unit_1() {
 }
 
 /// A copy of the tiny checkpoint's two read files in a scratch directory.
+/// Named after this test binary and the process, so no other binary and no overlapping run
+/// in another session or worktree shares it (#94).
 fn copy_tiny(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("u05-{name}"));
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("u05_checkpoint_activation-{}", std::process::id()))
+        .join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let src = fixtures_dir().join("checkpoint/tiny");
