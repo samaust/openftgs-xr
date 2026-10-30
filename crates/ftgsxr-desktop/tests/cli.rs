@@ -409,25 +409,38 @@ fn bench(args: &[&str], baselines: &std::path::Path) -> Output {
     o
 }
 
+/// `bench` with `args` ending in `--out` followed by `out`, and the file it wrote, or
+/// null when it wrote none.
+fn bench_file(
+    args: &[&str],
+    out: &std::path::Path,
+    baselines: &std::path::Path,
+) -> (Output, serde_json::Value) {
+    let o = bench(&[args, &[out.to_str().unwrap()]].concat(), baselines);
+    let file = fs::read(out)
+        .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+        .unwrap_or(serde_json::Value::Null);
+    (o, file)
+}
+
 #[test]
 #[ignore = "gpu"]
 fn gpu_bench_reports_a_regression_against_a_baseline_20_percent_better() {
     // Q-67's detecting test: the first run, with no baseline, exits 0; a baseline whose
-    // budgeted figures are 20 % better (B-6's bytes per primitive × 0.8: lower is
-    // better) makes the second run list each budget as a regression and exit 3.
+    // budgeted figure is 20 % better (B-5's seconds per 100 MB × 0.8: lower is better)
+    // makes the second run list the budget as a regression and exit 3. B-5, not B-6,
+    // whose `within_1_percent` budgets are not compared (Q-103, #180).
     let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), "cli", "bench-regression");
     let baselines = dir.join("baselines");
     fs::create_dir_all(&baselines).unwrap();
-    let model = dir.join("tiny.ftgs-if");
-    let tiny = ftgsxr_testkit::random_model(5, 1000, 3);
-    fs::write(&model, ftgsxr_testkit::exchange_bytes(&tiny)).unwrap();
-    let first = dir.join("first.json");
-    let args = ["B-6", "--model", model.to_str().unwrap(), "--out"];
+    // A load time is noisy: 1000 rows missed the 10 % margin about once in 15 runs,
+    // 50 000 rows (a file of about 13 MB) none in 20.
+    let model = dir.join("b5.ftgs-if");
+    let rows = ftgsxr_testkit::random_model(5, 50_000, 3);
+    fs::write(&model, ftgsxr_testkit::exchange_bytes(&rows)).unwrap();
+    let args = ["B-5", "--model", model.to_str().unwrap(), "--out"];
 
-    let o = bench(
-        &[&args[..], &[first.to_str().unwrap()]].concat(),
-        &baselines,
-    );
+    let (o, mut file) = bench_file(&args, &dir.join("first.json"), &baselines);
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -435,36 +448,87 @@ fn gpu_bench_reports_a_regression_against_a_baseline_20_percent_better() {
         String::from_utf8_lossy(&o.stderr)
     );
     assert!(stdout(&o).is_empty(), "the file goes to --out");
-    let mut file: serde_json::Value = serde_json::from_slice(&fs::read(&first).unwrap()).unwrap();
     assert_eq!(file["baseline"], serde_json::Value::Null);
     let budgets = file["budgets"].as_array_mut().unwrap();
-    assert_eq!(budgets.len(), 5, "five tiers");
+    assert_eq!(budgets.len(), 1, "one model");
     for b in budgets.iter_mut() {
         let better = b["value"].as_f64().unwrap() * 0.8;
         b["value"] = better.into();
     }
     fs::write(
-        baselines.join("B-6.json"),
+        baselines.join("B-5.json"),
         serde_json::to_vec_pretty(&file).unwrap(),
     )
     .unwrap();
 
-    let second = dir.join("second.json");
-    let o = bench(
-        &[&args[..], &[second.to_str().unwrap()]].concat(),
-        &baselines,
-    );
+    let (o, written) = bench_file(&args, &dir.join("second.json"), &baselines);
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert_eq!(o.status.code(), Some(3), "{stderr}");
     let regressions: Vec<&str> = stderr
         .lines()
-        .filter(|l| l.starts_with("ftgsxr: regression: B-6 bytes_per_primitive"))
+        .filter(|l| l.starts_with("ftgsxr: regression: P-3 s_per_100mb"))
         .collect();
-    assert_eq!(regressions.len(), 5, "{stderr}");
-    let written: serde_json::Value = serde_json::from_slice(&fs::read(&second).unwrap()).unwrap();
+    assert_eq!(regressions.len(), 1, "{stderr}");
     assert!(
         written["baseline"]
             .as_str()
-            .is_some_and(|p| p.ends_with("B-6.json"))
+            .is_some_and(|p| p.ends_with("B-5.json"))
+    );
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_bench_compares_neither_b6_nor_another_profile() {
+    // Q-103 (#180): a B-6 baseline 20 % better lists nothing, its `within_1_percent`
+    // budgets being their own check; a baseline of the other profile is not compared,
+    // and a note in the file and on standard error says which field differs.
+    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), "cli", "bench-not-compared");
+    let baselines = dir.join("baselines");
+    fs::create_dir_all(&baselines).unwrap();
+    let model = dir.join("tiny.ftgs-if");
+    let tiny = ftgsxr_testkit::random_model(5, 1000, 3);
+    fs::write(&model, ftgsxr_testkit::exchange_bytes(&tiny)).unwrap();
+    let args = ["B-6", "--model", model.to_str().unwrap(), "--out"];
+
+    let (o, mut file) = bench_file(&args, &dir.join("first.json"), &baselines);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    for b in file["budgets"].as_array_mut().unwrap() {
+        let better = b["value"].as_f64().unwrap() * 0.8;
+        b["value"] = better.into();
+    }
+    let baseline = baselines.join("B-6.json");
+    fs::write(&baseline, serde_json::to_vec_pretty(&file).unwrap()).unwrap();
+    let (o, written) = bench_file(&args, &dir.join("second.json"), &baselines);
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("ftgsxr: regression:"), "{stderr}");
+    assert!(written["baseline"].is_string());
+
+    // The same baseline from the other profile.
+    let (ours, theirs) = if cfg!(debug_assertions) {
+        ("debug", "release")
+    } else {
+        ("release", "debug")
+    };
+    file["profile"] = theirs.into();
+    fs::write(&baseline, serde_json::to_vec_pretty(&file).unwrap()).unwrap();
+    let (o, written) = bench_file(&args, &dir.join("third.json"), &baselines);
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(0), "{stderr}");
+    let note = format!("baseline not compared: profile {ours} against {theirs} (Q-103)");
+    assert!(stderr.contains(&note), "{stderr}");
+    assert!(
+        written["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str() == Some(note.as_str())),
+        "{}",
+        written["notes"]
     );
 }
