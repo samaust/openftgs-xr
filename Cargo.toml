@@ -43,7 +43,9 @@ ftgsxr-testkit = { path = "crates/ftgsxr-testkit" }
 
 # Engine.
 bevy = { version = "0.19.1", default-features = false }
-wgpu = "29.0.3"
+# Default features off: they choose backends (dx12, metal, gles, webgpu) for the crate
+# that uses wgpu, which turns on what it needs (Q-73).
+wgpu = { version = "29.0.3", default-features = false }
 wgpu-hal = "29.0.3"
 naga = "29.0.3"
 # bevy_math 0.19.1 requires glam ^0.32.0 (source log 2); §2.3's "(0.33)" is
