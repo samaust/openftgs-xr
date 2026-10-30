@@ -5,7 +5,8 @@
 //! sample point lies within ρ − 1 px of a center shows that center's color within 1/255,
 //! opaque, and every covered pixel lies within ρ + 1 px of the center whose color it shows.
 //! The depth-tested form writes reverse-Z depth near / z_c (Q-87); in `Both` mode the
-//! centers draw over the splats (Q-96).
+//! centers draw over the splats (Q-96). The time-center colormap maps \[τ₀, τ₁\] onto
+//! viridis \[0, 1\], and a single-timestamp model to viridis(0) (Q-92, Q-97).
 
 mod display_support;
 
@@ -54,7 +55,18 @@ fn projected(r: &Row) -> (Vec2, f32) {
 }
 
 fn check_discs(frame: &Frame, rows: &[Row]) {
-    let centers: Vec<(Vec2, [f32; 3])> = rows.iter().map(|r| (projected(r).0, r.color)).collect();
+    let colors: Vec<[f32; 3]> = rows.iter().map(|r| r.color).collect();
+    check_disc_colors(frame, rows, &colors);
+}
+
+/// Every pixel within ρ − 1 px of row k's center shows `colors[k]` within 1/255, opaque,
+/// and every covered pixel lies within ρ + 1 px of a center.
+fn check_disc_colors(frame: &Frame, rows: &[Row], colors: &[[f32; 3]]) {
+    let centers: Vec<(Vec2, [f32; 3])> = rows
+        .iter()
+        .zip(colors)
+        .map(|(r, &c)| (projected(r).0, c))
+        .collect();
     for (a, b) in centers.iter().zip(centers.iter().skip(1)) {
         assert!(a.0.distance(b.0) > 2.0 * RHO + 2.0, "the discs are apart");
     }
@@ -70,7 +82,7 @@ fn check_discs(frame: &Frame, rows: &[Row]) {
             for k in 0..3 {
                 assert!(
                     (texel[k] - color[k]).abs() <= 1.0 / 255.0,
-                    "pixel {i} channel {k}: {} against the DC color {}",
+                    "pixel {i} channel {k}: {} against the color {}",
                     texel[k],
                     color[k]
                 );
@@ -154,4 +166,76 @@ fn gpu_r13_centers_are_discs_of_radius_rho_in_the_dc_color() {
         },
     );
     check_discs(&frame, &rows);
+}
+
+/// Viridis at 0, 0.5 and 1: entries 0, 128 and 255 of matplotlib's 256-entry
+/// `_viridis_data` (v3.9.2; source-log row 76), sRGB-encoded display values (Q-92).
+const VIRIDIS_0: [f32; 3] = [0.267_004, 0.004_874, 0.329_415];
+const VIRIDIS_HALF: [f32; 3] = [0.127_568, 0.566_949, 0.550_556];
+const VIRIDIS_1: [f32; 3] = [0.993_248, 0.906_157, 0.143_936];
+
+/// Three still rows at the given time centers, apart in the probe camera's image.
+fn timed_rows(time_centers: [f64; 3]) -> Vec<Row> {
+    time_centers
+        .iter()
+        .enumerate()
+        .map(|(k, &time_center)| Row {
+            position: [-1.2 + 1.2 * k as f32, 0.0, 0.4 * k as f32 - 0.4],
+            velocity: [0.0; 3],
+            time_center,
+            duration: 100.0,
+            scale: 0.01,
+            opacity: 0.9,
+            color: [0.5; 3],
+        })
+        .collect()
+}
+
+fn time_center_frame(model: &ftgsxr_core::Model, tau: f64) -> Frame {
+    let dev = gpu_context();
+    let gpu_model = upload(&dev, model);
+    let mode = RenderMode::Centers {
+        pixel_radius: RHO,
+        colormap: Colormap::TimeCenter,
+    };
+    let draws = [draw(&gpu_model, tau, mode, ColorTransform::IDENTITY)];
+    render(
+        &dev,
+        &draws,
+        &probe_camera(),
+        &Run {
+            resolve: None,
+            depth: false,
+        },
+    )
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_r13_time_center_colormap_spans_tau0_to_tau1() {
+    // τ₀ ≠ 0, so the inverse span is 1 / (τ₁ − τ₀), not 1 / τ₁ (Q-97).
+    let rows = timed_rows([10.0, 11.0, 12.0]);
+    let mut m = model(&rows);
+    m.time.tau0 = 10.0;
+    m.time.tau1 = 12.0;
+    m.validate().expect("a valid model");
+    let frame = time_center_frame(&m, 11.0);
+    check_disc_colors(&frame, &rows, &[VIRIDIS_0, VIRIDIS_HALF, VIRIDIS_1]);
+    let covered = frame.layer.iter().filter(|t| t[3] > 0.0).count();
+    assert!(covered >= 3 * 9, "three discs drawn ({covered} pixels)");
+
+    // A single timestamp (D-9), τ₀ = τ₁: span 0, every center at viridis(0).
+    let rows = timed_rows([0.95; 3]);
+    let mut m = model(&rows);
+    m.time.tau0 = 0.95;
+    m.time.tau1 = 0.95;
+    m.validate().expect("a valid single-timestamp model");
+    let frame = time_center_frame(&m, 0.95);
+    check_disc_colors(&frame, &rows, &[VIRIDIS_0; 3]);
+    assert!(
+        frame.layer.iter().flatten().all(|v| v.is_finite()),
+        "no NaN from a zero span"
+    );
+    let covered = frame.layer.iter().filter(|t| t[3] > 0.0).count();
+    assert!(covered >= 3 * 9, "three discs drawn ({covered} pixels)");
 }
