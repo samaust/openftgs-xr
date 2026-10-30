@@ -19,19 +19,22 @@ use ftgsxr_core::{
 use ftgsxr_render::{FrameBuffers, QualityTier, RecordView, RenderMode};
 use ftgsxr_testkit::{gpu_context, random_model};
 
-/// R-5's tolerances. μ′ takes `MEAN_PX` plus float32's propagation f·2⁻²³‖x_c‖/z_c, and a
-/// radius whose pre-ceiling value lies within `CEIL_REL` relative of an integer may differ
-/// by 1 (Q-82).
+/// R-5's tolerances. μ′ takes `MEAN_PX` plus float32's propagation
+/// `MEAN_ROUNDING`·f·2⁻²³(‖R_w μ^S‖ + ‖t_w‖)/z_c, the rounding of x_c = R_w μ^S + t_w's
+/// operands, which nearly cancel inside the model, magnified by f/z_c; and a radius whose
+/// pre-ceiling value lies within `CEIL_REL` relative of an integer may differ by 1 (Q-82).
 // Q-82
 const MEAN_PX: f64 = 1e-3;
+// Q-82
+const MEAN_ROUNDING: f64 = 8.0;
 const CONIC_REL: f32 = 1e-4;
 const DEPTH: f32 = 1e-5;
 // Q-82
 const CEIL_REL: f64 = 1e-5;
 
 /// The oracle's quantities that `Projected` does not carry, from the same float64 path as
-/// `project` (E6): the camera-space mean x_c and the radii before their ceiling,
-/// extent·√Σ′₀₀ and extent·√Σ′₁₁ (Q-82).
+/// `project` (E6): the camera-space depth z_c, the magnitude ‖R_w μ^S‖ + ‖t_w‖ of x_c's
+/// operands, and the radii before their ceiling, extent·√Σ′₀₀ and extent·√Σ′₁₁ (Q-82).
 // Q-82
 fn pre_ceiling(
     mean: Vec3,
@@ -39,12 +42,13 @@ fn pre_ceiling(
     sigma_eff: f32,
     cam: &Camera,
     conv: &RenderConventions,
-) -> (DVec3, [f64; 2]) {
+) -> (f64, f64, [f64; 2]) {
     let k = cam.k;
     let (fx, fy, cx, cy) = (k.x_axis.x, k.y_axis.y, k.z_axis.x, k.z_axis.y);
     let (w, h) = (f64::from(cam.width), f64::from(cam.height));
     let r_w = DMat3::from_mat4(cam.world_to_camera);
-    let x_c = r_w * mean.as_dvec3() + cam.world_to_camera.w_axis.truncate();
+    let (rotated, t_w) = (r_w * mean.as_dvec3(), cam.world_to_camera.w_axis.truncate());
+    let x_c = rotated + t_w;
     let z = x_c.z;
     let (u, v) = (x_c.x / z, x_c.y / z);
     let m = f64::from(conv.jacobian_clamp_margin);
@@ -60,7 +64,8 @@ fn pre_ceiling(
     let extent = (2.0 * (f64::from(sigma_eff) / f64::from(conv.alpha_skip)).ln())
         .sqrt()
         .min(f64::from(conv.screen_extent_max));
-    (x_c, [extent * s00.sqrt(), extent * s11.sqrt()])
+    let operands = rotated.length() + t_w.length();
+    (z, operands, [extent * s00.sqrt(), extent * s11.sqrt()])
 }
 
 /// Q-82's radius test: exact, or within 1 where the pre-ceiling value lies within
@@ -103,9 +108,10 @@ fn pair(
 }
 
 /// R-5 on 10⁴ random primitives and 20 random views, ten from inside the model and ten from
-/// outside it (Q-82): the visible set equal; μ′ within 10⁻³ px plus f·2⁻²³‖x_c‖/z_c, conics
-/// 10⁻⁴ relative, depths 10⁻⁵, radii exact but within 1 where the oracle's pre-ceiling
-/// value is within 10⁻⁵ relative of an integer.
+/// outside it (Q-82): the visible set equal; μ′ within 10⁻³ px plus
+/// 8·f·2⁻²³(‖R_w μ^S‖ + ‖t_w‖)/z_c per axis, conics 10⁻⁴ relative, depths 10⁻⁵, radii
+/// exact but within 1 where the oracle's pre-ceiling value is within 10⁻⁵ relative of an
+/// integer.
 // Q-82
 #[test]
 #[ignore = "gpu"]
@@ -172,14 +178,14 @@ fn gpu_r05_cull_matches_project_on_random_primitives_and_views() {
             };
             // Q-82: the tolerances scaled to float32's propagation.
             let (sigma_eff, mu_s, cov) = row_at(&model, row, &pose, tau);
-            let (x_c, pre) = pre_ceiling(mu_s, cov, sigma_eff, &cam, &model.conventions);
+            let (z_c, operands, pre) = pre_ceiling(mu_s, cov, sigma_eff, &cam, &model.conventions);
             // The mirror must ceil to the oracle's radii, else it has drifted from `project`.
             assert_eq!(
                 pre.map(|r| r.ceil() as u32),
                 p.radii,
                 "view {v}: row {row}: the test's pre-ceiling radii drifted from project"
             );
-            let spread = 2f64.powi(-23) * x_c.length() / x_c.z;
+            let spread = MEAN_ROUNDING * 2f64.powi(-23) * operands / z_c;
             let focal = [cam.k.x_axis.x, cam.k.y_axis.y];
             let mean_ok = (0..2).all(|k| {
                 (f64::from(r.mean_px[k]) - f64::from(p.mean[k])).abs()
