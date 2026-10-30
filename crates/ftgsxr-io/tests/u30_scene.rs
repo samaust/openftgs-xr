@@ -223,10 +223,9 @@ fn scene_json(version: &str, source: &str, extra: &str) -> String {
     )
 }
 
-/// U-30 "a missing model listed as missing" (PRD #1: `read_scene` succeeds whether or not
-/// the referenced files exist): a hand-written scene naming a file that does not exist
-/// reads, with its values as written. Listing it as missing is M-4's (I-9).
-// Q-54
+/// U-30 "a scene naming a missing model still reads, its location kept as written": a
+/// hand-written scene naming a file that does not exist reads, with its values as written.
+/// Listing it as missing is M-4's (I-9).
 #[test]
 fn u30_scene_naming_a_missing_file_reads() {
     let missing = scratch("missing").join("no such model.safetensors");
