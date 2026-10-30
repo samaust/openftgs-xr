@@ -96,8 +96,10 @@ fn u27_index_manifest_refusals() {
     let schema_faults = [
         "[]".to_owned(),
         index_with("", "").replace("ftgsxr-index", "ftgsxr-scene"),
-        index_with("", "").replace(r#""version": 1"#, r#""version": 2"#),
-        index_with("", "").replace(r#""version": 1"#, r#""version": "2.0""#),
+        index_with("", "").replace(r#""version": 1"#, r#""version": true"#),
+        index_with("", "").replace(r#""version": 1"#, r#""version": 1.5"#),
+        index_with("", "").replace(r#""version": 1"#, r#""version": "v1""#),
+        index_with("", "").replace(r#""version": 1, "#, ""),
         index_with("", "").replace(r#""kind": "ply""#, r#""kind": "zip""#),
         index_with("", "").replace(r#""size": 5"#, r#""size": -5"#),
         index_with("", "").replace(r#", "size": 5"#, ""),
@@ -109,6 +111,17 @@ fn u27_index_manifest_refusals() {
     for body in &schema_faults {
         assert_eq!(code(body), "E-SCENE-FORMAT", "{body}");
     }
+    // Q-37 (#58): a well-formed version of another major is E-FILE-VERSION.
+    for version in ["2", "\"2.0\"", "\"2.1\""] {
+        let body =
+            index_with("", "").replace(r#""version": 1"#, &format!(r#""version": {version}"#));
+        assert_eq!(code(&body), "E-FILE-VERSION", "{body}");
+    }
+    // `format` is checked first: a wrong one is E-SCENE-FORMAT whatever the version.
+    let other = index_with("", "")
+        .replace("ftgsxr-index", "ftgsxr-scene")
+        .replace(r#""version": 1"#, r#""version": 2"#);
+    assert_eq!(code(&other), "E-SCENE-FORMAT");
 }
 
 #[test]

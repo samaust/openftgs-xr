@@ -31,8 +31,9 @@ pub enum IoError {
     /// the file and the detail.
     #[error("Not a valid scene, pose or index file: {0}")]
     Scene(String),
-    /// An error of the core (a model file's reader rules, or E-JSON for a player file
-    /// that is not well-formed JSON); it keeps the core's code and user text.
+    /// An error of the core (a model file's reader rules, or for a player file E-JSON when
+    /// it is not well-formed JSON and E-FILE-VERSION when its major version is not 1); it
+    /// keeps the core's code and user text.
     #[error(transparent)]
     Core(#[from] CoreError),
     /// E-IO: a file cannot be read or written (permissions, a missing directory, a full

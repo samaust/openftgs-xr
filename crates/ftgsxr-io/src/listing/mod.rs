@@ -75,8 +75,9 @@ pub enum ListingFlavor {
 /// of `entries`, in order, `location`, `thumbnail`, `audio` and `scene` resolved against
 /// `base`, an `ftgs-checkpoint` entry's location given a trailing `/` when its path has
 /// none (its query and fragment kept), `sha256` lowercase (Q-36). A body that is not JSON
-/// is E-JSON; one that breaks the schema (format, major version, an entry's keys and
-/// types) is E-SCENE-FORMAT; unknown keys are ignored (Q-37).
+/// is E-JSON; one that breaks the schema (format, a missing or malformed version, an
+/// entry's keys and types) is E-SCENE-FORMAT; a well-formed version whose major is not 1
+/// is E-FILE-VERSION, a minor version ignored; unknown keys are ignored (Q-37).
 // Q-36, Q-37
 pub fn parse_index_manifest(body: &str, base: &Url) -> Result<Vec<Entry>, IoError> {
     index::parse(body, base)
