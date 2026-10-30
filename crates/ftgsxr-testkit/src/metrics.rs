@@ -7,7 +7,8 @@ use ftgsxr_core::RenderImage;
 /// E15's three numbers for two renders of one request item (Q-1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Metrics {
-    /// PSNR in dB over the H·W·3 clamped RGB values; `f64::INFINITY` when the MSE is 0.
+    /// PSNR in dB over the H·W·3 clamped RGB values; `f64::INFINITY` when the MSE is 0, NaN
+    /// when an RGB value is non-finite (Q-41).
     pub psnr: f64,
     /// s: the share of pixels whose largest RGB channel difference exceeds 1/255.
     pub share: f64,
@@ -18,11 +19,11 @@ pub struct Metrics {
 /// A difference above this counts a pixel in s or s_α (E15).
 const LEVEL: f64 = 1.0 / 255.0;
 
-/// E15 for renders `a` and `b`, computed in float64 after clamping every RGB and alpha value
-/// of both to [0, 1] (D-46): PSNR = 10 log10(1 / MSE) over the H·W·3 RGB values, infinite
-/// at MSE = 0; s and s_α count a pixel when its largest RGB difference, or its alpha
-/// difference, exceeds 1/255. A non-finite value (NaN, +∞ or −∞) is not clamped: it counts
-/// its pixel as differing, and in RGB makes the PSNR NaN (Q-41).
+/// E15 for renders `a` and `b`, computed in float64 after clamping every finite RGB and
+/// alpha value of both to [0, 1] (D-46): PSNR = 10 log10(1 / MSE) over the H·W·3 RGB values,
+/// infinite at MSE = 0; s and s_α count a pixel when its largest RGB difference, or its
+/// alpha difference, exceeds 1/255. A non-finite value (NaN, +∞ or −∞) is not clamped: it
+/// counts its pixel as differing, and in RGB makes the PSNR NaN (Q-41).
 ///
 /// # Panics
 ///
