@@ -1618,7 +1618,6 @@ name = "ftgsxr-testkit"
 version = "0.1.0"
 dependencies = [
  "approx",
- "bytemuck",
  "ftgsxr-core",
  "ftgsxr-render",
  "safetensors",

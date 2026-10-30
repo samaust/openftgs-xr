@@ -10,11 +10,10 @@ repository.workspace = true
 publish.workspace = true
 
 # The workspace crates of §2.1's band table: `ftgsxr-core`, and `ftgsxr-render` for
-# `gpu_context` (M-2, Q-1); image joins when a helper needs it. sha2 (the fixtures' checksums), serde_json (the
-# safetensors headers the builder writes), bytemuck (tensor bytes) and tiny_http (the
+# `gpu_context` (M-2, Q-1); image joins when a helper needs it. sha2 (the fixtures'
+# checksums), serde_json (the safetensors headers the builder writes) and tiny_http (the
 # fixture server, §2.3's dev row) are §2.3 crates.
 [dependencies]
-bytemuck.workspace = true
 ftgsxr-core.workspace = true
 ftgsxr-render.workspace = true
 serde_json.workspace = true
