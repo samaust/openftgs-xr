@@ -144,10 +144,18 @@ fn json_string(s: &str) -> String {
 
 /// Float32 values as little-endian bytes (§1.2).
 fn f32_bytes(values: &[f32]) -> Vec<u8> {
-    values.iter().flat_map(|x| x.to_le_bytes()).collect()
+    if cfg!(target_endian = "little") {
+        bytemuck::cast_slice(values).to_vec()
+    } else {
+        values.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
 }
 
 /// Float64 values as little-endian bytes (§1.2).
 fn f64_bytes(values: &[f64]) -> Vec<u8> {
-    values.iter().flat_map(|x| x.to_le_bytes()).collect()
+    if cfg!(target_endian = "little") {
+        bytemuck::cast_slice(values).to_vec()
+    } else {
+        values.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
 }
