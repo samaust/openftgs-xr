@@ -16,7 +16,7 @@ use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
 use url::Url;
 
 use crate::http::status_error;
-use crate::listing::{checked_header_len, header_info};
+use crate::listing::{as_directory, checked_header_len, header_info};
 use crate::{
     Entry, EntryKind, HttpClient, Progress, list_dir, parse_html_listing, parse_index_manifest,
     parse_nginx_json,
@@ -139,13 +139,9 @@ impl HttpIndex {
     /// An HTTP index of `base` in `flavor`, fetched through `client` (Q-47). A base is a
     /// directory: one whose path does not end in `/` gets one (Q-48).
     // Q-47, Q-48
-    pub fn new(mut base: Url, flavor: ListingFlavor, client: Arc<HttpClient>) -> HttpIndex {
-        if !base.path().ends_with('/') {
-            let path = format!("{}/", base.path());
-            base.set_path(&path);
-        }
+    pub fn new(base: Url, flavor: ListingFlavor, client: Arc<HttpClient>) -> HttpIndex {
         HttpIndex {
-            base,
+            base: as_directory(base),
             flavor,
             client,
         }

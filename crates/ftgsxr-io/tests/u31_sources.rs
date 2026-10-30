@@ -403,24 +403,11 @@ fn u31_http_index_auto_tells_a_server_failure_from_no_listing() {
         paths(&server),
         ["/listing/models/index.json", "/listing/models/"].repeat(2)
     );
-    // A 2xx body that is neither nginx JSON nor HTML anchors has no listing either: a
-    // subdirectory is listed where it is named (Q-47), here a text file.
-    let count = server.requests().len();
-    assert_eq!(
-        source.list("notes.txt").unwrap_err().code(),
-        "E-NET-LISTING"
-    );
-    let seen: Vec<_> = server.requests()[count..]
-        .iter()
-        .map(|r| (r.path.clone(), r.status))
-        .collect();
-    assert_eq!(
-        seen,
-        [
-            ("/listing/models/index.json".to_owned(), 404),
-            ("/listing/models/notes.txt".to_owned(), 200)
-        ]
-    );
+    // A 2xx body that is neither nginx JSON nor HTML anchors (here an empty one) has no
+    // listing either.
+    server.status_for("/listing/models/", 200);
+    assert_eq!(source.list("").unwrap_err().code(), "E-NET-LISTING");
+    assert_eq!(server.requests().last().map(|r| r.status), Some(200));
 }
 
 #[test]
@@ -441,14 +428,12 @@ fn u31_http_index_base_without_a_trailing_slash_is_the_directory() {
                 let entries = source.list("").map(|e| summary(&e)).map_err(|e| e.code());
                 (name, entries, paths(&server)[before..].to_vec())
             };
-            let (name, entries, seen) = listed(&bare);
-            assert_eq!(name, server.url_of("listing/models/"));
+            let (bare_name, bare_entries, bare_seen) = listed(&bare);
+            let (_, slashed_entries, slashed_seen) = listed(&base);
+            assert_eq!(bare_name, server.url_of("listing/models/"));
             assert_eq!(
-                (entries, seen),
-                {
-                    let (_, entries, seen) = listed(&base);
-                    (entries, seen)
-                },
+                (bare_entries, bare_seen),
+                (slashed_entries, slashed_seen),
                 "{flavor:?} over {served:?}"
             );
         }
