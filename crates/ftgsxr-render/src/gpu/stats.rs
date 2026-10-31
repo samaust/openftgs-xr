@@ -55,7 +55,7 @@ impl FrameStats {
         let mut bytes = [0u8; STATS_BYTES as usize];
         bytes.copy_from_slice(&frame.set.staging[pick.take].get_mapped_range(..));
         for slot in 0..STAGING_SLOTS {
-            if slot == pick.take || pick.free[slot] {
+            if pick.released[slot] {
                 frame.set.staging[slot].unmap();
                 ring.state[slot].store(SLOT_FREE, Ordering::Release);
                 ring.frame[slot].store(u64::MAX, Ordering::Release);

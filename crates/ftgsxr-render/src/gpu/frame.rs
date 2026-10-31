@@ -90,7 +90,9 @@ pub(crate) const SLOT_PENDING: u8 = 1;
 pub(crate) const SLOT_READY: u8 = 2;
 
 /// The statistics ring (§1.4 stage 8, Q-81): which frame each staging buffer holds and
-/// whether it is mapped, and how many frames `encode_stats` has encoded.
+/// whether it is mapped, and how many frames `encode_stats` has encoded. `encode_stats`
+/// and `FrameStats::poll` never run at once on one ring: a reuse could unmap the buffer a
+/// poll is reading.
 pub(crate) struct StatsRing {
     pub(crate) state: [Arc<AtomicU8>; STAGING_SLOTS],
     pub(crate) frame: [AtomicU64; STAGING_SLOTS],
@@ -135,12 +137,12 @@ pub(crate) fn claim_slot(n: u64, state: &[u8; STAGING_SLOTS]) -> (usize, Claim) 
     (slot, claim)
 }
 
-/// The block `poll` returns (Q-81): the buffer to read, and the older mapped buffers it
-/// passes over, to unmap and free with it.
+/// The block `poll` returns (Q-81): the buffer to read, and the buffers to unmap and free
+/// once it is read, that one and the older mapped ones it passes over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Pick {
     pub(crate) take: usize,
-    pub(crate) free: [bool; STAGING_SLOTS],
+    pub(crate) released: [bool; STAGING_SLOTS],
 }
 
 /// The newest mapped block of frame n − 2 or earlier, `encoded` being n + 1, and the older
@@ -156,8 +158,10 @@ pub(crate) fn pick_block(
     let take = (0..STAGING_SLOTS)
         .filter(|&s| mapped[s])
         .max_by_key(|&s| frame[s])?;
-    let free = std::array::from_fn(|s| mapped[s] && s != take);
-    Some(Pick { take, free })
+    Some(Pick {
+        take,
+        released: mapped,
+    })
 }
 
 /// The buffers of one set (§2.1's list); the passes bind them.
@@ -348,7 +352,7 @@ mod tests {
             let pick = pick_block(self.encoded, &self.state, &self.frame)?;
             let f = self.frame[pick.take];
             for slot in 0..STAGING_SLOTS {
-                if slot == pick.take || pick.free[slot] {
+                if pick.released[slot] {
                     assert_eq!(
                         self.state[slot], SLOT_READY,
                         "only mapped buffers are freed"
@@ -397,7 +401,7 @@ mod tests {
         let pick = pick_block(ring.encoded, &ring.state, &ring.frame).expect("a block");
         assert_eq!(ring.frame[pick.take], 1);
         let freed: Vec<u64> = (0..STAGING_SLOTS)
-            .filter(|&s| pick.free[s])
+            .filter(|&s| pick.released[s] && s != pick.take)
             .map(|s| ring.frame[s])
             .collect();
         assert_eq!(freed, [0], "frame 0's buffer is freed");
@@ -437,18 +441,30 @@ mod tests {
         assert_eq!(claim_slot(4, &ring.state), (0, Claim::Reuse));
     }
 
+    /// SplitMix64, a seeded generator for the mappings.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+    }
+
     #[test]
     fn pick_block_returns_no_block_twice_nor_one_of_frame_n_minus_1_or_n() {
         // Mappings complete in submission order, a pseudo-random number of frames at a time
         // (none to all), and the ring is polled after every encode.
         let mut ring = Ring::new();
         let mut mapped = 0u64;
-        let mut seed = 0x177u32;
+        let mut rng = Rng(0x177);
         let mut last = None;
         for _ in 0..2000 {
             ring.encode();
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            let k = u64::from(seed >> 29);
+            let k = rng.next() % 8;
             while mapped < ring.encoded && mapped < ring.encoded.saturating_sub(4) + k {
                 ring.map(mapped);
                 mapped += 1;
