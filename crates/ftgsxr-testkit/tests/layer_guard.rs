@@ -8,12 +8,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Tests that check the layer another way, as `<crate>/tests/<file>::<function>` (Q-113):
-/// the binary's runs, R-15's and `bench`'s, read the layer's own log file (Q-105).
+/// Tests that check the layer another way, as `<crate>/tests/<file>:<function>`: the
+/// binary's runs, R-15's and `bench`'s, read the layer's own log file (Q-105).
+// Q-113
 const EXEMPT: &[&str] = &[
-    "ftgsxr-desktop/tests/cli.rs::gpu_r15_render_writes_the_renders_file",
-    "ftgsxr-desktop/tests/cli.rs::gpu_bench_reports_a_regression_against_a_baseline_20_percent_better",
-    "ftgsxr-desktop/tests/cli.rs::gpu_bench_compares_neither_b6_nor_another_profile",
+    "ftgsxr-desktop/tests/cli.rs:gpu_r15_render_writes_the_renders_file",
+    "ftgsxr-desktop/tests/cli.rs:gpu_bench_reports_a_regression_against_a_baseline_20_percent_better",
+    "ftgsxr-desktop/tests/cli.rs:gpu_bench_compares_neither_b6_nor_another_profile",
 ];
 
 /// This file, whose sample text declares unguarded tests.
@@ -31,9 +32,18 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// A line without its `//` comment, trimmed.
+fn code(line: &str) -> &str {
+    line.split("//").next().unwrap_or("").trim()
+}
+
 /// The name of the function a line declares, if it does.
 fn declared_fn(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix("fn ")?;
+    let mut rest = line.trim_start();
+    for qualifier in ["pub(crate) ", "pub ", "async "] {
+        rest = rest.strip_prefix(qualifier).unwrap_or(rest);
+    }
+    let rest = rest.strip_prefix("fn ")?;
     let end = rest
         .find(|c: char| !(c.is_alphanumeric() || c == '_'))
         .unwrap_or(rest.len());
@@ -43,18 +53,18 @@ fn declared_fn(line: &str) -> Option<&str> {
 /// Whether a code line binds the guard to a name: `let <name> = [path::]layer_messages();`
 /// with `<name>` other than `_`, which would drop the guard at once.
 fn binds_the_guard(line: &str) -> bool {
-    let Some(rest) = line.trim().strip_prefix("let ") else {
+    let Some(rest) = line.strip_prefix("let ") else {
         return false;
     };
-    let Some((name, call)) = rest.split_once('=') else {
+    let Some((name, value)) = rest.split_once('=') else {
         return false;
     };
     let name = name.trim();
-    let call = call.trim();
+    let value = value.trim();
     let named =
         !name.is_empty() && name != "_" && name.chars().all(|c| c.is_alphanumeric() || c == '_');
-    let call = call.strip_prefix("ftgsxr_testkit::").unwrap_or(call);
-    named && call.starts_with("layer_messages();")
+    let callee = value.strip_prefix("ftgsxr_testkit::").unwrap_or(value);
+    named && callee.starts_with("layer_messages();")
 }
 
 /// The `gpu_` and `ds_` test functions of one file's text whose first statement is not the
@@ -69,23 +79,24 @@ fn unguarded(text: &str) -> Vec<String> {
         if !(name.starts_with("gpu_") || name.starts_with("ds_")) {
             continue;
         }
-        // The attributes stacked above the function, `#[test]` among them.
+        // The attributes and comments stacked above the function, `#[test]` among them.
         let is_test = lines[..i]
             .iter()
             .rev()
             .map(|l| l.trim())
-            .take_while(|l| l.starts_with("#["))
-            .any(|l| l == "#[test]");
+            .take_while(|l| l.starts_with("#[") || l.starts_with("//"))
+            .any(|l| code(l) == "#[test]");
         if !is_test {
             continue;
         }
-        // The first code line after the body's opening brace, past blank and comment lines.
-        let open = (i..lines.len()).find(|&j| lines[j].trim_end().ends_with('{'));
+        // The first code after the body's opening brace, on its line or a later one, past
+        // blank and comment lines; a `}` there is an empty body.
+        let open = (i..lines.len()).find(|&j| code(lines[j]).contains('{'));
         let first = open.and_then(|o| {
-            lines[o + 1..]
-                .iter()
-                .map(|l| l.trim())
-                .find(|l| !l.is_empty() && !l.starts_with("//"))
+            let after = code(lines[o]).split_once('{').map_or("", |(_, a)| a.trim());
+            std::iter::once(after)
+                .chain(lines[o + 1..].iter().map(|l| code(l)))
+                .find(|l| !l.is_empty())
         });
         if !first.is_some_and(binds_the_guard) {
             found.push(name.to_string());
@@ -123,18 +134,18 @@ fn every_gpu_and_ds_test_holds_the_layer_guard() {
             continue;
         }
         for name in unguarded(&fs::read_to_string(file).unwrap()) {
-            let id = format!("{relative}::{name}");
+            let id = format!("{relative}:{name}");
             if EXEMPT.contains(&id.as_str()) {
                 exempt_seen.push(id);
             } else {
-                offending.push(format!("{relative}:{name}"));
+                offending.push(id);
             }
         }
     }
     assert!(
         offending.is_empty(),
-        "gpu_ and ds_ tests without `let _layer = layer_messages();` as their first \
-         statement (R-16, Q-105):\n{}",
+        "gpu_ and ds_ tests whose first statement doesn't bind `layer_messages()` to a name \
+         other than `_` (R-16, Q-105):\n{}",
         offending.join("\n")
     );
     // An exemption whose test is gone or now guarded is stale.
@@ -174,6 +185,19 @@ fn gpu_discarded() {
 fn ds_empty() {
 }
 
+#[test] // one line
+pub fn gpu_one_line() { let _layer = layer_messages(); }
+
+#[test]
+/// A doc line among the attributes.
+#[ignore = "gpu"]
+fn gpu_one_line_missing() { gpu_context(); }
+
+#[test]
+fn ds_comment_after_brace() { // Q-105
+    let _layer = layer_messages();
+}
+
 fn gpu_helper() {
     let device = gpu_context();
 }
@@ -185,6 +209,11 @@ fn cpu_test() {
 "#;
     assert_eq!(
         unguarded(text),
-        ["gpu_missing", "gpu_discarded", "ds_empty"]
+        [
+            "gpu_missing",
+            "gpu_discarded",
+            "ds_empty",
+            "gpu_one_line_missing"
+        ]
     );
 }
