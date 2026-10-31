@@ -205,8 +205,10 @@ const LAGGING_ROWS: usize = 200_000;
 /// submit, `FrameStats::poll`) is timed. In the first run the GPU is let finish after each
 /// frame outside the timed calls (a display period's stand-in), so `poll` gives `None` at
 /// frames 0 and 1 and frame k − 2's statistics at frame k. In the second the frames follow
-/// one another without waiting, so the GPU may lag the loop: `poll` may give `None` while
-/// frame k − 2 is still running, and whatever it gives is frame k − 2's. No call of either
+/// one another without waiting, so the GPU may lag the loop: two frames is a floor (Q-81),
+/// so `poll` may give `None` while frame k − 2 is still running, and whatever it gives at
+/// frame k is the block of a frame j ≤ k − 2 that no earlier poll gave, j growing from
+/// one block to the next. No call of either
 /// run may take longer than 1 ms; the submit's bound holds in a release build, and a debug
 /// build, where wgpu's submit spends about 1 ms of CPU without waiting on the GPU, times
 /// and reports it only (Q-111).
@@ -299,22 +301,34 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
     dev.device()
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("the frames complete");
-    let mut arrived = 0usize;
+    // Q-81: frame k reads the earliest frame j ≤ k − 2 after the last one read whose count
+    // it gives, so each frame's block is read at most once and in order.
+    let expected: Vec<u32> = (0..frames)
+        .map(|j| oracle(&big, &pose, tau_of(j), &cam).len() as u32)
+        .collect();
+    let mut next = 0usize;
+    let (mut arrived, mut late) = (0usize, 0usize);
     for (k, stats) in polled.iter().enumerate() {
         let Some(stats) = stats else {
             continue;
         };
         assert!(k >= 2, "frame {k}: nothing two frames old yet");
-        assert_eq!(
-            stats.visible_splats,
-            oracle(&big, &pose, tau_of(k - 2), &cam).len() as u32,
-            "frame {k} reads frame {}",
-            k - 2
-        );
+        let j = (next..=k - 2)
+            .find(|&j| expected[j] == stats.visible_splats)
+            .unwrap_or_else(|| {
+                panic!(
+                    "frame {k}: {} splats, no unread frame {next} to {} has that count: {:?}",
+                    stats.visible_splats,
+                    k - 2,
+                    &expected[next.min(k - 1)..=k - 2]
+                )
+            });
+        next = j + 1;
         arrived += 1;
+        late += usize::from(j < k - 2);
     }
     eprintln!(
-        "R-6: {arrived} of {} lagging frames had statistics",
+        "R-6: {arrived} of {} lagging frames had statistics, {late} of them late",
         frames - 2
     );
     for &(name, slowest, k) in &watchdog.slowest {
