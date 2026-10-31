@@ -1187,16 +1187,15 @@ mod tests {
     #[test]
     fn gpu_error_maps_render_errors_as_q75_and_q90() {
         // Q-75: a core error on a file names the file; without one, no path.
-        let core = || RenderError::Core(CoreError::Format("JSON".to_owned()));
+        // §1.15's E-FILE-KEYS text, "Missing key K".
+        let core = || RenderError::Core(CoreError::Keys("velocity".to_owned()));
         assert_eq!(
             gpu_error(Some(Path::new("m.ftgs-if")), core()),
-            HeadlessError::Input(
-                "E-FILE-FORMAT: m.ftgs-if: Not a supported model file (JSON)".to_owned()
-            )
+            HeadlessError::Input("E-FILE-KEYS: m.ftgs-if: Missing key velocity".to_owned())
         );
         assert_eq!(
             gpu_error(None, core()),
-            HeadlessError::Input("E-FILE-FORMAT: Not a supported model file (JSON)".to_owned())
+            HeadlessError::Input("E-FILE-KEYS: Missing key velocity".to_owned())
         );
         // Q-90: a non-finite render is Numeric, a GPU condition Environment with its
         // §1.15 code, a file or not.
