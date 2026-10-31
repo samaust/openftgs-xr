@@ -419,20 +419,26 @@ struct Gpu {
 
 impl Gpu {
     fn new() -> Result<Gpu, HeadlessError> {
-        let dev = SplatDevice::headless().map_err(gpu_error)?;
+        let dev = SplatDevice::headless().map_err(|e| gpu_error(None, e))?;
         let tier = QualityTier::desktop();
-        let passes = SplatPasses::new(&dev, LAYER_FORMAT, None, &tier).map_err(gpu_error)?;
+        let passes =
+            SplatPasses::new(&dev, LAYER_FORMAT, None, &tier).map_err(|e| gpu_error(None, e))?;
         Ok(Gpu { dev, tier, passes })
     }
 
     /// `model` packed with `layout`'s options and uploaded (§1.2 load options), with its
-    /// loaded degree.
-    fn upload(&self, model: &Model, tier: &QualityTier) -> Result<(GpuModel, u8), HeadlessError> {
+    /// loaded degree; `file` is the file it was read from, if any, which a core error names.
+    fn upload(
+        &self,
+        model: &Model,
+        tier: &QualityTier,
+        file: Option<&Path>,
+    ) -> Result<(GpuModel, u8), HeadlessError> {
         let (index, order) = TemporalIndex::build(model);
         let arrays = pack_for_gpu(model, &order, &tier.layout);
         let degree = arrays.sh_degree;
-        let gpu_model =
-            GpuModel::upload(&self.dev, &arrays, index, &model.conventions).map_err(gpu_error)?;
+        let gpu_model = GpuModel::upload(&self.dev, &arrays, index, &model.conventions)
+            .map_err(|e| gpu_error(file, e))?;
         Ok((gpu_model, degree))
     }
 
@@ -454,13 +460,17 @@ impl Gpu {
     }
 }
 
-/// A render-layer error as a `HeadlessError`: a core error as `Input`, the GPU's
-/// conditions as `Environment` with their §1.15 code (Q-90's mapping).
-fn gpu_error(e: RenderError) -> HeadlessError {
+/// A render-layer error as a `HeadlessError` (Q-90's mapping): a core error as `Input`,
+/// with the path of the `file` the model was read from if there is one (Q-75), a
+/// non-finite render as `Numeric`, the GPU's conditions as `Environment` with their §1.15
+/// code.
+// Q-75, Q-90
+fn gpu_error(file: Option<&Path>, e: RenderError) -> HeadlessError {
     match e {
-        RenderError::Core(core) => {
-            HeadlessError::Input(format!("{}: {}", core.code(), core.user_text()))
-        }
+        RenderError::Core(core) => match file {
+            Some(path) => core_input(path, &core),
+            None => HeadlessError::Input(format!("{}: {}", core.code(), core.user_text())),
+        },
         RenderError::NonFinite => HeadlessError::Numeric(String::new()),
         other => HeadlessError::Environment(format!("{}: {}", other.code(), other.user_text())),
     }
@@ -692,7 +702,7 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
                 (&synthetic, setup_label)
             }
         };
-        let (gpu_model, loaded) = gpu.upload(model, &gpu.tier)?;
+        let (gpu_model, loaded) = gpu.upload(model, &gpu.tier, given.map(|g| g.path.as_path()))?;
         let frames = FrameBuffers::new(&gpu.dev, &gpu.tier, gpu.capacity(gpu_model.n()));
         let cameras = orbit(model);
         for (camera, tau) in cameras.iter().cycle().take(WARM_UP) {
@@ -779,7 +789,7 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
                 (&synthetic, setup_label)
             }
         };
-        let (gpu_model, loaded) = gpu.upload(model, &gpu.tier)?;
+        let (gpu_model, loaded) = gpu.upload(model, &gpu.tier, given.map(|g| g.path.as_path()))?;
         // C = N, the rows uploaded (at most u32::MAX, `GpuModel` counts them in u32).
         let capacity = gpu_model.n();
         let frames = FrameBuffers::new(&gpu.dev, &gpu.tier, capacity);
@@ -847,7 +857,7 @@ fn bench_b5(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
         for _ in 0..B5_REPEATS {
             let start = Instant::now();
             let model = load(path)?;
-            let uploaded = gpu.upload(&model, &gpu.tier)?;
+            let uploaded = gpu.upload(&model, &gpu.tier, Some(path))?;
             gpu.wait()?;
             times.push(start.elapsed().as_secs_f64());
             drop(uploaded);
@@ -946,7 +956,7 @@ fn bench_b6(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
             }
         };
         for tier in &tiers {
-            let (gpu_model, loaded) = gpu.upload(model, tier)?;
+            let (gpu_model, loaded) = gpu.upload(model, tier, given.map(|g| g.path.as_path()))?;
             let value = gpu_model.memory_bytes() as f64 / f64::from(gpu_model.n());
             let half = tier.layout.half;
             let any_half = half.velocity || half.scale || half.rotation || half.opacity || half.sh;
@@ -979,6 +989,7 @@ fn bench_b6(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftgsxr_core::CoreError;
 
     fn budget(rule: Rule, value: f64) -> Budget {
         Budget {
@@ -1171,6 +1182,41 @@ mod tests {
                 assert_eq!((range.persistent.len(), range.transient.len()), (n, 0));
             }
         }
+    }
+
+    #[test]
+    fn gpu_error_maps_render_errors_as_q75_and_q90() {
+        // Q-75: a core error on a file names the file; without one, no path.
+        // §1.15's E-FILE-KEYS text, "Missing key K".
+        let core = || RenderError::Core(CoreError::Keys("velocity".to_owned()));
+        assert_eq!(
+            gpu_error(Some(Path::new("m.ftgs-if")), core()),
+            HeadlessError::Input("E-FILE-KEYS: m.ftgs-if: Missing key velocity".to_owned())
+        );
+        assert_eq!(
+            gpu_error(None, core()),
+            HeadlessError::Input("E-FILE-KEYS: Missing key velocity".to_owned())
+        );
+        // Q-90: a non-finite render is Numeric, a GPU condition Environment with its
+        // §1.15 code, a file or not.
+        let file = Some(Path::new("m.ftgs-if"));
+        assert_eq!(
+            gpu_error(file, RenderError::NonFinite),
+            HeadlessError::Numeric(String::new())
+        );
+        let budget = || RenderError::Budget {
+            needed: 3_000_000,
+            budget: 2_000_000,
+        };
+        let text = "E-MEM-BUDGET: Needs 3 MB, budget 2 MB; reduce to budget or choose a tier";
+        assert_eq!(
+            gpu_error(file, budget()),
+            HeadlessError::Environment(text.to_owned())
+        );
+        assert_eq!(
+            gpu_error(None, budget()),
+            HeadlessError::Environment(text.to_owned())
+        );
     }
 
     #[test]
