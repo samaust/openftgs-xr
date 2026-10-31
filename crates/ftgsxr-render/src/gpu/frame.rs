@@ -281,6 +281,21 @@ impl FrameBuffers {
         self.capacity
     }
 
+    /// The splat draw pass's timestamp writes (§1.13, Q-81): indices 4 and 5 of the frame's
+    /// query set, for the pass's owner to begin it with (Q-87); `None` when the device has
+    /// no timestamp queries. When `Some`, the frame's six timestamps are marked written, so
+    /// `encode_stats` resolves the draw's; it may be called before or after `encode_prepare`.
+    // Q-114
+    pub fn draw_timestamp_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        let (queries, _) = self.set.queries.as_ref()?;
+        self.ring.written.fetch_max(TIMESTAMPS, Ordering::AcqRel);
+        Some(wgpu::RenderPassTimestampWrites {
+            query_set: queries,
+            beginning_of_pass_write_index: Some(4),
+            end_of_pass_write_index: Some(5),
+        })
+    }
+
     /// The set's bytes on the GPU.
     #[cfg(test)]
     fn bytes(&self) -> u64 {

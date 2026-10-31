@@ -6,7 +6,6 @@
 //! §2.4 rule 2) and the statistics two frames late (§1.4 stage 8).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ::bevy::app::SubApp;
@@ -32,7 +31,6 @@ use super::{
     SplatTime, SplatTransform,
 };
 use crate::gpu::device::SplatDevice;
-use crate::gpu::frame::TIMESTAMPS;
 use crate::gpu::headless::sort_pose;
 use crate::gpu::passes::ENGINE_NEAR;
 use crate::gpu::{
@@ -501,20 +499,8 @@ fn draw_node(
     };
     let (camera, target, depth) = view.into_inner();
     let frame = &state.frame;
-    // The draw's timestamps, indices 4 and 5 (Q-81, Q-87): this node owns the pass.
-    let timestamp_writes =
-        frame
-            .set
-            .queries
-            .as_ref()
-            .map(|(queries, _)| wgpu::RenderPassTimestampWrites {
-                query_set: queries,
-                beginning_of_pass_write_index: Some(4),
-                end_of_pass_write_index: Some(5),
-            });
-    if timestamp_writes.is_some() {
-        frame.ring.written.store(TIMESTAMPS, Ordering::Release);
-    }
+    // The draw's timestamps (Q-81, Q-87, Q-114): this node owns the pass.
+    let timestamp_writes = frame.draw_timestamp_writes();
     let depth_attachment = Some(depth.get_attachment(StoreOp::Store));
     match (state.camera.output, &state.layer) {
         (OutputSpace::FileEncoded, _) => {

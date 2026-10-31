@@ -16,7 +16,7 @@ use ftgsxr_core::{
 
 use super::device::{BudgetSource, MemoryBudget, SplatDevice};
 use super::error::RenderError;
-use super::frame::{FrameBuffers, TIMESTAMPS};
+use super::frame::FrameBuffers;
 use super::inputs::{ColorTransform, ModelDraw, Overlays, RenderMode, SortPose, ViewParams};
 use super::model::GpuModel;
 use super::passes::SplatPasses;
@@ -280,20 +280,8 @@ impl HeadlessRenderer {
         gpu.passes
             .encode_prepare(&mut enc, frame, &draws, &sort_pose(camera), &[view]);
         {
-            // The draw's timestamps, indices 4 and 5 (Q-81): this renderer owns the pass.
-            let timestamp_writes =
-                frame
-                    .set
-                    .queries
-                    .as_ref()
-                    .map(|(queries, _)| wgpu::RenderPassTimestampWrites {
-                        query_set: queries,
-                        beginning_of_pass_write_index: Some(4),
-                        end_of_pass_write_index: Some(5),
-                    });
-            if timestamp_writes.is_some() {
-                frame.ring.written.store(TIMESTAMPS, Ordering::Release);
-            }
+            // The draw's timestamps (Q-81, Q-114): this renderer owns the pass.
+            let timestamp_writes = frame.draw_timestamp_writes();
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ftgsxr headless splats"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
