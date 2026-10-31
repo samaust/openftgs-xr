@@ -438,7 +438,8 @@ impl SplatPasses {
                 });
         self.sort.encode(enc, set, timestamp_writes);
         if set.queries.is_some() {
-            frame.ring.written.store(4, Ordering::Release);
+            // The draw's timestamps may already be marked (Q-114).
+            frame.ring.written.fetch_max(4, Ordering::AcqRel);
         }
     }
 
