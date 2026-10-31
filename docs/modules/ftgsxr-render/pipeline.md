@@ -26,7 +26,7 @@ One `FrameBuffers` set per view (per-view mode) holds, sized once per tier and c
 - **histograms**: the sort's per-block digit counts (Q-85).
 - **counters**: the splat draw's indirect arguments (words 0–3), the centers draw's (words 4–7), the overflow flag, and the rows that passed E3's test (Q-79).
 - **sort dispatch**: stage 3's indirect dispatch arguments for the sort (Q-85).
-- **statistics**: the 64-byte block of stage 8, and three staging buffers it is copied into (Q-81).
+- **statistics**: the 64-byte block of stage 8, and four staging buffers it is copied into (Q-81).
 - **draw constants**: one block per instance, written by `encode_prepare` and kept for `encode_draw` (Q-87): E7's constants of the instance's model (D-39), then the centers' colormap, ρ and scales (Q-92, Q-93).
 
 Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 and E7 constants, its temporal index and the 99th percentile of its speeds (Q-93).
@@ -47,11 +47,11 @@ Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 a
 
 **7 Resolve.** Reads the layer through a linear sampler at each target pixel's center (Q-95) and a block holding the background. Without a background it writes the layer un-premultiplied, decoded from sRGB and re-premultiplied, blended over the target, so the target keeps the layer's alpha for the compositor (D-14). With one it decodes E7's C + (1 − A)·c\_bg, formed in the file's space, and writes it opaque (Q-94). The sRGB target's encode on store then shows the file's values (D-6, R-11).
 
-**8 Statistics.** Resolves the frame's timestamps into the statistics block, then copies it into the next of three staging buffers, mapped when the encoder's submission completes.
+**8 Statistics.** Resolves the frame's timestamps into the statistics block, then copies it into the next of four staging buffers, mapped when the encoder's submission completes.
 
 ## The two-frame statistics
 
-Stage 8 never waits (P-5). The three staging buffers form a ring: the n-th `encode_stats` (from 0) copies frame n's block into buffer n mod 3 and asks for its mapping on submission. A buffer still waiting for its mapping skips that frame's copy; a mapped buffer nobody polled is unmapped and reused. `FrameStats::poll` polls the device without blocking and returns frame n − 2's block, once, when its buffer is mapped, and `None` otherwise (Q-81). The counts it reports are the clamped ones, those the draws use. R-6 checks the arrival two frames late under a watchdog on the frame loop.
+Stage 8 never waits (P-5). The four staging buffers form a ring: the n-th `encode_stats` (from 0) copies frame n's block into buffer n mod 4 and asks for its mapping on submission. A buffer still waiting for its mapping skips that frame's copy and keeps the frame it holds; a mapped buffer nobody returned is unmapped and reused. `FrameStats::poll` polls the device without blocking and returns the newest mapped block of frame n − 2 or earlier, once, unmapping and freeing the older mapped ones it passes over, and `None` otherwise; it never returns a block of frame n − 1 or n, so on a GPU that keeps pace the block is frame n − 2's, and on one running behind a block that maps late still reaches the HUD (Q-81). The counts it reports are the clamped ones, those the draws use. R-6 checks the arrival two frames late under a watchdog on the frame loop.
 
 ## The Bevy adapter's render nodes
 

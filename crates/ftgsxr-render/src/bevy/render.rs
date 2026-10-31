@@ -578,8 +578,8 @@ fn draw_node(
     state.passes.encode_stats(ctx.command_encoder(), frame);
 }
 
-/// Stage 8's read back, never blocking (Q-81): each view's statistics of two frames ago,
-/// once mapped, to the main world.
+/// Stage 8's read back, never blocking (Q-81): each view's newest mapped statistics of two
+/// or more frames ago, to the main world.
 fn poll_stats(views: Res<Views>, inbox: Res<StatsInbox>) {
     let Some(dev) = &views.dev else {
         return;
