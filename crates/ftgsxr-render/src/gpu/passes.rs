@@ -13,7 +13,8 @@ use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, Vec3};
 use super::device::SplatDevice;
 use super::error::RenderError;
 use super::frame::{
-    FrameBuffers, RecordMode, SLOT_FREE, SLOT_PENDING, SLOT_READY, STATS_BYTES, TIMESTAMPS,
+    Claim, FrameBuffers, RecordMode, SLOT_FREE, SLOT_PENDING, SLOT_READY, STATS_BYTES, TIMESTAMPS,
+    claim_slot,
 };
 use super::inputs::{
     ColorTransform, Colormap, ModelDraw, OcclusionInput, RenderMode, SortPose, ViewParams,
@@ -556,9 +557,9 @@ impl SplatPasses {
     /// Stage 8: the statistics block to the staging buffer; `FrameStats::poll` reads it two frames later.
     ///
     /// The frame's timestamps are resolved into the block first. Each frame takes the next
-    /// of three staging buffers, mapped when the encoder's submission completes; a buffer
-    /// still waiting for its mapping skips this frame's copy, and one mapped but never
-    /// polled is unmapped and reused (Q-81). Nothing waits (P-5).
+    /// of four staging buffers, mapped when the encoder's submission completes; a buffer
+    /// still waiting for its mapping skips this frame's copy and keeps the frame it holds,
+    /// and one mapped but never returned is unmapped and reused (Q-81). Nothing waits (P-5).
     pub fn encode_stats(&self, enc: &mut wgpu::CommandEncoder, frame: &FrameBuffers) {
         let set = &frame.set;
         let ring = &frame.ring;
@@ -570,18 +571,16 @@ impl SplatPasses {
             enc.copy_buffer_to_buffer(resolve, 0, &set.stats, 16, u64::from(written) * 8);
         }
         let n = ring.encoded.fetch_add(1, Ordering::AcqRel);
-        let slot = (n % ring.state.len() as u64) as usize;
+        // Q-81
+        let (slot, claim) = claim_slot(n, &ring.states());
         let state = &ring.state[slot];
-        match state.load(Ordering::Acquire) {
-            SLOT_READY => {
+        match claim {
+            Claim::Reuse => {
                 set.staging[slot].unmap();
                 state.store(SLOT_FREE, Ordering::Release);
             }
-            SLOT_PENDING => {
-                ring.frame[slot].store(u64::MAX, Ordering::Release);
-                return;
-            }
-            _ => {}
+            Claim::Skip => return,
+            Claim::Copy => {}
         }
         enc.copy_buffer_to_buffer(&set.stats, 0, &set.staging[slot], 0, STATS_BYTES);
         state.store(SLOT_PENDING, Ordering::Release);

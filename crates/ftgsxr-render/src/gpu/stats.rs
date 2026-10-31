@@ -5,7 +5,7 @@
 use std::sync::atomic::Ordering;
 
 use super::device::SplatDevice;
-use super::frame::{FrameBuffers, SLOT_FREE, SLOT_READY, STAGING_SLOTS, STATS_BYTES};
+use super::frame::{FrameBuffers, SLOT_FREE, STAGING_SLOTS, STATS_BYTES, pick_block};
 
 /// One frame's statistics for the HUD (§1.13): the counts after stage 3's clamp, C, the
 /// overflow flag, and the GPU times.
@@ -38,28 +38,29 @@ pub struct GpuTimes {
 }
 
 impl FrameStats {
-    /// The statistics `encode_stats` copied two frames ago (frame n − 2 after the n-th
-    /// call, counting from 0), once their mapping has completed; `None` before that or
-    /// when that frame's copy was skipped. Polls the device without waiting: it never
-    /// blocks (P-5, Q-81).
+    /// The newest block `encode_stats` copied two or more frames ago (frame n − 2 or
+    /// earlier after the n-th call, counting from 0) whose mapping has completed; the older
+    /// mapped blocks it passes over are dropped. `None` when no such block is mapped. Each
+    /// block is returned once, and on a GPU that keeps pace it is frame n − 2's. Polls the
+    /// device without waiting: it never blocks (P-5, Q-81).
     pub fn poll(frame: &FrameBuffers, dev: &SplatDevice) -> Option<FrameStats> {
         // Q-81
         let _ = dev.device().poll(wgpu::PollType::Poll);
         let ring = &frame.ring;
-        let encoded = ring.encoded.load(Ordering::Acquire);
-        let target = encoded.checked_sub(STAGING_SLOTS as u64)?;
-        let slot = (target % STAGING_SLOTS as u64) as usize;
-        if ring.frame[slot].load(Ordering::Acquire) != target
-            || ring.state[slot].load(Ordering::Acquire) != SLOT_READY
-        {
-            return None;
-        }
-        let staging = &frame.set.staging[slot];
+        let pick = pick_block(
+            ring.encoded.load(Ordering::Acquire),
+            &ring.states(),
+            &ring.frames(),
+        )?;
         let mut bytes = [0u8; STATS_BYTES as usize];
-        bytes.copy_from_slice(&staging.get_mapped_range(..));
-        staging.unmap();
-        ring.state[slot].store(SLOT_FREE, Ordering::Release);
-        ring.frame[slot].store(u64::MAX, Ordering::Release);
+        bytes.copy_from_slice(&frame.set.staging[pick.take].get_mapped_range(..));
+        for slot in 0..STAGING_SLOTS {
+            if slot == pick.take || pick.free[slot] {
+                frame.set.staging[slot].unmap();
+                ring.state[slot].store(SLOT_FREE, Ordering::Release);
+                ring.frame[slot].store(u64::MAX, Ordering::Release);
+            }
+        }
         Some(decode_stats(&bytes, dev.queue().get_timestamp_period()))
     }
 }

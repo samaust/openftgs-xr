@@ -3,7 +3,7 @@
 //! `FrameBuffers`: one set of a view's per-frame buffers, sized once per tier and
 //! capacity (§1.4, §1.12 Memory, §2.4 rule 4 and GPU data layout, D-34).
 
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
@@ -32,9 +32,13 @@ const DISPATCH_BYTES: u64 = 6 * WORD;
 /// The statistics block (§1.4 stage 8): the two counts, the overflow flag, C, and six
 /// 64-bit timestamps (Q-81).
 pub(crate) const STATS_BYTES: u64 = 64;
-/// Statistics are read two frames late (§1.4 stage 8, P-5): three staging buffers, since
-/// mapping is a whole buffer's state.
-pub(crate) const STAGING_SLOTS: usize = 3;
+/// The statistics ring's staging buffers (§1.4 stage 8, P-5): one per frame, since
+/// mapping is a whole buffer's state, and one more than the delay needs, so that a block
+/// that maps late is kept (Q-81).
+pub(crate) const STAGING_SLOTS: usize = 4;
+/// Statistics are read two frames late (§1.4 stage 8): after the n-th `encode_stats`
+/// (from 0), `poll` returns no block of frame n − 1 or n (Q-81).
+pub(crate) const STATS_DELAY: u64 = 2;
 /// The timestamps a frame writes (Q-81): the cull pass's begin and end, the sort's,
 /// the draw's.
 pub(crate) const TIMESTAMPS: u32 = 6;
@@ -94,6 +98,66 @@ pub(crate) struct StatsRing {
     pub(crate) encoded: AtomicU64,
     /// The timestamps written since the last `encode_stats`, a prefix of the query set.
     pub(crate) written: AtomicU32,
+}
+
+impl StatsRing {
+    /// Each buffer's state, as `claim_slot` and `pick_block` read it.
+    pub(crate) fn states(&self) -> [u8; STAGING_SLOTS] {
+        std::array::from_fn(|s| self.state[s].load(Ordering::Acquire))
+    }
+
+    /// The frame each buffer holds, `u64::MAX` for none.
+    pub(crate) fn frames(&self) -> [u64; STAGING_SLOTS] {
+        std::array::from_fn(|s| self.frame[s].load(Ordering::Acquire))
+    }
+}
+
+/// What `encode_stats` does with its staging buffer (Q-81).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Claim {
+    /// Free: copy the frame's block into it.
+    Copy,
+    /// Mapped but never returned: unmap it, then copy.
+    Reuse,
+    /// Still waiting for its mapping: skip the frame's copy, keeping the frame it holds.
+    Skip,
+}
+
+/// The buffer the n-th `encode_stats` (from 0) takes, n mod `STAGING_SLOTS`, and what it
+/// does with it (Q-81).
+pub(crate) fn claim_slot(n: u64, state: &[u8; STAGING_SLOTS]) -> (usize, Claim) {
+    let slot = (n % STAGING_SLOTS as u64) as usize;
+    let claim = match state[slot] {
+        SLOT_READY => Claim::Reuse,
+        SLOT_PENDING => Claim::Skip,
+        _ => Claim::Copy,
+    };
+    (slot, claim)
+}
+
+/// The block `poll` returns (Q-81): the buffer to read, and the older mapped buffers it
+/// passes over, to unmap and free with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Pick {
+    pub(crate) take: usize,
+    pub(crate) free: [bool; STAGING_SLOTS],
+}
+
+/// The newest mapped block of frame n − 2 or earlier, `encoded` being n + 1, and the older
+/// mapped ones; `None` when no such block is mapped (Q-81).
+pub(crate) fn pick_block(
+    encoded: u64,
+    state: &[u8; STAGING_SLOTS],
+    frame: &[u64; STAGING_SLOTS],
+) -> Option<Pick> {
+    let newest = encoded.checked_sub(1 + STATS_DELAY)?;
+    let mapped: [bool; STAGING_SLOTS] =
+        std::array::from_fn(|s| state[s] == SLOT_READY && frame[s] <= newest);
+    let take = (0..STAGING_SLOTS)
+        .filter(|&s| mapped[s])
+        .max_by_key(|&s| frame[s])?;
+    let free = std::array::from_fn(|s| mapped[s] && s != take);
+    Some(Pick { take, free })
 }
 
 /// The buffers of one set (§2.1's list); the passes bind them.
@@ -190,7 +254,7 @@ impl FrameBuffers {
                 storage | BufferUsages::INDIRECT,
             ),
             stats: buffer(dev, "ftgsxr statistics", STATS_BYTES, storage),
-            staging: [staging(0), staging(1), staging(2)],
+            staging: std::array::from_fn(staging),
             queries,
         };
         let ring = StatsRing {
@@ -227,11 +291,9 @@ impl FrameBuffers {
             &s.indirect,
             &s.dispatch,
             &s.stats,
-            &s.staging[0],
-            &s.staging[1],
-            &s.staging[2],
         ]
-        .iter()
+        .into_iter()
+        .chain(&s.staging)
         .map(|b| b.size())
         .sum()
     }
@@ -241,6 +303,168 @@ impl FrameBuffers {
 mod tests {
     use super::*;
     use ftgsxr_core::memory_estimate;
+
+    /// The ring's state without a GPU: `encode` and `poll` apply `claim_slot` and
+    /// `pick_block` as `encode_stats` and `FrameStats::poll` do, and `map` stands in for a
+    /// buffer's mapping completing.
+    struct Ring {
+        state: [u8; STAGING_SLOTS],
+        frame: [u64; STAGING_SLOTS],
+        encoded: u64,
+    }
+
+    impl Ring {
+        fn new() -> Ring {
+            Ring {
+                state: [SLOT_FREE; STAGING_SLOTS],
+                frame: [u64::MAX; STAGING_SLOTS],
+                encoded: 0,
+            }
+        }
+
+        /// Encodes the next frame; the claim made.
+        fn encode(&mut self) -> Claim {
+            let n = self.encoded;
+            self.encoded += 1;
+            let (slot, claim) = claim_slot(n, &self.state);
+            if claim != Claim::Skip {
+                self.state[slot] = SLOT_PENDING;
+                self.frame[slot] = n;
+            }
+            claim
+        }
+
+        /// Frame `f`'s buffer, if it is waiting for its mapping, is mapped.
+        fn map(&mut self, f: u64) {
+            for slot in 0..STAGING_SLOTS {
+                if self.frame[slot] == f && self.state[slot] == SLOT_PENDING {
+                    self.state[slot] = SLOT_READY;
+                }
+            }
+        }
+
+        /// The frame whose block `poll` returns.
+        fn poll(&mut self) -> Option<u64> {
+            let pick = pick_block(self.encoded, &self.state, &self.frame)?;
+            let f = self.frame[pick.take];
+            for slot in 0..STAGING_SLOTS {
+                if slot == pick.take || pick.free[slot] {
+                    assert_eq!(
+                        self.state[slot], SLOT_READY,
+                        "only mapped buffers are freed"
+                    );
+                    self.state[slot] = SLOT_FREE;
+                    self.frame[slot] = u64::MAX;
+                }
+            }
+            Some(f)
+        }
+    }
+
+    #[test]
+    fn pick_block_on_a_ring_that_keeps_pace_returns_frame_n_minus_2() {
+        let mut ring = Ring::new();
+        for n in 0..12u64 {
+            assert_eq!(ring.encode(), Claim::Copy, "frame {n}");
+            ring.map(n);
+            let expected = n.checked_sub(2);
+            assert_eq!(ring.poll(), expected, "after the {n}-th encode");
+            assert_eq!(ring.poll(), None, "polled again after the {n}-th encode");
+        }
+    }
+
+    #[test]
+    fn pick_block_returns_a_block_of_frame_n_minus_3_that_maps_late() {
+        let mut ring = Ring::new();
+        for _ in 0..3 {
+            ring.encode();
+        }
+        assert_eq!(ring.poll(), None, "frame 0 is not mapped yet");
+        ring.encode();
+        ring.map(0);
+        assert_eq!(ring.poll(), Some(0), "frame 1's buffer is not mapped");
+        assert_eq!(ring.poll(), None, "frame 0's block is returned once");
+    }
+
+    #[test]
+    fn pick_block_returns_frame_n_minus_2_and_frees_frame_n_minus_3() {
+        let mut ring = Ring::new();
+        for _ in 0..4 {
+            ring.encode();
+        }
+        ring.map(0);
+        ring.map(1);
+        let pick = pick_block(ring.encoded, &ring.state, &ring.frame).expect("a block");
+        assert_eq!(ring.frame[pick.take], 1);
+        let freed: Vec<u64> = (0..STAGING_SLOTS)
+            .filter(|&s| pick.free[s])
+            .map(|s| ring.frame[s])
+            .collect();
+        assert_eq!(freed, [0], "frame 0's buffer is freed");
+        assert_eq!(ring.poll(), Some(1));
+        assert_eq!(ring.poll(), None, "frame 0's block is never returned");
+        assert_eq!(
+            ring.encode(),
+            Claim::Copy,
+            "frame 4 takes frame 0's freed buffer"
+        );
+    }
+
+    #[test]
+    fn claim_slot_skips_a_copy_over_a_buffer_waiting_for_its_mapping_and_keeps_its_frame() {
+        let mut ring = Ring::new();
+        for _ in 0..4 {
+            ring.encode();
+        }
+        assert_eq!(claim_slot(4, &ring.state), (0, Claim::Skip));
+        assert_eq!(
+            ring.encode(),
+            Claim::Skip,
+            "frame 4 over frame 0's pending buffer"
+        );
+        assert_eq!(ring.frame[0], 0, "the buffer keeps frame 0");
+        ring.map(0);
+        assert_eq!(ring.poll(), Some(0), "frame 0's block, mapped at last");
+    }
+
+    #[test]
+    fn claim_slot_reuses_a_mapped_buffer_nobody_returned() {
+        let mut ring = Ring::new();
+        for n in 0..4 {
+            ring.encode();
+            ring.map(n);
+        }
+        assert_eq!(claim_slot(4, &ring.state), (0, Claim::Reuse));
+    }
+
+    #[test]
+    fn pick_block_returns_no_block_twice_nor_one_of_frame_n_minus_1_or_n() {
+        // Mappings complete in submission order, a pseudo-random number of frames at a time
+        // (none to all), and the ring is polled after every encode.
+        let mut ring = Ring::new();
+        let mut mapped = 0u64;
+        let mut seed = 0x177u32;
+        let mut last = None;
+        for _ in 0..2000 {
+            ring.encode();
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let k = u64::from(seed >> 29);
+            while mapped < ring.encoded && mapped < ring.encoded.saturating_sub(4) + k {
+                ring.map(mapped);
+                mapped += 1;
+            }
+            if let Some(f) = ring.poll() {
+                let n = ring.encoded - 1;
+                assert!(
+                    f + STATS_DELAY <= n,
+                    "frame {f} returned after the {n}-th encode"
+                );
+                assert!(last < Some(f), "frame {f} returned after frame {last:?}");
+                last = Some(f);
+            }
+        }
+        assert!(last.is_some());
+    }
 
     /// Q-23: one set's bytes are the estimate's `per_capacity_bytes` times C, less 16 C for
     /// `quest-low`'s half-precision records, plus the arguments and statistics (under
