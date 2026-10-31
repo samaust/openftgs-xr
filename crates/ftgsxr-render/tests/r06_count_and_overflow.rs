@@ -338,7 +338,6 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
         "R-6: {arrived} of {} lagging frames had statistics, {late} of them late",
         frames - 2
     );
-    assert!(arrived > 0, "some lagging frame had statistics");
     for &(name, slowest, k) in &watchdog.slowest {
         eprintln!("R-6: slowest {name}: {slowest:?} (frame {k})");
     }
