@@ -517,8 +517,8 @@ impl Targets {
 }
 
 /// One desktop frame (Q-102): stages 1–4 (`encode_prepare`), the splat draw into the
-/// layer cleared to (0, 0, 0, 0), the resolve onto the target over black and the
-/// statistics, submitted and waited for. Returns the frame's wall time in milliseconds,
+/// layer cleared to (0, 0, 0, 0) with its timestamps (Q-114), the resolve onto the target
+/// over black and the statistics, submitted and waited for. Returns the frame's wall time in milliseconds,
 /// from encoding to completion, and the statistics `FrameStats::poll` has ready.
 fn frame(
     gpu: &Gpu,
@@ -551,7 +551,8 @@ fn frame(
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            // Q-114
+            timestamp_writes: frame.draw_timestamp_writes(),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -681,7 +682,7 @@ const B1_N: [usize; 5] = [250_000, 500_000, 1_000_000, 2_000_000, 3_000_000];
 /// B-1 (§3.5, Q-102): desktop frames per second along the orbit; P-2.
 fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError> {
     let mut m = Measured {
-        notes: vec![FRAME_NOTE],
+        notes: vec![FRAME_NOTE, GPU_TIMES_NOTE, SYNTHETIC_LOAD_NOTE],
         ..Measured::default()
     };
     let cases: Vec<(usize, u8)> = match given {
@@ -714,7 +715,9 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
                 &targets,
             )?;
         }
-        let (mut per_camera, mut sort, mut visible) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut per_camera, mut visible) = (Vec::new(), Vec::new());
+        let (mut cull, mut sort, mut draw_ms, mut total) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for (camera, tau) in &cameras {
             let mut times = Vec::new();
             for _ in 0..3 {
@@ -727,7 +730,11 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
                 )?;
                 times.push(ms);
                 if let Some(s) = stats {
-                    sort.push(f64::from(s.gpu_times_ms.sort));
+                    let t = s.gpu_times_ms;
+                    cull.push(f64::from(t.cull));
+                    sort.push(f64::from(t.sort));
+                    draw_ms.push(f64::from(t.draw));
+                    total.push(f64::from(t.total));
                     visible.push(f64::from(s.visible_splats));
                 }
             }
@@ -747,7 +754,10 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
         m.figure(&setup, "fps_min", fps_min, "fps");
         m.figure(&setup, "fps_mean", 1e3 / mean, "fps");
         m.figure(&setup, "frame_ms_max", slowest, "ms");
+        m.figure(&setup, "gpu_cull_ms", median(&mut cull), "ms");
         m.figure(&setup, "gpu_sort_ms", median(&mut sort), "ms");
+        m.figure(&setup, "gpu_draw_ms", median(&mut draw_ms), "ms");
+        m.figure(&setup, "gpu_total_ms", median(&mut total), "ms");
         m.figure(&setup, "visible_splats", median(&mut visible), "splats");
         if given.is_some() || (n == 1_000_000 && degree == 2) {
             m.budgets.push(Budget {
@@ -765,6 +775,11 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
 
 /// The note on how a frame is timed.
 const FRAME_NOTE: &str = "a frame's time is the wall time from encoding to the GPU's completion, each frame submitted and waited for (Q-102)";
+/// The note on the GPU times (§1.13, Q-81, Q-114).
+const GPU_TIMES_NOTE: &str = "gpu_cull_ms, gpu_sort_ms, gpu_draw_ms and gpu_total_ms are medians over the measured frames of the GPU's timestamps: stages 1-3, stage 4, the splat draw, and the cull's begin to the draw's end; reported figures, not budgets (Q-81, Q-114)";
+/// The note on the synthetic sweep's load against P-2's model (§1.12 P-2, Q-102, Q-108),
+/// carried by a `--model` run's file too.
+const SYNTHETIC_LOAD_NOTE: &str = "without --model, B-1's synthetic models (every row persistent, Q-102) fill far more pixels per splat than a trained model of the same N, so the draw is bound by fill rate and P-2 is checked against a heavier load than its trained model until M-8 adds kitchen (Q-108)";
 
 /// B-3's capacities (§3.5).
 const B3_C: [usize; 6] = [100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];

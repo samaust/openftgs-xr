@@ -107,6 +107,41 @@ fn gpu_b1_with_a_model_writes_a_well_formed_file() {
 
 #[test]
 #[ignore = "gpu"]
+fn gpu_b1_reports_the_draw_time_and_the_synthetic_load_note() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+    // Q-114's detecting test: B-1 times its splat draw (`GpuTimes::draw`, Q-81, §1.13),
+    // and `total`, from the cull's begin to the last timestamp, now spans the draw too.
+    let (path, _) = tiny_model("b1-draw", 2000, 2);
+    let file = run("B-1", Some(&path), "b1-draw-out");
+    let (cull, sort, draw, total) = (
+        result(&file, "gpu_cull_ms"),
+        result(&file, "gpu_sort_ms"),
+        result(&file, "gpu_draw_ms"),
+        result(&file, "gpu_total_ms"),
+    );
+    assert!(cull > 0.0, "{cull}");
+    assert!(draw > 0.0, "{draw}");
+    assert!(
+        total >= sort + draw,
+        "total {total}, sort {sort}, draw {draw}"
+    );
+    // The figures are reported, not budgeted: P-2 stays B-1's one budget.
+    let budgets = file["budgets"].as_array().unwrap();
+    assert_eq!(budgets.len(), 1);
+    assert_eq!(budgets[0]["measure"], "fps_min");
+    // §1.12 P-2 ("the same model") against the synthetic sweep's load, until `kitchen` (Q-108).
+    let notes = file["notes"].as_array().unwrap();
+    assert!(
+        notes.iter().any(|n| {
+            let n = n.as_str().unwrap();
+            n.contains("synthetic") && n.contains("P-2") && n.contains("Q-108")
+        }),
+        "{notes:?}"
+    );
+}
+
+#[test]
+#[ignore = "gpu"]
 fn gpu_b3_with_a_model_reports_sort_times() {
     let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let (path, _) = tiny_model("b3", 5000, 0);
