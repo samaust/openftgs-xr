@@ -268,7 +268,14 @@ struct Proj {
     depth: f32,
 }
 
-// E6 for view v, in the order of `ftgsxr_core::project`.
+// The bound L on |u| beyond which f·u + c leaves float32's range, for f and L taken as
+// at least 1 (Q-118).
+fn mean_bound(f: f32, c: f32) -> f32 {
+    return max((F32_MAX - abs(c)) / max(f, 1.0), 1.0);
+}
+
+// E6 for view v, in the order of `ftgsxr_core::project`, plus the float32 bound on μ′
+// before it is computed, which the float64 `project` has no need of (Q-118).
 fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> Proj {
     var p: Proj;
     p.visible = false;
@@ -288,8 +295,9 @@ fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> P
     let cy = v.principal.y;
     // Q-118: a μ′ beyond float32's range is non-finite, decided on x_c before μ′ is
     // computed, since a float32 overflow on the GPU need not give ∞: |f·x/z + c| fits
-    // when |x| / ((F32_MAX − |c|) / f) ≤ z, a quotient that cannot overflow itself.
-    if abs(xc.x) / ((F32_MAX - abs(cx)) / fx) > z || abs(xc.y) / ((F32_MAX - abs(cy)) / fy) > z {
+    // when |x| / L ≤ z with L = (F32_MAX − |c|) / f. f is taken as at least 1, where u
+    // itself is the bound, and L as at least 1, so neither quotient overflows.
+    if abs(xc.x) / mean_bound(fx, cx) > z || abs(xc.y) / mean_bound(fy, cy) > z {
         p.non_finite = true;
         return p;
     }
@@ -455,6 +463,12 @@ fn cull_splats(
     }
     mark_active();
     let mu_s = inst.scale * (inst.rotation * t.mu) + inst.translation;
+    // Q-118: a non-finite μ^S is counted here, as in `cull_centers`, not left to reach
+    // z_c through the view's rotation.
+    if !finite(mu_s.x) || !finite(mu_s.y) || !finite(mu_s.z) {
+        count_non_finite();
+        return;
+    }
     let cov_s = stage_covariance(row);
 
     if RECORD_MODE == 0u {

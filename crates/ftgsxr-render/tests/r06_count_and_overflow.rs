@@ -9,16 +9,17 @@ mod cull_support;
 use std::time::{Duration, Instant};
 
 use cull_support::{draw, look_at, oracle, passes, prepare, sort_pose, test_pose, upload, view};
-use ftgsxr_core::{UVec2, Vec3};
+use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, Model, Pose, UVec2, Vec3};
 use ftgsxr_render::{
-    Colormap, FrameBuffers, FrameStats, GpuModel, QualityTier, RenderMode, SortMode, SortPose,
+    Colormap, FrameBuffers, FrameStats, GpuModel, ModelDraw, QualityTier, RenderMode, SortMode,
+    SortPose, SplatDevice, SplatPasses, ViewParams,
 };
 use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 /// The watchdog of R-6: no call of the frame loop may wait longer than this.
 const WATCHDOG: Duration = Duration::from_millis(1);
 
-fn camera() -> ftgsxr_core::Camera {
+fn camera() -> Camera {
     let center = test_pose().translation;
     look_at(
         center + Vec3::new(0.5, 0.8, -4.0),
@@ -124,7 +125,7 @@ fn gpu_r06_centers_follow_the_splats_under_the_same_capacity() {
     let centers = (0..model.len())
         .filter(|&i| {
             let (sigma_eff, mu_s, _) = cull_support::row_at(&model, i, &pose, tau);
-            let r = ftgsxr_core::DMat3::from_mat4(cam.world_to_camera);
+            let r = DMat3::from_mat4(cam.world_to_camera);
             let xc = r * mu_s.as_dvec3() + cam.world_to_camera.w_axis.truncate();
             let (u, v) = (
                 cam.k.x_axis.x * xc.x / xc.z + cam.k.z_axis.x,
@@ -363,10 +364,10 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
 /// position, four with an infinite position, four with an infinite scale. Returns the
 /// rows kept and the twelve, in that order of kinds.
 fn with_non_finite_rows(
-    model: &mut ftgsxr_core::Model,
-    pose: &ftgsxr_core::Pose,
+    model: &mut Model,
+    pose: &Pose,
     tau: f64,
-    cam: &ftgsxr_core::Camera,
+    cam: &Camera,
 ) -> (Vec<usize>, Vec<usize>) {
     let kept: Vec<usize> = oracle(model, pose, tau, cam)
         .iter()
@@ -391,12 +392,12 @@ fn with_non_finite_rows(
 
 /// Three frames of `draws` with the statistics; the third polls the first's block.
 fn stats_of(
-    dev: &ftgsxr_render::SplatDevice,
-    passes: &ftgsxr_render::SplatPasses,
+    dev: &SplatDevice,
+    passes: &SplatPasses,
     frame: &FrameBuffers,
-    draws: &[ftgsxr_render::ModelDraw],
-    pose: &ftgsxr_render::SortPose,
-    views: &[ftgsxr_render::ViewParams],
+    draws: &[ModelDraw],
+    pose: &SortPose,
+    views: &[ViewParams],
 ) -> FrameStats {
     let mut stats = None;
     for _ in 0..3 {
@@ -592,16 +593,16 @@ fn gpu_r06_non_finite_counts_once_per_row_and_instance_whatever_the_views() {
 
 /// A 320 × 240 camera of focal 300 at the origin looking along +z, its world-to-camera
 /// transform the identity, so x_c = μ^S exactly under the identity pose.
-fn identity_camera() -> ftgsxr_core::Camera {
-    ftgsxr_core::Camera {
+fn identity_camera() -> Camera {
+    Camera {
         width: 320,
         height: 240,
-        k: ftgsxr_core::DMat3::from_cols(
-            ftgsxr_core::DVec3::new(300.0, 0.0, 0.0),
-            ftgsxr_core::DVec3::new(0.0, 300.0, 0.0),
-            ftgsxr_core::DVec3::new(160.0, 120.0, 1.0),
+        k: DMat3::from_cols(
+            DVec3::new(300.0, 0.0, 0.0),
+            DVec3::new(0.0, 300.0, 0.0),
+            DVec3::new(160.0, 120.0, 1.0),
         ),
-        world_to_camera: ftgsxr_core::DMat4::IDENTITY,
+        world_to_camera: DMat4::IDENTITY,
     }
 }
 
@@ -630,12 +631,7 @@ fn gpu_r06_non_finite_does_not_count_a_row_e3_culls() {
     let gpu_model = upload(&dev, &model, &tier);
     let passes = passes(&dev, &tier);
     let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
-    let draws = [draw(
-        &gpu_model,
-        ftgsxr_core::Pose::IDENTITY,
-        tau,
-        RenderMode::Splats,
-    )];
+    let draws = [draw(&gpu_model, Pose::IDENTITY, tau, RenderMode::Splats)];
     let stats = stats_of(
         &dev,
         &passes,
@@ -659,15 +655,16 @@ fn gpu_r06_non_finite_counts_a_mean_beyond_float32() {
     let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let tier = QualityTier::conformance();
-    let mut model = random_model(0x6_0e, 5, 0);
+    let mut model = random_model(0x6_0e, 6, 0);
     let tau = 0.7;
     let cam = identity_camera();
     // x_c = μ^S, z_c within the near and far culls; f · |x_c| / z_c ≥ 3·10³⁹ > 3.4·10³⁸
-    // for rows 0–3 (row 3's u = x / z itself overflows); row 4, |μ′| = 3·10³⁷, is finite.
+    // for rows 0–4 (row 4's u = x / z itself overflows); row 5, |μ′| = 3·10³⁷, is finite.
     let positions = [
         [1e37, 0.0, 1.0],
         [-1e37, 0.0, 1.0],
         [0.0, 1e37, 1.0],
+        [0.0, -1e37, 1.0],
         [1e37, 0.0, 0.02],
         [1e35, 0.0, 1.0],
     ];
@@ -682,12 +679,7 @@ fn gpu_r06_non_finite_counts_a_mean_beyond_float32() {
     let gpu_model = upload(&dev, &model, &tier);
     let passes = passes(&dev, &tier);
     let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
-    let draws = [draw(
-        &gpu_model,
-        ftgsxr_core::Pose::IDENTITY,
-        tau,
-        RenderMode::Splats,
-    )];
+    let draws = [draw(&gpu_model, Pose::IDENTITY, tau, RenderMode::Splats)];
     let stats = stats_of(
         &dev,
         &passes,
@@ -696,7 +688,7 @@ fn gpu_r06_non_finite_counts_a_mean_beyond_float32() {
         &sort_pose(&cam),
         &[view(cam)],
     );
-    assert_eq!(stats.non_finite, 4, "rows 0–3, not the finite row 4");
-    assert_eq!(stats.visible_splats, 0, "all five are off the image");
+    assert_eq!(stats.non_finite, 5, "rows 0–4, not the finite row 5");
+    assert_eq!(stats.visible_splats, 0, "all six are off the image");
     assert!(dev.take_validation_messages().is_empty());
 }
