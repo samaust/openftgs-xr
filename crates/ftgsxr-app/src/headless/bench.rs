@@ -26,7 +26,7 @@ use ftgsxr_render::{
 
 use super::json::Json;
 use super::synthetic::{Persistence, synthetic_model};
-use super::{HeadlessError, core_input, identity_file, input_error, load, write_atomic};
+use super::{HeadlessError, core_input, identity_file, input_error, load, with_n, write_atomic};
 
 /// What `cmd_bench` measured (Q-67): the file's text and the budgets that regressed
 /// against the stored baseline, one line each; the binary exits 3 when there is any.
@@ -528,8 +528,9 @@ impl Gpu {
         let (index, order) = TemporalIndex::build(model);
         let arrays = pack_for_gpu(model, &order, &tier.layout);
         let degree = arrays.sh_degree;
+        // Q-117: a refusal over the budget gives N.
         let gpu_model = GpuModel::upload(&self.dev, &arrays, index, &model.conventions)
-            .map_err(|e| gpu_error(file, e))?;
+            .map_err(|e| with_n(gpu_error(file, e), model.len()))?;
         Ok((gpu_model, degree))
     }
 
@@ -1440,5 +1441,33 @@ mod tests {
         assert_eq!(median(&mut [3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(&mut [4.0, 1.0, 2.0, 3.0]), 2.5);
         assert_eq!(median(&mut []), 0.0);
+    }
+
+    /// Q-117 (§1.2 load option 4, D-13): a model over the device's budget is refused at
+    /// `bench`'s upload with E-MEM-BUDGET, §1.15's text followed by N.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_upload_over_the_budget_gives_n_and_the_bytes() {
+        let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+        let mut gpu = Gpu::new().expect("a GPU");
+        // A budget of one byte: ten rows' static bytes, under 1 MB, cannot fit.
+        gpu.dev.set_memory_budget(ftgsxr_render::MemoryBudget {
+            bytes: 1,
+            source: ftgsxr_render::BudgetSource::Tier,
+        });
+        let model = ftgsxr_testkit::random_model(5, 10, 0);
+        let e = gpu
+            .upload(&model, &gpu.tier, Some(Path::new("m.ftgs-if")))
+            .err()
+            .expect("refused");
+        // §1.15's text, the bytes in MB (needed rounded up, the budget down), then N.
+        assert_eq!(
+            e,
+            HeadlessError::Environment(
+                "E-MEM-BUDGET: Needs 1 MB, budget 0 MB; reduce to budget or choose a tier (N = 10)"
+                    .to_owned()
+            )
+        );
+        assert!(gpu.dev.take_validation_messages().is_empty());
     }
 }
