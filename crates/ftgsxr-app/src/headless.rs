@@ -130,8 +130,9 @@ pub fn exit_code(e: &HeadlessError) -> i32 {
 /// file's bytes. The file is written once every item has rendered, so a failure, a
 /// non-finite render among them (E-NUMERIC, exit 3), writes no file (Q-90). A convention
 /// rendered as openftgs's instead (E6, D-39) is printed to standard error as
-/// `ftgsxr: warning: <model>: <text>` before the render (Q-110).
-// Q-90, Q-86
+/// `ftgsxr: warning: <model>: <text>` before the render (Q-110). A model over the tier's
+/// budget is refused with E-MEM-BUDGET, §1.15's text followed by ` (N = <n>)` (Q-117).
+// Q-90, Q-86, Q-117
 pub fn cmd_render(
     model: &Path,
     request: &Path,
@@ -166,7 +167,7 @@ pub fn cmd_render(
     let mut renderer = HeadlessRenderer::new(tier).map_err(|e| render_error(model, e))?;
     let id = renderer
         .load(&loaded, req.sh_degree)
-        .map_err(|e| render_error(model, e))?;
+        .map_err(|e| with_n(render_error(model, e), loaded.len()))?;
     let renders = req
         .items
         .iter()
@@ -198,6 +199,18 @@ fn render_error(model: &Path, e: RenderError) -> HeadlessError {
         RenderError::Core(core) => core_input(model, &core),
         RenderError::NonFinite => HeadlessError::Numeric(String::new()),
         other => HeadlessError::Environment(format!("{}: {}", other.code(), other.user_text())),
+    }
+}
+
+/// `e` with the refused model's N after §1.15's text when it is E-MEM-BUDGET, so the
+/// refusal gives N and the bytes (§1.2 load option 4, D-13); any other error unchanged.
+// Q-117
+fn with_n(e: HeadlessError, n: usize) -> HeadlessError {
+    match e {
+        HeadlessError::Environment(m) if e.code() == "E-MEM-BUDGET" => {
+            HeadlessError::Environment(format!("{m} (N = {n})"))
+        }
+        other => other,
     }
 }
 

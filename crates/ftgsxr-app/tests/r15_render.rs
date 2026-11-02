@@ -5,7 +5,8 @@
 //! metadata (`format`, `version`, `producer` = `openftgs-xr <version> (<adapter>)`) and
 //! the request's SHA-256 (`gpu` lane); a request in another time unit (E-REQ-UNIT) and a
 //! request degree above the model's (E-REQ-DEGREE) exit 2 and write no file (`cpu` lane,
-//! the checks come before the GPU, Q-90).
+//! the checks come before the GPU, Q-90). Also Q-117's test: a model over the tier's budget
+//! is refused with E-MEM-BUDGET, exit 2, its message giving N (`gpu` lane).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -161,4 +162,28 @@ fn gpu_r15_a_quest_tier_renders_the_splats() {
             "{id}: P1's primitive is drawn (peak alpha {peak})"
         );
     }
+}
+
+/// Q-117 (§1.2 load option 4, D-13): a model over the tier's budget is refused with
+/// E-MEM-BUDGET, exit 2 and no file, and the message gives §1.15's text with N after it.
+#[test]
+#[ignore = "gpu"]
+fn gpu_cmd_render_over_the_budget_gives_n_and_the_bytes() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dir = scratch("budget");
+    let out = dir.join("out.safetensors");
+    // A budget of one byte: P1's static bytes, under 1 MB, cannot fit.
+    let mut tier = QualityTier::conformance();
+    tier.memory_budget_bytes = 1;
+    let e = cmd_render(&p1("safetensors"), &p1("request.json"), &out, tier, VERSION)
+        .expect_err("refused");
+    assert!(matches!(e, HeadlessError::Environment(_)), "{e:?}");
+    assert_eq!(exit_code(&e), 2);
+    assert!(!out.exists(), "no file is written");
+    // §1.15's text, the bytes in MB (needed rounded up, the budget down), then N: P1 is
+    // one static primitive (§3.2 R-1).
+    assert_eq!(
+        e.to_string(),
+        "E-MEM-BUDGET: Needs 1 MB, budget 0 MB; reduce to budget or choose a tier (N = 1)"
+    );
 }
