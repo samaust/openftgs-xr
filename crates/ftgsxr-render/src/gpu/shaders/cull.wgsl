@@ -59,17 +59,15 @@ struct Instance {
     pad1: u32,
 }
 
-// A cull view (E6): R_w, t_w, W × H, f, c.
+// A cull view (E6): R_w, then (t_w, W), (f, c) and (H, 0, 0, 0), the same bytes as
+// `frame_uniform` writes. #226: whole vec4 words, since Adreno's compiler on the Quest 3
+// misread the scalars that share a vec3's or vec2's 16-byte slot in this struct of an
+// array (W, c and H read from the next words), and culled every splat.
 struct ViewCam {
     rotation: mat3x3<f32>,
-    translation: vec3<f32>,
-    width: f32,
-    focal: vec2<f32>,
-    principal: vec2<f32>,
-    height: f32,
-    pad0: f32,
-    pad1: f32,
-    pad2: f32,
+    translation_width: vec4<f32>,
+    focal_principal: vec4<f32>,
+    height_pad: vec4<f32>,
 }
 
 // The frame: the cull views, C, the shared sort pose (D-4).
@@ -258,6 +256,27 @@ fn stage_covariance(row: u32) -> mat3x3<f32> {
     return cov * (inst.scale * inst.scale);
 }
 
+// A view's fields by name.
+struct View {
+    rotation: mat3x3<f32>,
+    translation: vec3<f32>,
+    width: f32,
+    focal: vec2<f32>,
+    principal: vec2<f32>,
+    height: f32,
+}
+
+fn view_fields(c: ViewCam) -> View {
+    var v: View;
+    v.rotation = c.rotation;
+    v.translation = c.translation_width.xyz;
+    v.width = c.translation_width.w;
+    v.focal = c.focal_principal.xy;
+    v.principal = c.focal_principal.zw;
+    v.height = c.height_pad.x;
+    return v;
+}
+
 struct Proj {
     visible: bool,
     // Culled for a non-finite value in the projection (E6).
@@ -276,7 +295,8 @@ fn mean_bound(f: f32, c: f32) -> f32 {
 
 // E6 for view v, in the order of `ftgsxr_core::project`, plus the float32 bound on μ′
 // before it is computed, which the float64 `project` has no need of (Q-118).
-fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> Proj {
+fn project(view: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> Proj {
+    let v = view_fields(view);
     var p: Proj;
     p.visible = false;
     p.non_finite = false;
@@ -587,7 +607,7 @@ fn cull_centers(
     var mean0 = vec2<f32>(0.0);
     var depth0 = 0.0;
     for (var i = 0u; i < frame.view_count; i++) {
-        let v = frame.views[i];
+        let v = view_fields(frame.views[i]);
         let xc = v.rotation * mu_s + v.translation;
         let z = xc.z;
         let mean = vec2<f32>(v.focal.x * xc.x / z + v.principal.x, v.focal.y * xc.y / z + v.principal.y);
