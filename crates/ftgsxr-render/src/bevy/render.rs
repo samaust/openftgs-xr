@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use ::bevy::app::SubApp;
 use ::bevy::camera::visibility::InheritedVisibility;
+// The depth the splats test against is Bevy's 3D depth (#204).
 use ::bevy::core_pipeline::core_3d::{
     CORE_3D_DEPTH_FORMAT, main_opaque_pass_3d, main_transparent_pass_3d,
 };
@@ -34,8 +35,7 @@ use super::{
 };
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::sort_pose;
-// The view target the resolve is compiled for (Q-91), and the depth the splats test
-// against is Bevy's 3D depth (#204).
+// The view target the resolve is compiled for (Q-91).
 use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
 use crate::gpu::{
     Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, Overlays, QualityTier,
