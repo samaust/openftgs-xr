@@ -37,5 +37,16 @@ Vendored code
 -------------
 
 vendor/bevy_mod_openxr-0.6.0 is bevy_mod_openxr 0.6.0 from crates.io (https://github.com/awtterpip/bevy_oxr),
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two changes
+marked in src/openxr/graphics/vulkan.rs (the Android Vulkan target; on Android, the instance
+drops wgpu's VALIDATION_INDIRECT_CALL).
+
+vendor/wgpu-core-29.0.4 is wgpu-core 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
 used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with one change
-marked in src/openxr/graphics/vulkan.rs (the Android Vulkan target).
+marked in src/instance.rs (an instance made from a Vulkan HAL instance keeps its flags).
+Copyright (c) 2025 The gfx-rs developers.
+
+vendor/wgpu-hal-29.0.4 is wgpu-hal 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with one change
+marked in src/vulkan/instance.rs (a public `flags()` getter on the Vulkan instance).
+Copyright (c) 2025 The gfx-rs developers.

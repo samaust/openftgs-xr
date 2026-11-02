@@ -279,7 +279,15 @@ fn get_extensions(
     cfg: Option<&OxrManualGraphicsConfig>,
     vk_entry: &ash::Entry,
 ) -> Result<(wgpu::InstanceFlags, Vec<&'static CStr>, Vec<&'static CStr>)> {
-    let flags = wgpu::InstanceFlags::default().with_env();
+    #[allow(unused_mut)]
+    let mut flags = wgpu::InstanceFlags::default().with_env();
+    // openftgs-xr change (Q-136, Q-T225.6), to bevy_mod_openxr 0.6.0 (crates.io), file
+    // src/openxr/graphics/vulkan.rs, MIT/Apache-2.0: on the Quest 3's Adreno, wgpu's
+    // validation of indirect calls leaves every indirect draw empty, so the HAL instance
+    // drops it on Android (wgpu-core's matching change is in the vendored wgpu-core).
+    // Was: no removal.
+    #[cfg(target_os = "android")]
+    flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     let mut instance_exts =
         <Vulkan as Api>::Instance::desired_extensions(vk_entry, VK_TARGET_VERSION_ASH, flags)?;
     let mut device_exts = vec![
