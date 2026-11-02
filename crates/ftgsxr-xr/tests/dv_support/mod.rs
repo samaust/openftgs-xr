@@ -170,3 +170,8 @@ pub fn badging(apk: &Path) -> String {
     cmd.args(["dump", "badging"]).arg(apk);
     String::from_utf8_lossy(&run(cmd).stdout).into_owned()
 }
+
+/// Removes `dv/` on the device, so no file of an earlier run stands for this one.
+pub fn clear() {
+    adb(&["shell", "rm", "-rf", DV_DIR]);
+}
