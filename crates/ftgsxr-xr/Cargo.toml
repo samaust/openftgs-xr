@@ -15,12 +15,14 @@ publish.workspace = true
 # builds use (§2.4); `fb_passthrough` and the other features join with their modules.
 # #223: bevy (the render features, as `ftgsxr-render`), the io crate for `XrSettings` and
 # the render crate for `SplatCamera`.
+# #227: the core crate for `Pose` (`TrackedHand`, `XrHands`).
 [dependencies]
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log"] }
 bevy_mod_openxr.workspace = true
 bevy_mod_xr.workspace = true
 bevy_xr_utils.workspace = true
 ftgsxr-app.workspace = true
+ftgsxr-core.workspace = true
 ftgsxr-io.workspace = true
 ftgsxr-render.workspace = true
 openxr.workspace = true

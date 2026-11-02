@@ -24,6 +24,7 @@ use openxr::EnvironmentBlendMode;
 use crate::XrError;
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
+use crate::tracking::TrackingPlugin;
 
 /// The XR build's plugin (§2.1, §1.8): bevy\_mod\_openxr's session, init, events,
 /// render, camera and action plugins with the player's app info, Appendix E.1's
@@ -57,6 +58,8 @@ fn extensions() -> OxrExtensions {
     raw.fb_swapchain_update_state = true;
     raw.fb_swapchain_update_state_vulkan = true;
     raw.meta_recommended_layer_resolution = true;
+    // The Touch Plus profile (Appendix D.2) through `tracking`'s bindings.
+    raw.meta_touch_controller_plus = true;
     exts
 }
 
@@ -139,7 +142,9 @@ impl Plugin for XrTail {
             OxrActionSyncingPlugin,
             OxrSpatialPlugin,
             OxrSpacePatchingPlugin,
-        ));
+        ))
+        // After the binding plugin, whose schedule `tracking` adds to.
+        .add_plugins(TrackingPlugin);
     }
 }
 
