@@ -357,26 +357,20 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
     assert!(dev.take_validation_messages().is_empty());
 }
 
-/// E6 and §1.4 stage 8 (revision 13): rows the view would keep, given a non-finite
-/// position or scale, are culled, neither counted visible nor drawn, and counted in
-/// `FrameStats::non_finite` two frames later.
-#[test]
-#[ignore = "gpu"]
-fn gpu_r06_non_finite_rows_are_culled_and_counted() {
-    let _layer = layer_messages(); // R-16, Q-105
-    let dev = gpu_context();
-    let tier = QualityTier::conformance();
-    let mut model = random_model(0x6_0a, 5_000, 0);
-    let pose = test_pose();
-    let cam = camera();
-    let tau = 0.7;
-    let kept: Vec<usize> = oracle(&model, &pose, tau, &cam)
+/// `model` with twelve of the rows the view keeps at τ made non-finite: four with a NaN
+/// position, four with an infinite position, four with an infinite scale. Returns the
+/// rows kept and the twelve, in that order of kinds.
+fn with_non_finite_rows(
+    model: &mut ftgsxr_core::Model,
+    pose: &ftgsxr_core::Pose,
+    tau: f64,
+    cam: &ftgsxr_core::Camera,
+) -> (Vec<usize>, Vec<usize>) {
+    let kept: Vec<usize> = oracle(model, pose, tau, cam)
         .iter()
         .map(|(i, _)| *i)
         .collect();
     assert!(kept.len() > 100, "the view keeps rows ({})", kept.len());
-    // Twelve kept rows: four with a NaN position, four with an infinite position, four
-    // with an infinite scale.
     let bad: Vec<usize> = kept
         .iter()
         .copied()
@@ -390,6 +384,48 @@ fn gpu_r06_non_finite_rows_are_culled_and_counted() {
             _ => model.scale[i][1] = f32::INFINITY,
         }
     }
+    (kept, bad)
+}
+
+/// Three frames of `draws` with the statistics; the third polls the first's block.
+fn stats_of(
+    dev: &ftgsxr_render::SplatDevice,
+    passes: &ftgsxr_render::SplatPasses,
+    frame: &FrameBuffers,
+    draws: &[ftgsxr_render::ModelDraw],
+    pose: &ftgsxr_render::SortPose,
+    views: &[ftgsxr_render::ViewParams],
+) -> FrameStats {
+    let mut stats = None;
+    for _ in 0..3 {
+        let mut enc = dev
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        passes.encode_prepare(&mut enc, frame, draws, pose, views);
+        passes.encode_stats(&mut enc, frame);
+        dev.queue().submit([enc.finish()]);
+        dev.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the frame completes");
+        stats = FrameStats::poll(frame, dev);
+    }
+    stats.expect("frame 0's statistics at frame 2")
+}
+
+/// E6 and §1.4 stage 8 (revision 13): rows the view would keep, given a non-finite
+/// position or scale, are culled, neither counted visible nor drawn, and counted in
+/// `FrameStats::non_finite` two frames later.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r06_non_finite_rows_are_culled_and_counted() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let tier = QualityTier::conformance();
+    let mut model = random_model(0x6_0a, 5_000, 0);
+    let pose = test_pose();
+    let cam = camera();
+    let tau = 0.7;
+    let (kept, bad) = with_non_finite_rows(&mut model, &pose, tau, &cam);
     let gpu_model = upload(&dev, &model, &tier);
     let passes = passes(&dev, &tier);
     let draws = [draw(&gpu_model, pose, tau, RenderMode::Splats)];
@@ -416,22 +452,64 @@ fn gpu_r06_non_finite_rows_are_culled_and_counted() {
         );
     }
 
-    // Three frames with the statistics; the third polls the first's block.
-    let mut stats = None;
-    for _ in 0..3 {
-        let mut enc = dev
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        passes.encode_prepare(&mut enc, &frame, &draws, &sort_pose(&cam), &[view(cam)]);
-        passes.encode_stats(&mut enc, &frame);
-        dev.queue().submit([enc.finish()]);
-        dev.device()
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("the frame completes");
-        stats = FrameStats::poll(&frame, &dev);
-    }
-    let stats = stats.expect("frame 0's statistics at frame 2");
+    let stats = stats_of(
+        &dev,
+        &passes,
+        &frame,
+        &draws,
+        &sort_pose(&cam),
+        &[view(cam)],
+    );
     assert_eq!(stats.non_finite, bad.len() as u32);
     assert_eq!(stats.visible_splats, expected);
+    assert!(dev.take_validation_messages().is_empty());
+}
+
+/// Q-118 (E6, §1.4 stage 8): a center counts when its μ^S is non-finite, and an instance
+/// drawn as splats and centers counts each such row once, not once per dispatch: the
+/// NaN and infinite positions give 8 in centers mode, and in both modes 12 (those 8 and
+/// the 4 infinite scales, which only the splats project).
+#[test]
+#[ignore = "gpu"]
+fn gpu_r06_non_finite_counts_centers_once_per_row_and_instance() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let tier = QualityTier::conformance();
+    let mut model = random_model(0x6_0b, 5_000, 0);
+    let pose = test_pose();
+    let cam = camera();
+    let tau = 0.7;
+    let (_, bad) = with_non_finite_rows(&mut model, &pose, tau, &cam);
+    let gpu_model = upload(&dev, &model, &tier);
+    let passes = passes(&dev, &tier);
+    let frame = FrameBuffers::new(&dev, &tier, 2 * model.len() as u32);
+    let (pixel_radius, colormap) = (3.0, Colormap::Dc);
+    for (mode, expected) in [
+        (
+            RenderMode::Centers {
+                pixel_radius,
+                colormap,
+            },
+            8,
+        ),
+        (
+            RenderMode::Both {
+                pixel_radius,
+                colormap,
+            },
+            bad.len() as u32,
+        ),
+    ] {
+        let draws = [draw(&gpu_model, pose, tau, mode)];
+        let stats = stats_of(
+            &dev,
+            &passes,
+            &frame,
+            &draws,
+            &sort_pose(&cam),
+            &[view(cam)],
+        );
+        assert_eq!(stats.non_finite, expected, "{mode:?}");
+    }
     assert!(dev.take_validation_messages().is_empty());
 }

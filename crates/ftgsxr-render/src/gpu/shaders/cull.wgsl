@@ -413,9 +413,13 @@ fn sort_key(depth: f32) -> u32 {
     return 0xffffffffu - bitcast<u32>(depth);
 }
 
-// Q-118: one count per row and instance culled with a non-finite projection.
+// Q-118: one count per row and instance culled with a non-finite projection, by the
+// dispatch that counts the instance's rows (Q-79), so an instance drawn as splats and
+// centers counts a row once.
 fn count_non_finite() {
-    atomicAdd(&counters[NON_FINITE], 1u);
+    if (inst.flags & FLAG_COUNT_ACTIVE) != 0u {
+        atomicAdd(&counters[NON_FINITE], 1u);
+    }
 }
 
 fn mark_active() {
