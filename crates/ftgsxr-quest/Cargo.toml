@@ -22,7 +22,7 @@ ftgsxr-xr.workspace = true
 bevy.workspace = true
 
 # #224: Bevy for `#[bevy_main]` and its winit runner on GameActivity (D-18; the XR crate
-# forces neither backend), bevy_mod_xr for the session state (Q-129); tracing's `log`
+# forces neither backend), bevy_mod_xr for the session state (§2.1); tracing's `log`
 # feature hands the events to android_logger (§1.13, no Bevy `LogPlugin` on the Quest).
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity.workspace = true
@@ -39,5 +39,5 @@ bevy = { workspace = true, features = [
 bevy_mod_xr.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
-# Q-143
+# §2.1
 tracing = { workspace = true, features = ["log"] }

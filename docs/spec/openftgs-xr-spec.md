@@ -559,12 +559,12 @@ The workspace is one Cargo workspace with one `[workspace.dependencies]` table, 
 | Foundation | `ftgsxr-io` | lib, no engine dependency | `ftgsxr-core`, toml, ureq, rustls, url, directories, serde\_json, sha2, thiserror, tracing | paths, settings, scene and pose files, listings, HTTP, model sources (§1.5, §1.11) |
 | Engine | `ftgsxr-render` | lib | the two above, bevy (render features) | the wgpu render layer (shaders, passes, the headless renderer) and its Bevy plugin adapter (§1.4) |
 | Application | `ftgsxr-app` | lib | the three above, bevy, bevy\_egui, bevy\_kira\_audio, image | everything both builds share: intents, the platform port, library, playback, manipulation, locomotion, UI, audio, capture, persistence, the headless commands, desktop input (§1.5–§1.7, §1.10–§1.13) |
-| XR | `ftgsxr-xr` | lib | the four above, bevy\_mod\_openxr, bevy\_mod\_xr, bevy\_xr\_utils, openxr | the OpenXR session, tracking, XR intents, passthrough, depth, light, anchors, the panel (§1.8, §1.9) |
+| XR | `ftgsxr-xr` | lib | the four above, bevy (render and log features), bevy\_mod\_openxr, bevy\_mod\_xr, bevy\_xr\_utils, openxr | the OpenXR session, tracking, XR intents, passthrough, depth, light, anchors, the panel (§1.8, §1.9) |
 | Platform | `ftgsxr-desktop` | bin `ftgsxr` | `ftgsxr-app`, `ftgsxr-xr` (feature `xr`, on by default), clap, rfd | the Linux player and the command line (§1.7) |
-| Platform | `ftgsxr-quest` | cdylib `libftgsxr_quest.so` | `ftgsxr-app`, `ftgsxr-xr`, android-activity, jni, ndk-context, android\_logger | the Android entry point and the JNI adapter of the shim (§2.5) |
+| Platform | `ftgsxr-quest` | cdylib `libftgsxr_quest.so` | `ftgsxr-app`, `ftgsxr-xr`, bevy, bevy\_mod\_xr (Android only), android-activity, jni, ndk-context, android\_logger, tracing (Android only, with its `log` feature, so Bevy's events reach android\_logger) | the Android entry point and the JNI adapter of the shim (§2.5) |
 | Dev | `ftgsxr-testkit` | lib, dev-dependency | `ftgsxr-core`, `ftgsxr-render`, image, sha2, serde\_json, bytemuck, tiny\_http | fixtures, checksums, image metrics (E15), a wgpu test context, synthetic tiny models (§3) |
 | Dev | `tools/fixtures/` | Python | openftgs (as a program) | writes the probe models, requests and reference renders of §3.2 |
-| Dev | `android/` | Gradle project with the Kotlin shim | the Khronos OpenXR loader, GameActivity | packages the Quest app (§2.5) |
+| Dev | `android/` | Gradle project with the Kotlin shim | the Khronos OpenXR loader, GameActivity with androidx.appcompat and androidx.core | packages the Quest app (§2.5) |
 
 Builds: the desktop binary links `ftgsxr-desktop` → `ftgsxr-app` → `ftgsxr-render` → `ftgsxr-io` → `ftgsxr-core`, plus `ftgsxr-xr` for `--xr`; the Quest library links `ftgsxr-quest` → `ftgsxr-xr` → `ftgsxr-app` → … The headless commands use `ftgsxr-render`'s wgpu layer without a Bevy `App`.
 
@@ -1251,7 +1251,7 @@ Every dependency is under a license compatible with an Apache-2.0 release; none 
 | cargo-ndk | 4.1 | building the Android library | build tool | Apache-2.0 OR MIT | verified |
 | Gradle, the Android SDK and NDK, Kotlin | the versions `android/` pins | packaging the Quest app | build tools and programs | Apache-2.0 (Gradle, Kotlin); the Android SDK license (programs) | knowledge |
 | Khronos OpenXR loader for Android (`org.khronos.openxr:openxr_loader_for_android`) | ≥ 1.0.34, pinned in `android/` | the OpenXR loader (D-19) | quest, bundled | Apache-2.0 (OpenXR-SDK); the Maven artifact's POM license is confirmed when `android/` is set up | verified for OpenXR-SDK |
-| GameActivity (Android Game Development Kit) | pinned in `android/` | the activity base class (D-18) | quest, bundled | Apache-2.0 | knowledge |
+| GameActivity (Android Game Development Kit) | pinned in `android/` | the activity base class (D-18), with `androidx.appcompat:appcompat` and `androidx.core:core`, which its `AppCompatActivity` base needs and its POM leaves to the app; versions pinned in `android/` | quest, bundled | Apache-2.0 | knowledge |
 | openftgs | the clone's commit, recorded in `tests/fixtures/README.md` | produces the fixtures of §3.2 (`ftgs render --backend reference`) | dev program | Apache-2.0 | verified |
 | Monado | the system's | the OpenXR runtime of the `xr` lane | runtime, never read | BSL-1.0 main code (docs only) | verified (Debian copyright) |
 
@@ -1260,7 +1260,7 @@ Notes:
 - bevy\_gaussian\_splatting (MIT OR Apache-2.0) is not a dependency (D-2); where a piece of its design is adapted (the radix sort's structure), the code carries the attribution comment and NOTICE entry CLAUDE.md requires, and Appendix A has its rows.
 - Meta's OpenXR Mobile SDK, its loader and its samples are not used; the Khronos loader is (D-19). Meta's documentation is the source of Appendix E.
 - The license scan runs cargo-deny in CI with an allowlist (MIT, MIT-0, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, Unicode-3.0, CDLA-Permissive-2.0, CC0-1.0, MPL-2.0 for unmodified dependencies) and fails on GPL, AGPL, LGPL and unknown licenses. MPL-2.0 (`option-ext` under `directories`, as hypothesis in openftgs) is file-level copyleft: depending on the unmodified crate is compatible with the Apache-2.0 release, and its source is never read (CLAUDE.md). MIT-0 (`encase` under Bevy's render layer) and CC0-1.0 (`hexf-parse` under naga) are permissive and allow commercial use.
-- The Android build bundles the Khronos loader and the GameActivity library in the APK; their license texts ship in the app's licenses panel (§1.7) with every crate's, generated by cargo-about or cargo-deny's list.
+- The Android build bundles the Khronos loader, the GameActivity library and its AndroidX dependencies (appcompat, core and their transitive AndroidX libraries) in the APK; their license texts ship in the app's licenses panel (§1.7) with every crate's, the crates' generated by cargo-about or cargo-deny's list; how the AndroidX texts are gathered is M-9's.
 - No pretrained weights, datasets or models are bundled; the fixtures of §3.2 are the player's own (§2.7).
 
 ### 2.4 Performance architecture
