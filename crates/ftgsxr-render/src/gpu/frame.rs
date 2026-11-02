@@ -24,6 +24,7 @@ const WORD: u64 = 4;
 /// The counters (`cull.wgsl`): two indirect draws (splats and centers, §1.4 stages 5 and
 /// 6) of four words each, the overflow flag, the rows that passed E3's test (Q-79), the
 /// primitives culled for a non-finite projection (E6) and one spare word.
+// Q-118
 pub(crate) const COUNTER_WORDS: u64 = 12;
 const INDIRECT_BYTES: u64 = COUNTER_WORDS * WORD;
 /// The sort passes' indirect dispatches (§1.4 stage 3): the blocks of the count and
