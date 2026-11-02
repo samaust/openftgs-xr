@@ -52,14 +52,37 @@ jobs:
       - name: skeleton test
         run: cargo test -p ftgsxr-core skeleton
 
-  # The Quest build (`cargo ndk` with the Android NDK, without Gradle, §2.7) joins in
-  # M-3, with `android/` and `ftgsxr-quest`'s entry point:
-  #
-  # quest:
-  #   name: quest build
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - run: rustup target add aarch64-linux-android
-  #     - run: cargo install --locked cargo-ndk
-  #     - run: cargo ndk -t arm64-v8a build --release -p ftgsxr-quest
+  # The Quest build (§2.7): `cargo ndk` with the Android NDK, without Gradle, to catch
+  # compile breaks of `ftgsxr-quest` (#224). NDK 25.1.8937393 (§2.5), installed with the
+  # runner's sdkmanager.
+  quest:
+    name: quest build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+
+      - name: Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;25.1.8937393" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-ndk
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-android-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-android-${{ runner.os }}-
+
+      - name: cargo ndk
+        run: |
+          command -v cargo-ndk || cargo install --locked cargo-ndk --version ^4.1
+          cargo ndk -t arm64-v8a build --release -p ftgsxr-quest

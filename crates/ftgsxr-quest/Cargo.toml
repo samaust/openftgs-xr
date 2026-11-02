@@ -18,9 +18,25 @@ crate-type = ["cdylib"]
 [dependencies]
 ftgsxr-app.workspace = true
 ftgsxr-xr.workspace = true
+# Also here, featureless, for Bevy's derive macros, which find the crate in this table.
+bevy.workspace = true
 
+# #224: Bevy for `#[bevy_main]` and its winit runner on GameActivity (D-18; the XR crate
+# forces neither backend), bevy_mod_xr for the session state (Q-T224.1); tracing's `log`
+# feature hands the events to android_logger (§1.13, no Bevy `LogPlugin` on the Quest).
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity.workspace = true
 android_logger.workspace = true
+bevy = { workspace = true, features = [
+    "std",
+    "multi_threaded",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_window",
+    "bevy_winit",
+    "android-game-activity",
+] }
+bevy_mod_xr.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
+tracing = { workspace = true, features = ["log"] }

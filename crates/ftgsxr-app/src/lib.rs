@@ -22,3 +22,7 @@ pub use platform::Permission;
 // Q-89: the tier `cmd_render` (and M-4's `AppPlugin`) takes, for callers that depend on
 // the app alone (§2.1's `ftgsxr-desktop`).
 pub use ftgsxr_render::QualityTier;
+// Q-T224.1: what the Quest's provisional harness (`ftgsxr_quest::main` before M-4's
+// `AppPlugin`) takes, for callers that depend on the app alone (§2.1's `ftgsxr-quest`).
+pub use ftgsxr_io::{AppPaths, ModelBytes, Settings, load_settings};
+pub use ftgsxr_render::{SortMode, SplatLoad, SplatPlugin, SplatTime};
