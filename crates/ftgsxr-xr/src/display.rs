@@ -4,7 +4,7 @@
 //! display, D-27, §2.1 `DisplaySettings`, Q-124).
 //!
 //! - Refresh rate (XR\_FB\_display\_refresh\_rate): the runtime's rates go into
-//!   `available_rates` at each session; a wanted rate from that list is requested, and the
+//!   `available_rates` once each session has begun; a wanted rate from that list is requested, and the
 //!   runtime's change event is logged as `display refresh rate <from> -> <to> Hz`.
 //! - Foveation (XR\_FB\_foveation and its configuration, Vulkan and swapchain-update-state
 //!   companions): a profile at the setting's level is created in the main world and
@@ -36,7 +36,10 @@ use bevy_mod_openxr::resources::{
     OxrSystemId, OxrViews,
 };
 use bevy_mod_openxr::session::OxrSession;
-use bevy_mod_xr::session::{XrRenderSystems, XrRequestExitMessage, XrSessionCreated, XrState};
+use bevy_mod_xr::session::{
+    XrPostSessionBegin, XrPreDestroySession, XrRenderSystems, XrRequestExitMessage,
+    XrSessionCreated, XrState,
+};
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
 use ftgsxr_app::SettingsRes;
 use ftgsxr_io::Settings;
@@ -231,9 +234,12 @@ impl Plugin for DisplayPlugin {
         .init_resource::<FoveationRequest>()
         .add_plugins(ExtractResourcePlugin::<FoveationRequest>::default())
         .add_systems(XrSessionCreated, on_session_created)
+        .add_systems(XrPostSessionBegin, on_session_begun)
+        .add_systems(XrPreDestroySession, drop_profile)
         .add_systems(Update, apply_changes)
         .add_oxr_event_handler(log_rate_change);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.add_systems(XrPreDestroySession, drop_profile);
             render_app.add_systems(
                 Render,
                 apply_foveation
@@ -266,6 +272,7 @@ fn recommended(
 }
 
 /// Logs an E-XR-UNSUPPORTED (§1.15: the control is hidden, so a warning).
+// Q-T228.4
 fn unsupported(e: &XrError) {
     warn!("{}: {}", e.code(), e.user_text());
 }
@@ -276,7 +283,7 @@ fn on_session_created(
     session: Option<Res<OxrSession>>,
     instance: Option<Res<OxrInstance>>,
     current: Option<Res<OxrCurrentSessionConfig>>,
-    mut settings: ResMut<DisplaySettings>,
+    settings: Res<DisplaySettings>,
     mut applied: ResMut<Applied>,
     mut request: ResMut<FoveationRequest>,
 ) {
@@ -288,13 +295,31 @@ fn on_session_created(
         );
     }
     let caps = Caps::of(instance.as_deref());
-    apply_rate(caps, &session, &mut settings);
-    applied.refresh_rate = settings.refresh_rate;
     let f = settings.foveation;
     if caps.foveation || (f != Foveation::Off && applied.foveation_requested) {
         foveation(caps, &session, f, &mut request);
     }
     applied.foveation = Some(f);
+}
+
+/// Once the session has begun: the rates and the wanted rate (the request is made on a
+/// running session).
+fn on_session_begun(
+    session: Option<Res<OxrSession>>,
+    instance: Option<Res<OxrInstance>>,
+    mut settings: ResMut<DisplaySettings>,
+    mut applied: ResMut<Applied>,
+) {
+    let Some(session) = session else { return };
+    apply_rate(Caps::of(instance.as_deref()), &session, &mut settings);
+    applied.refresh_rate = settings.refresh_rate;
+}
+
+/// Drops the foveation profile with its session (it is a child of the session).
+fn drop_profile(request: Option<ResMut<FoveationRequest>>) {
+    if let Some(mut r) = request {
+        r.level = None;
+    }
 }
 
 /// Enumerates the rates and requests the wanted one.
@@ -390,6 +415,7 @@ fn apply_changes(
             error!("render scale {scale}: no view configuration; not applied");
             return;
         };
+        // Q-T228.2
         let base = if caps.layer_resolution {
             layer_resolution(&session, &instance, &layer).unwrap_or(view)
         } else {
