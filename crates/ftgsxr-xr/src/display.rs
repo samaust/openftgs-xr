@@ -316,7 +316,7 @@ fn unsupported(e: &XrError) {
 }
 
 /// At each session: the rates, the wanted rate, the foveation again (the swapchain is
-/// new) and the swapchain's size.
+/// new) and the swapchain's size; a failed render scale is forgotten (Q-147).
 fn on_session_created(
     session: Option<Res<OxrSession>>,
     instance: Option<Res<OxrInstance>>,
