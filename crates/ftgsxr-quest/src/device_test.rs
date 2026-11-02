@@ -25,7 +25,7 @@ struct DeviceTest {
 }
 
 /// Prints the verdict line (§3.4).
-fn verdict(name: &str, pass: bool, detail: &str) {
+pub(crate) fn verdict(name: &str, pass: bool, detail: &str) {
     let word = if pass { "PASS" } else { "FAIL" };
     info!("ftgsxr-test: {name} {word} {detail}");
 }
@@ -41,6 +41,7 @@ pub(crate) fn add(app: &mut App, name: String) {
             })
             .add_systems(Update, dv1);
         }
+        "dv12" => crate::dv12::add(app),
         _ => verdict(&name, false, "unknown test"),
     }
 }
