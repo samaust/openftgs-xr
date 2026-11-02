@@ -300,20 +300,31 @@ fn read_baseline(path: &Path) -> Result<Option<(PathBuf, Json)>, HeadlessError> 
     Ok(Some((canonical, parsed)))
 }
 
-/// An `Input` error naming `out` when the directory it would be written in is not one.
+/// An `Input` error naming `out` when the directory it would be written in is not one, or
+/// can't be written: the temporary file `write_atomic` would use is created and removed.
 fn check_out_dir(out: &Path) -> Result<(), HeadlessError> {
     let dir = match out.parent() {
         Some(d) if !d.as_os_str().is_empty() => d,
         _ => Path::new("."),
     };
     match fs::metadata(dir) {
-        Ok(m) if m.is_dir() => Ok(()),
-        Ok(_) => Err(input_error(
-            out,
-            std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"),
-        )),
-        Err(e) => Err(input_error(out, e)),
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => {
+            return Err(input_error(
+                out,
+                std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"),
+            ));
+        }
+        Err(e) => return Err(input_error(out, e)),
     }
+    let name = out.file_name().map_or_else(
+        || "ftgsxr-bench".into(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let probe = dir.join(format!(".{name}.tmp-{}", std::process::id()));
+    fs::File::create(&probe).map_err(|e| input_error(out, e))?;
+    let _ = fs::remove_file(&probe);
+    Ok(())
 }
 
 /// The note for the GPU validation messages collected during a run, if any (Q-116): the
@@ -1345,7 +1356,7 @@ mod tests {
     }
 
     #[test]
-    fn cmd_bench_refuses_a_malformed_baseline_before_rendering() {
+    fn cmd_bench_in_refuses_a_malformed_baseline_before_rendering() {
         // #194, Q-103: a malformed baseline is E-JSON (exit 2). The model named does not
         // exist, so reaching the model's load (or the GPU) would give another error: the
         // E-JSON proves the baseline is read first.
@@ -1362,7 +1373,7 @@ mod tests {
     }
 
     #[test]
-    fn cmd_bench_refuses_an_out_in_a_missing_directory_before_rendering() {
+    fn cmd_bench_in_refuses_an_out_in_a_missing_directory_before_rendering() {
         // #194: `--out` in a directory that doesn't exist fails before the model's load
         // (a missing model, which would fail differently) and so before any frame.
         let dir = scratch("out");
@@ -1373,6 +1384,32 @@ mod tests {
             HeadlessError::Input(text) => assert!(text.contains("no-such-dir"), "{text}"),
             other => panic!("expected an Input error, got {other:?}"),
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cmd_bench_in_refuses_an_out_in_a_read_only_directory_before_rendering() {
+        // #194: `--out` in a directory that exists but can't be written fails before the
+        // model's load (a missing model, which would fail differently), as E-IO (exit 2).
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("read-only");
+        let locked = dir.join("locked");
+        fs::create_dir(&locked).expect("the locked directory");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).expect("read-only");
+        // Root writes a read-only directory anyway, so there is nothing to refuse.
+        let writable = fs::write(locked.join("probe"), b"").is_ok();
+        if !writable {
+            let out = locked.join("b6.json");
+            let err = cmd_bench_in("B-6", Some(&out), Some(&dir.join("missing.ftgs-if")), &dir)
+                .expect_err("an unwritable --out");
+            match &err {
+                HeadlessError::Input(text) => assert!(text.contains("locked"), "{text}"),
+                other => panic!("expected an Input error, got {other:?}"),
+            }
+            assert_eq!(super::super::exit_code(&err), 2);
+            assert_eq!(fs::read_dir(&locked).unwrap().count(), 0, "no file left");
+        }
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
         let _ = fs::remove_dir_all(&dir);
     }
 
