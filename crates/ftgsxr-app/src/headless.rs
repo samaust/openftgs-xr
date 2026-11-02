@@ -19,6 +19,9 @@ mod bench;
 // Q-67
 pub use bench::{BenchReport, cmd_bench};
 mod json;
+mod sort_check;
+// Q-146
+pub use sort_check::sort_check;
 mod synthetic;
 
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their

@@ -9,3 +9,31 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+
+# M-3 (#222): the XR crates of §2.1's row and §2.3, and the app for `Permission` (§2.1's
+# `XrError::Permission`). bevy_mod_openxr's default feature `vulkan` is the backend both
+# builds use (§2.4); `fb_passthrough` and the other features join with their modules.
+# #223: bevy (the render features, as `ftgsxr-render`), the io crate for `XrSettings` and
+# the render crate for `SplatCamera`.
+# #227: the core crate for `Pose` (`TrackedHand`, `XrHands`).
+[dependencies]
+# Q-144
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log"] }
+bevy_mod_openxr.workspace = true
+bevy_mod_xr.workspace = true
+bevy_xr_utils.workspace = true
+ftgsxr-app.workspace = true
+ftgsxr-core.workspace = true
+ftgsxr-io.workspace = true
+ftgsxr-render.workspace = true
+openxr.workspace = true
+
+# #223: the `xr` tests capture the log (I-15's "no error-level log", I-17's warning) with
+# a tracing subscriber of their own, as Q-106's `layer_messages` does; the testkit and the
+# probe fixtures for the model I-15 draws.
+[dev-dependencies]
+# #225: Dv-2's pixel check decodes the headset's screenshot (PNG). Q-141
+image = { workspace = true, features = ["png"] }
+ftgsxr-testkit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

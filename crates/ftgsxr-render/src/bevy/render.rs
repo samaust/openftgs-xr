@@ -45,32 +45,37 @@ use crate::gpu::{
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
 const LAYER_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
-/// Statistics on their way from the render world to `SplatStats`, in arrival order.
+/// Statistics on their way from the render world to `SplatStats`, in arrival order, each
+/// with whether it is the first splat camera's.
 #[derive(Resource, Clone, Default)]
-pub(crate) struct StatsInbox(Arc<Mutex<Vec<FrameStats>>>);
+pub(crate) struct StatsInbox(Arc<Mutex<Vec<(bool, FrameStats)>>>);
 
 impl StatsInbox {
-    fn push(&self, stats: FrameStats) {
+    fn push(&self, first: bool, stats: FrameStats) {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(stats);
+            .push((first, stats));
     }
 
-    fn drain(&self) -> Vec<FrameStats> {
+    fn drain(&self) -> Vec<(bool, FrameStats)> {
         std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 
-/// Main world: the statistics that arrived into `SplatStats` (the last one wins), and
-/// `SplatEvent::Overflow` for each frame that dropped records (D-34).
+/// Main world: the first splat camera's statistics into `SplatStats` (in per-view stereo
+/// each eye has its own block, and a stereo pair counts once, Q-125), and
+/// `SplatEvent::Overflow` for each view's frame that dropped records (D-34).
 pub(crate) fn publish_stats(
     inbox: Res<StatsInbox>,
     mut stats: ResMut<SplatStats>,
     mut commands: Commands,
 ) {
-    for s in inbox.drain() {
-        stats.0 = Some(s);
+    for (first, s) in inbox.drain() {
+        if first {
+            // Q-125
+            stats.0 = Some(s);
+        }
         if s.overflow {
             commands.trigger(SplatEvent::Overflow {
                 visible: s.visible_splats + s.visible_centers,
@@ -102,6 +107,8 @@ struct Extracted {
     dev: Option<Arc<SplatDevice>>,
     instances: Vec<Instance>,
     cameras: HashMap<Entity, SplatCamera>,
+    /// Each splat camera's order, by render entity.
+    orders: HashMap<Entity, isize>,
 }
 
 /// What stages 1–4 depend on (§1.4): when it equals the previous frame's, they are
@@ -211,7 +218,7 @@ fn extract(
     gpu: Extract<Option<Res<SplatGpu>>>,
     models: Extract<Res<GpuModels>>,
     instances: Extract<InstanceQuery>,
-    cameras: Extract<Query<(&RenderEntity, &SplatCamera)>>,
+    cameras: Extract<Query<(&RenderEntity, &SplatCamera, Option<&::bevy::camera::Camera>)>>,
 ) {
     out.dev = gpu.as_ref().map(|g| Arc::clone(&g.0));
     let mut found: Vec<(Entity, Instance)> = instances
@@ -238,7 +245,11 @@ fn extract(
         .collect();
     found.sort_by_key(|(e, _)| *e);
     out.instances = found.into_iter().map(|(_, i)| i).collect();
-    out.cameras = cameras.iter().map(|(r, c)| (r.id(), *c)).collect();
+    out.cameras = cameras.iter().map(|(r, c, _)| (r.id(), *c)).collect();
+    out.orders = cameras
+        .iter()
+        .map(|(r, _, cam)| (r.id(), cam.map_or(0, |c| c.order)))
+        .collect();
 }
 
 /// Each splat camera's passes, frame buffers, layer and inputs, and whether stages 1–4
@@ -575,15 +586,19 @@ fn draw_node(
 
 /// Stage 8's read back, never blocking (Q-81): each view's newest mapped statistics of two
 /// or more frames ago, to the main world.
-fn poll_stats(views: Res<Views>, inbox: Res<StatsInbox>) {
+/// The first splat camera is the live one of lowest order, ties to the lower render
+/// entity (Q-125; `ftgsxr_xr` orders the eyes by index, so it is the left eye).
+fn poll_stats(views: Res<Views>, extracted: Res<Extracted>, inbox: Res<StatsInbox>) {
     let Some(dev) = &views.dev else {
         return;
     };
+    let order = |e: &Entity| extracted.orders.get(e).copied().unwrap_or(0);
     let mut entities: Vec<&Entity> = views.states.keys().collect();
-    entities.sort();
+    entities.sort_by_key(|e| (order(e), **e));
+    let first = entities.first().copied().copied();
     for entity in entities {
         if let Some(stats) = FrameStats::poll(&views.states[entity].frame, dev) {
-            inbox.push(stats);
+            inbox.push(Some(*entity) == first, stats);
         }
     }
 }

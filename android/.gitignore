@@ -1,0 +1,12 @@
+# Build outputs, the native libraries cargo-ndk writes, the SDK location and keystores
+# (CLAUDE.md, §2.5) never enter git.
+.gradle/
+.kotlin/
+build/
+app/build/
+app/src/main/jniLibs/
+local.properties
+*.jks
+*.keystore
+*.apk
+*.aab

@@ -10,6 +10,8 @@ target/
 android/.gradle/
 android/**/build/
 android/local.properties
+# cargo-ndk's libraries and the debug build's validation layer (Q-123)
+android/app/src/*/jniLibs/
 *.apk
 *.aab
 *.keystore

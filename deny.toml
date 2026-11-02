@@ -29,7 +29,11 @@ allow = [
 confidence-threshold = 0.93
 # The allowlist names licenses the milestones' dependencies bring before they arrive.
 unused-allowed-license = "allow"
-exceptions = []
+# Q-126: BSL-1.0 (Boost, permissive, commercial use allowed) for this one crate only,
+# which bevy_xr_utils 0.6.0 takes (§2.3's XR row); the allowlist above stays §2.3's.
+exceptions = [
+    { allow = ["BSL-1.0"], crate = "openxr_mndx_xdev_space" },
+]
 
 [licenses.private]
 ignore = false

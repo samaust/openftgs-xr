@@ -504,6 +504,9 @@ impl SplatPasses {
         });
         pass.set_pipeline(&self.splat);
         pass.set_bind_group(0, &group, &[]);
+        // D-30: the indirect draw is kept, not the full-capacity fallback. On the Quest 3 it
+        // draws both eyes at C = 1,000,000 at 71.4 Hz once wgpu's `VALIDATION_INDIRECT_CALL`
+        // is off (Q-136, Q-142); the fallback held 40.9 Hz there.
         pass.draw_indirect(&set.indirect, 0);
 
         // Stage 6, the same bindings with the counters in place of the payloads.
