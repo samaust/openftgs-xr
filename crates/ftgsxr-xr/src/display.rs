@@ -25,7 +25,7 @@ use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageWriter;
 use bevy::log::{error, info, warn};
 use bevy::math::UVec2;
-use bevy::prelude::{DetectChanges, DetectChangesMut};
+use bevy::prelude::DetectChangesMut;
 use bevy::prelude::{IntoScheduleConfigs, Res, ResMut, Resource, resource_exists};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp};
@@ -371,7 +371,9 @@ fn foveation(caps: Caps, session: &OxrSession, f: Foveation, request: &mut Fovea
     }
 }
 
-/// The main world's part of a change to `DisplaySettings` while a session exists.
+/// The main world's part of a change to `DisplaySettings` while the session runs: each
+/// field is compared with what was applied, not with Bevy's change detection, so a change
+/// made while the session is not running is applied once it runs (§1.12).
 #[allow(clippy::too_many_arguments)]
 fn apply_changes(
     session: Option<Res<OxrSession>>,
@@ -386,7 +388,7 @@ fn apply_changes(
     mut recreate: ResMut<Recreate>,
     mut exit: MessageWriter<XrRequestExitMessage>,
 ) {
-    if !settings.is_changed() || state.as_deref() != Some(&XrState::Running) {
+    if state.as_deref() != Some(&XrState::Running) {
         return;
     }
     let Some(session) = session else { return };

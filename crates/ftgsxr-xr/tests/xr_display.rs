@@ -16,7 +16,7 @@ use bevy_mod_xr::session::XrState;
 use ftgsxr_render::{Foveation, SortMode};
 use ftgsxr_xr::{DisplaySettings, XrPlugin};
 use tracing::Level;
-use xr_support::{Monado, capture_log, lines, xr_app};
+use xr_support::{Monado, capture_log, lines, swapchain_sizes, xr_app};
 
 fn run_until_running(app: &mut App) {
     let start = Instant::now();
@@ -108,17 +108,7 @@ fn xr_display_rates_are_the_runtimes_and_foveation_and_layer_resolution_are_unsu
 
     // The re-creation completes: a second session runs with the first swapchain's size
     // times 0.8 (no META recommendation on Monado, Q-132).
-    let sizes = || -> Vec<(u32, u32)> {
-        lines()
-            .iter()
-            .filter(|l| l.target == "ftgsxr_xr::display")
-            .filter_map(|l| {
-                let rest = l.message.strip_prefix("swapchain ")?;
-                let (w, h) = rest.split_whitespace().next()?.split_once('x')?;
-                Some((w.parse().ok()?, h.parse().ok()?))
-            })
-            .collect()
-    };
+    let sizes = swapchain_sizes;
     let first = sizes()[0];
     let start = Instant::now();
     while sizes().len() < 2 || app.world().get_resource::<XrState>() != Some(&XrState::Running) {
@@ -131,4 +121,54 @@ fn xr_display_rates_are_the_runtimes_and_foveation_and_layer_resolution_are_unsu
     }
     let scaled = |v: u32| (v as f32 * 0.8).round() as u32;
     assert_eq!(sizes()[1], (scaled(first.0), scaled(first.1)));
+}
+
+/// Runs until a second session runs with a swapchain logged, the first size and the
+/// second's.
+fn run_until_recreated(app: &mut App) -> ((u32, u32), (u32, u32)) {
+    let start = Instant::now();
+    while swapchain_sizes().len() < 2
+        || app.world().get_resource::<XrState>() != Some(&XrState::Running)
+    {
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "the session is re-created within 30 s: {:?}",
+            swapchain_sizes()
+        );
+        app.update();
+    }
+    let s = swapchain_sizes();
+    (s[0], s[1])
+}
+
+// §1.12 (a render-scale change re-creates the swapchain), Q-124: a change made before
+// the session runs is applied once it does (review of PRD #221).
+#[test]
+#[ignore = "xr"]
+fn xr_display_a_render_scale_set_before_the_session_runs_is_applied_once_it_runs() {
+    capture_log();
+    let _monado = Monado::start();
+    let mut app = xr_app(
+        XrPlugin {
+            passthrough: false,
+            hands: false,
+            sort: SortMode::PerView,
+        },
+        |_| {},
+    );
+    // A few frames before the session runs, so the change is not the resource's insertion.
+    for _ in 0..2 {
+        app.update();
+    }
+    assert_ne!(
+        app.world().get_resource::<XrState>(),
+        Some(&XrState::Running),
+        "the change is made before the session runs"
+    );
+    app.world_mut()
+        .resource_mut::<DisplaySettings>()
+        .render_scale = 0.8;
+    let (first, second) = run_until_recreated(&mut app);
+    let scaled = |v: u32| (v as f32 * 0.8).round() as u32;
+    assert_eq!(second, (scaled(first.0), scaled(first.1)));
 }
