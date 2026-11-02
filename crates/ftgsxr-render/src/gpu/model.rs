@@ -655,7 +655,7 @@ mod tests {
     /// which `RenderError::Budget` does not carry.
     #[test]
     #[ignore = "gpu"]
-    fn gpu_model_upload_over_the_budget_logs_n_and_the_bytes() {
+    fn gpu_reserve_logged_over_the_budget_logs_n_and_the_bytes() {
         use crate::gpu::device::{BudgetSource, MemoryBudget};
         use bevy::log::tracing_subscriber::{self, util::SubscriberInitExt};
         use std::sync::{Arc, Mutex};
