@@ -39,4 +39,5 @@ bevy = { workspace = true, features = [
 bevy_mod_xr.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
+# Q-T221F.1
 tracing = { workspace = true, features = ["log"] }
