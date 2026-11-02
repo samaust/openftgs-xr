@@ -26,3 +26,5 @@ pub use ftgsxr_render::QualityTier;
 // `AppPlugin`) takes, for callers that depend on the app alone (§2.1's `ftgsxr-quest`).
 pub use ftgsxr_io::{AppPaths, ModelBytes, Settings, load_settings};
 pub use ftgsxr_render::{SortMode, SplatLoad, SplatPlugin, SplatTime};
+// Q-T225.1: what the Quest's device test `dv2` reads of the adapter (§3.4, Dv-2).
+pub use ftgsxr_render::{SplatCamera, SplatEvent, SplatStats};
