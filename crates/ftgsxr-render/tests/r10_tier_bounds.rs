@@ -54,12 +54,18 @@ fn gpu_r10_quest_balanced_storage_within_50_db_of_conformance() {
         );
         let psnr = metrics(&a, &b).psnr;
         min_psnr = min_psnr.min(psnr);
-        if psnr.is_nan() || psnr < MIN_STORAGE_PSNR {
+        // The tier stores in half precision (§1.12), so its render differs from
+        // conformance's: an infinite PSNR means the half path did not run.
+        if !psnr.is_finite() || psnr < MIN_STORAGE_PSNR {
             failures.push(format!("{}: PSNR {psnr:.2} dB", item.id));
         }
     }
     eprintln!("R-10 quest-balanced storage: minimum PSNR {min_psnr:.2} dB");
-    assert!(failures.is_empty(), "below 50 dB:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "below 50 dB or identical to conformance:\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]

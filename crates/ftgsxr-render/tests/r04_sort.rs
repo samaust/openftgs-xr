@@ -6,6 +6,11 @@
 //! The sort is reached through `encode_prepare` and `FrameBuffers::read_back` (Q-69): each
 //! slot's key is recomputed from its record's depth with `sort_key` (`sort_key16` for
 //! `Depth16`, Q-2), and `sorted` must equal the slots stably sorted by that key.
+//!
+//! The depths are log-uniform over [`Z_MIN`, `Z_MAX`], inside the default `near` and `far`
+//! (Q-69), so every digit of k̄, the most significant included, is well spread: a positive
+//! float32's top byte changes once per factor of 4 in depth, so the 26 octaves give about
+//! 20 of its values, where a narrow range would give two.
 
 mod cull_support;
 
@@ -21,6 +26,36 @@ const SORT_BLOCK: u32 = 1024;
 /// The frame's time: every row's time center, so every row is fully opaque in time.
 const TAU: f64 = 0.95;
 
+/// The nearest and farthest depths drawn, inside the default near (0.01) and far (10¹⁰).
+const Z_MIN: f64 = 0.02;
+const Z_MAX: f64 = 5.0e9;
+/// The distinct top bytes of k̄ the random keys must fill (E8's layout: one value per
+/// factor of 4 in depth, about 20 over [`Z_MIN`, `Z_MAX`]).
+const MIN_TOP_BYTES: usize = 16;
+
+/// The depth at `u` ∈ [0, 1] of the log-uniform range [`Z_MIN`, `Z_MAX`].
+fn log_depth(u: f64) -> f32 {
+    (Z_MIN * (Z_MAX / Z_MIN).powf(u)) as f32
+}
+
+/// A depth drawn log-uniformly over [`Z_MIN`, `Z_MAX`].
+fn random_depth(rng: &mut Rng) -> f32 {
+    log_depth(rng.range(0.0, 1.0))
+}
+
+/// Asserts the keys fill at least [`MIN_TOP_BYTES`] values of the top digit, so the most
+/// significant radix pass sorts into many bins.
+fn assert_top_digit_spread(keys: &[u32], shift: u32) {
+    let mut top: Vec<u32> = keys.iter().map(|k| k >> shift).collect();
+    top.sort_unstable();
+    top.dedup();
+    assert!(
+        top.len() >= MIN_TOP_BYTES,
+        "the keys fill {} values of the top digit",
+        top.len()
+    );
+}
+
 /// A camera at the origin looking along +z, 800 × 800 px, f = 400 px.
 fn camera() -> Camera {
     look_at(
@@ -33,7 +68,8 @@ fn camera() -> Camera {
 }
 
 /// `N` small, opaque, static rows in front of `camera()`, each at a depth from `depth`
-/// and inside the image (|x|, |y| ≤ 0.4 z), so every row is visible.
+/// and inside the image (|x|, |y| ≤ 0.4 z), so every row is visible; the scale grows with
+/// the depth (0.0003 z, 0.12 px at f = 400 px), so near and far rows are alike on screen.
 fn model(seed: u64, mut depth: impl FnMut(&mut Rng) -> f32) -> Model {
     let mut m = random_model(seed, N, 0);
     let mut rng = Rng(seed);
@@ -43,7 +79,7 @@ fn model(seed: u64, mut depth: impl FnMut(&mut Rng) -> f32) -> Model {
         let y = rng.range(-0.4, 0.4) as f32 * z;
         m.position[i] = [x, y, z];
         m.velocity[i] = [0.0; 3];
-        m.scale[i] = [0.003; 3];
+        m.scale[i] = [0.0003 * z; 3];
         m.opacity[i] = 0.9;
         m.time_center[i] = TAU;
         m.duration[i] = 100.0;
@@ -115,9 +151,10 @@ fn assert_sorted(got: &FrameContents, keys: &[u32]) {
 #[ignore = "gpu"]
 fn gpu_r04_sort_orders_a_million_random_keys_like_a_stable_cpu_sort() {
     let _layer = layer_messages(); // R-16, Q-105
-    let m = model(0x4_01, |rng| rng.range(2.0, 20.0) as f32);
+    let m = model(0x4_01, random_depth);
     let got = frame(&m, &QualityTier::conformance());
     let k = keys(&got, |k| k);
+    assert_top_digit_spread(&k, 24);
     assert_sorted(&got, &k);
 }
 
@@ -126,13 +163,16 @@ fn gpu_r04_sort_orders_a_million_random_keys_like_a_stable_cpu_sort() {
 fn gpu_r04_sort_is_stable_on_repeated_keys() {
     let _layer = layer_messages(); // R-16, Q-105
     // 1000 distinct depths over 10⁶ rows: every key repeats about 1000 times.
-    let m = model(0x4_02, |rng| 2.0 + (rng.next_u64() % 1000) as f32 * 0.018);
+    let m = model(0x4_02, |rng| {
+        log_depth((rng.next_u64() % 1000) as f64 / 999.0)
+    });
     let got = frame(&m, &QualityTier::conformance());
     let k = keys(&got, |k| k);
     let mut distinct = k.clone();
     distinct.sort_unstable();
     distinct.dedup();
     assert!(distinct.len() <= 1000, "{} distinct keys", distinct.len());
+    assert_top_digit_spread(&k, 24);
     assert_sorted(&got, &k);
 }
 
@@ -144,8 +184,9 @@ fn gpu_r04_depth16_agrees_on_the_top_16_bits() {
         sort_key: SortKey::Depth16,
         ..QualityTier::conformance()
     };
-    let m = model(0x4_03, |rng| rng.range(2.0, 20.0) as f32);
+    let m = model(0x4_03, random_depth);
     let got = frame(&m, &tier);
     let k = keys(&got, |k| u32::from(sort_key16(k)));
+    assert_top_digit_spread(&k, 8);
     assert_sorted(&got, &k);
 }
