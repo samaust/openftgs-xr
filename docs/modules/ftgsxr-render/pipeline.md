@@ -26,7 +26,7 @@ One `FrameBuffers` set per view (per-view mode) holds, sized once per tier and c
 - **histograms**: the sort's per-block digit counts (Q-85).
 - **counters**: the splat draw's indirect arguments (words 0–3), the centers draw's (words 4–7), the overflow flag, and the rows that passed E3's test (Q-79).
 - **sort dispatch**: stage 3's indirect dispatch arguments for the sort (Q-85).
-- **statistics**: the 64-byte block of stage 8, and four staging buffers it is copied into (Q-81).
+- **statistics**: the 80-byte block of stage 8 (§1.4, revision 13): the splat and center counts, the overflow flag, C and the count of primitives culled for a non-finite projection (E6) in words 0–4, three pad words, then the six 64-bit timestamps from byte 32; and four staging buffers it is copied into (Q-81).
 - **draw constants**: one block per instance, written by `encode_prepare` and kept for `encode_draw` (Q-87): E7's constants of the instance's model (D-39), then the centers' colormap, ρ and scales (Q-92, Q-93).
 
 Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 and E7 constants, its temporal index and the 99th percentile of its speeds (Q-93).
@@ -35,9 +35,9 @@ Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 a
 
 **1 Prepare.** On the CPU, per instance: τ\_m − τ₀ in float32 (computed in float64), the pose's rotation, translation and scale, E4's eye in model space, E14's gains with the flag that applies them only when they differ from the identity (Q-80), the dispatch ranges of the temporal index at τ\_m (E3), the SH degree and ρ. Splat dispatches are listed before every centers dispatch (Q-78). The frame block holds the cull views, C and the sort pose. Nothing is read from the GPU (D-34).
 
-**2 Cull.** Reads the model buffers and uniform blocks, the instance block and the frame block; writes records, keys, payloads and counters. A visible splat takes a slot by an atomic increment of the splat count; a slot at or beyond C is dropped and raises the overflow flag. A center takes slot min(splats, C) + j by its own count (Q-78).
+**2 Cull.** Reads the model buffers and uniform blocks, the instance block and the frame block; writes records, keys, payloads and counters. A visible splat takes a slot by an atomic increment of the splat count; a slot at or beyond C is dropped and raises the overflow flag. A center takes slot min(splats, C) + j by its own count (Q-78). A row culled for a non-finite value in its projection (E6), in every view, adds one to the counters' non-finite word (Q-118).
 
-**3 Size.** Reads and rewrites the counters: clamps the splat count to C and the center count to what remains, completes both indirect draws (four vertices, first instance 0) and raises the overflow flag when either was clamped. Writes the sort dispatch arguments and the counts, flag and C of the statistics block, its timestamps zeroed.
+**3 Size.** Reads and rewrites the counters: clamps the splat count to C and the center count to what remains, completes both indirect draws (four vertices, first instance 0) and raises the overflow flag when either was clamped. Writes the sort dispatch arguments and the counts, flag, C and non-finite count of the statistics block, its pad and timestamps zeroed.
 
 **4 Sort.** Reads the counters and the sort dispatch arguments; sorts the splats' pairs through the histograms into the first key and payload pair (`sort.md`). Centers are not sorted.
 
