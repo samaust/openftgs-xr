@@ -1812,6 +1812,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "ftgsxr-core",
+ "ftgsxr-io",
  "ftgsxr-render",
  "ftgsxr-testkit",
  "serde_json",
@@ -1906,11 +1907,17 @@ dependencies = [
 name = "ftgsxr-xr"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "bevy_mod_openxr",
  "bevy_mod_xr",
  "bevy_xr_utils",
  "ftgsxr-app",
+ "ftgsxr-io",
+ "ftgsxr-render",
+ "ftgsxr-testkit",
  "openxr",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
