@@ -17,9 +17,11 @@ mod render;
 
 use ::bevy::app::{App, First, Plugin, PostUpdate, Update};
 use ::bevy::asset::{AssetApp, Handle};
+use ::bevy::camera::visibility::Visibility;
 use ::bevy::ecs::prelude::*;
 use ::bevy::image::Image;
 use ::bevy::render::RenderApp;
+use ::bevy::transform::components::Transform;
 use ftgsxr_core::{Camera, GpuLayoutOptions};
 
 pub use asset::{SplatAsset, load_splat_asset};
@@ -37,8 +39,10 @@ pub struct SplatPlugin {
 }
 
 /// One instance of a model (§1.5 Instances), drawn by every `SplatCamera`; with
-/// `Transform` (uniform scale: P_m's s_m is the x scale, E5) and `Visibility`.
-#[derive(Component, Clone, Debug)]
+/// `Transform` (uniform scale: P_m's s_m is the x scale, E5) and `Visibility`, which it
+/// requires (#202).
+#[derive(Component, Clone, Debug, PartialEq)]
+#[require(Transform, Visibility)]
 pub struct SplatModel(pub Handle<SplatAsset>);
 
 /// τ_m, the raw time the instance is evaluated at (E9), and whether the clock is past
@@ -195,6 +199,7 @@ impl Plugin for SplatPlugin {
             .init_resource::<load::GpuModels>()
             .init_resource::<render::StatsInbox>()
             .add_observer(load::make_camera_follow_d6)
+            .add_observer(load::clear_late_splat_camera)
             .add_systems(First, (load::ensure_device, render::publish_stats))
             .add_systems(Update, (load::start_loads, load::finish_loads).chain())
             .add_systems(PostUpdate, load::upload_models);
