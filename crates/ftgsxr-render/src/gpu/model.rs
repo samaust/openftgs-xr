@@ -3,6 +3,7 @@
 //! `GpuModel`: one model's structure-of-arrays buffers (§2.4 GPU data layout, Q-22), its
 //! temporal index (E3, D-10) and its uniform block of E6 and E7 constants (D-39).
 
+use bevy::log::warn;
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
 use ftgsxr_core::{GpuArrays, RenderConventions, TemporalIndex};
 
@@ -177,6 +178,21 @@ fn speed_percentile_99(arrays: &GpuArrays) -> f32 {
     s[rank - 1]
 }
 
+/// `arrays`' static bytes reserved on `dev`'s budget (Q-74); a refusal is logged with N,
+/// the bytes needed and the budget left (§1.2 load option 4, D-13), since
+/// `RenderError::Budget` carries no N.
+// Q-117
+fn reserve_logged(dev: &SplatDevice, arrays: &GpuArrays) -> Result<Reservation, RenderError> {
+    dev.reserve(static_bytes(arrays)).inspect_err(|e| {
+        if let RenderError::Budget { needed, budget } = e {
+            warn!(
+                "model of N = {} refused: needs {needed} bytes, budget {budget} bytes (E-MEM-BUDGET)",
+                arrays.n
+            );
+        }
+    })
+}
+
 impl GpuModel {
     /// Uploads `arrays` (packed by `pack_for_gpu` in the order `index` was built for) with
     /// the model's conventions in its uniform block (D-39).
@@ -201,7 +217,7 @@ impl GpuModel {
             "the temporal index is built for the packed rows"
         );
         // Q-74: the model's static bytes against what the device's live models leave.
-        let reservation = dev.reserve(static_bytes(arrays))?;
+        let reservation = reserve_logged(dev, arrays)?;
         let uniform = dev.device().create_buffer(&BufferDescriptor {
             label: Some("ftgsxr model uniform"),
             size: MODEL_UNIFORM_BYTES as u64,
@@ -339,7 +355,7 @@ impl ModelUpload {
             "the temporal index is built for the packed rows"
         );
         // Q-74: the model's static bytes against what the device's live models leave.
-        let reservation = dev.reserve(static_bytes(&arrays))?;
+        let reservation = reserve_logged(dev, &arrays)?;
         let buffer = |label: &str, len: usize| {
             dev.device().create_buffer(&BufferDescriptor {
                 label: Some(label),
@@ -632,6 +648,65 @@ mod tests {
         assert_eq!(model.memory_bytes(), one);
         drop(model);
         assert_eq!(dev.model_bytes_in_use(), 0);
+        assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
+    }
+
+    /// Q-117 (#189): an upload over the budget logs N, the bytes needed and the budget,
+    /// which `RenderError::Budget` does not carry.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_model_upload_over_the_budget_logs_n_and_the_bytes() {
+        use crate::gpu::device::{BudgetSource, MemoryBudget};
+        use bevy::log::tracing_subscriber::{self, util::SubscriberInitExt};
+        use std::sync::{Arc, Mutex};
+
+        /// A writer into a shared buffer, for the captured log.
+        #[derive(Clone)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("the log buffer")
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let log = Captured(Arc::new(Mutex::new(Vec::new())));
+        let writer = log.clone();
+        let _subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish()
+            .set_default();
+
+        let mut dev = SplatDevice::headless().expect("an adapter");
+        let n = 64;
+        let arrays = patterned_arrays(n);
+        // 48 · 64 + 8 = 3 080 bytes, as in the chunked test above, against 1 000.
+        dev.set_memory_budget(MemoryBudget {
+            bytes: 1000,
+            source: BudgetSource::Tier,
+        });
+        match GpuModel::upload(
+            &dev,
+            &arrays,
+            persistent_index(n),
+            &RenderConventions::default(),
+        ) {
+            Err(RenderError::Budget { needed, budget }) => {
+                assert_eq!((needed, budget), (3080, 1000))
+            }
+            other => panic!("expected E-MEM-BUDGET, got {:?}", other.map(|_| ())),
+        }
+        let text = String::from_utf8(log.0.lock().expect("the log buffer").clone()).expect("UTF-8");
+        assert!(
+            text.contains("N = 64") && text.contains("3080 bytes") && text.contains("1000 bytes"),
+            "{text}"
+        );
         assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
     }
 

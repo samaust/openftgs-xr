@@ -13,9 +13,9 @@ publish.workspace = true
 # M-2: the headless commands need the core (#117) and the render layer's headless renderer
 # for `render` (#118); `bench` (#122) drives the render layer's passes through Bevy's
 # re-exported wgpu descriptors (`bevy_render`) and clears the layer with `bevy_color`'s
-# wgpu conversion. The other crates of §2.1's row join with the modules that use them.
+# wgpu conversion; it logs through `bevy_log`'s `tracing` (§2.6, #189, #193). The other crates of §2.1's row join with the modules that use them.
 [dependencies]
-bevy = { workspace = true, features = ["bevy_render", "bevy_color"] }
+bevy = { workspace = true, features = ["bevy_render", "bevy_color", "bevy_log"] }
 ftgsxr-core.workspace = true
 ftgsxr-render.workspace = true
 
