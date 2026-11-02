@@ -589,3 +589,56 @@ fn gpu_r06_non_finite_counts_once_per_row_and_instance_whatever_the_views() {
     );
     assert!(dev.take_validation_messages().is_empty());
 }
+
+/// Q-118 (E6, E3, §1.4 stage 8): a row E3 culls (σ_eff < α_skip) is not counted, even
+/// with an infinite scale, while the same row above α_skip is.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r06_non_finite_does_not_count_a_row_e3_culls() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let tier = QualityTier::conformance();
+    let mut model = random_model(0x6_0d, 8, 0);
+    let tau = 0.7;
+    // An identity pose and camera, every row at (0, 0, 1) in the middle of the image.
+    let cam = ftgsxr_core::Camera {
+        width: 320,
+        height: 240,
+        k: ftgsxr_core::DMat3::from_cols(
+            ftgsxr_core::DVec3::new(300.0, 0.0, 0.0),
+            ftgsxr_core::DVec3::new(0.0, 300.0, 0.0),
+            ftgsxr_core::DVec3::new(160.0, 120.0, 1.0),
+        ),
+        world_to_camera: ftgsxr_core::DMat4::IDENTITY,
+    };
+    for i in 0..8 {
+        // Every row active at τ (σ_t = 1) and still, so E3 decides on the opacity alone:
+        // 0.9 for rows 0–3, 0.001 < α_skip = 1/255 for rows 4–7.
+        model.time_center[i] = tau;
+        model.duration[i] = 10.0;
+        model.velocity[i] = [0.0; 3];
+        model.position[i] = [0.0, 0.0, 1.0];
+        model.scale[i] = [0.05, f32::INFINITY, 0.05];
+        model.opacity[i] = if i < 4 { 0.9 } else { 0.001 };
+    }
+    let gpu_model = upload(&dev, &model, &tier);
+    let passes = passes(&dev, &tier);
+    let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
+    let draws = [draw(
+        &gpu_model,
+        ftgsxr_core::Pose::IDENTITY,
+        tau,
+        RenderMode::Splats,
+    )];
+    let stats = stats_of(
+        &dev,
+        &passes,
+        &frame,
+        &draws,
+        &sort_pose(&cam),
+        &[view(cam)],
+    );
+    assert_eq!(stats.non_finite, 4, "rows 0–3 only");
+    assert_eq!(stats.visible_splats, 0);
+    assert!(dev.take_validation_messages().is_empty());
+}
