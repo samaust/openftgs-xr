@@ -11,7 +11,6 @@
 //! `FileEncoded` is not drawn onto one (Q-100, #178), and the GPU times of a frame that
 //! skips stages 1–4 (Q-81, Q-115, #184).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bevy::MinimalPlugins;
@@ -51,9 +50,17 @@ const MAX_FRAMES: usize = 600;
 /// holds a frame that drew the model.
 const SETTLE_FRAMES: usize = 4;
 
-/// Set by the render error handler: Bevy reported a validation, out-of-memory or
-/// internal error, or lost the device (§1.13: any message fails a `gpu` test).
-static RENDER_ERROR: AtomicBool = AtomicBool::new(false);
+/// Inserted into the App's main world by the render error handler: Bevy reported a
+/// validation, out-of-memory or internal error, or lost the device (§1.13: any message
+/// fails a `gpu` test). Held per App, so a test sees only its own App's errors (#206,
+/// Q-105).
+#[derive(Resource)]
+struct RenderErrored;
+
+/// Whether `app`'s render error handler has fired.
+fn render_errored(app: &App) -> bool {
+    app.world().contains_resource::<RenderErrored>()
+}
 
 #[derive(Resource, Clone, Default)]
 struct Seen {
@@ -177,9 +184,9 @@ fn render_p1(
             tier: QualityTier::conformance(),
         },
     ))
-    .insert_resource(RenderErrorHandler(|error, _, _| {
+    .insert_resource(RenderErrorHandler(|error, main_world, _| {
         eprintln!("render error: {:?}: {}", error.ty, error.description);
-        RENDER_ERROR.store(true, Ordering::Release);
+        main_world.insert_resource(RenderErrored);
         RenderErrorPolicy::StopRendering
     }));
     while app.plugins_state() == PluginsState::Adding {
@@ -234,10 +241,7 @@ fn render_p1(
     let mut uploaded_at = None;
     for frame in 0..MAX_FRAMES {
         app.update();
-        assert!(
-            !RENDER_ERROR.load(Ordering::Acquire),
-            "Bevy reported a render error"
-        );
+        assert!(!render_errored(&app), "Bevy reported a render error");
         let events = seen.events.lock().unwrap().clone();
         if let Some(SplatEvent::Failed { error, .. }) = events
             .iter()
@@ -267,10 +271,7 @@ fn render_p1(
         uploaded_at.is_some(),
         "P1 uploaded within {MAX_FRAMES} frames"
     );
-    assert!(
-        !RENDER_ERROR.load(Ordering::Acquire),
-        "Bevy reported a render error"
-    );
+    assert!(!render_errored(&app), "Bevy reported a render error");
     let data = seen
         .readback
         .lock()
