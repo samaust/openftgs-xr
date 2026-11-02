@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dv-3 on the device (§3.4, Q-122): R-4's criteria (§3.2; §1.4 stages 3 and 4, E8, D-33)
-//! on the Quest's GPU, through the headless renderer's own device (`SplatDevice::headless`,
-//! Q-74). The host driver pushed two exchange files written with `write_exchange` (Q-65):
-//! `dv/r4-random.safetensors`, 10⁶ rows at log-uniform random depths, and
-//! `dv/r4-repeated.safetensors`, 10⁶ rows over 1000 distinct depths, every row visible
-//! from [`camera`] at τ = [`TAU`]. Three checks, as R-4's three tests: the random model in
-//! the `conformance` tier, the repeated one in it (stability), and the random one with
-//! `Depth16` (its top 16 bits, Q-2). Each reads the frame back (Q-69), recomputes each
-//! slot's key from its record's depth with `sort_key` (`sort_key16` for `Depth16`) and
-//! requires `sorted` to equal the slots stably sorted by that key, every row visible, no
-//! overflow and the sizing pass's dispatch arguments ⌈count / 1024⌉ (Q-85).
+//! R-4's three checks on the device (§3.2, §3.4 Dv-3; §1.4 stages 3 and 4, E8, D-33,
+//! Q-122), for the Quest's Dv-3 runner, which depends on the app alone (§2.1's
+//! `ftgsxr-quest`). Through the headless renderer's own device (`SplatDevice::headless`,
+//! Q-74), each check loads an exchange file the host wrote with `write_exchange` (Q-65),
+//! 10⁶ rows every one of which is visible from [`camera`] at τ = [`TAU`], uploads it, runs
+//! `encode_prepare`, reads the frame back (Q-69), recomputes each slot's key from its
+//! record's depth with `sort_key` (`sort_key16` for `Depth16`, Q-2) and requires `sorted`
+//! to equal the slots stably sorted by that key, every row visible, no overflow and the
+//! sizing pass's dispatch arguments ⌈count / 1024⌉ (Q-85).
 
 use std::path::Path;
 
 use bevy::render::render_resource::{CommandEncoderDescriptor, TextureFormat};
-// Q-135
-use ftgsxr_app::{
-    Camera, ColorTransform, DMat3, DMat4, DVec3, FrameBuffers, FrameContents, GpuModel, ModelDraw,
-    Overlays, Pose, QualityTier, RenderMode, SortKey, SortPose, SplatDevice, SplatPasses,
-    TemporalIndex, Vec3, ViewParams, open_model, pack_for_gpu, sort_key, sort_key16,
+use ftgsxr_core::{
+    Camera, DMat3, DMat4, DVec3, Pose, TemporalIndex, UVec2, Vec3, open_model, pack_for_gpu,
+    sort_key, sort_key16,
+};
+use ftgsxr_render::{
+    ColorTransform, FrameBuffers, FrameContents, GpuModel, ModelDraw, Overlays, QualityTier,
+    RenderMode, SortKey, SortPose, SplatDevice, SplatPasses, ViewParams,
 };
 
-/// R-4's size; the driver writes this many rows.
+/// R-4's size (§3.2); the host writes this many rows.
 const N: u32 = 1_000_000;
 /// The keys one workgroup of the sort's count pass takes (Q-85).
 const SORT_BLOCK: u32 = 1024;
@@ -70,7 +70,7 @@ fn frame(dev: &SplatDevice, path: &Path, tier: &QualityTier) -> Result<FrameCont
     };
     let views = [ViewParams {
         camera: cam,
-        target_size: ftgsxr_app::UVec2::new(cam.width, cam.height),
+        target_size: UVec2::new(cam.width, cam.height),
     }];
     let mut enc = dev
         .device()
@@ -131,20 +131,22 @@ fn check(got: &FrameContents, digits: impl Fn(u32) -> u32) -> Result<(), String>
     Ok(())
 }
 
-/// The three checks; `Ok` with a summary, or the first disagreement.
-pub(super) fn run(dv: &Path) -> Result<String, String> {
+/// R-4's three checks (§3.2) on this device's GPU (Dv-3): `random` (log-uniform random
+/// depths) sorted in the `conformance` tier, `repeated` (1000 distinct depths) in it for
+/// the stability, and `random` again with `Depth16` for its top 16 bits. `Ok` with a
+/// summary naming the adapter, or the first disagreement.
+// Q-T221F.4
+pub fn sort_check(random: &Path, repeated: &Path) -> Result<String, String> {
     let dev = SplatDevice::headless().map_err(|e| format!("{}: {}", e.code(), e.user_text()))?;
-    let random = dv.join("r4-random.safetensors");
-    let repeated = dv.join("r4-repeated.safetensors");
     let conformance = QualityTier::conformance();
-    check(&frame(&dev, &random, &conformance)?, |k| k).map_err(|e| format!("random: {e}"))?;
-    check(&frame(&dev, &repeated, &conformance)?, |k| k)
+    check(&frame(&dev, random, &conformance)?, |k| k).map_err(|e| format!("random: {e}"))?;
+    check(&frame(&dev, repeated, &conformance)?, |k| k)
         .map_err(|e| format!("repeated keys: {e}"))?;
     let depth16 = QualityTier {
         sort_key: SortKey::Depth16,
         ..QualityTier::conformance()
     };
-    check(&frame(&dev, &random, &depth16)?, |k| {
+    check(&frame(&dev, random, &depth16)?, |k| {
         u32::from(sort_key16(k))
     })
     .map_err(|e| format!("Depth16: {e}"))?;

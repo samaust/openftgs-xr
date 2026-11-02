@@ -17,7 +17,6 @@ pub(crate) const EXTRA: &str = "ftgsxr-test";
 /// host's 10 s criterion (Dv-1) is judged from the launch by the driver.
 const DV1_TIMEOUT: Duration = Duration::from_secs(30);
 
-mod dv3;
 mod dv4;
 
 /// Runs `name` when it is a headless test (Dv-3, Dv-4: before the XR session is created,
@@ -25,7 +24,11 @@ mod dv4;
 /// `dv`, printing its verdict; `false` when `name` is not one, for `add`.
 pub(crate) fn run_headless(name: &str, dv: &Path) -> bool {
     let result = match name {
-        "dv3" => dv3::run(dv),
+        // Dv-3: R-4's checks on the two models the driver pushed. Q-T221F.4
+        "dv3" => ftgsxr_app::sort_check(
+            &dv.join("r4-random.safetensors"),
+            &dv.join("r4-repeated.safetensors"),
+        ),
         "dv4" => dv4::run(dv),
         _ => return false,
     };
