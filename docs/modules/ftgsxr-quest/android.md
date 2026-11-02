@@ -25,7 +25,7 @@ The Khronos OpenXR loader comes from Maven, `org.khronos.openxr:openxr_loader_fo
 
 The debug APK bundles the Khronos validation layer `libVkLayer_khronos_validation.so` for arm64-v8a, from a Vulkan-ValidationLayers Android release (Apache-2.0), which the build script downloads once, checks against its SHA-256 and places under `android/app/src/debug/jniLibs/` (Q-123); the release APK has none. The XR crate creates the Vulkan instance through the runtime with no layers and no debug messenger, so the layer is enabled from outside: the `dv` driver sets Android's GPU debug-layer settings for the app before Dv-2's launch and resets them afterwards, also when the test fails. The layer's messages reach logcat under the tag `VALIDATION`.
 
-The validation runs on the instance the vendored bevy\_mod\_openxr creates (Q-139, Q-142, `ftgsxr-xr/session.md`): its patches remove the messages a Vulkan 1.1 instance gave and keep wgpu's indirect-call validation off on Android, so the indirect draws stay (D-30, Q-136).
+The validation runs on the instance the vendored bevy\_mod\_openxr creates (Q-139, D-30, `ftgsxr-xr/session.md`): its patches remove the messages a Vulkan 1.1 instance gave and keep wgpu's indirect-call validation off on Android, so the indirect draws stay.
 
 ## Signing
 

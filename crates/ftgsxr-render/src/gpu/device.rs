@@ -123,7 +123,7 @@ impl SplatDevice {
         desc.backends = wgpu::Backends::VULKAN;
         // §1.13: validation in debug builds only (`debugging()` with debug assertions).
         desc.flags = wgpu::InstanceFlags::from_build_config().with_env();
-        // Q-136: on the Quest 3's Adreno, wgpu's validation of indirect calls left every
+        // D-30: on the Quest 3's Adreno, wgpu's validation of indirect calls left every
         // indirect draw empty (Dv-4, #226); the Vulkan layers and wgpu's own validation stay.
         if cfg!(target_os = "android") {
             desc.flags

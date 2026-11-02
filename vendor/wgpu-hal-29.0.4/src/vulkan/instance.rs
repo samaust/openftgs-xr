@@ -196,7 +196,7 @@ impl super::Instance {
         &self.shared
     }
 
-    // openftgs-xr change (Q-142), to wgpu-hal 29.0.4 (crates.io), file
+    // openftgs-xr change (D-30), to wgpu-hal 29.0.4 (crates.io), file
     // src/vulkan/instance.rs, MIT OR Apache-2.0: a public getter for the flags the instance
     // was created with, so wgpu-core's `from_hal_instance` can keep them. Was: no getter.
     pub fn flags(&self) -> wgt::InstanceFlags {

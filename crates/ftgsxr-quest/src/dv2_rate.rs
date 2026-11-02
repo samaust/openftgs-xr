@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn at_default_rate_passes_a_session_at_72_hz() {
         assert!(at_default_rate(720, 10.0).is_ok());
-        // The device run Q-142 records: 715 frames in 10.01 s.
+        // The device run D-30 records (71.4 Hz): 715 frames in 10.01 s.
         assert!(at_default_rate(715, 10.01).is_ok());
         assert!(at_default_rate(685, 10.0).is_ok());
         assert!(at_default_rate(755, 10.0).is_ok());

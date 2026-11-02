@@ -106,13 +106,13 @@ tiny_http = "0.12"
 
 # Q-139: bevy_mod_openxr 0.6.0 vendored with two changes, both Android only, in
 # vendor/bevy_mod_openxr-0.6.0/src/openxr/graphics/vulkan.rs (the Vulkan target; the
-# instance drops wgpu's VALIDATION_INDIRECT_CALL), approved by the owner.
+# instance drops wgpu's VALIDATION_INDIRECT_CALL, D-30), approved by the owner.
 [patch.crates-io]
 bevy_mod_openxr = { path = "vendor/bevy_mod_openxr-0.6.0" }
-# Q-142: wgpu-core 29.0.4 vendored with one change (src/instance.rs, an instance made
+# D-30: wgpu-core 29.0.4 vendored with one change (src/instance.rs, an instance made
 # from a Vulkan HAL instance keeps its flags).
 wgpu-core = { path = "vendor/wgpu-core-29.0.4" }
-# Q-142: wgpu-hal 29.0.4 vendored with one change (src/vulkan/instance.rs, a `flags()`
+# D-30: wgpu-hal 29.0.4 vendored with one change (src/vulkan/instance.rs, a `flags()`
 # getter on the Vulkan instance).
 wgpu-hal = { path = "vendor/wgpu-hal-29.0.4" }
 
