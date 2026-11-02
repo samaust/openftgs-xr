@@ -34,11 +34,15 @@ struct Kept {
     messages: Vec<String>,
     /// How many instances the layer reported itself active on.
     active: usize,
+    /// Whether any instance in the process has reported the layer active; `take_active`
+    /// does not clear it, so the guard's check (Q-105, changed) holds per process.
+    ever_active: bool,
 }
 
 static KEPT: Mutex<Kept> = Mutex::new(Kept {
     messages: Vec::new(),
     active: 0,
+    ever_active: false,
 });
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
@@ -82,6 +86,7 @@ impl<S: Subscriber> Layer<S> for Collector {
             kept.messages.push(format!("{level} {}", record.message));
         } else if record.message.contains(LAYER_ACTIVE) {
             kept.active += 1;
+            kept.ever_active = true;
         }
     }
 }
@@ -102,7 +107,9 @@ fn install() {
 
 /// The guard of one `gpu` test (Q-105): made before the test's first device, it installs
 /// the collector, and when dropped in a debug build it panics on any warning or error the
-/// Vulkan validation layer reported that nobody took, so the test fails (§1.13, R-16).
+/// Vulkan validation layer reported that nobody took, so the test fails (§1.13, R-16), and
+/// when no instance in the process has reported the layer active, so R-16 cannot pass
+/// vacuously on a machine where the layer fails to load (Q-105, changed, #209).
 ///
 /// Messages are kept per process, not per thread: under `--test-threads 1`, the `gpu`
 /// lane's rule (D-28), they are the guarded test's own.
@@ -140,6 +147,12 @@ impl Drop for LayerMessages {
                 panic!(
                     "{} Vulkan validation layer message(s): {left:#?}",
                     left.len()
+                );
+            }
+            if !kept().ever_active {
+                panic!(
+                    "the Vulkan validation layer is not loaded: no instance in this process \
+                     reported the Khronos validation layer active (R-16, Q-105)"
                 );
             }
         }

@@ -36,7 +36,13 @@ fn info_prints_the_reply() {
 fn validate_prints_one_line_per_model() {
     let p1 = fixtures_dir().join("probes/P1.safetensors");
     let ckpt = fixtures_dir().join("checkpoint/tiny");
-    let o = ftgsxr(&["validate", p1.to_str().unwrap(), ckpt.to_str().unwrap()]);
+    let ply = fixtures_dir().join("checkpoint/tiny.tau0.ply");
+    let o = ftgsxr(&[
+        "validate",
+        p1.to_str().unwrap(),
+        ckpt.to_str().unwrap(),
+        ply.to_str().unwrap(),
+    ]);
     assert_eq!(
         o.status.code(),
         Some(0),
@@ -45,7 +51,7 @@ fn validate_prints_one_line_per_model() {
     );
     let out = stdout(&o);
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(lines.len(), 3, "{out}");
     assert!(
         lines[0].starts_with(&format!("{}: kind ftgs-if, N ", p1.display())),
         "{out}"
@@ -55,6 +61,11 @@ fn validate_prints_one_line_per_model() {
         "{out}"
     );
     assert!(lines[1].ends_with(" bytes"), "{out}");
+    // Every kind's string is pinned, so a renamed ModelKind variant fails here (#196).
+    assert!(
+        lines[2].starts_with(&format!("{}: kind ply, N ", ply.display())),
+        "{out}"
+    );
 }
 
 #[test]
@@ -406,6 +417,10 @@ fn bench(args: &[&str], baselines: &std::path::Path) -> Output {
         );
     }
     assert!(messages.is_empty(), "{messages:#?}");
+    // §1.13, Q-116: wgpu's validation errors reach only the report's note, which the
+    // binary prints on standard error; R-16's guard above sees only the layer's records.
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!stderr.contains("GPU validation reported"), "{stderr}");
     o
 }
 
