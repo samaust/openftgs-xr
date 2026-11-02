@@ -22,6 +22,7 @@ use ftgsxr_render::SortMode;
 use openxr::EnvironmentBlendMode;
 
 use crate::XrError;
+use crate::display::DisplayPlugin;
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
 use crate::tracking::TrackingPlugin;
@@ -144,7 +145,9 @@ impl Plugin for XrTail {
             OxrSpacePatchingPlugin,
         ))
         // After the binding plugin, whose schedule `tracking` adds to.
-        .add_plugins(TrackingPlugin);
+        .add_plugins(TrackingPlugin)
+        // After the events plugin and `session`, whose re-creation it uses (Q-124).
+        .add_plugins(DisplayPlugin);
     }
 }
 

@@ -50,9 +50,10 @@ pub(crate) struct SessionConfig {
     pub(crate) sort: SortMode,
 }
 
-/// Set when the runtime reported LOSS\_PENDING, until the session is created again.
+/// Set when the session is to be created again once destroyed: after the runtime
+/// reported LOSS\_PENDING (E-XR-LOST), or for `display`'s render-scale change (Q-124).
 #[derive(Resource, Default)]
-struct Lost(bool);
+pub(crate) struct Recreate(pub(crate) bool);
 
 /// The session's systems; `plugin` adds it after the crate's plugins.
 pub(crate) struct SessionPlugin {
@@ -66,13 +67,13 @@ impl Plugin for SessionPlugin {
             warn!("XR sort mode SharedCenter: accepted, but draws nothing until M-8 (R-9)");
         }
         app.insert_resource(self.config)
-            .init_resource::<Lost>()
+            .init_resource::<Recreate>()
             .add_plugins(ExtractResourcePlugin::<XrPrimaryReferenceSpace>::default())
             .add_systems(XrSessionCreated, set_primary_reference_space)
             .add_systems(XrPreDestroySession, cleanup)
             .add_systems(PreUpdate, set_eye_near)
             .add_systems(Last, make_splat_eyes)
-            .add_systems(Update, (watch_states, restart_after_loss).chain())
+            .add_systems(Update, (watch_states, recreate_after_destroy).chain())
             .add_oxr_event_handler(log_reference_space_change);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(XrPreDestroySession, cleanup);
@@ -236,7 +237,7 @@ fn make_splat_eyes(
 }
 
 /// Logs the session's states (§1.15): LOSS\_PENDING is E-XR-LOST.
-fn watch_states(mut changed: MessageReader<XrStateChanged>, mut lost: ResMut<Lost>) {
+fn watch_states(mut changed: MessageReader<XrStateChanged>, mut lost: ResMut<Recreate>) {
     for XrStateChanged(state) in changed.read() {
         info!("XR session state {state:?}");
         if let XrState::Exiting {
@@ -250,16 +251,16 @@ fn watch_states(mut changed: MessageReader<XrStateChanged>, mut lost: ResMut<Los
     }
 }
 
-/// E-XR-LOST's recovery: the crate destroys a lost session but never creates it again, so
-/// this asks for a new one once the old one is gone.
-fn restart_after_loss(
+/// E-XR-LOST's recovery and `display`'s re-creation: the crate destroys a session but
+/// never creates it again, so this asks for a new one once the old one is gone.
+fn recreate_after_destroy(
     mut destroyed: MessageReader<XrSessionDestroyedMessage>,
-    mut lost: ResMut<Lost>,
+    mut lost: ResMut<Recreate>,
     mut create: MessageWriter<XrCreateSessionMessage>,
 ) {
     if destroyed.read().count() > 0 && lost.0 {
         lost.0 = false;
-        info!("XR session lost: creating it again");
+        info!("XR session destroyed: creating it again");
         create.write(XrCreateSessionMessage);
     }
 }

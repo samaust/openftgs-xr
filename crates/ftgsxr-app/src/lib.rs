@@ -28,3 +28,14 @@ pub use ftgsxr_io::{AppPaths, ModelBytes, Settings, load_settings};
 pub use ftgsxr_render::{SortMode, SplatLoad, SplatPlugin, SplatTime};
 // Q-T225.1: what the Quest's device test `dv2` reads of the adapter (§3.4, Dv-2).
 pub use ftgsxr_render::{SplatCamera, SplatEvent, SplatStats};
+// Q-135: what the Quest's Dv-3 runner (R-4 on the device, Q-122) takes to load a model,
+// upload it, run stages 1–3 and read the frame back, for callers that depend on the app
+// alone (§2.1's `ftgsxr-quest`).
+pub use ftgsxr_core::{
+    Camera, DMat3, DMat4, DVec3, Pose, TemporalIndex, UVec2, Vec3, open_model, pack_for_gpu,
+    sort_key, sort_key16,
+};
+pub use ftgsxr_render::{
+    ColorTransform, FrameBuffers, FrameContents, GpuModel, ModelDraw, Overlays, RenderMode,
+    SortKey, SortPose, SplatDevice, SplatPasses, ViewParams,
+};

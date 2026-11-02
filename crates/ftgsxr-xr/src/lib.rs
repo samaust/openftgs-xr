@@ -7,12 +7,18 @@
 #![warn(missing_docs)]
 // §2.6: this crate may use `unsafe`, each block with a `// SAFETY:` comment.
 
+mod display;
 mod error;
 mod passthrough;
 mod plugin;
 mod session;
 mod tracking;
 
+// §2.1 (#228, Q-124).
+pub use display::DisplaySettings;
+// Q-133: `DisplaySettings.foveation`'s type, for `ftgsxr-quest`, whose band (§2.1)
+// excludes `ftgsxr-render`.
+pub use ftgsxr_render::Foveation;
 // §2.1; Q-119: `code` and `user_text`.
 pub use error::XrError;
 // §2.1 (M-3: the declarations I-15 reads).
