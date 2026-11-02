@@ -43,20 +43,7 @@ fn init_log(level: &str) {
 fn paths() -> AppPaths {
     let app = ANDROID_APP
         .get()
-        .expect("invariant: /// E-XR-RUNTIME when the session cannot be created (§1.15): the Quest exits 2. The XR
-/// crate logs it and inserts the primary reference space only once a session exists, so
-/// a session-created message without that space is the failure (or a session left
-/// without its reference space, which is E-XR-RUNTIME too).
-fn exit_without_session(
-    mut created: MessageReader<XrSessionCreatedMessage>,
-    space: Option<Res<XrPrimaryReferenceSpace>>,
-) {
-    if created.read().count() > 0 && space.is_none() {
-        std::process::exit(EXIT_ENVIRONMENT);
-    }
-}
-
-#[bevy_main] sets the AndroidApp before main");
+        .expect("invariant: #[bevy_main] sets the AndroidApp before main");
     let internal = app
         .internal_data_path()
         .expect("invariant: Android gives every app its internal files directory");
