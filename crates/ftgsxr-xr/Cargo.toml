@@ -21,7 +21,6 @@ publish.workspace = true
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log"] }
 bevy_mod_openxr.workspace = true
 bevy_mod_xr.workspace = true
-bevy_xr_utils.workspace = true
 ftgsxr-app.workspace = true
 ftgsxr-core.workspace = true
 ftgsxr-io.workspace = true
