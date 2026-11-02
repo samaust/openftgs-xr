@@ -8,6 +8,7 @@
 
 mod probe_support;
 
+use ftgsxr_core::Quat;
 use ftgsxr_render::{HeadlessRenderer, QualityTier};
 use ftgsxr_testkit::layer_messages;
 use probe_support::{check_items, posed_instances, probe, render_request};
@@ -21,6 +22,14 @@ fn gpu_r08_rotated_and_scaled_instance_with_degree_3_sh() {
     let (model, pose) = &instances[0];
     assert_eq!(model.sh_degree, 3, "degree-3 SH");
     assert_eq!(pose.scale, 2.0);
+    // R-8's 90° about +y, from the pose file itself (Q-12); q and −q are one rotation.
+    let quarter_turn = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    assert!(
+        pose.rotation.abs_diff_eq(quarter_turn, 1e-4)
+            || pose.rotation.abs_diff_eq(-quarter_turn, 1e-4),
+        "a 90° rotation about +y, not {:?}",
+        pose.rotation
+    );
     let (_, request) = probe("R8_merged");
     let mut renderer = HeadlessRenderer::new(QualityTier::conformance()).expect("an adapter");
     let id = renderer
