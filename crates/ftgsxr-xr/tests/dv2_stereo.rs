@@ -16,64 +16,7 @@ mod dv_support;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use dv_support::{PACKAGE, adb, apk, device, install, launch, log, push, stop, verdict};
-
-/// The layer the debug APK bundles (Q-123).
-const LAYER: &str = "VK_LAYER_KHRONOS_validation";
-
-/// Android's GPU debug-layer settings for the app, reset when dropped.
-struct DebugLayers;
-
-impl DebugLayers {
-    fn enable() -> DebugLayers {
-        adb(&[
-            "shell",
-            "settings",
-            "put",
-            "global",
-            "enable_gpu_debug_layers",
-            "1",
-        ]);
-        adb(&[
-            "shell",
-            "settings",
-            "put",
-            "global",
-            "gpu_debug_app",
-            PACKAGE,
-        ]);
-        adb(&[
-            "shell",
-            "settings",
-            "put",
-            "global",
-            "gpu_debug_layers",
-            LAYER,
-        ]);
-        DebugLayers
-    }
-}
-
-impl Drop for DebugLayers {
-    fn drop(&mut self) {
-        for key in [
-            "enable_gpu_debug_layers",
-            "gpu_debug_app",
-            "gpu_debug_layers",
-        ] {
-            adb(&["shell", "settings", "delete", "global", key]);
-        }
-    }
-}
-
-/// The lines of `tag` in logcat so far.
-fn tagged(tag: &str) -> Vec<String> {
-    adb(&["logcat", "-d", "-s", &format!("{tag}:*")])
-        .lines()
-        .filter(|l| !l.starts_with("---------"))
-        .map(str::to_owned)
-        .collect()
-}
+use dv_support::{DebugLayers, Validation, apk, device, install, launch, log, push, stop, verdict};
 
 #[test]
 #[ignore = "dv"]
@@ -89,10 +32,7 @@ fn dv_dv2_two_eyes_draw_a_probe_for_10_s_without_validation_messages() {
     let shot = screenshot_while_drawing(start);
     let result = verdict("dv2", start, Duration::from_secs(60));
     stop();
-    let validation = tagged("VALIDATION");
-    let announced = tagged("GraphicsEnvironment")
-        .iter()
-        .any(|l| l.contains("Vulkan debug layer list") && l.contains(LAYER));
+    let validation = Validation::read();
     let warnings: Vec<String> = log()
         .into_iter()
         // The adapter's warnings (`W` lines), not dv2's own info lines.
@@ -101,13 +41,7 @@ fn dv_dv2_two_eyes_draw_a_probe_for_10_s_without_validation_messages() {
     drop(layers);
 
     let (pass, detail, _) = result.expect("a dv2 verdict line in logcat");
-    assert!(announced, "Android loaded {LAYER} for the app");
-    assert!(
-        validation.is_empty(),
-        "no validation message ({} lines), first: {:?}",
-        validation.len(),
-        validation.iter().take(6).collect::<Vec<_>>()
-    );
+    validation.assert_clean();
     assert!(warnings.is_empty(), "no splat camera warning: {warnings:?}");
     assert!(pass, "dv2 FAIL {detail}");
     let shot = shot.expect("a screenshot while both eyes draw");
