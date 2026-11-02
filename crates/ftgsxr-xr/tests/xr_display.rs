@@ -105,4 +105,30 @@ fn xr_display_rates_are_the_runtimes_and_foveation_and_layer_resolution_are_unsu
         before + 1
     );
     assert_eq!(app.world().resource::<DisplaySettings>().render_scale, 0.8);
+
+    // The re-creation completes: a second session runs with the first swapchain's size
+    // times 0.8 (no META recommendation on Monado, Q-T228.2).
+    let sizes = || -> Vec<(u32, u32)> {
+        lines()
+            .iter()
+            .filter(|l| l.target == "ftgsxr_xr::display")
+            .filter_map(|l| {
+                let rest = l.message.strip_prefix("swapchain ")?;
+                let (w, h) = rest.split_whitespace().next()?.split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?))
+            })
+            .collect()
+    };
+    let first = sizes()[0];
+    let start = Instant::now();
+    while sizes().len() < 2 || app.world().get_resource::<XrState>() != Some(&XrState::Running) {
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the session is re-created within 20 s: {:?}",
+            sizes()
+        );
+        app.update();
+    }
+    let scaled = |v: u32| (v as f32 * 0.8).round() as u32;
+    assert_eq!(sizes()[1], (scaled(first.0), scaled(first.1)));
 }

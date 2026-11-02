@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dv-12 on the device (§3.4, #228): selects 90 Hz, steps through every foveation
+//! Dv-12 on the device (§3.4, #228): selects 72 Hz and then 90 Hz (so the change event to
+//! 90 Hz fires even when the headset starts at 90), steps through every foveation
 //! level, then sets the render scale to 0.8 and waits for the session to run again. The
 //! verdict is PASS once the sequence completes; the host driver judges the rest from
 //! `display`'s log lines (the rate's change event, each level applied, the new size).
@@ -28,6 +29,7 @@ const LEVELS: [Foveation; 5] = [
 #[derive(Debug, PartialEq)]
 enum Step {
     WaitRunning,
+    Rate72,
     Rate,
     Level(usize),
     Scale { left_running: bool },
@@ -74,7 +76,12 @@ fn run(
     let waited = test.since.elapsed() >= STEP;
     let next = match test.step {
         Step::WaitRunning if running => {
-            info!("dv12: rates {:?}, requesting 90 Hz", ds.available_rates);
+            info!("dv12: rates {:?}, requesting 72 Hz", ds.available_rates);
+            ds.refresh_rate = Some(72.0);
+            Some(Step::Rate72)
+        }
+        Step::Rate72 if waited => {
+            info!("dv12: requesting 90 Hz");
             ds.refresh_rate = Some(90.0);
             Some(Step::Rate)
         }
