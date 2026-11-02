@@ -559,7 +559,7 @@ The workspace is one Cargo workspace with one `[workspace.dependencies]` table, 
 | Foundation | `ftgsxr-io` | lib, no engine dependency | `ftgsxr-core`, toml, ureq, rustls, url, directories, serde\_json, sha2, thiserror, tracing | paths, settings, scene and pose files, listings, HTTP, model sources (§1.5, §1.11) |
 | Engine | `ftgsxr-render` | lib | the two above, bevy (render features) | the wgpu render layer (shaders, passes, the headless renderer) and its Bevy plugin adapter (§1.4) |
 | Application | `ftgsxr-app` | lib | the three above, bevy, bevy\_egui, bevy\_kira\_audio, image | everything both builds share: intents, the platform port, library, playback, manipulation, locomotion, UI, audio, capture, persistence, the headless commands, desktop input (§1.5–§1.7, §1.10–§1.13) |
-| XR | `ftgsxr-xr` | lib | the four above, bevy (render and log features), bevy\_mod\_openxr, bevy\_mod\_xr, bevy\_xr\_utils, openxr | the OpenXR session, tracking, XR intents, passthrough, depth, light, anchors, the panel (§1.8, §1.9) |
+| XR | `ftgsxr-xr` | lib | the four above, bevy (render and log features), bevy\_mod\_openxr, bevy\_mod\_xr, openxr | the OpenXR session, tracking, XR intents, passthrough, depth, light, anchors, the panel (§1.8, §1.9) |
 | Platform | `ftgsxr-desktop` | bin `ftgsxr` | `ftgsxr-app`, `ftgsxr-xr` (feature `xr`, on by default), clap, rfd | the Linux player and the command line (§1.7) |
 | Platform | `ftgsxr-quest` | cdylib `libftgsxr_quest.so` | `ftgsxr-app`, `ftgsxr-xr`, bevy, bevy\_mod\_xr (Android only), android-activity, jni, ndk-context, android\_logger, tracing (Android only, with its `log` feature, so Bevy's events reach android\_logger) | the Android entry point and the JNI adapter of the shim (§2.5) |
 | Dev | `ftgsxr-testkit` | lib, dev-dependency | `ftgsxr-core`, `ftgsxr-render`, image, sha2, serde\_json, bytemuck, tiny\_http | fixtures, checksums, image metrics (E15), a wgpu test context, synthetic tiny models (§3) |
@@ -1217,7 +1217,7 @@ Every dependency is under a license compatible with an Apache-2.0 release; none 
 | ↳ wgpu, wgpu-hal, naga | Bevy's pins (29) | the GPU layer of `ftgsxr-render`, through Bevy's re-exports; wgpu-core and wgpu-hal 29.0.4 vendored through `[patch.crates-io]` (D-30) | core | MIT OR Apache-2.0 | verified |
 | ↳ glam | Bevy's pin (0.32) | vectors, quaternions, matrices, re-exported by `ftgsxr-core` | core | MIT OR Apache-2.0 | verified |
 | ↳ winit | Bevy's pin (0.30) | the desktop window | desktop | Apache-2.0 | verified |
-| bevy\_mod\_openxr, bevy\_mod\_xr, bevy\_xr\_utils | 0.6.0 | the OpenXR session, swapchains, per-eye cameras, actions, hand tracking, passthrough layer | xr | MIT OR Apache-2.0 | verified (crates.io field, README; license files present) |
+| bevy\_mod\_openxr, bevy\_mod\_xr | 0.6.0 | the OpenXR session, swapchains, per-eye cameras, actions, hand tracking, passthrough layer | xr | MIT OR Apache-2.0 | verified (crates.io field, README; license files present) |
 | ↳ openxr, openxr-sys | 0.21.1 (the XR crates' pin) | OpenXR bindings; the extensions of Appendix E | xr | MIT OR Apache-2.0 | verified |
 | ↳ android-activity | =0.6.0 (the XR crates' pin) | the Android activity glue | quest | MIT OR Apache-2.0 | verified |
 | safetensors | 0.8 | reading `ftgs-if`, `params.safetensors`; writing `ftgs-renders` and `ftgs-if` | core | Apache-2.0 | verified |
