@@ -11,7 +11,6 @@ use std::borrow::Cow;
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate};
 use bevy::ecs::message::MessageWriter;
-use bevy::log::error;
 use bevy::math::{Isometry3d, Vec2};
 use bevy::prelude::{
     Commands, Component, Entity, IntoScheduleConfigs, Query, Res, ResMut, Resource, Transform,
@@ -30,6 +29,9 @@ use bevy_mod_xr::spaces::XrSpaceLocationFlags;
 use ftgsxr_app::SettingsRes;
 use ftgsxr_core::{Pose, Quat, Vec3};
 use openxr::{Action, ActionSet, Haptic, Path, Posef};
+
+use crate::XrError;
+use crate::error::log_error;
 
 /// Where a hand's state comes from (§2.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +139,7 @@ impl Plugin for TrackingPlugin {
         let actions = match create_actions(instance) {
             Ok(a) => a,
             Err(e) => {
-                error!("the action set `player`: {e}");
+                log_error(&XrError::Runtime(format!("the action set `player`: {e}")));
                 return;
             }
         };
@@ -284,7 +286,9 @@ fn spawn_spaces(session: Option<Res<OxrSession>>, actions: Res<Actions>, mut com
                 Ok(space) => {
                     commands.spawn((space, Transform::default(), HandSpace { hand, aim }));
                 }
-                Err(e) => error!("the {name} pose space (aim {aim}): {e}"),
+                Err(e) => log_error(&XrError::Runtime(format!(
+                    "the {name} pose space (aim {aim}): {e}"
+                ))),
             }
         }
     }
