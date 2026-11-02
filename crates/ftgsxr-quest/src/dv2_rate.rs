@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dv-2's frame-rate judgement (§3.4 Dv-2, §1.12): whether the frames the `dv2` device
+//! Dv-2's refresh-rate judgement (§3.4 Dv-2, §1.12): whether the frames the `dv2` device
 //! test counted over its window came at the default 72 Hz. Built on the host too, so its
 //! tests run there (#269).
 
@@ -42,23 +42,23 @@ mod tests {
     // Q-138: the band is 95 % to 105 % of 72 Hz × the elapsed time.
 
     #[test]
-    fn a_session_at_72_hz_passes() {
+    fn at_default_rate_passes_a_session_at_72_hz() {
         assert!(at_default_rate(720, 10.0).is_ok());
-        // The device run Q-138 records: 715 frames in 10.01 s.
+        // The device run Q-142 records: 715 frames in 10.01 s.
         assert!(at_default_rate(715, 10.01).is_ok());
         assert!(at_default_rate(685, 10.0).is_ok());
         assert!(at_default_rate(755, 10.0).is_ok());
     }
 
     #[test]
-    fn a_halved_rate_fails_on_the_lower_bound() {
+    fn at_default_rate_fails_a_halved_rate_on_the_lower_bound() {
         let e = at_default_rate(360, 10.0).unwrap_err();
         assert!(e.contains("below"), "{e}");
         assert!(at_default_rate(683, 10.0).is_err());
     }
 
     #[test]
-    fn any_other_quest_rate_fails_on_the_upper_bound() {
+    fn at_default_rate_fails_any_other_quest_rate_on_the_upper_bound() {
         // §1.12: the Quest 3's other rates, 80 to 120 Hz.
         for hz in [80, 90, 96, 100, 120] {
             let e = at_default_rate(hz * 10, 10.0).unwrap_err();

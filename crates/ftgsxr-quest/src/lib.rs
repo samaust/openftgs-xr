@@ -2,7 +2,7 @@
 
 //! openftgs-xr on the Meta Quest 3: the Android entry point and the JNI adapter of the
 //! shim (§2.5, §2.1), built as `libftgsxr_quest.so`. On the host the crate is empty
-//! (§2.7's host checks); `main` is Android's (M-3, #224).
+//! (§2.7's host checks), its tests aside; `main` is Android's (M-3, #224).
 
 #![warn(missing_docs)]
 // §2.6: this crate may use `unsafe` for JNI, each block with a `// SAFETY:` comment.
