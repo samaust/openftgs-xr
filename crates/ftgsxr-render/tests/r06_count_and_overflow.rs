@@ -590,6 +590,21 @@ fn gpu_r06_non_finite_counts_once_per_row_and_instance_whatever_the_views() {
     assert!(dev.take_validation_messages().is_empty());
 }
 
+/// A 320 × 240 camera of focal 300 at the origin looking along +z, its world-to-camera
+/// transform the identity, so x_c = μ^S exactly under the identity pose.
+fn identity_camera() -> ftgsxr_core::Camera {
+    ftgsxr_core::Camera {
+        width: 320,
+        height: 240,
+        k: ftgsxr_core::DMat3::from_cols(
+            ftgsxr_core::DVec3::new(300.0, 0.0, 0.0),
+            ftgsxr_core::DVec3::new(0.0, 300.0, 0.0),
+            ftgsxr_core::DVec3::new(160.0, 120.0, 1.0),
+        ),
+        world_to_camera: ftgsxr_core::DMat4::IDENTITY,
+    }
+}
+
 /// Q-118 (E6, E3, §1.4 stage 8): a row E3 culls (σ_eff < α_skip) is not counted, even
 /// with an infinite scale, while the same row above α_skip is.
 #[test]
@@ -601,16 +616,7 @@ fn gpu_r06_non_finite_does_not_count_a_row_e3_culls() {
     let mut model = random_model(0x6_0d, 8, 0);
     let tau = 0.7;
     // An identity pose and camera, every row at (0, 0, 1) in the middle of the image.
-    let cam = ftgsxr_core::Camera {
-        width: 320,
-        height: 240,
-        k: ftgsxr_core::DMat3::from_cols(
-            ftgsxr_core::DVec3::new(300.0, 0.0, 0.0),
-            ftgsxr_core::DVec3::new(0.0, 300.0, 0.0),
-            ftgsxr_core::DVec3::new(160.0, 120.0, 1.0),
-        ),
-        world_to_camera: ftgsxr_core::DMat4::IDENTITY,
-    };
+    let cam = identity_camera();
     for i in 0..8 {
         // Every row active at τ (σ_t = 1) and still, so E3 decides on the opacity alone:
         // 0.9 for rows 0–3, 0.001 < α_skip = 1/255 for rows 4–7.
@@ -640,5 +646,57 @@ fn gpu_r06_non_finite_does_not_count_a_row_e3_culls() {
     );
     assert_eq!(stats.non_finite, 4, "rows 0–3 only");
     assert_eq!(stats.visible_splats, 0);
+    assert!(dev.take_validation_messages().is_empty());
+}
+
+/// Q-118 (E6, §1.4 stage 8): a row whose camera-space position is finite but whose μ′
+/// lies beyond float32's range, off the image, is counted rather than culled as off the
+/// image, whichever way it points; its overflow is not left to the GPU, where float32
+/// overflow need not give ∞ (#219).
+#[test]
+#[ignore = "gpu"]
+fn gpu_r06_non_finite_counts_a_mean_beyond_float32() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let tier = QualityTier::conformance();
+    let mut model = random_model(0x6_0e, 5, 0);
+    let tau = 0.7;
+    let cam = identity_camera();
+    // x_c = μ^S, z_c within the near and far culls; f · |x_c| / z_c ≥ 3·10³⁹ > 3.4·10³⁸
+    // for rows 0–3 (row 3's u = x / z itself overflows); row 4, |μ′| = 3·10³⁷, is finite.
+    let positions = [
+        [1e37, 0.0, 1.0],
+        [-1e37, 0.0, 1.0],
+        [0.0, 1e37, 1.0],
+        [1e37, 0.0, 0.02],
+        [1e35, 0.0, 1.0],
+    ];
+    for (i, p) in positions.iter().enumerate() {
+        model.time_center[i] = tau;
+        model.duration[i] = 10.0;
+        model.velocity[i] = [0.0; 3];
+        model.scale[i] = [0.05; 3];
+        model.opacity[i] = 0.9;
+        model.position[i] = *p;
+    }
+    let gpu_model = upload(&dev, &model, &tier);
+    let passes = passes(&dev, &tier);
+    let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
+    let draws = [draw(
+        &gpu_model,
+        ftgsxr_core::Pose::IDENTITY,
+        tau,
+        RenderMode::Splats,
+    )];
+    let stats = stats_of(
+        &dev,
+        &passes,
+        &frame,
+        &draws,
+        &sort_pose(&cam),
+        &[view(cam)],
+    );
+    assert_eq!(stats.non_finite, 4, "rows 0–3, not the finite row 4");
+    assert_eq!(stats.visible_splats, 0, "all five are off the image");
     assert!(dev.take_validation_messages().is_empty());
 }

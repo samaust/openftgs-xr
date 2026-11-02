@@ -188,6 +188,9 @@ fn sh_at(m: u32) -> f32 {
     return unpack_value(sh[field_index(m, half)], m, half);
 }
 
+// The largest finite float32.
+const F32_MAX: f32 = 3.40282347e38;
+
 fn finite(x: f32) -> bool {
     return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u;
 }
@@ -283,6 +286,13 @@ fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> P
     let fy = v.focal.y;
     let cx = v.principal.x;
     let cy = v.principal.y;
+    // Q-118: a μ′ beyond float32's range is non-finite, decided on x_c before μ′ is
+    // computed, since a float32 overflow on the GPU need not give ∞: |f·x/z + c| fits
+    // when |x| / ((F32_MAX − |c|) / f) ≤ z, a quotient that cannot overflow itself.
+    if abs(xc.x) / ((F32_MAX - abs(cx)) / fx) > z || abs(xc.y) / ((F32_MAX - abs(cy)) / fy) > z {
+        p.non_finite = true;
+        return p;
+    }
     let u = xc.x / z;
     let w = xc.y / z;
     let mean = vec2<f32>(fx * u + cx, fy * w + cy);
