@@ -211,7 +211,7 @@ x_c = R_w\,\mu^S + t_w,\qquad \mu' = \Big(f_x\,\tfrac{x_c}{z_c} + c_x,\ f_y\,\tf
 ```
 
 - J is the EWA Jacobian of the perspective projection at x\_c, with x\_c/z\_c clamped to \[−(c\_x/f\_x + m\,W/f\_x), (W − c\_x)/f\_x + m\,W/f\_x\] and y\_c/z\_c likewise with H, f\_y, c\_y, where m is `jacobian_clamp_margin` (0.15); the clamp applies to J only, not to μ′.
-- ε is `eps2d` (0.3). A primitive is culled when z\_c < `near` (0.01) or z\_c > `far` (10¹⁰), z\_c in stage metres, when det Σ′ ≤ 0, or when its box lies wholly outside the image. A non-finite value anywhere in its projection culls it too, and the HUD counts such primitives; the headless render checks its output and exits 3 when any value is not finite, as openftgs's does.
+- ε is `eps2d` (0.3). A primitive is culled when z\_c < `near` (0.01) or z\_c > `far` (10¹⁰), z\_c in stage metres, when det Σ′ ≤ 0, or when its box lies wholly outside the image. A non-finite value anywhere in its projection culls it too, and the HUD counts such primitives (`FrameStats.non_finite`, §1.4 stage 8); the headless render checks its output and exits 3 when any value is not finite, as openftgs's does.
 - The screen extent is e = min(`screen_extent_max` (3.33), √(2 ln(σ\_eff/α\_skip))) standard deviations, α\_skip the model's `alpha_skip` (1/255), (`screen_extent_rule` = `opacity_aware`); the radii are r\_x = ⌈e √Σ′₀₀⌉ and r\_y = ⌈e √Σ′₁₁⌉ in whole pixels; the box is μ′ ± r. A primitive is visible when both radii are positive. The conic is Σ′⁻¹.
 - A `screen_extent_rule` or `rasterize_mode` other than openftgs's is reported as a warning and rendered as `opacity_aware` and `classic` (D-39).
 
@@ -322,7 +322,7 @@ f\_gpu is the frame's GPU time (§1.13). After 10 consecutive frames with e > 1.
 5. **Draw splats (render pass).** One indirect instanced draw of four-vertex strips in the sorted order into the frame's layer: a 16-bit float RGBA target cleared to (0, 0, 0, 0), blending `One, OneMinusSrcAlpha` on color and alpha, the depth test on against the pass's opaque depth at the record's depth, the depth write off, MSAA off. The vertex stage places the quad at μ′ ± r (per view) or projects the stage-space record for this eye (shared-center mode); the fragment stage evaluates E7's α with the conic, the skip rules and E13's weight, and writes (cα, α).
 6. **Draw centers (render pass)** \[R: centers rendering\]. For instances in centers mode, one indirect instanced draw of discs of radius ρ pixels (default 3 at render scale 1, 1–8) at the moved positions, opaque, depth write on, colored by the instance's colormap: the DC color C₀c₀₀ + 0.5 (default), the time center over \[τ₀, τ₁\] (a perceptually ordered colormap), the speed ‖velocity‖ relative to the model's 99th percentile, or the opacity. Centers need no sort.
 7. **Resolve (full-screen pass)** \[D-6\]. The layer holds file-encoded premultiplied values. For display, each pixel's color is un-premultiplied, decoded from sRGB to linear light, re-premultiplied and composited over the view target with the over operator, so the engine's linear pipeline shows the file's values unchanged on an sRGB display. In VR mode the background is composited first (E7's c\_bg); in passthrough mode the view target keeps the layer's alpha for the compositor (D-14). A headless render skips the resolve and reads the layer back (§1.7).
-8. **Statistics.** A 64-byte block (the two counts, the overflow flag) is copied to a staging buffer and read two frames later for the HUD (§1.13), never in the frame that wrote it.
+8. **Statistics.** An 80-byte block (the two counts, the overflow flag, the count of primitives culled for a non-finite projection, E6) is copied to a staging buffer and read two frames later for the HUD (§1.13), never in the frame that wrote it.
 
 When no instance's τ\_m, pose, mode or transform changed since the last frame and the view's camera did not move, stages 1–4 are skipped and the previous frame's buffers are drawn again; the output is identical by construction.
 
@@ -987,7 +987,7 @@ impl SplatPasses {
     /// Stage 8: the statistics block to the staging buffer; `FrameStats::poll` reads it two frames later.
     pub fn encode_stats(&self, enc: &mut wgpu::CommandEncoder, frame: &FrameBuffers);
 }
-pub struct FrameStats { pub visible_splats: u32, pub visible_centers: u32, pub capacity: u32, pub overflow: bool, pub gpu_times_ms: GpuTimes }
+pub struct FrameStats { pub visible_splats: u32, pub visible_centers: u32, pub capacity: u32, pub overflow: bool, pub non_finite: u32, pub gpu_times_ms: GpuTimes }
 pub struct GpuTimes { pub cull: f32, pub sort: f32, pub draw: f32, pub total: f32 }
 impl FrameStats { pub fn poll(frame: &FrameBuffers, dev: &SplatDevice) -> Option<FrameStats>; }   // never blocks
 /// The headless adapter (§1.7 `render`): its own wgpu instance, adapter and device.
