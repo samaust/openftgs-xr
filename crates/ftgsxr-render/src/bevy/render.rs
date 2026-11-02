@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use ::bevy::app::SubApp;
 use ::bevy::camera::visibility::InheritedVisibility;
-use ::bevy::core_pipeline::core_3d::{main_opaque_pass_3d, main_transparent_pass_3d};
+use ::bevy::core_pipeline::core_3d::{
+    CORE_3D_DEPTH_FORMAT, main_opaque_pass_3d, main_transparent_pass_3d,
+};
 use ::bevy::core_pipeline::{Core3d, Core3dSystems};
 use ::bevy::ecs::prelude::*;
 use ::bevy::log::{error, warn};
@@ -32,7 +34,9 @@ use super::{
 };
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::sort_pose;
-use crate::gpu::passes::ENGINE_NEAR;
+// The view target the resolve is compiled for (Q-91), and the depth the splats test
+// against is Bevy's 3D depth (#204).
+use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
 use crate::gpu::{
     Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, Overlays, QualityTier,
     RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
@@ -40,10 +44,6 @@ use crate::gpu::{
 
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
 const LAYER_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-/// The view target the resolve is compiled for (Q-91).
-const RESOLVE_TARGET: TextureFormat = TextureFormat::Rgba8UnormSrgb;
-/// Bevy's 3D depth format (`bevy_core_pipeline::core_3d::CORE_3D_DEPTH_FORMAT`).
-const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
 
 /// Statistics on their way from the render world to `SplatStats`, in arrival order.
 #[derive(Resource, Clone, Default)]
@@ -355,7 +355,7 @@ fn prepare_view(
             view.target_format
         }
         OutputSpace::LinearOver { .. } => {
-            if view.target_format != RESOLVE_TARGET {
+            if view.target_format != RESOLVE_TARGET_FORMAT {
                 return Err("LinearOver needs an Rgba8UnormSrgb view target (Q-91)");
             }
             LAYER_FORMAT
@@ -367,12 +367,11 @@ fn prepare_view(
     let passes = match views.passes.get(&key) {
         Some(p) => Arc::clone(p),
         None => {
-            let p = SplatPasses::new(dev, layer_format, Some(DEPTH_FORMAT), &view_tier).map_err(
-                |e| {
+            let p = SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
+                .map_err(|e| {
                     error!("splat passes: {}: {}", e.code(), e.user_text());
                     "the splat passes did not compile"
-                },
-            )?;
+                })?;
             let p = Arc::new(p);
             views.passes.insert(key, Arc::clone(&p));
             p
