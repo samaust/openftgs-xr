@@ -20,9 +20,9 @@ bevy\_mod\_openxr 0.6.0 runs the session: its init, session, events and render p
 
 Three crates are vendored under `vendor/` and used through `[patch.crates-io]`, each with its changes marked in place, with attribution:
 
-- **bevy\_mod\_openxr 0.6.0** (Q-139, Q-142): on Android, the Vulkan instance targets 1.3, the Quest 3 device's version, instead of 1.1, so the features and SPIR-V version wgpu enables are ones the instance allows; and the HAL instance's flags drop wgpu's `VALIDATION_INDIRECT_CALL`, the Android rule of Q-136 kept in this one place.
-- **wgpu-hal 29.0.4** (Q-142): a public `flags()` getter on the Vulkan instance.
-- **wgpu-core 29.0.4** (Q-142): `Instance::from_hal_instance` keeps a Vulkan HAL instance's flags instead of taking the defaults, which had made the removal above ineffective.
+- **bevy\_mod\_openxr 0.6.0** (Q-139, D-30): on Android, the Vulkan instance targets 1.3, the Quest 3 device's version, instead of 1.1, so the features and SPIR-V version wgpu enables are ones the instance allows; and the HAL instance's flags drop wgpu's `VALIDATION_INDIRECT_CALL`, the Android rule of D-30 kept in this one place.
+- **wgpu-hal 29.0.4** (D-30): a public `flags()` getter on the Vulkan instance.
+- **wgpu-core 29.0.4** (D-30): `Instance::from_hal_instance` keeps a Vulkan HAL instance's flags instead of taking the defaults, which had made the removal above ineffective.
 
 With all three, the XR path's device has no indirect-call validation on the Quest, and its indirect draws draw (D-30, `ftgsxr-render/pipeline.md`). The wgpu patch is platform-neutral; a wgpu release that carries it lets both wgpu crates be dropped.
 

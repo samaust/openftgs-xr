@@ -184,7 +184,7 @@ impl Instance {
         name: String,
         hal_instance: <A as hal::Api>::Instance,
     ) -> Self {
-        let flags = hal_instance_flags::<A>(&hal_instance); // openftgs-xr, Q-142
+        let flags = hal_instance_flags::<A>(&hal_instance); // openftgs-xr, D-30
         Self {
             _name: name,
             instance_per_backend: vec![(A::VARIANT, Box::new(hal_instance))],
@@ -1248,9 +1248,9 @@ impl Global {
     }
 }
 
-// openftgs-xr change (Q-142), to wgpu-core 29.0.4 (crates.io), file src/instance.rs,
+// openftgs-xr change (D-30), to wgpu-core 29.0.4 (crates.io), file src/instance.rs,
 // MIT OR Apache-2.0: an instance made from a HAL instance took the build's default flags
-// instead of the flags the HAL instance was created with (Q-136). A Vulkan HAL instance
+// instead of the flags the HAL instance was created with (D-30). A Vulkan HAL instance
 // now gives its own flags (wgpu-hal's vendored `flags()` getter); other backends keep the
 // default. Was: `wgt::InstanceFlags::default()`.
 fn hal_instance_flags<A: hal::Api>(hal_instance: &<A as hal::Api>::Instance) -> wgt::InstanceFlags {
