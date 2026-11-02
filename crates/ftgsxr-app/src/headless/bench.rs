@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use bevy::color::LinearRgba;
+use bevy::log::warn;
 use bevy::render::render_resource::{
     CommandEncoderDescriptor, Extent3d, LoadOp, Operations, PollType, RenderPassColorAttachment,
     RenderPassDescriptor, StoreOp, TextureDescriptor, TextureDimension, TextureFormat,
@@ -191,15 +192,27 @@ pub(crate) fn compare_against(
 /// desktop benchmark `name` (B-1, B-3, B-5 or B-6) on the high-performance adapter, with
 /// the setups of Q-102 or, with `model`, on that one model (any §1.2 input); compares
 /// its budgets with the stored baseline `<NAME>.json` when the baseline has the run's
-/// profile and GPU, else notes why not, in the file and on standard error (Q-103); and
-/// writes the file at `out` when given. A NAME the desktop does not run is `Input`; an
-/// invalid model is `Input` with its E-FILE code; no adapter, or no timestamp queries for
-/// B-3, is `Environment`; a malformed baseline is `Input` (E-JSON).
+/// profile and GPU, else notes why not in the file (Q-103); and writes the file at `out`
+/// when given. A NAME the desktop does not run is `Input`; a malformed baseline is `Input`
+/// (E-JSON), and an `out` whose directory does not exist an `Input` error, both before the
+/// GPU opens; an invalid model is `Input` with its E-FILE code; no adapter, or no timestamp
+/// queries for B-3, is `Environment`. GPU validation messages are a note, not an error
+/// (Q-116).
 // Q-67, Q-102, Q-103
 pub fn cmd_bench(
     name: &str,
     out: Option<&Path>,
     model: Option<&Path>,
+) -> Result<BenchReport, HeadlessError> {
+    cmd_bench_in(name, out, model, &baseline_dir())
+}
+
+/// `cmd_bench` with the baselines' directory given.
+fn cmd_bench_in(
+    name: &str,
+    out: Option<&Path>,
+    model: Option<&Path>,
+    baselines: &Path,
 ) -> Result<BenchReport, HeadlessError> {
     let run: fn(&Gpu, Option<&Given>) -> Result<Measured, HeadlessError> = match name {
         "B-1" => bench_b1,
@@ -212,6 +225,12 @@ pub fn cmd_bench(
             )));
         }
     };
+    // #194: the baseline and the output directory are checked before any frame, so a bad
+    // one doesn't throw a run away (Q-103's errors, unchanged).
+    let baseline = read_baseline(&baselines.join(format!("{name}.json")))?;
+    if let Some(out) = out {
+        check_out_dir(out)?;
+    }
     let given = model
         .map(|path| {
             load(path).map(|model| Given {
@@ -224,46 +243,107 @@ pub fn cmd_bench(
     let measured = run(&gpu, given.as_ref());
     let messages = gpu.dev.take_validation_messages();
     let measured = measured?;
-    if let Some(first) = messages.first() {
-        return Err(HeadlessError::Environment(format!(
-            "E-GPU-SHADER: {} GPU validation messages, the first: {first}",
-            messages.len()
-        )));
-    }
 
     let profile = if cfg!(debug_assertions) {
         "debug"
     } else {
         "release"
     };
-    let mut notes: Vec<Json> = measured.notes.iter().map(|n| Json::str(*n)).collect();
-    let baseline_path = baseline_dir().join(format!("{name}.json"));
-    let (baseline, regressions) = if baseline_path.is_file() {
-        let text =
-            fs::read_to_string(&baseline_path).map_err(|e| input_error(&baseline_path, e))?;
-        let parsed = Json::parse(&text).map_err(|e| {
-            HeadlessError::Input(format!("E-JSON: {}: {e}", baseline_path.display()))
-        })?;
-        let path = baseline_path.canonicalize().unwrap_or(baseline_path);
+    let mut notes: Vec<String> = measured.notes.iter().map(|n| (*n).to_owned()).collect();
+    // Q-116
+    for m in &messages {
+        warn!("ftgsxr bench {name}: GPU validation: {m}");
+    }
+    notes.extend(validation_note(&messages));
+    let (baseline, regressions) = match baseline {
         // A baseline not compared against is not `baseline` (Q-103: "the path compared
         // against, or null").
-        match compare_against(&measured.budgets, profile, gpu.dev.adapter_name(), &parsed) {
-            Ok(regressions) => (Json::str(path.display().to_string()), regressions),
-            Err(note) => {
-                eprintln!("ftgsxr: {name}: {note}");
-                notes.push(Json::str(note));
-                (Json::Null, Vec::new())
+        Some((path, parsed)) => {
+            match compare_against(&measured.budgets, profile, gpu.dev.adapter_name(), &parsed) {
+                Ok(regressions) => (Json::str(path.display().to_string()), regressions),
+                Err(note) => {
+                    // #193, Q-110: the library logs; the binary prints the note from the
+                    // file's `notes` (Q-103).
+                    warn!("ftgsxr bench {name}: {note}");
+                    notes.push(note);
+                    (Json::Null, Vec::new())
+                }
             }
         }
-    } else {
-        (Json::Null, Vec::new())
+        None => (Json::Null, Vec::new()),
     };
+    let json = report_json(
+        name,
+        gpu.dev.adapter_name(),
+        profile,
+        &measured,
+        baseline,
+        notes,
+    );
+    if let Some(out) = out {
+        write_atomic(out, json.as_bytes()).map_err(|e| input_error(out, e))?;
+    }
+    Ok(BenchReport { json, regressions })
+}
 
+/// The stored baseline at `path`, canonicalized, and its parsed text; `None` when there is
+/// no file, E-JSON when it is malformed (Q-103).
+// Q-103
+fn read_baseline(path: &Path) -> Result<Option<(PathBuf, Json)>, HeadlessError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(path).map_err(|e| input_error(path, e))?;
+    let parsed = Json::parse(&text)
+        .map_err(|e| HeadlessError::Input(format!("E-JSON: {}: {e}", path.display())))?;
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Ok(Some((canonical, parsed)))
+}
+
+/// An `Input` error naming `out` when the directory it would be written in is not one.
+fn check_out_dir(out: &Path) -> Result<(), HeadlessError> {
+    let dir = match out.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    match fs::metadata(dir) {
+        Ok(m) if m.is_dir() => Ok(()),
+        Ok(_) => Err(input_error(
+            out,
+            std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"),
+        )),
+        Err(e) => Err(input_error(out, e)),
+    }
+}
+
+/// The note for the GPU validation messages collected during a run, if any (Q-116): the
+/// count and every message, which the binary prints on standard error.
+// Q-116
+pub(crate) fn validation_note(messages: &[String]) -> Option<String> {
+    (!messages.is_empty()).then(|| {
+        format!(
+            "GPU validation reported {} messages (Q-116): {}",
+            messages.len(),
+            messages.join("; ")
+        )
+    })
+}
+
+/// The benchmark file's text, two-space indented with a final newline (Q-67, Q-103).
+// Q-67, Q-103
+fn report_json(
+    name: &str,
+    gpu: &str,
+    profile: &str,
+    measured: &Measured,
+    baseline: Json,
+    notes: Vec<String>,
+) -> String {
     let file = Json::obj([
         ("format", Json::str("ftgsxr-bench")),
         ("version", Json::Num(1.0)),
         ("bench", Json::str(name)),
-        ("machine", machine(gpu.dev.adapter_name())),
+        ("machine", machine(gpu)),
         (
             "versions",
             Json::obj([
@@ -295,14 +375,14 @@ pub fn cmd_bench(
             Json::Arr(measured.budgets.iter().map(Budget::to_json).collect()),
         ),
         ("baseline", baseline),
-        ("notes", Json::Arr(notes)),
+        (
+            "notes",
+            Json::Arr(notes.into_iter().map(Json::str).collect()),
+        ),
     ]);
     let mut json = file.pretty();
     json.push('\n');
-    if let Some(out) = out {
-        write_atomic(out, json.as_bytes()).map_err(|e| input_error(out, e))?;
-    }
-    Ok(BenchReport { json, regressions })
+    json
 }
 
 /// The pinned Bevy (§2.3, the workspace's `[workspace.dependencies]`), which no runtime
@@ -787,6 +867,7 @@ const B3_C: [usize; 6] = [100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000
 const B3_FRAMES: usize = 32;
 
 /// B-3 (§3.5, Q-102): the sort's GPU time for C keys; P-4.
+// Q-102
 fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError> {
     let mut m = Measured::default();
     let cases: Vec<usize> = match given {
@@ -865,6 +946,7 @@ const B5_DEGREE: u8 = 2;
 const B5_REPEATS: usize = 3;
 
 /// B-5 (§3.5, Q-102): load time from local storage; P-3.
+// Q-102
 fn bench_b5(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError> {
     let mut m = Measured::default();
     let mut timed = |path: &Path, label: Json, file_bytes: u64| -> Result<(), HeadlessError> {
@@ -948,6 +1030,7 @@ const B6_N: usize = 100_000;
 
 /// B-6 (§3.5, Q-102): static bytes per primitive in every tier and L against §1.12's
 /// table, within 1 %.
+// Q-102
 fn bench_b6(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError> {
     let mut m = Measured::default();
     let tiers = [
@@ -1232,6 +1315,87 @@ mod tests {
             gpu_error(None, budget()),
             HeadlessError::Environment(text.to_owned())
         );
+    }
+
+    #[test]
+    fn validation_note_reports_the_messages_without_failing() {
+        // Q-116: no message, no note; collected messages are one note naming their
+        // count and each message, and `cmd_bench` returns it rather than an error.
+        assert_eq!(validation_note(&[]), None);
+        let messages = ["VUID-a: first".to_owned(), "VUID-b: second".to_owned()];
+        let note = validation_note(&messages).expect("a note");
+        assert!(note.contains("2 messages"), "{note}");
+        assert!(
+            note.contains("VUID-a: first") && note.contains("VUID-b: second"),
+            "{note}"
+        );
+        assert!(
+            note.contains("Q-116") && !note.contains("E-GPU-SHADER"),
+            "{note}"
+        );
+    }
+
+    /// A fresh directory under the system's temporary directory.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ftgsxr-bench-test-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
+    }
+
+    #[test]
+    fn cmd_bench_refuses_a_malformed_baseline_before_rendering() {
+        // #194, Q-103: a malformed baseline is E-JSON (exit 2). The model named does not
+        // exist, so reaching the model's load (or the GPU) would give another error: the
+        // E-JSON proves the baseline is read first.
+        let dir = scratch("malformed");
+        fs::write(dir.join("B-6.json"), "{ not json").expect("the baseline");
+        let err = cmd_bench_in("B-6", None, Some(&dir.join("missing.ftgs-if")), &dir)
+            .expect_err("a malformed baseline");
+        match &err {
+            HeadlessError::Input(text) => assert!(text.starts_with("E-JSON: "), "{text}"),
+            other => panic!("expected E-JSON, got {other:?}"),
+        }
+        assert_eq!(super::super::exit_code(&err), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cmd_bench_refuses_an_out_in_a_missing_directory_before_rendering() {
+        // #194: `--out` in a directory that doesn't exist fails before the model's load
+        // (a missing model, which would fail differently) and so before any frame.
+        let dir = scratch("out");
+        let out = dir.join("no-such-dir").join("b6.json");
+        let err = cmd_bench_in("B-6", Some(&out), Some(&dir.join("missing.ftgs-if")), &dir)
+            .expect_err("an unwritable --out");
+        match &err {
+            HeadlessError::Input(text) => assert!(text.contains("no-such-dir"), "{text}"),
+            other => panic!("expected an Input error, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn report_json_puts_a_budget_not_met_on_a_pass_false_line() {
+        // #198, Q-103: the `ftgsxr` binary (crates/ftgsxr-desktop/src/main.rs) finds a
+        // budget not met as a line starting `"pass": false`; the writer must keep that form.
+        let measured = Measured {
+            budgets: vec![budget(Rule::AtLeast, 50.0)],
+            ..Measured::default()
+        };
+        let json = report_json("B-1", "GPU A", "debug", &measured, Json::Null, Vec::new());
+        assert!(
+            json.lines()
+                .any(|l| l.trim_start().starts_with("\"pass\": false")),
+            "{json}"
+        );
+        let met = Measured {
+            budgets: vec![budget(Rule::AtLeast, 100.0)],
+            ..Measured::default()
+        };
+        let json = report_json("B-1", "GPU A", "debug", &met, Json::Null, Vec::new());
+        assert!(!json.contains("\"pass\": false"), "{json}");
     }
 
     #[test]
