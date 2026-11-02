@@ -4,6 +4,7 @@
 //! `ftgsxr-test` names a test, whose verdict is the logcat line
 //! `ftgsxr-test: <name> PASS|FAIL <detail>` under the tag `ftgsxr`.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
@@ -15,6 +16,25 @@ pub(crate) const EXTRA: &str = "ftgsxr-test";
 /// How long `dv1` waits for the running session on the device before printing FAIL; the
 /// host's 10 s criterion (Dv-1) is judged from the launch by the driver.
 const DV1_TIMEOUT: Duration = Duration::from_secs(30);
+
+mod dv3;
+mod dv4;
+
+/// Runs `name` when it is a headless test (Dv-3, Dv-4: before the XR session is created,
+/// on the headless renderer's own device, Q-122) with the pushed and written files in
+/// `dv`, printing its verdict; `false` when `name` is not one, for `add`.
+pub(crate) fn run_headless(name: &str, dv: &Path) -> bool {
+    let result = match name {
+        "dv3" => dv3::run(dv),
+        "dv4" => dv4::run(dv),
+        _ => return false,
+    };
+    match result {
+        Ok(detail) => verdict(name, true, &detail),
+        Err(detail) => verdict(name, false, &detail),
+    }
+    true
+}
 
 /// The test this launch runs and whether its verdict is printed.
 #[derive(Resource)]
