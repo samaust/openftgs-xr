@@ -17,6 +17,7 @@ publish.workspace = true
 [dependencies]
 bevy = { workspace = true, features = ["bevy_render", "bevy_color", "bevy_log"] }
 ftgsxr-core.workspace = true
+ftgsxr-io.workspace = true # Q-T223.1: `SettingsRes` holds `ftgsxr_io::Settings`
 ftgsxr-render.workspace = true
 
 [dev-dependencies]
