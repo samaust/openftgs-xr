@@ -105,6 +105,19 @@ fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
+    if let Some(name) = &test {
+        // Dv-3, Dv-4 (Q-122): before the XR session, then the process exits.
+        let dv = ANDROID_APP
+            .get()
+            .and_then(|a| a.external_data_path())
+            .map(|e| e.join("dv"));
+        if let Some(dv) = dv
+            && device_test::run_headless(name, &dv)
+        {
+            std::process::exit(0);
+        }
+    }
+
     let tier = QualityTier::by_name(&settings.general.tier).unwrap_or_else(|| {
         warn!("unknown tier {}; quest-balanced", settings.general.tier);
         QualityTier::by_name("quest-balanced").expect("invariant: §1.12's tier exists")
