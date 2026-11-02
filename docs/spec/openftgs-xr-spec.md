@@ -1325,7 +1325,7 @@ Rust wraps them as `QuestPlatform` (the `Platform`, `DocumentProvider` and `Came
 
 ### 2.7 Test infrastructure
 
-**Lanes** (D-28). `cpu` tests run under plain `cargo test` on any machine. The other lanes are `#[ignore = "<lane>"]` with a name prefix: `gpu_` (needs a graphics adapter), `xr_` (needs an OpenXR runtime: Monado on the desktop), `dv_` (needs the Quest over adb), `net_` (needs the internet), `ds_` (needs `$OPENFTGS_DATASETS` and the trained tiny models). A lane runs with `cargo test -- --ignored <prefix>`, and the `gpu`, `xr` and `dv` lanes with `--test-threads 1`. The skills' ledger budgets every run (`.claude/skills/implement-without-subagents/SKILL.md`).
+**Lanes** (D-28). `cpu` tests run under plain `cargo test` on any machine. The other lanes are `#[ignore = "<lane>"]` with a name prefix: `gpu_` (needs a graphics adapter), `xr_` (needs an OpenXR runtime: Monado on the desktop), `dv_` (needs the Quest over adb), `net_` (needs the internet), `ds_` (needs `$OPENFTGS_DATASETS` and the trained tiny models). A lane runs with `cargo test -- --ignored <prefix>`, and the `gpu`, `ds`, `xr` and `dv` lanes with `--test-threads 1`. The skills' ledger budgets every run (`.claude/skills/implement-without-subagents/SKILL.md`).
 
 **Skeleton test.** `ftgsxr-core` has the always-run test `skeleton`: every source file of the workspace starts with its SPDX header; `cargo metadata` lists exactly §2.1's crates; every `.wgsl` file is referenced by `ftgsxr-render`.
 
