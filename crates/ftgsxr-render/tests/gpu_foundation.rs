@@ -259,3 +259,48 @@ fn gpu_validation_layer_message_fails_the_test() {
     drop(dev);
     drop(layer);
 }
+
+/// Set in the child run of the test below, which disables the Khronos layer.
+const NO_LAYER_CHILD: &str = "FTGSXR_TEST_NO_LAYER_CHILD";
+
+#[cfg(debug_assertions)]
+#[test]
+#[ignore = "gpu"]
+fn gpu_guard_fails_when_the_validation_layer_is_not_loaded() {
+    // Q-105 (changed, #209): in a debug build the guard panics when it drops and no instance
+    // in the process reported the layer active, so R-16 cannot pass vacuously. The test runs
+    // itself again with the loader told to hide the layer (`VK_LOADER_LAYERS_DISABLE`).
+    let layer = layer_messages();
+    let dev = gpu_context();
+    if std::env::var_os(NO_LAYER_CHILD).is_some() {
+        assert_eq!(layer.take_active(), 0, "the layer was disabled");
+        drop(dev);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(layer)))
+            .expect_err("the guard panics without the layer");
+        let text = panic
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_default();
+        assert!(text.contains("validation layer is not loaded"), "{text}");
+        return;
+    }
+    let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([
+            "--ignored",
+            "--exact",
+            "gpu_guard_fails_when_the_validation_layer_is_not_loaded",
+            "--test-threads",
+            "1",
+        ])
+        .env(NO_LAYER_CHILD, "1")
+        .env("VK_LOADER_LAYERS_DISABLE", "*validation*")
+        .output()
+        .expect("the child run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("1 passed"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
