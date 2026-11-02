@@ -9,7 +9,9 @@
 //! conversion to E6's camera); window and swapchain behaviour are M-4's I-n. The other
 //! tests here check `LinearOver`'s resolve onto an sRGB target (Q-94), that
 //! `FileEncoded` is not drawn onto one (Q-100, #178), and the GPU times of a frame that
-//! skips stages 1–4 (Q-81, Q-115, #184).
+//! skips stages 1–4 (Q-81, Q-115, #184), that a change of τ_m, the camera or an
+//! instance's transform runs them again (#187) and a background change alone does not
+//! (#201), and the components' requirements and D-6 settings (#202, #203).
 
 use std::sync::{Arc, Mutex};
 
@@ -163,6 +165,7 @@ struct P1Scene {
     app: App,
     seen: Seen,
     camera: Entity,
+    model: Entity,
 }
 
 impl P1Scene {
@@ -259,7 +262,12 @@ impl P1Scene {
             },
         );
 
-        let mut scene = P1Scene { app, seen, camera };
+        let mut scene = P1Scene {
+            app,
+            seen,
+            camera,
+            model,
+        };
         let mut uploaded_at = None;
         for frame in 0..MAX_FRAMES {
             scene.frames(1);
@@ -621,4 +629,74 @@ fn gpu_bevy_adapter_changing_only_the_background_skips_stages_1_to_4() {
             "stages 1–4 skipped: {stats:?}"
         );
     }
+}
+
+/// Settles P1 (`FileEncoded` on a 16-bit float target) over unchanged frames, applies
+/// `change`, and checks that stages 1–4 ran again (§1.4's skip condition, §2.4 rule 2,
+/// Q-100's key, #187): a statistics block after the change times the cull and the sort
+/// (> 0, on a device with timestamp queries), or the read back differs from the
+/// settled frame's.
+fn assert_stages_1_to_4_rerun_after(what: &str, change: impl FnOnce(&mut P1Scene)) {
+    let mut scene = P1Scene::settled(OutputSpace::FileEncoded, TextureFormat::Rgba16Float);
+    let settled = scene.readback(UNCHANGED_FRAMES);
+    scene.take_stats();
+    change(&mut scene);
+    let after = scene.readback(UNCHANGED_FRAMES);
+    let stats = scene.take_stats();
+    let timed = scene.timestamps()
+        && stats
+            .iter()
+            .any(|s| s.gpu_times_ms.cull > 0.0 && s.gpu_times_ms.sort > 0.0);
+    let redrawn = after != settled;
+    eprintln!("{what}: stages 1–4 timed {timed}, read back changed {redrawn}");
+    assert!(
+        timed || redrawn,
+        "{what}: stages 1–4 ran after the change: {stats:?}"
+    );
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_reruns_stages_1_to_4_after_a_change_of_tau() {
+    let _layer = layer_messages(); // R-16, Q-105
+    assert_stages_1_to_4_rerun_after("τ_m", |scene| {
+        let model = scene.model;
+        // Within P1's span [0, 1.9], away from the settled 0.95.
+        scene
+            .app
+            .world_mut()
+            .get_mut::<SplatTime>(model)
+            .expect("the instance's time")
+            .tau = 1.5;
+    });
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_reruns_stages_1_to_4_after_the_camera_moves() {
+    let _layer = layer_messages(); // R-16, Q-105
+    assert_stages_1_to_4_rerun_after("the camera's transform", |scene| {
+        let camera = scene.camera;
+        scene
+            .app
+            .world_mut()
+            .get_mut::<Transform>(camera)
+            .expect("the camera's transform")
+            .translation += Vec3::new(0.2, 0.0, 0.1);
+    });
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_reruns_stages_1_to_4_after_the_instance_moves() {
+    let _layer = layer_messages(); // R-16, Q-105
+    assert_stages_1_to_4_rerun_after("the instance's transform", |scene| {
+        let model = scene.model;
+        scene
+            .app
+            .world_mut()
+            .get_mut::<Transform>(model)
+            .expect("the instance's transform")
+            .translation += Vec3::new(0.2, 0.0, 0.1);
+    });
 }
