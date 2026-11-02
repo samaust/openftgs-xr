@@ -18,9 +18,12 @@ use bevy::app::{App, PluginsState};
 use bevy::asset::{AssetPlugin, Assets, RenderAssetUsages};
 use bevy::camera::visibility::Visibility;
 use bevy::camera::{
-    Camera, Camera3d, CameraPlugin, PerspectiveProjection, Projection, RenderTarget,
+    Camera, Camera3d, CameraPlugin, ClearColorConfig, PerspectiveProjection, Projection,
+    RenderTarget,
 };
+use bevy::color::Color;
 use bevy::core_pipeline::CorePipelinePlugin;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::ecs::prelude::*;
 use bevy::image::{Image, ImagePlugin};
 use bevy::math::{Mat3, Quat, Vec3};
@@ -30,6 +33,7 @@ use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::settings::WgpuFeatures;
+use bevy::render::view::Msaa;
 use bevy::render::{RenderApp, RenderPlugin};
 use bevy::transform::TransformPlugin;
 use bevy::transform::components::Transform;
@@ -472,4 +476,58 @@ fn splat_components_derive_what_q99_lists_where_their_fields_allow() {
     copy::<SplatCamera>();
     no_copy::<SplatModel>();
     no_copy::<SplatLoad>();
+}
+
+/// A `SplatCamera` in an App without a renderer, inserted in two steps when
+/// `camera_later`: the component first, `Camera3d` on a later frame.
+fn splat_camera_after(camera_later: bool) -> (Camera, Msaa, Tonemapping) {
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        SplatPlugin {
+            tier: QualityTier::conformance(),
+        },
+    ));
+    let splat = SplatCamera {
+        sort: SortMode::PerView,
+        output: OutputSpace::LinearOver { background: None },
+    };
+    let entity = if camera_later {
+        let entity = app.world_mut().spawn(splat).id();
+        app.update();
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(Camera3d::default());
+        entity
+    } else {
+        app.world_mut().spawn((Camera3d::default(), splat)).id()
+    };
+    app.update();
+    let e = app.world().entity(entity);
+    (
+        e.get::<Camera>().expect("a camera").clone(),
+        *e.get::<Msaa>().expect("an Msaa"),
+        *e.get::<Tonemapping>().expect("a Tonemapping"),
+    )
+}
+
+/// D-6, Q-100: a splat camera ends with no MSAA, no tonemapping and a transparent
+/// clear whatever the order its components were inserted in (#203).
+#[test]
+fn splat_camera_follows_d6_whatever_the_insertion_order() {
+    for camera_later in [false, true] {
+        let (camera, msaa, tonemapping) = splat_camera_after(camera_later);
+        assert!(
+            matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == Color::NONE),
+            "transparent clear (camera later: {camera_later}): {:?}",
+            camera.clear_color
+        );
+        assert_eq!(msaa, Msaa::Off, "camera later: {camera_later}");
+        assert_eq!(
+            tonemapping,
+            Tonemapping::None,
+            "camera later: {camera_later}"
+        );
+    }
 }

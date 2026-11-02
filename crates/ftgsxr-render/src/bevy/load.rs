@@ -165,6 +165,17 @@ pub(crate) fn make_camera_follow_d6(
     }
 }
 
+/// The transparent clear of `make_camera_follow_d6` for a camera added after its
+/// `SplatCamera`, so the insertion order does not matter (D-6, Q-100, #203).
+pub(crate) fn clear_late_splat_camera(
+    add: On<Add, Camera>,
+    mut cameras: Query<&mut Camera, With<SplatCamera>>,
+) {
+    if let Ok(mut camera) = cameras.get_mut(add.entity) {
+        camera.clear_color = ClearColorConfig::Custom(Color::NONE);
+    }
+}
+
 /// Starts each new `SplatLoad` as one task on the async compute task pool (§2.4 Threads).
 pub(crate) fn start_loads(
     mut commands: Commands,
