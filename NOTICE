@@ -40,6 +40,9 @@ vendor/bevy_mod_openxr-0.6.0 is bevy_mod_openxr 0.6.0 from crates.io (https://gi
 used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two changes
 marked in src/openxr/graphics/vulkan.rs (the Android Vulkan target; on Android, the instance
 drops wgpu's VALIDATION_INDIRECT_CALL).
+Its LICENSE-MIT and LICENSE-APACHE are copied from the upstream repository's main branch
+(commit 18b64bec26f343931f1b439d2e4a4013f6a095e8), since the crates.io package ships none and
+the repository has no 0.6.0 release tag; neither file names a copyright holder.
 
 vendor/wgpu-core-29.0.4 is wgpu-core 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
 used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with one change
