@@ -398,9 +398,14 @@ fn prepare_view(
             })
             .collect(),
     };
+    // §2.4 rule 4: the frame buffers are sized once per passes (layer format and sort
+    // mode) and capacity, so a change of the output alone (a `LinearOver` background)
+    // keeps them, and the key below decides stages 1–4 (#201).
     let state = match views.states.remove(&entity) {
         Some(s)
-            if Arc::ptr_eq(&s.passes, &passes) && s.camera == camera && s.frame.capacity() == c =>
+            if Arc::ptr_eq(&s.passes, &passes)
+                && s.camera.sort == camera.sort
+                && s.frame.capacity() == c =>
         {
             s
         }
@@ -417,6 +422,7 @@ fn prepare_view(
         },
     };
     let mut state = state;
+    state.camera = camera;
     // §1.4, §2.4 rule 2, Q-100: stages 1–4 only when an input changed.
     // The key names GPU models by address: safe because `state.instances` still holds
     // the previous frame's `Arc`s here, so no address can have been reused yet.

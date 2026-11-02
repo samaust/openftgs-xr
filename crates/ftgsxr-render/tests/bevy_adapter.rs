@@ -14,7 +14,7 @@
 use std::sync::{Arc, Mutex};
 
 use bevy::MinimalPlugins;
-use bevy::app::{App, PluginsState};
+use bevy::app::{App, Last, PluginsState};
 use bevy::asset::{AssetPlugin, Assets, RenderAssetUsages};
 use bevy::camera::visibility::Visibility;
 use bevy::camera::{
@@ -41,8 +41,8 @@ use bevy::window::{ExitCondition, WindowPlugin};
 use ftgsxr_core::{Camera as FtgsCamera, DMat3, RenderImage};
 use ftgsxr_io::ModelBytes;
 use ftgsxr_render::{
-    OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatLoad, SplatMode, SplatModel,
-    SplatOverlays, SplatPlugin, SplatStats, SplatTime, SplatTransform,
+    FrameStats, OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatLoad, SplatMode,
+    SplatModel, SplatOverlays, SplatPlugin, SplatStats, SplatTime, SplatTransform,
 };
 use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe, reference_render};
 
@@ -71,6 +71,7 @@ fn render_errored(app: &App) -> bool {
 struct Seen {
     events: Arc<Mutex<Vec<SplatEvent>>>,
     readback: Arc<Mutex<Option<Vec<u8>>>>,
+    stats: Arc<Mutex<Vec<FrameStats>>>,
 }
 
 /// The Bevy view transform of openftgs's camera: the center −R_wᵀ t_w, and the view axes
@@ -157,140 +158,185 @@ fn composite(bytes: &[u8], w: u32, h: u32, background: [f32; 3]) -> RenderImage 
 
 /// P1's first item drawn by a Bevy `App` with `SplatPlugin { tier: conformance }`: the
 /// model loaded through `SplatLoad` at the item's timestamp, one `SplatCamera` writing
-/// `output` into an image target of `format`; returns the target's bytes as read back,
-/// a few frames after the upload, and the `SplatStats` then.
+/// `output` into an image target of `format`.
+struct P1Scene {
+    app: App,
+    seen: Seen,
+    camera: Entity,
+}
+
+impl P1Scene {
+    /// The scene, run until the model uploaded and a few frames more, so the next frames
+    /// draw it.
+    fn settled(output: OutputSpace, format: TextureFormat) -> P1Scene {
+        let (_, request) = probe("P1");
+        let item = &request.items[0];
+        let (w, h) = (item.camera.width, item.camera.height);
+        let bytes = std::fs::read(fixtures_dir().join("probes/P1.safetensors")).expect("P1's file");
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            TransformPlugin,
+            AssetPlugin::default(),
+            WindowPlugin {
+                primary_window: None,
+                exit_condition: ExitCondition::DontExit,
+                close_when_requested: false,
+                ..WindowPlugin::default()
+            },
+            RenderPlugin::default(),
+            ImagePlugin::default(),
+            MeshPlugin,
+            CameraPlugin,
+            CorePipelinePlugin,
+            SplatPlugin {
+                tier: QualityTier::conformance(),
+            },
+        ))
+        .insert_resource(RenderErrorHandler(|error, main_world, _| {
+            eprintln!("render error: {:?}: {}", error.ty, error.description);
+            main_world.insert_resource(RenderErrored);
+            RenderErrorPolicy::StopRendering
+        }));
+        while app.plugins_state() == PluginsState::Adding {
+            bevy::tasks::tick_global_task_pools_on_main_thread();
+        }
+        app.finish();
+        app.cleanup();
+
+        let seen = Seen::default();
+        app.insert_resource(seen.clone());
+        app.add_observer(|event: On<SplatEvent>, seen: Res<Seen>| {
+            seen.events.lock().unwrap().push(event.event().clone());
+        });
+        // Every statistics block as it arrives, not only the last (#201, #187).
+        app.add_systems(Last, |stats: Res<SplatStats>, seen: Res<Seen>| {
+            if stats.is_changed()
+                && let Some(s) = stats.0
+            {
+                seen.stats.lock().unwrap().push(s);
+            }
+        });
+
+        let mut image = Image::new_target_texture(w, h, format, None);
+        image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+        image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Camera::default(),
+                RenderTarget::Image(target.clone().into()),
+                bevy_projection(&item.camera),
+                bevy_transform(&item.camera),
+                SplatCamera {
+                    sort: SortMode::PerView,
+                    output,
+                },
+            ))
+            .id();
+        let model = app
+            .world_mut()
+            .spawn((
+                SplatLoad {
+                    bytes: ModelBytes::Owned(bytes),
+                    kind_hint: None,
+                    reduce_to: None,
+                },
+                SplatTime {
+                    tau: item.timestamp,
+                    extrapolating: false,
+                },
+                Transform::IDENTITY,
+            ))
+            .id();
+        app.world_mut().spawn(Readback::texture(target)).observe(
+            |event: On<ReadbackComplete>, seen: Res<Seen>| {
+                *seen.readback.lock().unwrap() = Some(event.data.clone());
+            },
+        );
+
+        let mut scene = P1Scene { app, seen, camera };
+        let mut uploaded_at = None;
+        for frame in 0..MAX_FRAMES {
+            scene.frames(1);
+            let events = scene.seen.events.lock().unwrap().clone();
+            if let Some(SplatEvent::Failed { error, .. }) = events
+                .iter()
+                .find(|e| matches!(e, SplatEvent::Failed { .. }))
+            {
+                panic!("the load failed: {error}");
+            }
+            if uploaded_at.is_none()
+                && events
+                    .iter()
+                    .any(|e| matches!(e, SplatEvent::Uploaded { entity, .. } if *entity == model))
+            {
+                uploaded_at = Some(frame);
+            }
+            if uploaded_at.is_some_and(|f| frame >= f + SETTLE_FRAMES) {
+                break;
+            }
+        }
+        assert!(
+            uploaded_at.is_some(),
+            "P1 uploaded within {MAX_FRAMES} frames"
+        );
+        scene
+    }
+
+    /// Runs `n` frames, failing on any render error.
+    fn frames(&mut self, n: usize) {
+        for _ in 0..n {
+            self.app.update();
+            assert!(!render_errored(&self.app), "Bevy reported a render error");
+        }
+    }
+
+    /// A fresh read back of the target, from a frame rendered after this call: two
+    /// frames, then `more`.
+    fn readback(&mut self, more: usize) -> Vec<u8> {
+        *self.seen.readback.lock().unwrap() = None;
+        self.frames(2 + more);
+        self.seen
+            .readback
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("a read back of the image target")
+    }
+
+    /// The statistics blocks that arrived since the last call.
+    fn take_stats(&self) -> Vec<FrameStats> {
+        std::mem::take(&mut *self.seen.stats.lock().unwrap())
+    }
+
+    /// Whether the device has timestamp queries.
+    fn timestamps(&self) -> bool {
+        self.app
+            .sub_app(RenderApp)
+            .world()
+            .resource::<RenderDevice>()
+            .features()
+            .contains(WgpuFeatures::TIMESTAMP_QUERY)
+    }
+}
+
+/// The target's bytes as read back a few frames after the upload, the `SplatStats`
+/// then, and whether the device has timestamp queries; `unchanged_frames` more frames
+/// are rendered before the read back is taken.
 fn render_p1(
     output: OutputSpace,
     format: TextureFormat,
     unchanged_frames: usize,
 ) -> (Vec<u8>, SplatStats, bool) {
-    let (_, request) = probe("P1");
-    let item = &request.items[0];
-    let (w, h) = (item.camera.width, item.camera.height);
-    let bytes = std::fs::read(fixtures_dir().join("probes/P1.safetensors")).expect("P1's file");
-
-    let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins,
-        TransformPlugin,
-        AssetPlugin::default(),
-        WindowPlugin {
-            primary_window: None,
-            exit_condition: ExitCondition::DontExit,
-            close_when_requested: false,
-            ..WindowPlugin::default()
-        },
-        RenderPlugin::default(),
-        ImagePlugin::default(),
-        MeshPlugin,
-        CameraPlugin,
-        CorePipelinePlugin,
-        SplatPlugin {
-            tier: QualityTier::conformance(),
-        },
-    ))
-    .insert_resource(RenderErrorHandler(|error, main_world, _| {
-        eprintln!("render error: {:?}: {}", error.ty, error.description);
-        main_world.insert_resource(RenderErrored);
-        RenderErrorPolicy::StopRendering
-    }));
-    while app.plugins_state() == PluginsState::Adding {
-        bevy::tasks::tick_global_task_pools_on_main_thread();
-    }
-    app.finish();
-    app.cleanup();
-
-    let seen = Seen::default();
-    app.insert_resource(seen.clone());
-    app.add_observer(|event: On<SplatEvent>, seen: Res<Seen>| {
-        seen.events.lock().unwrap().push(event.event().clone());
-    });
-
-    let mut image = Image::new_target_texture(w, h, format, None);
-    image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
-    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
-    let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
-
-    app.world_mut().spawn((
-        Camera3d::default(),
-        Camera::default(),
-        RenderTarget::Image(target.clone().into()),
-        bevy_projection(&item.camera),
-        bevy_transform(&item.camera),
-        SplatCamera {
-            sort: SortMode::PerView,
-            output,
-        },
-    ));
-    let model = app
-        .world_mut()
-        .spawn((
-            SplatLoad {
-                bytes: ModelBytes::Owned(bytes),
-                kind_hint: None,
-                reduce_to: None,
-            },
-            SplatTime {
-                tau: item.timestamp,
-                extrapolating: false,
-            },
-            Transform::IDENTITY,
-        ))
-        .id();
-    app.world_mut().spawn(Readback::texture(target)).observe(
-        |event: On<ReadbackComplete>, seen: Res<Seen>| {
-            *seen.readback.lock().unwrap() = Some(event.data.clone());
-        },
-    );
-
-    let mut uploaded_at = None;
-    for frame in 0..MAX_FRAMES {
-        app.update();
-        assert!(!render_errored(&app), "Bevy reported a render error");
-        let events = seen.events.lock().unwrap().clone();
-        if let Some(SplatEvent::Failed { error, .. }) = events
-            .iter()
-            .find(|e| matches!(e, SplatEvent::Failed { .. }))
-        {
-            panic!("the load failed: {error}");
-        }
-        if uploaded_at.is_none()
-            && events
-                .iter()
-                .any(|e| matches!(e, SplatEvent::Uploaded { entity, .. } if *entity == model))
-        {
-            uploaded_at = Some(frame);
-        }
-        if uploaded_at.is_some_and(|f| frame >= f + SETTLE_FRAMES) {
-            // A fresh read back, from a frame after the settle.
-            *seen.readback.lock().unwrap() = None;
-            app.update();
-            app.update();
-            for _ in 0..unchanged_frames {
-                app.update();
-            }
-            break;
-        }
-    }
-    assert!(
-        uploaded_at.is_some(),
-        "P1 uploaded within {MAX_FRAMES} frames"
-    );
-    assert!(!render_errored(&app), "Bevy reported a render error");
-    let data = seen
-        .readback
-        .lock()
-        .unwrap()
-        .clone()
-        .expect("a read back of the image target");
-    let stats = *app.world().resource::<SplatStats>();
-    let timestamps = app
-        .sub_app(RenderApp)
-        .world()
-        .resource::<RenderDevice>()
-        .features()
-        .contains(WgpuFeatures::TIMESTAMP_QUERY);
-    (data, stats, timestamps)
+    let mut scene = P1Scene::settled(output, format);
+    let data = scene.readback(unchanged_frames);
+    let stats = *scene.app.world().resource::<SplatStats>();
+    (data, stats, scene.timestamps())
 }
 
 /// The first item's reference render of P1.
@@ -351,6 +397,13 @@ fn gpu_bevy_adapter_resolves_p1_over_a_background_onto_an_srgb_target() {
         TextureFormat::Rgba8UnormSrgb,
         0,
     );
+    assert_resolved_over(&data, background);
+    assert_stats(stats);
+}
+
+/// The read back sRGB target `data` holds P1's reference composited over `background`
+/// within E15's color criteria, opaque everywhere.
+fn assert_resolved_over(data: &[u8], background: [f32; 3]) {
     let (reference, request_background) = p1_reference();
     assert_eq!(request_background, [0.0; 3], "P1's reference is over black");
     let (w, h) = (reference.width as usize, reference.height as usize);
@@ -386,7 +439,6 @@ fn gpu_bevy_adapter_resolves_p1_over_a_background_onto_an_srgb_target() {
         m.psnr >= MIN_PSNR && m.share <= MAX_SHARE,
         "E15's tier: {m:?}"
     );
-    assert_stats(stats);
 }
 
 /// `FileEncoded` on an sRGB target is not drawn (D-6, Q-100): the hardware would store
@@ -528,6 +580,45 @@ fn splat_camera_follows_d6_whatever_the_insertion_order() {
             tonemapping,
             Tonemapping::None,
             "camera later: {camera_later}"
+        );
+    }
+}
+
+/// §2.4 rule 4, §1.4's skip (#201): changing only a `LinearOver` background keeps the
+/// view's frame buffers and does not run stages 1–4. Every statistics block after the
+/// change times no cull and no sort, and the read back shows the new background.
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_changing_only_the_background_skips_stages_1_to_4() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let over = |background| OutputSpace::LinearOver {
+        background: Some(background),
+    };
+    let mut scene = P1Scene::settled(over([0.2, 0.4, 0.6]), TextureFormat::Rgba8UnormSrgb);
+    scene.readback(UNCHANGED_FRAMES);
+    scene.take_stats();
+    let background = [0.7, 0.1, 0.3];
+    let camera = scene.camera;
+    scene
+        .app
+        .world_mut()
+        .get_mut::<SplatCamera>(camera)
+        .expect("the splat camera")
+        .output = over(background);
+    let data = scene.readback(UNCHANGED_FRAMES);
+    assert_resolved_over(&data, background);
+    let stats = scene.take_stats();
+    assert!(!stats.is_empty(), "statistics after the change");
+    if !scene.timestamps() {
+        eprintln!("no TIMESTAMP_QUERY: the GPU times are not checked");
+        return;
+    }
+    for s in &stats {
+        let t = s.gpu_times_ms;
+        assert_eq!(
+            (t.cull, t.sort),
+            (0.0, 0.0),
+            "stages 1–4 skipped: {stats:?}"
         );
     }
 }
