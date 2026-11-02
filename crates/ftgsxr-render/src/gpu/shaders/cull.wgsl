@@ -98,6 +98,7 @@ const SPLAT_COUNT: u32 = 1u;
 const CENTER_COUNT: u32 = 5u;
 const OVERFLOW: u32 = 8u;
 const ACTIVE: u32 = 9u;
+// Q-118
 const NON_FINITE: u32 = 10u;
 
 // The sort's block, keys per workgroup of its count and scatter passes (§1.4 stage 3),
