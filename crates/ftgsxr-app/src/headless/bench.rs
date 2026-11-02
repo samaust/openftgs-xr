@@ -1331,7 +1331,7 @@ mod tests {
     #[test]
     fn validation_note_reports_the_messages_without_failing() {
         // Q-116: no message, no note; collected messages are one note naming their
-        // count and each message, and `cmd_bench` returns it rather than an error.
+        // count and each message, and the note names no §1.15 error code.
         assert_eq!(validation_note(&[]), None);
         let messages = ["VUID-a: first".to_owned(), "VUID-b: second".to_owned()];
         let note = validation_note(&messages).expect("a note");

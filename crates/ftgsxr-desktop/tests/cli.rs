@@ -417,6 +417,10 @@ fn bench(args: &[&str], baselines: &std::path::Path) -> Output {
         );
     }
     assert!(messages.is_empty(), "{messages:#?}");
+    // §1.13, Q-116: wgpu's validation errors reach only the report's note, which the
+    // binary prints on standard error; R-16's guard above sees only the layer's records.
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!stderr.contains("GPU validation reported"), "{stderr}");
     o
 }
 

@@ -49,6 +49,13 @@ fn run(name: &str, model: Option<&Path>, dir_name: &str) -> Value {
     let text = std::fs::read_to_string(&out).expect("the file is written");
     assert_eq!(report.json, text);
     let file: Value = serde_json::from_str(&text).expect("well-formed JSON");
+    // §1.13, Q-116: `cmd_bench` turns wgpu's validation errors into a note, not an
+    // error, and R-16's guard sees only the Khronos layer's records, so a note fails here.
+    assert!(
+        !text.contains("GPU validation reported"),
+        "the run reported GPU validation messages: {}",
+        file["notes"]
+    );
     assert_eq!(file["format"], "ftgsxr-bench");
     assert_eq!(file["version"], 1);
     assert_eq!(file["bench"], name);
