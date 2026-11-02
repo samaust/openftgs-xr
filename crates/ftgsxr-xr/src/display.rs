@@ -23,7 +23,7 @@
 
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageWriter;
-use bevy::log::{error, info, warn};
+use bevy::log::{info, warn};
 use bevy::math::UVec2;
 use bevy::prelude::DetectChangesMut;
 use bevy::prelude::{IntoScheduleConfigs, Res, ResMut, Resource, resource_exists};
@@ -189,6 +189,9 @@ struct Applied {
     foveation: Option<Foveation>,
     /// The scale the live (or next) swapchain is made with.
     scale: f32,
+    /// A requested scale that could not be applied, so it is reported once, not every
+    /// frame, and attempted again only when the setting changes (§1.13).
+    failed_scale: Option<f32>,
     /// Whether the settings' foveation was asked for explicitly (an absent extension is
     /// only reported for a request, Q-124).
     foveation_requested: bool,
@@ -230,6 +233,7 @@ impl Plugin for DisplayPlugin {
             refresh_rate: None,
             foveation: None,
             scale,
+            failed_scale: None,
             foveation_requested: explicit_foveation,
         })
         .init_resource::<FoveationRequest>()
@@ -404,11 +408,15 @@ fn apply_changes(
         foveation(caps, &session, settings.foveation, &mut request);
     }
     let scale = settings.render_scale;
-    if (scale - applied.scale).abs() >= SCALE_STEP - 1e-6 && !recreate.0 {
+    if scale_due(&mut applied, scale, recreate.0) {
         let Some((view, max)) = recommended(instance.as_deref(), system.as_deref()) else {
-            error!("render scale {scale}: no view configuration; not applied");
+            applied.failed_scale = Some(scale);
+            log_error(&XrError::Runtime(format!(
+                "render scale {scale}: no view configuration; not applied"
+            )));
             return;
         };
+        applied.failed_scale = None;
         // Q-132
         let base = if caps.layer_resolution {
             layer_resolution(&session, &instance, &layer).unwrap_or(view)
@@ -429,6 +437,19 @@ fn apply_changes(
         recreate.0 = true;
         exit.write(XrRequestExitMessage);
     }
+}
+
+/// Whether a render-scale change to `scale` is to be attempted now: it differs from the
+/// applied scale by a step, no re-creation is under way, and it is not the scale that last
+/// failed. A failed scale is reported once and attempted again only after the setting
+/// moves (§1.13).
+fn scale_due(applied: &mut Applied, scale: f32, recreating: bool) -> bool {
+    if applied.failed_scale.is_some_and(|f| f != scale) {
+        applied.failed_scale = None;
+    }
+    (scale - applied.scale).abs() >= SCALE_STEP - 1e-6
+        && !recreating
+        && applied.failed_scale != Some(scale)
 }
 
 /// What XR\_META\_recommended\_layer\_resolution's query needs from the main world.
@@ -560,6 +581,29 @@ fn log_rate_change(event: OxrEventIn) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A render scale that fails is attempted (and so logged) once per requested change,
+    /// not every frame; it is attempted again once the setting moves (§1.13; #265).
+    #[test]
+    fn failed_scale_is_attempted_once_per_change() {
+        let mut applied = Applied {
+            refresh_rate: None,
+            foveation: None,
+            scale: 1.0,
+            failed_scale: None,
+            foveation_requested: false,
+        };
+        assert!(!scale_due(&mut applied, 1.0, false));
+        assert!(scale_due(&mut applied, 1.5, false));
+        assert!(!scale_due(&mut applied, 1.5, true));
+        applied.failed_scale = Some(1.5);
+        for _ in 0..3 {
+            assert!(!scale_due(&mut applied, 1.5, false));
+        }
+        assert!(scale_due(&mut applied, 1.2, false));
+        assert_eq!(applied.failed_scale, None);
+        assert!(scale_due(&mut applied, 1.5, false));
+    }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {
         DisplaySettings {
