@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use bevy::MinimalPlugins;
 use bevy::app::{App, PluginsState};
 use bevy::asset::{AssetPlugin, Assets, RenderAssetUsages};
+use bevy::camera::visibility::Visibility;
 use bevy::camera::{
     Camera, Camera3d, CameraPlugin, PerspectiveProjection, Projection, RenderTarget,
 };
@@ -36,8 +37,8 @@ use bevy::window::{ExitCondition, WindowPlugin};
 use ftgsxr_core::{Camera as FtgsCamera, DMat3, RenderImage};
 use ftgsxr_io::ModelBytes;
 use ftgsxr_render::{
-    OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatLoad, SplatPlugin,
-    SplatStats, SplatTime,
+    OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatLoad, SplatMode, SplatModel,
+    SplatOverlays, SplatPlugin, SplatStats, SplatTime, SplatTransform,
 };
 use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe, reference_render};
 
@@ -439,4 +440,36 @@ fn gpu_bevy_adapter_reports_only_the_draw_on_a_frame_that_skips_stages_1_to_4() 
     assert_eq!((t.cull, t.sort), (0.0, 0.0), "no stage 1–4 times: {t:?}");
     assert!(t.draw > 0.0, "the draw is timed: {t:?}");
     assert_eq!(t.total, t.draw, "the total is the draw's alone: {t:?}");
+}
+
+/// §2.1: a `SplatModel` comes "with Transform (uniform scale) and Visibility", so an
+/// entity spawned with only the component has both (#202).
+#[test]
+fn splat_model_requires_transform_and_visibility() {
+    let mut world = World::new();
+    let entity = world.spawn(SplatModel(bevy::asset::Handle::default())).id();
+    let entity = world.entity(entity);
+    assert!(
+        entity.contains::<Transform>(),
+        "SplatModel requires Transform"
+    );
+    assert!(
+        entity.contains::<Visibility>(),
+        "SplatModel requires Visibility"
+    );
+}
+
+/// Q-99: the bevy components derive `Clone, Copy, Debug, PartialEq` where their fields
+/// allow (#202). A handle and model bytes are not `Copy`.
+#[test]
+fn splat_components_derive_what_q99_lists_where_their_fields_allow() {
+    fn copy<T: Clone + Copy + std::fmt::Debug + PartialEq>() {}
+    fn no_copy<T: Clone + std::fmt::Debug + PartialEq>() {}
+    copy::<SplatTime>();
+    copy::<SplatMode>();
+    copy::<SplatTransform>();
+    copy::<SplatOverlays>();
+    copy::<SplatCamera>();
+    no_copy::<SplatModel>();
+    no_copy::<SplatLoad>();
 }

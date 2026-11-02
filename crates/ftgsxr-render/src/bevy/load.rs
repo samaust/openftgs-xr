@@ -34,7 +34,8 @@ pub(crate) const UPLOAD_BYTES_PER_FRAME: u64 = 64_000_000;
 /// on the async compute task pool with the tier's load options and the governor's SH cap
 /// (`load_splat_asset`), then adds the `SplatAsset` and inserts `SplatModel` on the
 /// entity; a failure is `SplatEvent::Failed` on the entity, which gets no `SplatModel`.
-#[derive(Component, Debug)]
+/// Clone and comparable as Q-99 asks of the components (#202).
+#[derive(Component, Clone, Debug, PartialEq)]
 pub struct SplatLoad {
     /// The model's bytes, or a checkpoint's directory (D-51).
     pub bytes: ModelBytes,
