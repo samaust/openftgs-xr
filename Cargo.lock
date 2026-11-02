@@ -1912,6 +1912,7 @@ dependencies = [
  "bevy_mod_xr",
  "bevy_xr_utils",
  "ftgsxr-app",
+ "ftgsxr-core",
  "ftgsxr-io",
  "ftgsxr-render",
  "ftgsxr-testkit",

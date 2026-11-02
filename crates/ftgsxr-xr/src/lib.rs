@@ -11,6 +11,7 @@ mod error;
 mod passthrough;
 mod plugin;
 mod session;
+mod tracking;
 
 // §2.1; Q-119: `code` and `user_text`.
 pub use error::XrError;
@@ -18,3 +19,5 @@ pub use error::XrError;
 pub use passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 // §2.1 `XrPlugin`; Q-120: `add_xr`.
 pub use plugin::{XrPlugin, add_xr};
+// §2.1 (#227).
+pub use tracking::{HandSource, TrackedHand, XrHands};
