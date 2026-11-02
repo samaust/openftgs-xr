@@ -14,7 +14,8 @@ use ftgsxr_xr::{DisplaySettings, Foveation};
 
 use crate::device_test::verdict;
 
-const NAME: &str = "dv12";
+/// The test's name in the intent extra.
+pub(crate) const NAME: &str = "dv12";
 const TIMEOUT: Duration = Duration::from_secs(60);
 /// How long each step is left to take effect.
 const STEP: Duration = Duration::from_secs(2);
@@ -44,7 +45,7 @@ struct Dv12 {
 }
 
 /// Adds the test.
-pub(crate) fn add(app: &mut App) {
+pub(super) fn add(app: &mut App) {
     let now = Instant::now();
     app.insert_resource(Dv12 {
         started: now,

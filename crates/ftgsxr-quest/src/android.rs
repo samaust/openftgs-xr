@@ -65,6 +65,15 @@ fn exit_without_session(
     AppPaths::android(&internal, external.as_deref(), &cache)
 }
 
+/// A model's bytes to load as they are (no kind hint, no reduction).
+pub(crate) fn splat_load(bytes: Vec<u8>) -> SplatLoad {
+    SplatLoad {
+        bytes: ModelBytes::Owned(bytes),
+        kind_hint: None,
+        reduce_to: None,
+    }
+}
+
 /// The provisional harness M-4's `AppPlugin` replaces: every exchange file of the models
 /// directory as a model instance at the identity pose (#224; D-11's fit is not claimed).
 fn spawn_models(app: &mut App, models: &Path) {
@@ -80,11 +89,7 @@ fn spawn_models(app: &mut App, models: &Path) {
             Ok(bytes) => {
                 info!("loading {}", path.display());
                 app.world_mut().spawn((
-                    SplatLoad {
-                        bytes: ModelBytes::Owned(bytes),
-                        kind_hint: None,
-                        reduce_to: None,
-                    },
+                    splat_load(bytes),
                     SplatTime {
                         tau: 0.0,
                         extrapolating: false,
@@ -134,11 +139,7 @@ fn main() {
 
     if let Some(name) = &test {
         // Dv-3, Dv-4 (Q-122): before the XR session, then the process exits.
-        let dv = ANDROID_APP
-            .get()
-            .and_then(|a| a.external_data_path())
-            .map(|e| e.join("dv"));
-        if let Some(dv) = dv
+        if let Some(dv) = device_test::dv_dir()
             && device_test::run_headless(name, &dv)
         {
             std::process::exit(0);
@@ -183,7 +184,7 @@ fn main() {
     spawn_models(&mut app, &paths.models);
     if let Some(name) = test {
         info!("device test {name}");
-        device_test::add(&mut app, name);
+        device_test::add(&mut app, &name);
     }
     app.run();
 }
