@@ -13,7 +13,7 @@ use bevy::app::{App, Last, Plugin, PreUpdate, Update};
 use bevy::camera::{Camera, Projection};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::ecs::message::{MessageReader, MessageWriter};
-use bevy::log::{error, info, warn};
+use bevy::log::{info, warn};
 use bevy::math::{Isometry3d, Mat4};
 use bevy::prelude::{
     Added, Commands, Entity, IntoScheduleConfigs, Query, Res, ResMut, Resource, Transform, With,
@@ -36,6 +36,7 @@ use ftgsxr_render::{OutputSpace, SortMode, SplatCamera};
 use openxr::ReferenceSpaceType;
 
 use crate::XrError;
+use crate::error::{log_error, log_runtime, log_warning};
 
 /// The height D-24's LOCAL fallback assumes the floor below the session's origin, metres.
 const LOCAL_FLOOR_DROP_M: f32 = 1.5;
@@ -112,19 +113,16 @@ fn set_primary_reference_space(
     mut root: Query<&mut Transform, With<XrTrackingRoot>>,
     mut commands: Commands,
 ) {
-    // The crate runs this schedule even when the session failed: E-XR-RUNTIME (§1.15).
+    // The crate runs this schedule even when the session failed: E-XR-RUNTIME (§1.15);
+    // the Quest's entry point exits 2 on the missing reference space.
     let Some(session) = session else {
-        let e = XrError::Runtime("the session could not be created".into());
-        error!("{}: {}", e.code(), e.user_text());
+        log_runtime("the session could not be created");
         return;
     };
     let enumerated = match session.enumerate_reference_spaces() {
         Ok(spaces) => spaces,
         Err(e) => {
-            error!(
-                "{}: reference spaces: {e}",
-                XrError::Runtime(e.to_string()).code()
-            );
+            log_error(&XrError::Runtime(format!("reference spaces: {e}")));
             Vec::new()
         }
     };
@@ -153,10 +151,7 @@ fn set_primary_reference_space(
     }
     match session.create_reference_space(ty, Isometry3d::IDENTITY) {
         Ok(space) => commands.insert_resource(XrPrimaryReferenceSpace(space)),
-        Err(e) => error!(
-            "{}: reference space {ty:?}: {e}",
-            XrError::Runtime(e.to_string()).code()
-        ),
+        Err(e) => log_error(&XrError::Runtime(format!("reference space {ty:?}: {e}"))),
     }
 }
 
@@ -236,17 +231,17 @@ fn make_splat_eyes(
     }
 }
 
-/// Logs the session's states (§1.15): LOSS\_PENDING is E-XR-LOST.
-fn watch_states(mut changed: MessageReader<XrStateChanged>, mut lost: ResMut<Recreate>) {
+/// Logs the session's states (§1.15): LOSS\_PENDING is E-XR-LOST, recoverable, so a
+/// warning (§1.13).
+fn watch_states(mut changed: MessageReader<XrStateChanged>, mut recreate: ResMut<Recreate>) {
     for XrStateChanged(state) in changed.read() {
         info!("XR session state {state:?}");
         if let XrState::Exiting {
             should_restart: true,
         } = state
         {
-            let e = XrError::SessionLost;
-            error!("{}: {}", e.code(), e.user_text());
-            lost.0 = true;
+            log_warning(&XrError::SessionLost);
+            recreate.0 = true;
         }
     }
 }
@@ -255,11 +250,11 @@ fn watch_states(mut changed: MessageReader<XrStateChanged>, mut lost: ResMut<Rec
 /// never creates it again, so this asks for a new one once the old one is gone.
 fn recreate_after_destroy(
     mut destroyed: MessageReader<XrSessionDestroyedMessage>,
-    mut lost: ResMut<Recreate>,
+    mut recreate: ResMut<Recreate>,
     mut create: MessageWriter<XrCreateSessionMessage>,
 ) {
-    if destroyed.read().count() > 0 && lost.0 {
-        lost.0 = false;
+    if destroyed.read().count() > 0 && recreate.0 {
+        recreate.0 = false;
         info!("XR session destroyed: creating it again");
         create.write(XrCreateSessionMessage);
     }

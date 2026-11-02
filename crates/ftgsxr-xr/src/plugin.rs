@@ -3,7 +3,7 @@
 //! `XrPlugin` and its composition with Bevy's plugins (§2.1, Q-120).
 
 use bevy::app::{App, Plugin, PluginGroup, PluginGroupBuilder};
-use bevy::log::{error, info};
+use bevy::log::info;
 use bevy::render::RenderPlugin;
 use bevy::render::render_resource::TextureFormat;
 use bevy_mod_openxr::action_binding::OxrActionBindingPlugin;
@@ -21,8 +21,8 @@ use bevy_mod_xr::session::{XrSessionPlugin, XrState};
 use ftgsxr_render::SortMode;
 use openxr::EnvironmentBlendMode;
 
-use crate::XrError;
 use crate::display::DisplayPlugin;
+use crate::error::log_runtime;
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
 use crate::tracking::TrackingPlugin;
@@ -116,9 +116,8 @@ impl Plugin for XrPlugin {
                 ..OxrInitPlugin::default()
             });
         if app.world().get_resource::<XrState>() == Some(&XrState::Unavailable) {
-            // E-XR-RUNTIME: the desktop continues without XR (§1.15).
-            let e = XrError::Runtime("the OpenXR instance could not be created".into());
-            error!("{}: {}", e.code(), e.user_text());
+            // E-XR-RUNTIME: the desktop continues without XR, the Quest exits 2 (§1.15).
+            log_runtime("the OpenXR instance could not be created");
         }
         let passthrough_available = app
             .world()

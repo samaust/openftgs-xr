@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use bevy::log::{error, warn};
+
 use ftgsxr_app::Permission;
 
 /// An XR failure (§2.1, §1.15).
@@ -51,3 +53,24 @@ impl fmt::Display for XrError {
 }
 
 impl std::error::Error for XrError {}
+
+/// Logs `e` as an error: its code and user text (§1.13, §1.15).
+pub(crate) fn log_error(e: &XrError) {
+    error!("{}: {}", e.code(), e.user_text());
+}
+
+/// Logs `e`, a condition §1.15 lists as recoverable, as a warning (§1.13).
+pub(crate) fn log_warning(e: &XrError) {
+    warn!("{}: {}", e.code(), e.user_text());
+}
+
+/// Logs E-XR-RUNTIME once, where it happens: a warning on the desktop, which continues
+/// without XR, an error on the Quest, whose entry point exits 2 (§1.15, §1.13).
+pub(crate) fn log_runtime(what: &str) {
+    let e = XrError::Runtime(what.to_owned());
+    if cfg!(target_os = "android") {
+        log_error(&e);
+    } else {
+        log_warning(&e);
+    }
+}

@@ -48,6 +48,7 @@ use openxr::sys;
 use openxr::sys::Handle as _;
 
 use crate::XrError;
+use crate::error::log_error;
 use crate::session::Recreate;
 
 /// The scale change that re-creates the swapchain (§1.12).
@@ -329,10 +330,7 @@ fn apply_rate(caps: Caps, session: &OxrSession, settings: &mut DisplaySettings) 
         session
             .enumerate_display_refresh_rates()
             .unwrap_or_else(|e| {
-                error!(
-                    "{}: refresh rates: {e}",
-                    XrError::Runtime(e.to_string()).code()
-                );
+                log_error(&XrError::Runtime(format!("refresh rates: {e}")));
                 Vec::new()
             })
     } else {
@@ -347,10 +345,7 @@ fn apply_rate(caps: Caps, session: &OxrSession, settings: &mut DisplaySettings) 
         ),
         Ok(RateAction::Request(r)) => match session.request_display_refresh_rate(r) {
             Ok(()) => info!("display refresh rate {r} Hz requested"),
-            Err(e) => error!(
-                "{}: refresh rate {r} Hz: {e}",
-                XrError::Runtime(e.to_string()).code()
-            ),
+            Err(e) => log_error(&XrError::Runtime(format!("refresh rate {r} Hz: {e}"))),
         },
     }
 }
@@ -372,10 +367,7 @@ fn foveation(caps: Caps, session: &OxrSession, f: Foveation, request: &mut Fovea
             request.generation += 1;
             request.level = Some((f, profile));
         }
-        Err(e) => error!(
-            "{}: foveation {f:?}: {e}",
-            XrError::Runtime(e.to_string()).code()
-        ),
+        Err(e) => log_error(&XrError::Runtime(format!("foveation {f:?}: {e}"))),
     }
 }
 
@@ -493,10 +485,9 @@ fn layer_resolution(
     let res =
         unsafe { (fp.get_recommended_layer_resolution)(session.as_raw(), &info, out.as_mut_ptr()) };
     if res.into_raw() < 0 {
-        error!(
-            "{}: recommended layer resolution: {res:?}",
-            XrError::Runtime(format!("{res:?}")).code()
-        );
+        log_error(&XrError::Runtime(format!(
+            "recommended layer resolution: {res:?}"
+        )));
         return None;
     }
     // SAFETY: the call succeeded, so the runtime filled `out`.
@@ -545,10 +536,9 @@ fn apply_foveation(
     // `FoveationRequest` for the call and after.
     let res = unsafe { (fp.update_swapchain)(handle, (&raw const state).cast()) };
     if res.into_raw() < 0 {
-        error!(
-            "{}: foveation {f:?} on the swapchain: {res:?}",
-            XrError::Runtime(format!("{res:?}")).code()
-        );
+        log_error(&XrError::Runtime(format!(
+            "foveation {f:?} on the swapchain: {res:?}"
+        )));
     } else {
         info!("foveation {f:?} applied to the swapchain");
     }
