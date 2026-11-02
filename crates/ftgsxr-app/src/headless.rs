@@ -207,7 +207,7 @@ fn render_error(model: &Path, e: RenderError) -> HeadlessError {
 // Q-117
 fn with_n(e: HeadlessError, n: usize) -> HeadlessError {
     match e {
-        HeadlessError::Environment(m) if m.starts_with("E-MEM-BUDGET: ") => {
+        HeadlessError::Environment(m) if e.code() == "E-MEM-BUDGET" => {
             HeadlessError::Environment(format!("{m} (N = {n})"))
         }
         other => other,

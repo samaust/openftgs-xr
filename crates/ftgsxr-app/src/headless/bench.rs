@@ -1468,6 +1468,7 @@ mod tests {
                     .to_owned()
             )
         );
+        assert_eq!(super::super::exit_code(&e), 2);
         assert!(gpu.dev.take_validation_messages().is_empty());
     }
 }
