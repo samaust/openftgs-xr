@@ -37,5 +37,5 @@ Vendored code
 -------------
 
 vendor/bevy_mod_openxr-0.6.0 is bevy_mod_openxr 0.6.0 from crates.io (https://github.com/awtterpip/bevy_oxr),
-used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two changes
-marked in src/openxr/graphics/vulkan.rs (the Android Vulkan target and instance flags).
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with one change
+marked in src/openxr/graphics/vulkan.rs (the Android Vulkan target).
