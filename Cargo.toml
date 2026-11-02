@@ -58,7 +58,6 @@ winit = "0.30"
 # XR.
 bevy_mod_openxr = "0.6.0"
 bevy_mod_xr = "0.6.0"
-bevy_xr_utils = "0.6.0"
 openxr = "0.21.1"
 openxr-sys = "0.13.1"
 

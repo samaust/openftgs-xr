@@ -1227,26 +1227,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_xr_utils"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d30ad71c7872ab6758e3eb173c1943bf4f6663d58400323edf06f0ff3f6abcbf"
-dependencies = [
- "bevy_app",
- "bevy_color",
- "bevy_derive",
- "bevy_ecs",
- "bevy_gizmos",
- "bevy_log",
- "bevy_math",
- "bevy_mod_openxr",
- "bevy_mod_xr",
- "bevy_transform",
- "openxr",
- "openxr_mndx_xdev_space",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2198,7 +2178,6 @@ dependencies = [
  "bevy",
  "bevy_mod_openxr",
  "bevy_mod_xr",
- "bevy_xr_utils",
  "ftgsxr-app",
  "ftgsxr-core",
  "ftgsxr-io",
@@ -3330,15 +3309,6 @@ dependencies = [
  "cmake",
  "libc",
  "mint",
-]
-
-[[package]]
-name = "openxr_mndx_xdev_space"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1b0e85e7ff61dcce98c9e1981f9181bc935242cb3239bd6ec6cad83aa0c2897"
-dependencies = [
- "openxr",
 ]
 
 [[package]]
