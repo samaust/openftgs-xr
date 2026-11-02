@@ -75,10 +75,22 @@ impl FrameStats {
 /// byte `STATS_TIMESTAMPS` six 64-bit timestamps (the cull's begin and end, the sort's,
 /// the draw's) in ticks of `period_ns`, 0 where the frame wrote none.
 pub(crate) fn decode_stats(bytes: &[u8; STATS_BYTES as usize], period_ns: f32) -> FrameStats {
-    let word = |i: usize| u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().expect("4 bytes"));
+    // #193: each range is a fixed sub-slice of the STATS_BYTES block, in bounds and of
+    // the array's length, so the conversions cannot fail.
+    let word = |i: usize| {
+        u32::from_le_bytes(
+            bytes[4 * i..4 * i + 4]
+                .try_into()
+                .expect("invariant: a 4-byte range of the STATS_BYTES block converts to [u8; 4]"),
+        )
+    };
     let ts: [u64; 6] = std::array::from_fn(|i| {
         let at = STATS_TIMESTAMPS as usize + 8 * i;
-        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"))
+        u64::from_le_bytes(
+            bytes[at..at + 8]
+                .try_into()
+                .expect("invariant: an 8-byte range of the STATS_BYTES block converts to [u8; 8]"),
+        )
     });
     let ms = |ticks: u64| (ticks as f64 * f64::from(period_ns) / 1e6) as f32;
     let span = |a: u64, b: u64| {
