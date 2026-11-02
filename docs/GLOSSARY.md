@@ -604,6 +604,18 @@ _Avoid_: preset, graphics setting, level
 The minimal Kotlin code of the Android build that calls the platform APIs with no native path and returns their results to Rust over JNI. §2.5, D-15, D-49
 _Avoid_: wrapper, bridge, Java layer, plugin
 
+**Reference space**:
+The OpenXR frame the session locates views and spaces in, chosen at session creation by the chain STAGE, LOCAL_FLOOR, LOCAL; stage space is the chosen one, raised 1.5 m under the LOCAL fallback. §1.8, D-24
+_Avoid_: tracking origin, play area, world origin
+
+**Swapchain**:
+The runtime's array of eye images the projection layer is submitted from, sized at the recommended eye-buffer size times the render scale and re-created when the scale changes by 0.1 or more. §1.12, D-27
+_Avoid_: framebuffer, eye buffer (the runtime's recommended size, not the images), render target
+
+**Action set `player`**:
+The one OpenXR action set of the player, holding every action of Appendix D.2 with suggested bindings for the Touch Plus, Touch and simple-controller profiles, attached once per session. §1.8, Appendix D.2
+_Avoid_: input map, control scheme, binding set
+
 ### Files
 
 **File format**:
@@ -889,3 +901,11 @@ _Avoid_: out-of-scope folder, `.out-of-scope/`, rejection log, wontfix list
 **Release checklist**:
 In openftgs, the release milestone's record of the release-time checks that its spec's §2 notes call for: the license scan and its sign-offs, the libraries bundled in dependency wheels, the vendored license files, the pretrained weights' terms, the absence of dataset material, and the source-log audit. openftgs §2.3
 _Avoid_: release notes (the user-facing summary on the changelog page), audit (one of its checks), release log
+
+**Device test runner**:
+The part of the Quest app that runs a §3.4 device test named in the launch intent and prints its verdict to logcat; the host-side driver of the `dv` lane installs, launches and reads it. §3.4
+_Avoid_: test harness (openftgs's differential harness), instrumentation test, on-device suite
+
+**XR spike**:
+Milestone M-3: the first build that proves the platform path before any interaction, so that D-30's indirect-draw question and the Quest packaging are answered early. docs/prd/milestones.md, D-30
+_Avoid_: prototype, proof of concept, MVP
