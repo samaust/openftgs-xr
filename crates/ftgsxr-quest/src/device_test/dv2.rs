@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Dv-2 (§3.4, D-4 per view, Q-121): the probe the driver pushed as `dv/probe.safetensors`
-//! loads through `SplatLoad`, is kept 1 m ahead of the left eye once both eyes are
-//! splat cameras (kept there each frame), and is drawn by both for 10 s; PASS with the frame count when the
-//! frames came at the default 72 Hz and the first eye's statistics saw the probe. The
-//! driver judges the validation layer's messages (Q-123).
+//! loads through `SplatLoad`, is kept 1 m ahead of the left eye once both eyes are splat
+//! cameras (kept there each frame), and is drawn by both for 10 s; PASS with the frame
+//! count when the frames came at the default 72 Hz, neither fewer nor more (`dv2_rate`,
+//! Q-138, #269), and the first eye's statistics saw the probe. The driver judges the
+//! validation layer's messages (Q-123).
 
 use std::time::{Duration, Instant};
 
@@ -15,17 +16,13 @@ use ftgsxr_app::{SplatCamera, SplatEvent, SplatStats};
 
 use crate::android::splat_load;
 use crate::device_test::{dv_dir, verdict};
+use crate::dv2_rate::at_default_rate;
 
 /// The test's name in the intent extra.
 pub(crate) const NAME: &str = "dv2";
 
 /// The drawing time Dv-2 asks for.
 const WINDOW: Duration = Duration::from_secs(10);
-/// The default refresh rate (§1.12).
-const RATE_HZ: f64 = 72.0;
-/// The share of 72 Hz's frames the window must hold.
-// Q-138
-const MIN_RATE_SHARE: f64 = 0.95;
 /// How long the load, upload and the eyes may take before FAIL.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// The probe's distance ahead of the left eye, metres.
@@ -127,13 +124,17 @@ fn run(
         return;
     }
     let rate = f64::from(frames) / elapsed.as_secs_f64();
-    let min = MIN_RATE_SHARE * RATE_HZ * elapsed.as_secs_f64();
+    // Q-138
+    let at_rate = at_default_rate(frames, elapsed.as_secs_f64());
     let seen = stats.0.is_some_and(|s| s.visible_splats > 0);
-    let detail = format!(
+    let mut detail = format!(
         "{frames} frames in {:.2} s ({rate:.1} Hz), first eye's statistics {:?}",
         elapsed.as_secs_f64(),
         stats.0
     );
-    verdict(NAME, f64::from(frames) >= min && seen, &detail);
+    if let Err(e) = &at_rate {
+        detail.push_str(&format!("; {e}"));
+    }
+    verdict(NAME, at_rate.is_ok() && seen, &detail);
     test.done = true;
 }
