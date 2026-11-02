@@ -13,7 +13,7 @@ bevy\_mod\_openxr 0.6.0 runs the session: its init, session, events and render p
 - asks for the extensions of Appendix E.1 that M-3 uses; the crate drops those the runtime lacks with a warning;
 - configures an OPAQUE session (D-14) with the swapchain format `Rgba8UnormSrgb` (Q-91);
 - on Android, adds the instance extension `VK_KHR_get_surface_capabilities2` through the crate's `OxrManualGraphicsConfig`, which the Quest runtime's surface extension requires (Q-139);
-- logs E-XR-RUNTIME at error level when the instance could not be created (the desktop continues without XR, the Quest exits 2, §1.15);
+- logs E-XR-RUNTIME once when the instance could not be created, as `session` does when the session could not be created: a warning on the desktop, which continues without XR, an error on the Quest, which exits 2 (§1.13, §1.15);
 - inserts `Environment` in VR mode, with `passthrough_available` true when XR\_FB\_passthrough was enabled. `passthrough` and `hands` are only logged in M-3 (M-6, M-5).
 
 ## The vendored crates
@@ -47,7 +47,7 @@ On the Quest no Bevy window exists; winit's runner is set to poll (reactive with
 
 ## States, loss and re-creation
 
-`session` logs every `XrStateChanged`. LOSS\_PENDING, which the crate reports as `Exiting { should_restart: true }`, is E-XR-LOST at error level and marks the session for re-creation. The crate destroys a session but never creates one again, so once the old session is destroyed `session` asks for a new one. `display`'s render-scale change uses the same mark (Q-124, `display.md`). `XrError`'s codes and user texts are Q-119's.
+`session` logs every `XrStateChanged`. LOSS\_PENDING, which the crate reports as `Exiting { should_restart: true }`, is E-XR-LOST, logged as a warning since §1.15 lists it as recoverable (§1.13), and marks the session for re-creation. The crate destroys a session but never creates one again, so once the old session is destroyed `session` asks for a new one. `display`'s render-scale change uses the same mark (Q-124, `display.md`). `XrError`'s codes and user texts are Q-119's.
 
 ## Sleep and wake
 
