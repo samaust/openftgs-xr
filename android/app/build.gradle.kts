@@ -55,6 +55,7 @@ dependencies {
     implementation("androidx.games:games-activity:2.0.2")
     // GameActivity 2.0.2 extends AppCompatActivity, whose classes its POM leaves to the
     // app (both Apache-2.0, part of "the GameActivity library" of §2.3).
+    // Q-145
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.core:core:1.12.0")
     // D-19: ≥ 1.0.34 as Meta requires; 1.1.46 and later also ship `jni/arm64-v8a`, so

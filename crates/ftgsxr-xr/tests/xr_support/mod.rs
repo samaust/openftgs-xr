@@ -162,6 +162,19 @@ pub fn lines() -> Vec<Line> {
     LINES.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
+/// The swapchain sizes `display` logged, one per session, in order (`swapchain WxH …`).
+pub fn swapchain_sizes() -> Vec<(u32, u32)> {
+    lines()
+        .iter()
+        .filter(|l| l.target == "ftgsxr_xr::display")
+        .filter_map(|l| {
+            let rest = l.message.strip_prefix("swapchain ")?;
+            let (w, h) = rest.split_whitespace().next()?.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .collect()
+}
+
 /// Set when the render world reports an error.
 #[derive(Resource)]
 pub struct RenderErrored;

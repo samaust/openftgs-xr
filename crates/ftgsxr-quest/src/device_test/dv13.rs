@@ -13,7 +13,8 @@ use bevy_mod_xr::session::{XrState, XrStateChanged};
 
 use crate::device_test::verdict;
 
-const NAME: &str = "dv13";
+/// The test's name in the intent extra.
+pub(crate) const NAME: &str = "dv13";
 /// How long the first session may take to run.
 const FIRST_RUN: Duration = Duration::from_secs(30);
 
@@ -33,7 +34,7 @@ struct Dv13 {
 }
 
 /// Adds the test.
-pub(crate) fn add(app: &mut App) {
+pub(super) fn add(app: &mut App) {
     app.insert_resource(Dv13 {
         started: Instant::now(),
         step: Step::WaitRunning,

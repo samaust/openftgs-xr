@@ -11,12 +11,13 @@ use bevy::android::ANDROID_APP;
 use bevy::prelude::*;
 use bevy::window::ExitCondition;
 use bevy::winit::{UpdateMode, WinitSettings};
-use bevy_mod_xr::session::XrState;
+use bevy_mod_xr::session::{XrSessionCreatedMessage, XrState};
+use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
 use ftgsxr_app::{
     AppPaths, ModelBytes, QualityTier, SettingsRes, SortMode, SplatLoad, SplatPlugin, SplatTime,
     load_settings,
 };
-use ftgsxr_xr::{XrError, XrPlugin, add_xr};
+use ftgsxr_xr::{XrPlugin, add_xr};
 
 use crate::{device_test, jni_calls};
 
@@ -42,13 +43,35 @@ fn init_log(level: &str) {
 fn paths() -> AppPaths {
     let app = ANDROID_APP
         .get()
-        .expect("invariant: #[bevy_main] sets the AndroidApp before main");
+        .expect("invariant: /// E-XR-RUNTIME when the session cannot be created (§1.15): the Quest exits 2. The XR
+/// crate logs it and inserts the primary reference space only once a session exists, so
+/// a session-created message without that space is the failure (or a session left
+/// without its reference space, which is E-XR-RUNTIME too).
+fn exit_without_session(
+    mut created: MessageReader<XrSessionCreatedMessage>,
+    space: Option<Res<XrPrimaryReferenceSpace>>,
+) {
+    if created.read().count() > 0 && space.is_none() {
+        std::process::exit(EXIT_ENVIRONMENT);
+    }
+}
+
+#[bevy_main] sets the AndroidApp before main");
     let internal = app
         .internal_data_path()
         .expect("invariant: Android gives every app its internal files directory");
     let external = app.external_data_path();
     let cache = jni_calls::cache_dir().unwrap_or_else(|| internal.join("cache"));
     AppPaths::android(&internal, external.as_deref(), &cache)
+}
+
+/// A model's bytes to load as they are (no kind hint, no reduction).
+pub(crate) fn splat_load(bytes: Vec<u8>) -> SplatLoad {
+    SplatLoad {
+        bytes: ModelBytes::Owned(bytes),
+        kind_hint: None,
+        reduce_to: None,
+    }
 }
 
 /// The provisional harness M-4's `AppPlugin` replaces: every exchange file of the models
@@ -66,11 +89,7 @@ fn spawn_models(app: &mut App, models: &Path) {
             Ok(bytes) => {
                 info!("loading {}", path.display());
                 app.world_mut().spawn((
-                    SplatLoad {
-                        bytes: ModelBytes::Owned(bytes),
-                        kind_hint: None,
-                        reduce_to: None,
-                    },
+                    splat_load(bytes),
                     SplatTime {
                         tau: 0.0,
                         extrapolating: false,
@@ -80,6 +99,19 @@ fn spawn_models(app: &mut App, models: &Path) {
             }
             Err(e) => warn!("E-IO: {}: {e}", path.display()),
         }
+    }
+}
+
+/// E-XR-RUNTIME when the session cannot be created (§1.15): the Quest exits 2. The XR
+/// crate logs it and inserts the primary reference space only once a session exists, so
+/// a session-created message without that space is the failure (or a session left
+/// without its reference space, which is E-XR-RUNTIME too).
+fn exit_without_session(
+    mut created: MessageReader<XrSessionCreatedMessage>,
+    space: Option<Res<XrPrimaryReferenceSpace>>,
+) {
+    if created.read().count() > 0 && space.is_none() {
+        std::process::exit(EXIT_ENVIRONMENT);
     }
 }
 
@@ -107,11 +139,7 @@ fn main() {
 
     if let Some(name) = &test {
         // Dv-3, Dv-4 (Q-122): before the XR session, then the process exits.
-        let dv = ANDROID_APP
-            .get()
-            .and_then(|a| a.external_data_path())
-            .map(|e| e.join("dv"));
-        if let Some(dv) = dv
+        if let Some(dv) = device_test::dv_dir()
             && device_test::run_headless(name, &dv)
         {
             std::process::exit(0);
@@ -149,15 +177,14 @@ fn main() {
         .add_plugins(add_xr(group, xr))
         .add_plugins(SplatPlugin { tier });
     if app.world().get_resource::<XrState>() == Some(&XrState::Unavailable) {
-        // E-XR-RUNTIME: the Quest exits 2 (§1.15).
-        let e = XrError::Runtime("the OpenXR instance could not be created".into());
-        error!("{}: {}", e.code(), e.user_text());
+        // E-XR-RUNTIME, which `XrPlugin` logged: the Quest exits 2 (§1.15).
         std::process::exit(EXIT_ENVIRONMENT);
     }
+    app.add_systems(Update, exit_without_session);
     spawn_models(&mut app, &paths.models);
     if let Some(name) = test {
         info!("device test {name}");
-        device_test::add(&mut app, name);
+        device_test::add(&mut app, &name);
     }
     app.run();
 }

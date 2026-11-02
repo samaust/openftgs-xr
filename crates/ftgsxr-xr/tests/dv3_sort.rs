@@ -13,7 +13,9 @@ mod dv_support;
 
 use std::time::Duration;
 
-use dv_support::{apk, clear, device, install, launch, push, stop, verdict};
+use dv_support::{
+    DebugLayers, Validation, apk, clear, device, install, launch, push, stop, verdict,
+};
 use ftgsxr_core::{Model, write_exchange};
 use ftgsxr_testkit::random_model;
 
@@ -95,9 +97,14 @@ fn dv_dv3_the_sort_meets_r4_on_the_quest() {
     push(&random, "r4-random.safetensors");
     push(&repeated, "r4-repeated.safetensors");
     let _ = std::fs::remove_dir_all(&tmp);
+    // §1.13: the debug build runs with the validation layer (Q-123).
+    let layers = DebugLayers::enable();
     let start = launch("dv3");
     let result = verdict("dv3", start, Duration::from_secs(300));
     stop();
+    let validation = Validation::read();
+    drop(layers);
     let (pass, detail, _) = result.expect("a dv3 verdict line in logcat");
+    validation.assert_clean();
     assert!(pass, "dv3 FAIL {detail}");
 }

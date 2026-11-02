@@ -186,11 +186,14 @@ fn create_actions(instance: &OxrInstance) -> openxr::Result<Actions> {
     })
 }
 
+/// The left hand's index in the bindings' hand lists.
+const L: &[usize] = &[0];
+/// Both hands.
+const B: &[usize] = &[0, 1];
+
 /// Appendix D.2's bindings of one Touch profile: (action, hands, path under the hand).
 fn touch_bindings(a: &Actions) -> Vec<(openxr::sys::Action, &'static [usize], &'static str)> {
-    const L: &[usize] = &[0];
     const R: &[usize] = &[1];
-    const B: &[usize] = &[0, 1];
     vec![
         (a.select.as_raw(), B, "input/trigger/value"),
         (a.grab.as_raw(), B, "input/squeeze/value"),
@@ -211,8 +214,6 @@ fn touch_bindings(a: &Actions) -> Vec<(openxr::sys::Action, &'static [usize], &'
 /// Appendix D.2's `khr/simple_controller` column (menu on the left hand, as the Touch
 /// columns; select, the poses and the haptic output on both).
 fn simple_bindings(a: &Actions) -> Vec<(openxr::sys::Action, &'static [usize], &'static str)> {
-    const L: &[usize] = &[0];
-    const B: &[usize] = &[0, 1];
     vec![
         (a.select.as_raw(), B, "input/select/click"),
         (a.menu.as_raw(), L, "input/menu/click"),

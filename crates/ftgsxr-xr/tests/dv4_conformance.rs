@@ -5,13 +5,16 @@
 //! (§3.2): the driver pushes each probe's model and request into `dv/`, the device runs
 //! `cmd_render` on each in the `conformance` tier and writes `dv/<P>.renders.safetensors`,
 //! and the driver pulls them and applies `metrics` against `reference_render` (D-46).
-//! Prerequisites: `dv_support`'s.
+//! The bundled validation layer is enabled for the run (§1.13, Q-123), as for Dv-2, and
+//! the run fails on any of its messages. Prerequisites: `dv_support`'s.
 
 mod dv_support;
 
 use std::time::Duration;
 
-use dv_support::{apk, clear, device, install, launch, pull, push, stop, verdict};
+use dv_support::{
+    DebugLayers, Validation, apk, clear, device, install, launch, pull, push, stop, verdict,
+};
 use ftgsxr_core::read_renders;
 use ftgsxr_testkit::{fixtures_dir, metrics, probe, reference_render};
 
@@ -40,10 +43,15 @@ fn dv_dv4_probes_rendered_on_the_quest_meet_the_tier() {
             &format!("{p}.request.json"),
         );
     }
+    // §1.13: the debug build runs with the validation layer (Q-123).
+    let layers = DebugLayers::enable();
     let start = launch("dv4");
     let result = verdict("dv4", start, Duration::from_secs(300));
     stop();
+    let validation = Validation::read();
+    drop(layers);
     let (pass, detail, _) = result.expect("a dv4 verdict line in logcat");
+    validation.assert_clean();
     assert!(pass, "dv4 FAIL {detail}");
 
     let tmp = std::env::temp_dir().join(format!("ftgsxr-dv4-{}", std::process::id()));

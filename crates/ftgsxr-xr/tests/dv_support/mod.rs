@@ -181,3 +181,96 @@ pub fn badging(apk: &Path) -> String {
 pub fn clear() {
     adb(&["shell", "rm", "-rf", DV_DIR]);
 }
+
+/// The layer the debug APK bundles (Q-123).
+pub const LAYER: &str = "VK_LAYER_KHRONOS_validation";
+
+/// Android's GPU debug-layer settings for the app (§1.13 GPU validation, Q-123), reset
+/// when dropped, also when the test fails.
+pub struct DebugLayers;
+
+impl DebugLayers {
+    /// Sets the three settings before a launch (Q-123).
+    pub fn enable() -> DebugLayers {
+        adb(&[
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "enable_gpu_debug_layers",
+            "1",
+        ]);
+        adb(&[
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "gpu_debug_app",
+            PACKAGE,
+        ]);
+        adb(&[
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "gpu_debug_layers",
+            LAYER,
+        ]);
+        DebugLayers
+    }
+}
+
+impl Drop for DebugLayers {
+    fn drop(&mut self) {
+        for key in [
+            "enable_gpu_debug_layers",
+            "gpu_debug_app",
+            "gpu_debug_layers",
+        ] {
+            adb(&["shell", "settings", "delete", "global", key]);
+        }
+    }
+}
+
+/// The lines of `tag` in logcat so far.
+pub fn tagged(tag: &str) -> Vec<String> {
+    adb(&["logcat", "-d", "-s", &format!("{tag}:*")])
+        .lines()
+        .filter(|l| !l.starts_with("---------"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The layer's checks after a run with [`DebugLayers`] (§1.13, Q-123): Android announced
+/// the layer for the app, and no line arrived under the tag `VALIDATION`. Read before
+/// the settings are reset.
+pub struct Validation {
+    /// Whether `GraphicsEnvironment` named the layer in its debug layer list.
+    pub announced: bool,
+    /// The lines under `VALIDATION`.
+    pub messages: Vec<String>,
+}
+
+impl Validation {
+    /// Reads the layer's announcement and messages from logcat.
+    pub fn read() -> Validation {
+        let announced = tagged("GraphicsEnvironment")
+            .iter()
+            .any(|l| l.contains("Vulkan debug layer list") && l.contains(LAYER));
+        Validation {
+            announced,
+            messages: tagged("VALIDATION"),
+        }
+    }
+
+    /// Fails unless the layer was loaded and said nothing.
+    pub fn assert_clean(&self) {
+        assert!(self.announced, "Android loaded {LAYER} for the app");
+        assert!(
+            self.messages.is_empty(),
+            "no validation message ({} lines), first: {:?}",
+            self.messages.len(),
+            self.messages.iter().take(6).collect::<Vec<_>>()
+        );
+    }
+}

@@ -25,7 +25,7 @@ use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageWriter;
 use bevy::log::{error, info, warn};
 use bevy::math::UVec2;
-use bevy::prelude::{DetectChanges, DetectChangesMut};
+use bevy::prelude::DetectChangesMut;
 use bevy::prelude::{IntoScheduleConfigs, Res, ResMut, Resource, resource_exists};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp};
@@ -48,6 +48,7 @@ use openxr::sys;
 use openxr::sys::Handle as _;
 
 use crate::XrError;
+use crate::error::log_error;
 use crate::session::Recreate;
 
 /// The scale change that re-creates the swapchain (§1.12).
@@ -329,10 +330,7 @@ fn apply_rate(caps: Caps, session: &OxrSession, settings: &mut DisplaySettings) 
         session
             .enumerate_display_refresh_rates()
             .unwrap_or_else(|e| {
-                error!(
-                    "{}: refresh rates: {e}",
-                    XrError::Runtime(e.to_string()).code()
-                );
+                log_error(&XrError::Runtime(format!("refresh rates: {e}")));
                 Vec::new()
             })
     } else {
@@ -347,10 +345,7 @@ fn apply_rate(caps: Caps, session: &OxrSession, settings: &mut DisplaySettings) 
         ),
         Ok(RateAction::Request(r)) => match session.request_display_refresh_rate(r) {
             Ok(()) => info!("display refresh rate {r} Hz requested"),
-            Err(e) => error!(
-                "{}: refresh rate {r} Hz: {e}",
-                XrError::Runtime(e.to_string()).code()
-            ),
+            Err(e) => log_error(&XrError::Runtime(format!("refresh rate {r} Hz: {e}"))),
         },
     }
 }
@@ -372,14 +367,13 @@ fn foveation(caps: Caps, session: &OxrSession, f: Foveation, request: &mut Fovea
             request.generation += 1;
             request.level = Some((f, profile));
         }
-        Err(e) => error!(
-            "{}: foveation {f:?}: {e}",
-            XrError::Runtime(e.to_string()).code()
-        ),
+        Err(e) => log_error(&XrError::Runtime(format!("foveation {f:?}: {e}"))),
     }
 }
 
-/// The main world's part of a change to `DisplaySettings` while a session exists.
+/// The main world's part of a change to `DisplaySettings` while the session runs: each
+/// field is compared with what was applied, not with Bevy's change detection, so a change
+/// made while the session is not running is applied once it runs (§1.12).
 #[allow(clippy::too_many_arguments)]
 fn apply_changes(
     session: Option<Res<OxrSession>>,
@@ -394,7 +388,7 @@ fn apply_changes(
     mut recreate: ResMut<Recreate>,
     mut exit: MessageWriter<XrRequestExitMessage>,
 ) {
-    if !settings.is_changed() || state.as_deref() != Some(&XrState::Running) {
+    if state.as_deref() != Some(&XrState::Running) {
         return;
     }
     let Some(session) = session else { return };
@@ -493,10 +487,9 @@ fn layer_resolution(
     let res =
         unsafe { (fp.get_recommended_layer_resolution)(session.as_raw(), &info, out.as_mut_ptr()) };
     if res.into_raw() < 0 {
-        error!(
-            "{}: recommended layer resolution: {res:?}",
-            XrError::Runtime(format!("{res:?}")).code()
-        );
+        log_error(&XrError::Runtime(format!(
+            "recommended layer resolution: {res:?}"
+        )));
         return None;
     }
     // SAFETY: the call succeeded, so the runtime filled `out`.
@@ -545,10 +538,9 @@ fn apply_foveation(
     // `FoveationRequest` for the call and after.
     let res = unsafe { (fp.update_swapchain)(handle, (&raw const state).cast()) };
     if res.into_raw() < 0 {
-        error!(
-            "{}: foveation {f:?} on the swapchain: {res:?}",
-            XrError::Runtime(format!("{res:?}")).code()
-        );
+        log_error(&XrError::Runtime(format!(
+            "foveation {f:?} on the swapchain: {res:?}"
+        )));
     } else {
         info!("foveation {f:?} applied to the swapchain");
     }
