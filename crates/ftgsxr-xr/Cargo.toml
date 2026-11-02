@@ -17,7 +17,7 @@ publish.workspace = true
 # the render crate for `SplatCamera`.
 # #227: the core crate for `Pose` (`TrackedHand`, `XrHands`).
 [dependencies]
-# Q-144
+# §2.1
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log"] }
 bevy_mod_openxr.workspace = true
 bevy_mod_xr.workspace = true

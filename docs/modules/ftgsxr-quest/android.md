@@ -44,7 +44,7 @@ The `#[bevy_main]` entry point, in order:
 7. spawns every exchange file of the models directory as a model instance at the identity pose, the provisional harness M-4's `AppPlugin` replaces (Q-129);
 8. adds the named device test and runs.
 
-The crate names only `ftgsxr-app` and `ftgsxr-xr`, with `bevy` and `bevy_mod_xr` directly (Q-129); what it needs from `ftgsxr-core`, `ftgsxr-io` and `ftgsxr-render` comes through `ftgsxr_app`'s and `ftgsxr_xr`'s re-exports (Q-129, Q-133, Q-137), and Dv-3 runs `ftgsxr_app::sort_check` (Q-146).
+The crate names only `ftgsxr-app` and `ftgsxr-xr`, with `bevy` and `bevy_mod_xr` directly (§2.1); what it needs from `ftgsxr-core`, `ftgsxr-io` and `ftgsxr-render` comes through `ftgsxr_app`'s and `ftgsxr_xr`'s re-exports (Q-129, Q-133, Q-137), and Dv-3 runs `ftgsxr_app::sort_check` (Q-146).
 
 ## The device test runner and the logcat protocol
 
