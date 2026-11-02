@@ -609,7 +609,7 @@ The OpenXR frame the session locates views and spaces in, chosen at session crea
 _Avoid_: tracking origin, play area, world origin
 
 **Swapchain**:
-The runtime's array of eye images the projection layer is submitted from, sized at the recommended eye-buffer size times the render scale and re-created when the scale changes by 0.1 or more. §1.12, D-27
+The runtime's array of eye images the projection layer is submitted from, sized at the runtime's recommended size times the render scale and re-created when the scale changes by 0.1 or more. §1.12, D-27
 _Avoid_: framebuffer, eye buffer (the runtime's recommended size, not the images), render target
 
 **Action set `player`**:
