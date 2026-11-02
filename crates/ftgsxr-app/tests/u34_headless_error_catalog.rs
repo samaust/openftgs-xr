@@ -106,3 +106,16 @@ fn u34_user_text_drops_the_code_prefix() {
         "Render produced invalid values (rgb/0 holds a NaN)"
     );
 }
+
+#[test]
+fn u34_every_headless_error_variant_is_covered() {
+    // A variant added without a row in `every_variant` fails to compile: the match is
+    // exhaustive.
+    for (error, _, _) in every_variant() {
+        match error {
+            HeadlessError::Input(_) | HeadlessError::Environment(_) | HeadlessError::Numeric(_) => {
+            }
+        }
+    }
+    assert_eq!(every_variant().len(), 6);
+}
