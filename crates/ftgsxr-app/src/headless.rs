@@ -225,10 +225,17 @@ pub fn cmd_info(version: &str, json: bool) -> String {
     if json {
         return info_json(&reply);
     }
+    info_text(&reply)
+}
+
+/// `cmd_info`'s text form of `reply`: one `key: value` line per field, strings bare
+/// (Q-77).
+// Q-71, Q-77
+fn info_text(reply: &InfoReply) -> String {
     let kinds = reply
         .query_kinds
         .iter()
-        .map(|k| format!("{k:?}"))
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(",");
     let mut lines = vec![
@@ -383,6 +390,24 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn info_text_writes_the_query_kinds_bare() {
+        // Q-77: the reply's strings are bare, query_kinds' entries included.
+        let reply = InfoReply {
+            name: "openftgs-xr".to_owned(),
+            version: "0.0.0".to_owned(),
+            query_kinds: vec!["depth".to_owned(), "alpha".to_owned()],
+            rasterizer_name: "openftgs-xr wgpu-blend".to_owned(),
+            rasterizer_version: "0.0.0".to_owned(),
+            render_conventions: RenderConventions::default(),
+        };
+        let text = info_text(&reply);
+        assert!(
+            text.lines().any(|l| l == "query_kinds: [depth,alpha]"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn json_entries_keeps_string_values_that_hold_a_comma_or_a_quote() {

@@ -87,6 +87,48 @@ fn u33_validate_the_fixtures() {
     );
 }
 
+/// Every model in the fixture set, found through `tests/fixtures/SHA256SUMS` so a new
+/// fixture is covered without editing this test (#208): each `.safetensors` file but the
+/// renders files, each `.ply` file, and each checkpoint directory (the parent of a
+/// `manifest.json`) in place of the files inside it. `http/empty.safetensors` is left out:
+/// it is the 0-byte file of U-31's HTTP read, invalid on purpose (`tests/fixtures/README.md`).
+fn every_model_fixture() -> Vec<PathBuf> {
+    let sums = fs::read_to_string(fixtures_dir().join("SHA256SUMS")).unwrap();
+    // `<digest>  <path>`; a path may hold spaces.
+    let listed: Vec<&str> = sums
+        .lines()
+        .filter_map(|l| l.split_once("  ").map(|(_, p)| p))
+        .collect();
+    let checkpoints: Vec<&str> = listed
+        .iter()
+        .filter_map(|p| p.strip_suffix("/manifest.json"))
+        .collect();
+    let mut models: Vec<PathBuf> = checkpoints.iter().map(|c| fixture(c)).collect();
+    for rel in &listed {
+        let model = (rel.ends_with(".safetensors") && !rel.ends_with(".renders.safetensors"))
+            || rel.ends_with(".ply");
+        let in_checkpoint = checkpoints
+            .iter()
+            .any(|c| rel.starts_with(&format!("{c}/")));
+        if model && !in_checkpoint && *rel != "http/empty.safetensors" {
+            models.push(fixture(rel));
+        }
+    }
+    models
+}
+
+#[test]
+fn u33_validate_every_model_fixture() {
+    let paths = every_model_fixture();
+    // The probes P1–P10 at least, so a change to SHA256SUMS' form can't empty the list.
+    assert!(paths.len() >= 10, "{paths:?}");
+    for path in &paths {
+        let infos = cmd_validate(std::slice::from_ref(path))
+            .unwrap_or_else(|e| panic!("{}: {}: {}", path.display(), e.code(), e.user_text()));
+        assert_eq!(infos.len(), 1, "{}", path.display());
+    }
+}
+
 #[test]
 fn u33_validate_refuses_an_invalid_file_with_exit_2() {
     let dir = scratch_dir(
