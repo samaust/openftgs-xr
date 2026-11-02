@@ -190,7 +190,8 @@ struct Applied {
     /// The scale the live (or next) swapchain is made with.
     scale: f32,
     /// A requested scale that could not be applied: reported once, not every frame, and
-    /// attempted again only once the setting moves (§1.13; Q-147).
+    /// attempted again only once the setting moves or a new session is created (§1.13;
+    /// Q-147).
     failed_scale: Option<f32>,
     /// Whether the settings' foveation was asked for explicitly (an absent extension is
     /// only reported for a request, Q-124).
@@ -211,7 +212,8 @@ impl Applied {
 
     /// Takes the render-scale change to `scale` if one is to be attempted now: it differs
     /// from the applied scale by a step, no re-creation is under way, and it is not the
-    /// scale that last failed. A failure is forgotten once the setting moves off it.
+    /// scale that last failed. A failure is forgotten once the setting moves off it, and at
+    /// a new session.
     // Q-147
     fn take_scale_change(&mut self, scale: f32, recreating: bool) -> bool {
         if self.failed_scale.is_some_and(|f| f != scale) {
@@ -225,6 +227,12 @@ impl Applied {
     /// Records that `scale` could not be applied, so it is not attempted again each frame.
     fn scale_failed(&mut self, scale: f32) {
         self.failed_scale = Some(scale);
+    }
+
+    /// Forgets a failed scale at a new session, whose view configuration may answer, so
+    /// the setting is attempted once on it (Q-147).
+    fn session_created(&mut self) {
+        self.failed_scale = None;
     }
 }
 
@@ -308,7 +316,7 @@ fn unsupported(e: &XrError) {
 }
 
 /// At each session: the rates, the wanted rate, the foveation again (the swapchain is
-/// new) and the swapchain's size.
+/// new) and the swapchain's size; a failed render scale is forgotten (Q-147).
 fn on_session_created(
     session: Option<Res<OxrSession>>,
     instance: Option<Res<OxrInstance>>,
@@ -318,6 +326,8 @@ fn on_session_created(
     mut request: ResMut<FoveationRequest>,
 ) {
     let Some(session) = session else { return };
+    // Q-147
+    applied.session_created();
     if let Some(c) = current {
         info!(
             "swapchain {}x{} at render scale {} (§1.12)",
@@ -594,8 +604,9 @@ mod tests {
     use super::*;
 
     /// A render scale that fails is attempted (and so logged) once per requested change,
-    /// not every frame, and again once the setting moves (§1.13; Q-147). `apply_changes`
-    /// itself needs a running session, so the test is of the decision it takes each frame.
+    /// not every frame, and again once the setting moves or a new session is created
+    /// (§1.13; Q-147). `apply_changes` itself needs a running session, so the test is of
+    /// the decision it takes each frame.
     #[test]
     fn take_scale_change_skips_a_failed_scale_until_the_setting_moves() {
         let mut applied = Applied::new(1.0, false);
@@ -608,6 +619,14 @@ mod tests {
         }
         assert!(applied.take_scale_change(1.2, false));
         assert!(applied.take_scale_change(1.5, false));
+        // A new session forgets the failure: the unchanged setting is attempted once on
+        // it, then skipped again (Q-147, owner #272).
+        applied.scale_failed(1.5);
+        assert!(!applied.take_scale_change(1.5, false));
+        applied.session_created();
+        assert!(applied.take_scale_change(1.5, false));
+        applied.scale_failed(1.5);
+        assert!(!applied.take_scale_change(1.5, false));
     }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {
