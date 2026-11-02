@@ -188,6 +188,9 @@ fn sh_at(m: u32) -> f32 {
     return unpack_value(sh[field_index(m, half)], m, half);
 }
 
+// The largest finite float32.
+const F32_MAX: f32 = 3.40282347e38;
+
 fn finite(x: f32) -> bool {
     return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u;
 }
@@ -265,7 +268,14 @@ struct Proj {
     depth: f32,
 }
 
-// E6 for view v, in the order of `ftgsxr_core::project`.
+// The bound L on |u| beyond which f·u + c leaves float32's range, for f and L taken as
+// at least 1 (Q-118).
+fn mean_bound(f: f32, c: f32) -> f32 {
+    return max((F32_MAX - abs(c)) / max(f, 1.0), 1.0);
+}
+
+// E6 for view v, in the order of `ftgsxr_core::project`, plus the float32 bound on μ′
+// before it is computed, which the float64 `project` has no need of (Q-118).
 fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> Proj {
     var p: Proj;
     p.visible = false;
@@ -283,6 +293,14 @@ fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> P
     let fy = v.focal.y;
     let cx = v.principal.x;
     let cy = v.principal.y;
+    // Q-118: a μ′ beyond float32's range is non-finite, decided on x_c before μ′ is
+    // computed, since a float32 overflow on the GPU need not give ∞: |f·x/z + c| fits
+    // when |x| / L ≤ z with L = (F32_MAX − |c|) / f. f is taken as at least 1, where u
+    // itself is the bound, and L as at least 1, so neither quotient overflows.
+    if abs(xc.x) / mean_bound(fx, cx) > z || abs(xc.y) / mean_bound(fy, cy) > z {
+        p.non_finite = true;
+        return p;
+    }
     let u = xc.x / z;
     let w = xc.y / z;
     let mean = vec2<f32>(fx * u + cx, fy * w + cy);
@@ -413,9 +431,13 @@ fn sort_key(depth: f32) -> u32 {
     return 0xffffffffu - bitcast<u32>(depth);
 }
 
-// Q-118: one count per row and instance culled with a non-finite projection.
+// Q-118: one count per row and instance culled with a non-finite projection, by the
+// dispatch that counts the instance's rows (Q-79), so an instance drawn as splats and
+// centers counts a row once.
 fn count_non_finite() {
-    atomicAdd(&counters[NON_FINITE], 1u);
+    if (inst.flags & FLAG_COUNT_ACTIVE) != 0u {
+        atomicAdd(&counters[NON_FINITE], 1u);
+    }
 }
 
 fn mark_active() {
@@ -441,6 +463,12 @@ fn cull_splats(
     }
     mark_active();
     let mu_s = inst.scale * (inst.rotation * t.mu) + inst.translation;
+    // Q-118: a non-finite μ^S is counted here, as in `cull_centers`, not left to reach
+    // z_c through the view's rotation.
+    if !finite(mu_s.x) || !finite(mu_s.y) || !finite(mu_s.z) {
+        count_non_finite();
+        return;
+    }
     let cov_s = stage_covariance(row);
 
     if RECORD_MODE == 0u {

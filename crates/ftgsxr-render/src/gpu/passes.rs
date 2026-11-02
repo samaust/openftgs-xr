@@ -304,8 +304,9 @@ impl SplatPasses {
                     Kind::Splats => splats,
                     Kind::Centers => centers,
                 };
-                // Q-79: a row's E3 pass is counted once, by its instance's splat
-                // dispatch, or by its centers dispatch for a centers-only instance.
+                // Q-79, Q-118: a row's E3 pass, and its non-finite cull, are counted
+                // once, by its instance's splat dispatch, or by its centers dispatch for
+                // a centers-only instance.
                 let count_active = match kind {
                     Kind::Splats => true,
                     Kind::Centers => !splats,
