@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dv-3 (§3.4, `dv` lane, D-33, Q-122, Q-135): R-4's criteria (§3.2) on the Quest's
+//! Dv-3 (§3.4, `dv` lane, D-33, Q-122, Q-135, Q-146): R-4's criteria (§3.2) on the Quest's
 //! GPU. The driver writes R-4's two models as exchange files with `write_exchange` (Q-65)
 //! from the testkit's `random_model`, reshaped as `ftgsxr-render`'s `r04_sort.rs` does:
 //! `r4-random` at log-uniform random depths and `r4-repeated` over 1000 distinct depths,
 //! 10⁶ rows each, every row visible from the runner's camera (the origin, looking along
-//! +z, f = 400 px, 800 × 800 px). It pushes them into `dv/`; the device sorts them through
-//! `encode_prepare`, checks the order, the stability, `Depth16`'s top 16 bits and the
-//! dispatch arguments, and prints the verdict. Prerequisites: `dv_support`'s.
+//! +z, f = 400 px, 800 × 800 px). It pushes them into `dv/`; the device checks them
+//! with `ftgsxr_app::sort_check` (Q-146): the order, the stability, `Depth16`'s top 16
+//! bits and the dispatch arguments, and prints the verdict. Prerequisites: `dv_support`'s.
 
 mod dv_support;
 
