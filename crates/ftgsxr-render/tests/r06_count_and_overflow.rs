@@ -356,3 +356,82 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
     );
     assert!(dev.take_validation_messages().is_empty());
 }
+
+/// E6 and §1.4 stage 8 (revision 13): rows the view would keep, given a non-finite
+/// position or scale, are culled, neither counted visible nor drawn, and counted in
+/// `FrameStats::non_finite` two frames later.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r06_non_finite_rows_are_culled_and_counted() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let tier = QualityTier::conformance();
+    let mut model = random_model(0x6_0a, 5_000, 0);
+    let pose = test_pose();
+    let cam = camera();
+    let tau = 0.7;
+    let kept: Vec<usize> = oracle(&model, &pose, tau, &cam)
+        .iter()
+        .map(|(i, _)| *i)
+        .collect();
+    assert!(kept.len() > 100, "the view keeps rows ({})", kept.len());
+    // Twelve kept rows: four with a NaN position, four with an infinite position, four
+    // with an infinite scale.
+    let bad: Vec<usize> = kept
+        .iter()
+        .copied()
+        .step_by(kept.len() / 12)
+        .take(12)
+        .collect();
+    for (k, &i) in bad.iter().enumerate() {
+        match k % 3 {
+            0 => model.position[i][0] = f32::NAN,
+            1 => model.position[i][2] = f32::INFINITY,
+            _ => model.scale[i][1] = f32::INFINITY,
+        }
+    }
+    let gpu_model = upload(&dev, &model, &tier);
+    let passes = passes(&dev, &tier);
+    let draws = [draw(&gpu_model, pose, tau, RenderMode::Splats)];
+    let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
+    let expected = (kept.len() - bad.len()) as u32;
+
+    let got = prepare(
+        &dev,
+        &passes,
+        &frame,
+        &draws,
+        &sort_pose(&cam),
+        &[view(cam)],
+    );
+    assert_eq!(
+        got.visible_splats, expected,
+        "the non-finite rows are not drawn"
+    );
+    assert_eq!(got.records.len() as u32, expected);
+    for r in &got.records {
+        assert!(
+            r.depth.is_finite() && r.mean_px.is_finite(),
+            "no record of a non-finite row: {r:?}"
+        );
+    }
+
+    // Three frames with the statistics; the third polls the first's block.
+    let mut stats = None;
+    for _ in 0..3 {
+        let mut enc = dev
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        passes.encode_prepare(&mut enc, &frame, &draws, &sort_pose(&cam), &[view(cam)]);
+        passes.encode_stats(&mut enc, &frame);
+        dev.queue().submit([enc.finish()]);
+        dev.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the frame completes");
+        stats = FrameStats::poll(&frame, &dev);
+    }
+    let stats = stats.expect("frame 0's statistics at frame 2");
+    assert_eq!(stats.non_finite, bad.len() as u32);
+    assert_eq!(stats.visible_splats, expected);
+    assert!(dev.take_validation_messages().is_empty());
+}

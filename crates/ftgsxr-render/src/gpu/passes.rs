@@ -14,7 +14,7 @@ use super::device::SplatDevice;
 use super::error::RenderError;
 use super::frame::{
     ALL_TIMESTAMPS, Claim, FrameBuffers, PREPARE_TIMESTAMPS, RecordMode, SLOT_FREE, SLOT_PENDING,
-    SLOT_READY, STATS_BYTES, TIMESTAMPS, claim_slot,
+    SLOT_READY, STATS_BYTES, STATS_TIMESTAMPS, TIMESTAMPS, claim_slot,
 };
 use super::inputs::{
     ColorTransform, Colormap, ModelDraw, OcclusionInput, RenderMode, SortPose, ViewParams,
@@ -572,7 +572,11 @@ impl SplatPasses {
         if let Some((queries, resolve)) = &set.queries {
             // Q-81: a timestamp not written this frame is 0, not an earlier frame's, so a
             // frame that skips stages 1–4 (Q-100) times its draw alone.
-            enc.clear_buffer(&set.stats, 16, Some(u64::from(TIMESTAMPS) * 8));
+            enc.clear_buffer(
+                &set.stats,
+                STATS_TIMESTAMPS,
+                Some(u64::from(TIMESTAMPS) * 8),
+            );
             if written != 0 {
                 // The written indices are one run: stages 1–4's, the draw's, or both.
                 let (first, end) = (written.trailing_zeros(), 32 - written.leading_zeros());
@@ -582,7 +586,7 @@ impl SplatPasses {
                     resolve,
                     0,
                     &set.stats,
-                    16 + u64::from(first) * 8,
+                    STATS_TIMESTAMPS + u64::from(first) * 8,
                     u64::from(end - first) * 8,
                 );
             }

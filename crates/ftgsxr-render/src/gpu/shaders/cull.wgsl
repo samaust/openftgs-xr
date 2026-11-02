@@ -92,11 +92,13 @@ const FLAG_TRANSFORM: u32 = 1u;
 const FLAG_COUNT_ACTIVE: u32 = 2u;
 
 // The counters' words (the indirect arguments of `frame.rs`): the splat draw (0–3), the
-// centers draw (4–7), the overflow flag (8), the rows that passed E3's test (9).
+// centers draw (4–7), the overflow flag (8), the rows that passed E3's test (9), the
+// primitives culled for a non-finite projection (10, E6, §1.4 stage 8).
 const SPLAT_COUNT: u32 = 1u;
 const CENTER_COUNT: u32 = 5u;
 const OVERFLOW: u32 = 8u;
 const ACTIVE: u32 = 9u;
+const NON_FINITE: u32 = 10u;
 
 // The sort's block, keys per workgroup of its count and scatter passes (§1.4 stage 3),
 // set from `sort.rs`'s `SORT_BLOCK`.
@@ -135,7 +137,7 @@ const SH_C33: f32 = 0.5900435899266435;
 // Stage 3's own bindings (a pipeline layout of its own).
 @group(0) @binding(10) var<storage, read_write> size_counters: array<atomic<u32>, 12>;
 @group(0) @binding(11) var<storage, read_write> size_dispatch: array<u32, 6>;
-@group(0) @binding(12) var<storage, read_write> size_stats: array<u32, 16>;
+@group(0) @binding(12) var<storage, read_write> size_stats: array<u32, 20>;
 @group(0) @binding(13) var<uniform> size_frame: Frame;
 
 fn record_words() -> u32 {
@@ -254,6 +256,8 @@ fn stage_covariance(row: u32) -> mat3x3<f32> {
 
 struct Proj {
     visible: bool,
+    // Culled for a non-finite value in the projection (E6).
+    non_finite: bool,
     mean: vec2<f32>,
     conic: vec3<f32>,
     radii: vec2<f32>,
@@ -264,9 +268,14 @@ struct Proj {
 fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> Proj {
     var p: Proj;
     p.visible = false;
+    p.non_finite = false;
     let xc = v.rotation * mu_s + v.translation;
     let z = xc.z;
-    if !finite(z) || z < model.near || z > model.far {
+    if !finite(z) {
+        p.non_finite = true;
+        return p;
+    }
+    if z < model.near || z > model.far {
         return p;
     }
     let fx = v.focal.x;
@@ -288,25 +297,40 @@ fn project(v: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> P
     let s01 = dot(j0, sc * j1);
     let s11 = dot(j1, sc * j1) + model.eps2d;
     let det = s00 * s11 - s01 * s01;
-    if !finite(det) || det <= 0.0 {
+    if !finite(det) {
+        p.non_finite = true;
+        return p;
+    }
+    if det <= 0.0 {
         return p;
     }
     // The opacity-aware extent, capped; σ_eff < α_skip has none.
     let e2 = 2.0 * log(sigma_eff / model.alpha_skip);
-    if !finite(e2) || e2 < 0.0 {
+    if !finite(e2) {
+        p.non_finite = true;
+        return p;
+    }
+    if e2 < 0.0 {
         return p;
     }
     let extent = min(sqrt(e2), model.screen_extent_max);
     let rx = ceil(extent * sqrt(s00));
     let ry = ceil(extent * sqrt(s11));
-    if !finite(rx) || !finite(ry) || rx <= 0.0 || ry <= 0.0 {
+    // Q-T188.1: the mean's finiteness before the box test, so an infinite μ′ is counted
+    // rather than culled as off the image.
+    if !finite(rx) || !finite(ry) || !finite(mean.x) || !finite(mean.y) {
+        p.non_finite = true;
+        return p;
+    }
+    if rx <= 0.0 || ry <= 0.0 {
         return p;
     }
     if mean.x + rx <= 0.0 || mean.x - rx >= v.width || mean.y + ry <= 0.0 || mean.y - ry >= v.height {
         return p;
     }
     let conic = vec3<f32>(s11 / det, -s01 / det, s00 / det);
-    if !finite(mean.x) || !finite(mean.y) || !finite(conic.x) || !finite(conic.y) || !finite(conic.z) {
+    if !finite(conic.x) || !finite(conic.y) || !finite(conic.z) {
+        p.non_finite = true;
         return p;
     }
     p.visible = true;
@@ -388,6 +412,11 @@ fn sort_key(depth: f32) -> u32 {
     return 0xffffffffu - bitcast<u32>(depth);
 }
 
+// Q-T188.1: one count per row and instance culled with a non-finite projection.
+fn count_non_finite() {
+    atomicAdd(&counters[NON_FINITE], 1u);
+}
+
 fn mark_active() {
     if (inst.flags & FLAG_COUNT_ACTIVE) != 0u {
         atomicAdd(&counters[ACTIVE], 1u);
@@ -416,6 +445,9 @@ fn cull_splats(
     if RECORD_MODE == 0u {
         let p = project(frame.views[0], mu_s, cov_s, t.sigma_eff);
         if !p.visible {
+            if p.non_finite {
+                count_non_finite();
+            }
             return;
         }
         let c = color(row, t.mu);
@@ -444,12 +476,20 @@ fn cull_splats(
 
     // Shared center (D-4): visible when inside either eye's frustum.
     var visible = false;
+    var non_finite = false;
     for (var i = 0u; i < frame.view_count; i++) {
-        if project(frame.views[i], mu_s, cov_s, t.sigma_eff).visible {
+        let p = project(frame.views[i], mu_s, cov_s, t.sigma_eff);
+        if p.visible {
             visible = true;
+        }
+        if p.non_finite {
+            non_finite = true;
         }
     }
     if !visible {
+        if non_finite {
+            count_non_finite();
+        }
         return;
     }
     let c = color(row, t.mu);
@@ -511,6 +551,7 @@ fn cull_centers(
     mark_active();
     let mu_s = inst.scale * (inst.rotation * t.mu) + inst.translation;
     if !finite(mu_s.x) || !finite(mu_s.y) || !finite(mu_s.z) {
+        count_non_finite();
         return;
     }
     var visible = false;
@@ -565,7 +606,8 @@ fn cull_centers(
 // Stage 3: the counts clamped to C (splats first, then centers in what remains), the draw
 // arguments completed, the sort's dispatches (⌈count / SORT_BLOCK⌉ blocks, then the scan's
 // single workgroup), and the statistics
-// block's counts, overflow flag and capacity, its timestamps zeroed (§1.4 stage 8).
+// block's counts, overflow flag, capacity and non-finite count, its pad and timestamps
+// zeroed (§1.4 stage 8).
 @compute @workgroup_size(1)
 fn size() {
     let cap = size_frame.capacity;
@@ -598,7 +640,8 @@ fn size() {
     size_stats[1] = c;
     size_stats[2] = over;
     size_stats[3] = cap;
-    for (var i = 4u; i < 16u; i++) {
+    size_stats[4] = atomicLoad(&size_counters[NON_FINITE]);
+    for (var i = 5u; i < 20u; i++) {
         size_stats[i] = 0u;
     }
 }
