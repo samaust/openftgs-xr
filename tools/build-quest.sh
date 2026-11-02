@@ -19,6 +19,26 @@ case "$profile" in
   *) echo "usage: $0 [debug|release]" >&2; exit 2 ;;
 esac
 
+# Q-123: the debug build bundles the Khronos validation layer (arm64-v8a) from a
+# Vulkan-ValidationLayers Android release (Apache-2.0), downloaded and checked here, never
+# committed; the dv driver enables it through Android's GPU debug-layer settings.
+vvl_version=1.4.304.1
+vvl_sha256=f7b3688442437bc278f81cbbe1d78a701c32e9cdbaabcf136028d6097602fac6
+vvl_dir="$root/android/app/src/debug/jniLibs/arm64-v8a"
+if [ "$profile" = debug ] && [ ! -f "$vvl_dir/libVkLayer_khronos_validation.so" ]; then
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/ftgsxr"
+  zip="$cache/android-binaries-$vvl_version.zip"
+  mkdir -p "$cache"
+  if [ ! -f "$zip" ]; then
+    curl -sSLf -o "$zip.part" \
+      "https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases/download/vulkan-sdk-$vvl_version/android-binaries-$vvl_version.zip"
+    mv "$zip.part" "$zip"
+  fi
+  echo "$vvl_sha256  $zip" | sha256sum -c --quiet -
+  mkdir -p "$vvl_dir"
+  unzip -o -j -q "$zip" "android-binaries-$vvl_version/arm64-v8a/libVkLayer_khronos_validation.so" -d "$vvl_dir"
+fi
+
 cd "$root"
 cargo ndk -t arm64-v8a -o android/app/src/main/jniLibs build "${cargo_flags[@]}" -p ftgsxr-quest
 
