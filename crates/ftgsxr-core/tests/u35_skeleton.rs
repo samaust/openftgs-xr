@@ -185,7 +185,8 @@ fn skipped(root: &Path, dir: &Path) -> bool {
         return true;
     }
     let rel = dir.strip_prefix(root).unwrap_or(dir);
-    [".claude/worktrees", ".scratch", "tests/fixtures"]
+    // Vendored crates keep their own headers (CLAUDE.md; Q-139).
+    [".claude/worktrees", ".scratch", "tests/fixtures", "vendor"]
         .iter()
         .any(|s| rel == Path::new(s))
 }

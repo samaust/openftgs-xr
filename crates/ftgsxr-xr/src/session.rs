@@ -10,7 +10,7 @@
 //! session after a loss.
 
 use bevy::app::{App, Last, Plugin, PreUpdate, Update};
-use bevy::camera::Projection;
+use bevy::camera::{Camera, Projection};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::log::{error, info, warn};
@@ -168,29 +168,53 @@ fn cleanup(query: Query<Entity, With<XrReferenceSpace>>, mut commands: Commands)
     }
 }
 
-/// Sets each new eye camera's near plane to 0.01 m (Q-87) and its tonemapping off (D-6,
-/// which `SplatCamera` sets too, but only once the eye is located); the crate spawns the
-/// eyes at every session and recomputes their matrix from `near` every frame.
-fn set_eye_near(eyes: Query<Entity, Added<XrCamera>>, mut commands: Commands) {
-    for eye in &eyes {
-        commands.entity(eye).insert((
-            Projection::custom(XrProjection {
+/// Readies each new eye camera in place: its near plane 0.01 m (Q-87), kept inside the
+/// crate's `XrProjection` so the located matrix is never reset to the identity; its
+/// tonemapping off (D-6, which `SplatCamera` sets too, once the eye is ready); and its
+/// camera order its eye index, so the adapter's first splat camera is the left eye
+/// (`XrCamera(0)`), both eyes having order 0 otherwise (Q-125). The crate spawns the eyes
+/// at every session and recomputes their matrix from `near` every frame.
+fn set_eye_near(
+    mut eyes: Query<(Entity, &XrCamera, &mut Camera, &mut Projection), Added<XrCamera>>,
+    mut commands: Commands,
+) {
+    for (eye, index, mut camera, mut projection) in &mut eyes {
+        if let Projection::Custom(custom) = projection.as_mut()
+            && let Some(p) = custom.get_mut::<XrProjection>()
+        {
+            p.near = EYE_NEAR_M;
+        } else {
+            *projection = Projection::custom(XrProjection {
                 near: EYE_NEAR_M,
                 ..XrProjection::default()
-            }),
-            Tonemapping::None,
-        ));
+            });
+        }
+        // Q-125
+        camera.order = isize::try_from(index.0).unwrap_or(isize::MAX);
+        commands.entity(eye).insert(Tonemapping::None);
     }
 }
 
 /// The eyes not yet `SplatCamera`s.
 type UnmarkedEyes = (With<XrCamera>, Without<SplatCamera>);
 
-/// Makes each eye a `SplatCamera` over the VR-mode background (Q-49) once the crate has
-/// set its projection from the located views (it starts as the identity, which the
-/// adapter would refuse).
+/// Whether a clip mapping is a located eye's: perspective (w_clip = −z_view) at the
+/// engine's near plane, as the adapter requires (Q-87, Q-100).
+fn is_located(clip_from_view: Mat4) -> bool {
+    clip_from_view != Mat4::IDENTITY
+        && clip_from_view.z_axis.w == -1.0
+        && clip_from_view.w_axis.w == 0.0
+        && (clip_from_view.w_axis.z - EYE_NEAR_M).abs() <= EYE_NEAR_M * 1e-3
+}
+
+/// Makes each eye a `SplatCamera` over the VR-mode background (Q-49) once the camera's
+/// computed clip mapping, which the render world extracts, is the located views' at the
+/// near plane 0.01 m: the crate spawns the eyes with the identity, and Bevy computes the
+/// camera's matrix from the projection in its own PostUpdate system, so the projection
+/// alone can be a frame ahead of what is extracted (#224's "not a perspective
+/// projection").
 fn make_splat_eyes(
-    eyes: Query<(Entity, &Projection), UnmarkedEyes>,
+    eyes: Query<(Entity, &Camera), UnmarkedEyes>,
     config: Res<SessionConfig>,
     settings: Option<Res<SettingsRes>>,
     mut commands: Commands,
@@ -200,14 +224,8 @@ fn make_splat_eyes(
         || Settings::default().environment.background,
         |s| s.0.environment.background,
     );
-    for (eye, projection) in &eyes {
-        let located = match projection {
-            Projection::Custom(custom) => custom
-                .get::<XrProjection>()
-                .is_some_and(|p| p.projection_matrix != Mat4::IDENTITY),
-            _ => false,
-        };
-        if located {
+    for (eye, camera) in &eyes {
+        if is_located(camera.clip_from_view()) {
             commands.entity(eye).insert(SplatCamera {
                 sort: config.sort,
                 output: OutputSpace::LinearOver {
@@ -285,5 +303,22 @@ mod tests {
         assert_eq!(chain(&no_stage, &every, false), T::LOCAL);
         // The chain ends at LOCAL even when the list leaves it out (Q-49).
         assert_eq!(chain(&names(&["stage"]), &[T::LOCAL], false), T::LOCAL);
+    }
+
+    #[test]
+    fn is_located_only_for_a_located_eye_at_the_engines_near_plane() {
+        use bevy_mod_xr::camera::{Fov, calculate_projection};
+        let fov = Fov {
+            angle_left: -0.9,
+            angle_right: 0.8,
+            angle_down: -0.85,
+            angle_up: 0.75,
+        };
+        assert!(!is_located(Mat4::IDENTITY), "the crate's spawn matrix");
+        assert!(
+            !is_located(calculate_projection(0.1, fov)),
+            "the crate's near"
+        );
+        assert!(is_located(calculate_projection(EYE_NEAR_M, fov)));
     }
 }

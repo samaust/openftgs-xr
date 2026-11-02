@@ -5,6 +5,8 @@
 
 [workspace]
 resolver = "3"
+# Q-139: the vendored crate is a patch, not a member.
+exclude = ["vendor"]
 members = [
     "crates/ftgsxr-core",
     "crates/ftgsxr-io",
@@ -102,3 +104,21 @@ ndk-context = "0.1"
 proptest = "1"
 approx = "0.5"
 tiny_http = "0.12"
+
+# Q-139: bevy_mod_openxr 0.6.0 vendored with one change (its Android Vulkan target,
+# vendor/bevy_mod_openxr-0.6.0/src/openxr/graphics/vulkan.rs), approved by the owner.
+[patch.crates-io]
+bevy_mod_openxr = { path = "vendor/bevy_mod_openxr-0.6.0" }
+# Q-142: wgpu-core 29.0.4 vendored with one change (src/instance.rs, an instance made
+# from a Vulkan HAL instance keeps its flags).
+wgpu-core = { path = "vendor/wgpu-core-29.0.4" }
+# Q-142: wgpu-hal 29.0.4 vendored with one change (src/vulkan/instance.rs, a `flags()`
+# getter on the Vulkan instance).
+wgpu-hal = { path = "vendor/wgpu-hal-29.0.4" }
+
+# Q-140: the dv lane's debug APK: the dev profile's debug assertions (and so the
+# validation of §1.13), optimised so Dv-2 can hold 72 Hz.
+[profile.dv]
+inherits = "dev"
+opt-level = 3
+debug-assertions = true

@@ -26,6 +26,8 @@ pub use ftgsxr_render::QualityTier;
 // `AppPlugin`) takes, for callers that depend on the app alone (§2.1's `ftgsxr-quest`).
 pub use ftgsxr_io::{AppPaths, ModelBytes, Settings, load_settings};
 pub use ftgsxr_render::{SortMode, SplatLoad, SplatPlugin, SplatTime};
+// Q-137: what the Quest's device test `dv2` reads of the adapter (§3.4, Dv-2).
+pub use ftgsxr_render::{SplatCamera, SplatEvent, SplatStats};
 // Q-135: what the Quest's Dv-3 runner (R-4 on the device, Q-122) takes to load a model,
 // upload it, run stages 1–3 and read the frame back, for callers that depend on the app
 // alone (§2.1's `ftgsxr-quest`).
