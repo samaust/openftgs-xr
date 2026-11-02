@@ -96,8 +96,16 @@ fn gpu_b1_with_a_model_writes_a_well_formed_file() {
     assert_eq!(first["setup"]["n"], 2000);
     assert_eq!(first["setup"]["width"], 1920);
     assert_eq!(first["setup"]["height"], 1080);
-    assert!(result(&file, "fps_min") > 0.0);
-    assert!(result(&file, "fps_mean") >= result(&file, "fps_min"));
+    // Q-102 (#199): `fps_min` = 1000 / the slowest camera's ms, which the file gives as
+    // `frame_ms_max`; both fps figures are finite and positive.
+    let (fps_min, fps_mean) = (result(&file, "fps_min"), result(&file, "fps_mean"));
+    assert!(fps_min.is_finite() && fps_min > 0.0, "{fps_min}");
+    assert!(fps_mean.is_finite() && fps_mean > 0.0, "{fps_mean}");
+    let slowest = result(&file, "frame_ms_max");
+    assert!(
+        (fps_min - 1e3 / slowest).abs() <= 1e-9 * fps_min,
+        "fps_min {fps_min} against 1000 / {slowest}"
+    );
     assert!(result(&file, "visible_splats") <= 2000.0);
     let budgets = file["budgets"].as_array().unwrap();
     assert_eq!(budgets.len(), 1);
