@@ -97,7 +97,17 @@ impl Plugin for XrPlugin {
                 // Q-91
                 formats: Some(vec![TextureFormat::Rgba8UnormSrgb]),
                 resolutions: None,
-            })
+            });
+        // Q-T225.3: the Quest's runtime asks for VK_KHR_surface_protected_capabilities
+        // without the instance extension it requires (a validation error at instance
+        // creation, Dv-2), so the instance also enables VK_KHR_get_surface_capabilities2.
+        #[cfg(target_os = "android")]
+        app.insert_resource(bevy_mod_openxr::graphics::OxrManualGraphicsConfig {
+            fallback_backend: bevy_mod_openxr::graphics::GraphicsBackend::Vulkan(()),
+            vk_instance_exts: vec![c"VK_KHR_get_surface_capabilities2"],
+            vk_device_exts: Vec::new(),
+        });
+        app
             // The crate creates the instance here and adds `RenderPlugin` itself, with
             // Bevy's default render plugin when the instance fails.
             .add_plugins(OxrInitPlugin {

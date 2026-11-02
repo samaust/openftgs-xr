@@ -93,7 +93,8 @@ fn dv_dv2_two_eyes_draw_a_probe_for_10_s_without_validation_messages() {
         .any(|l| l.contains("Vulkan debug layer list") && l.contains(LAYER));
     let warnings: Vec<String> = log()
         .into_iter()
-        .filter(|l| l.contains("splat camera"))
+        // The adapter's warnings (`W` lines), not dv2's own info lines.
+        .filter(|l| l.contains(" W ") && l.contains("splat camera"))
         .collect();
     drop(layers);
 
