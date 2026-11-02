@@ -5,10 +5,12 @@
 use std::sync::atomic::Ordering;
 
 use super::device::SplatDevice;
-use super::frame::{FrameBuffers, SLOT_FREE, STAGING_SLOTS, STATS_BYTES, pick_block};
+use super::frame::{
+    FrameBuffers, SLOT_FREE, STAGING_SLOTS, STATS_BYTES, STATS_TIMESTAMPS, pick_block,
+};
 
 /// One frame's statistics for the HUD (§1.13): the counts after stage 3's clamp, C, the
-/// overflow flag, and the GPU times.
+/// overflow flag, the non-finite count, and the GPU times.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameStats {
     /// Splat records drawn, at most C.
@@ -19,6 +21,9 @@ pub struct FrameStats {
     pub capacity: u32,
     /// Whether rows were dropped for want of capacity (D-34).
     pub overflow: bool,
+    /// Primitives culled for a non-finite value in their projection (E6), over every
+    /// instance drawn by the view (Q-118).
+    pub non_finite: u32,
     /// The GPU times of the frame's passes.
     pub gpu_times_ms: GpuTimes,
 }
@@ -65,13 +70,27 @@ impl FrameStats {
     }
 }
 
-/// The statistics block (`cull.wgsl`'s `size`, Q-81): the two counts, the overflow
-/// flag and C in words 0–3, then six 64-bit timestamps (the cull's begin and end, the
-/// sort's, the draw's) in ticks of `period_ns`, 0 where the frame wrote none.
+/// The statistics block (`cull.wgsl`'s `size`, §1.4 stage 8, Q-81): the two counts, the
+/// overflow flag, C and the non-finite count in words 0–4, three pad words, then from
+/// byte `STATS_TIMESTAMPS` six 64-bit timestamps (the cull's begin and end, the sort's,
+/// the draw's) in ticks of `period_ns`, 0 where the frame wrote none.
 pub(crate) fn decode_stats(bytes: &[u8; STATS_BYTES as usize], period_ns: f32) -> FrameStats {
-    let word = |i: usize| u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().expect("4 bytes"));
+    // #193: each range is a fixed sub-slice of the STATS_BYTES block, in bounds and of
+    // the array's length, so the conversions cannot fail.
+    let word = |i: usize| {
+        u32::from_le_bytes(
+            bytes[4 * i..4 * i + 4]
+                .try_into()
+                .expect("invariant: a 4-byte range of the STATS_BYTES block converts to [u8; 4]"),
+        )
+    };
     let ts: [u64; 6] = std::array::from_fn(|i| {
-        u64::from_le_bytes(bytes[16 + 8 * i..24 + 8 * i].try_into().expect("8 bytes"))
+        let at = STATS_TIMESTAMPS as usize + 8 * i;
+        u64::from_le_bytes(
+            bytes[at..at + 8]
+                .try_into()
+                .expect("invariant: an 8-byte range of the STATS_BYTES block converts to [u8; 8]"),
+        )
     });
     let ms = |ticks: u64| (ticks as f64 * f64::from(period_ns) / 1e6) as f32;
     let span = |a: u64, b: u64| {
@@ -86,6 +105,7 @@ pub(crate) fn decode_stats(bytes: &[u8; STATS_BYTES as usize], period_ns: f32) -
         visible_centers: word(1),
         overflow: word(2) != 0,
         capacity: word(3),
+        non_finite: word(4),
         gpu_times_ms: GpuTimes {
             cull: span(ts[0], ts[1]),
             sort: span(ts[2], ts[3]),
@@ -99,32 +119,48 @@ pub(crate) fn decode_stats(bytes: &[u8; STATS_BYTES as usize], period_ns: f32) -
 mod tests {
     use super::*;
 
-    fn block(words: [u32; 4], ts: [u64; 6]) -> [u8; STATS_BYTES as usize] {
+    fn block(words: [u32; 5], ts: [u64; 6]) -> [u8; STATS_BYTES as usize] {
         let mut b = [0u8; STATS_BYTES as usize];
         for (i, w) in words.iter().enumerate() {
             b[4 * i..4 * i + 4].copy_from_slice(&w.to_le_bytes());
         }
         for (i, t) in ts.iter().enumerate() {
-            b[16 + 8 * i..24 + 8 * i].copy_from_slice(&t.to_le_bytes());
+            let at = STATS_TIMESTAMPS as usize + 8 * i;
+            b[at..at + 8].copy_from_slice(&t.to_le_bytes());
         }
         b
     }
 
     #[test]
     fn decode_stats_reads_the_counts_and_the_flag() {
-        let s = decode_stats(&block([7, 3, 1, 10], [0; 6]), 1.0);
+        let s = decode_stats(&block([7, 3, 1, 10, 0], [0; 6]), 1.0);
         assert_eq!(
             (s.visible_splats, s.visible_centers, s.overflow, s.capacity),
             (7, 3, true, 10)
         );
+        assert_eq!(s.non_finite, 0);
         assert_eq!(s.gpu_times_ms, GpuTimes::default());
+    }
+
+    #[test]
+    fn decode_stats_reads_the_non_finite_count_beside_the_timestamps() {
+        // §1.4 stage 8, revision 13: the non-finite count in word 4; the timestamps after
+        // the pad words are read unchanged by it.
+        let s = decode_stats(
+            &block([4, 0, 0, 10, 17], [1_000_000, 2_000_000, 0, 0, 0, 0]),
+            1.0,
+        );
+        assert_eq!(s.non_finite, 17);
+        assert_eq!((s.visible_splats, s.capacity, s.overflow), (4, 10, false));
+        assert_eq!(s.gpu_times_ms.cull, 1.0);
+        assert_eq!(s.gpu_times_ms.total, 1.0);
     }
 
     #[test]
     fn decode_stats_turns_ticks_into_milliseconds() {
         // 1 ns per tick: the cull 2 ms, no sort or draw written, total 2 ms.
         let s = decode_stats(
-            &block([0, 0, 0, 1], [1_000_000, 3_000_000, 0, 0, 0, 0]),
+            &block([0, 0, 0, 1, 0], [1_000_000, 3_000_000, 0, 0, 0, 0]),
             1.0,
         );
         assert_eq!(s.gpu_times_ms.cull, 2.0);
@@ -133,7 +169,7 @@ mod tests {
         assert_eq!(s.gpu_times_ms.total, 2.0);
         // 2 ns per tick, every pass written.
         let s = decode_stats(
-            &block([0; 4], [1_000, 2_000, 2_500, 3_000, 4_000, 6_000]),
+            &block([0; 5], [1_000, 2_000, 2_500, 3_000, 4_000, 6_000]),
             2.0,
         );
         assert_eq!(
@@ -152,7 +188,7 @@ mod tests {
         // A frame that skipped stages 1–4 (Q-100): the cull and sort wrote nothing, so
         // they are 0 (Q-81), and the total runs from the draw's begin to its end (Q-115).
         let s = decode_stats(
-            &block([5, 0, 0, 10], [0, 0, 0, 0, 7_000_000, 10_000_000]),
+            &block([5, 0, 0, 10, 0], [0, 0, 0, 0, 7_000_000, 10_000_000]),
             1.0,
         );
         assert_eq!(s.gpu_times_ms.cull, 0.0);
