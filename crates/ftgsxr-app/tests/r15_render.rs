@@ -162,3 +162,29 @@ fn gpu_r15_a_quest_tier_renders_the_splats() {
         );
     }
 }
+
+/// Q-117 (§1.2 load option 4, D-13): a model over the tier's budget is refused with
+/// E-MEM-BUDGET, exit 2 and no file, and the message gives §1.15's text with N after it.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r15_a_model_over_the_budget_gives_n_and_the_bytes() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dir = scratch("budget");
+    let out = dir.join("out.safetensors");
+    let n = ftgsxr_core::open_model(&p1("safetensors")).unwrap().len();
+    // A budget of one byte: P1's static bytes, under 1 MB, cannot fit.
+    let mut tier = QualityTier::conformance();
+    tier.memory_budget_bytes = 1;
+    let e = cmd_render(&p1("safetensors"), &p1("request.json"), &out, tier, VERSION)
+        .expect_err("refused");
+    assert!(matches!(e, HeadlessError::Environment(_)), "{e:?}");
+    assert_eq!(exit_code(&e), 2);
+    assert!(!out.exists(), "no file is written");
+    // §1.15's text, the bytes in MB (needed rounded up, the budget down), then N.
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "E-MEM-BUDGET: Needs 1 MB, budget 0 MB; reduce to budget or choose a tier (N = {n})"
+        )
+    );
+}
