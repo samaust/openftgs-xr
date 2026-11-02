@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use cull_support::{draw, look_at, oracle, passes, prepare, sort_pose, test_pose, upload, view};
 use ftgsxr_core::{UVec2, Vec3};
-use ftgsxr_render::{Colormap, FrameBuffers, FrameStats, GpuModel, QualityTier, RenderMode};
+use ftgsxr_render::{
+    Colormap, FrameBuffers, FrameStats, GpuModel, QualityTier, RenderMode, SortMode, SortPose,
+};
 use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 /// The watchdog of R-6: no call of the frame loop may wait longer than this.
@@ -511,5 +513,79 @@ fn gpu_r06_non_finite_counts_centers_once_per_row_and_instance() {
         );
         assert_eq!(stats.non_finite, expected, "{mode:?}");
     }
+    assert!(dev.take_validation_messages().is_empty());
+}
+
+/// Q-118 (E6, §1.4 stage 8, D-4): the count is of primitives, once per row and
+/// instance: two eyes culling one shared-center set count the twelve rows once, and two
+/// instances of the model in one frame count them once each.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r06_non_finite_counts_once_per_row_and_instance_whatever_the_views() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let mut model = random_model(0x6_0c, 5_000, 0);
+    let pose = test_pose();
+    let cam = camera();
+    let tau = 0.7;
+    let (_, bad) = with_non_finite_rows(&mut model, &pose, tau, &cam);
+    let n = bad.len() as u32;
+
+    // Two eyes 64 mm apart about `cam`, one shared-center set (D-4).
+    let center = pose.translation;
+    let head = center + Vec3::new(0.5, 0.8, -4.0);
+    let eye = |dx: f32| {
+        look_at(
+            head + Vec3::X * dx,
+            center,
+            300.0,
+            UVec2::new(320, 240),
+            [160.0, 120.0],
+        )
+    };
+    let tier = QualityTier {
+        sort_mode: SortMode::SharedCenter,
+        ..QualityTier::conformance()
+    };
+    let gpu_model = upload(&dev, &model, &tier);
+    let passes_shared = passes(&dev, &tier);
+    let frame = FrameBuffers::new(&dev, &tier, model.len() as u32);
+    let sort = SortPose {
+        origin: head,
+        forward: (center - head).normalize(),
+    };
+    let draws = [draw(&gpu_model, pose, tau, RenderMode::Splats)];
+    let stats = stats_of(
+        &dev,
+        &passes_shared,
+        &frame,
+        &draws,
+        &sort,
+        &[view(eye(-0.032)), view(eye(0.032))],
+    );
+    assert_eq!(stats.non_finite, n, "two eyes, one count per row");
+
+    // Two instances of the model, one view: one count per row and instance.
+    let tier = QualityTier::conformance();
+    let gpu_model = upload(&dev, &model, &tier);
+    let passes = passes(&dev, &tier);
+    let frame = FrameBuffers::new(&dev, &tier, 2 * model.len() as u32);
+    let draws = [
+        draw(&gpu_model, pose, tau, RenderMode::Splats),
+        draw(&gpu_model, pose, tau, RenderMode::Splats),
+    ];
+    let stats = stats_of(
+        &dev,
+        &passes,
+        &frame,
+        &draws,
+        &sort_pose(&cam),
+        &[view(cam)],
+    );
+    assert_eq!(
+        stats.non_finite,
+        2 * n,
+        "two instances, one count per row each"
+    );
     assert!(dev.take_validation_messages().is_empty());
 }
