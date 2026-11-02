@@ -32,3 +32,10 @@ matplotlib (https://github.com/matplotlib/matplotlib), tag v3.9.2,
 lib/matplotlib/_cm_listed.py
 Copyright (c) 2012- Matplotlib Development Team; All Rights Reserved
 Licensed under the matplotlib license agreement (LICENSE/LICENSE in that repository).
+
+Vendored code
+-------------
+
+vendor/bevy_mod_openxr-0.6.0 is bevy_mod_openxr 0.6.0 from crates.io (https://github.com/awtterpip/bevy_oxr),
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two changes
+marked in src/openxr/graphics/vulkan.rs (the Android Vulkan target and instance flags).

@@ -888,8 +888,6 @@ dependencies = [
 [[package]]
 name = "bevy_mod_openxr"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af0560ba6db564db1e3b60dfc9abf359443a33ba9295acfd18aff8996b8f6288"
 dependencies = [
  "android-activity",
  "android_system_properties",

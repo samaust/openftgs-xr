@@ -5,6 +5,8 @@
 
 [workspace]
 resolver = "3"
+# Q-T225.3: the vendored crate is a patch, not a member.
+exclude = ["vendor"]
 members = [
     "crates/ftgsxr-core",
     "crates/ftgsxr-io",
@@ -102,3 +104,15 @@ ndk-context = "0.1"
 proptest = "1"
 approx = "0.5"
 tiny_http = "0.12"
+
+# Q-T225.3: bevy_mod_openxr 0.6.0 vendored with one change (its Android Vulkan target,
+# vendor/bevy_mod_openxr-0.6.0/src/openxr/graphics/vulkan.rs), approved by the owner.
+[patch.crates-io]
+bevy_mod_openxr = { path = "vendor/bevy_mod_openxr-0.6.0" }
+
+# Q-T225.4: the dv lane's debug APK: the dev profile's debug assertions (and so the
+# validation of §1.13), optimised so Dv-2 can hold 72 Hz.
+[profile.dv]
+inherits = "dev"
+opt-level = 3
+debug-assertions = true

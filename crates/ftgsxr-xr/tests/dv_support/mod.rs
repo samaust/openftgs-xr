@@ -7,7 +7,8 @@
 //!
 //! Prerequisites: `adb` on the `PATH` (or under `$ANDROID_HOME/platform-tools`), one
 //! headset listed by `adb devices` (or `ANDROID_SERIAL` naming it), awake; the debug
-//! APK built by `tools/build-quest.sh debug`, its path in `FTGSXR_QUEST_APK` (no test
+//! APK built by `tools/build-quest.sh debug` (cargo profile `dv`, Q-T225.4), its path in
+//! `FTGSXR_QUEST_APK` (no test
 //! builds it). `aapt2` from `$ANDROID_HOME/build-tools/34.0.0` reads the APK's
 //! features. Run with `--test-threads 1`.
 

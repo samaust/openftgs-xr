@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Builds the Quest APK (§2.5): `libftgsxr_quest.so` with cargo-ndk into android/'s
+# Builds the Quest APK (§2.5): `libftgsxr_quest.so` (the debug APK with cargo's `dv`
+# profile, Q-T225.4) with cargo-ndk into android/'s
 # jniLibs, then Gradle. Usage: tools/build-quest.sh [debug|release] (default debug).
 # Prints the APK's path last. Needs the aarch64-linux-android target, cargo-ndk, JDK 17
 # or later, and ANDROID_HOME (default ~/Android/Sdk) with NDK 25.1.8937393 and
@@ -14,7 +15,8 @@ export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/25.1.8937393}"
 
 case "$profile" in
-  debug) cargo_flags=(); task=assembleDebug ;;
+  # Q-T225.4: the debug APK (the dv lane's) is built with the `dv` profile.
+  debug) cargo_flags=(--profile dv); task=assembleDebug ;;
   release) cargo_flags=(--release); task=assembleRelease ;;
   *) echo "usage: $0 [debug|release]" >&2; exit 2 ;;
 esac
