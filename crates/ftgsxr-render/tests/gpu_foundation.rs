@@ -274,6 +274,13 @@ fn gpu_guard_fails_when_the_validation_layer_is_not_loaded() {
     let dev = gpu_context();
     if std::env::var_os(NO_LAYER_CHILD).is_some() {
         assert_eq!(layer.take_active(), 0, "the layer was disabled");
+        // The loader warns that it disabled the layer; that warning is taken, so only the
+        // new check can fail the guard.
+        let loader = layer.take();
+        assert!(
+            loader.iter().any(|m| m.contains("forced disabled")),
+            "{loader:?}"
+        );
         drop(dev);
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(layer)))
             .expect_err("the guard panics without the layer");
