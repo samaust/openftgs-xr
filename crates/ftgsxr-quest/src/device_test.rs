@@ -63,6 +63,7 @@ pub(crate) fn add(app: &mut App, name: String) {
         }
         "dv2" => dv2::add(app, name),
         "dv12" => crate::dv12::add(app),
+        "dv13" => crate::dv13::add(app),
         _ => verdict(&name, false, "unknown test"),
     }
 }

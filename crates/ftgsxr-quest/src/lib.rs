@@ -14,4 +14,6 @@ mod device_test;
 #[cfg(target_os = "android")]
 mod dv12;
 #[cfg(target_os = "android")]
+mod dv13;
+#[cfg(target_os = "android")]
 mod jni_calls;
