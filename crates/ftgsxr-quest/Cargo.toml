@@ -12,3 +12,15 @@ publish.workspace = true
 [lib]
 name = "ftgsxr_quest"
 crate-type = ["cdylib"]
+
+# M-3 (#222): §2.1's row. The Android crates only under the Android target, so the crate
+# builds empty on the host (§2.7's host checks).
+[dependencies]
+ftgsxr-app.workspace = true
+ftgsxr-xr.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity.workspace = true
+android_logger.workspace = true
+jni.workspace = true
+ndk-context.workspace = true

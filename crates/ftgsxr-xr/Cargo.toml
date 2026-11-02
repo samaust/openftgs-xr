@@ -9,3 +9,13 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+
+# M-3 (#222): the XR crates of §2.1's row and §2.3, and the app for `Permission` (§2.1's
+# `XrError::Permission`). bevy_mod_openxr's default feature `vulkan` is the backend both
+# builds use (§2.4); `fb_passthrough` and the other features join with their modules.
+[dependencies]
+bevy_mod_openxr.workspace = true
+bevy_mod_xr.workspace = true
+bevy_xr_utils.workspace = true
+ftgsxr-app.workspace = true
+openxr.workspace = true
