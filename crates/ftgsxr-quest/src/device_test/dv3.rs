@@ -88,7 +88,10 @@ fn frame(dev: &SplatDevice, path: &Path, tier: &QualityTier) -> Result<FrameCont
 /// R-4's criteria on `got` with each slot's key from its record's depth, `digits` of it.
 fn check(got: &FrameContents, digits: impl Fn(u32) -> u32) -> Result<(), String> {
     if got.visible_splats != N {
-        return Err(format!("{} of {N} rows visible", got.visible_splats));
+        return Err(format!(
+            "{} of {N} rows visible ({} active rows)",
+            got.visible_splats, got.active_rows
+        ));
     }
     if got.overflow {
         return Err("overflow".into());
