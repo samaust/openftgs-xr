@@ -52,6 +52,11 @@ fn run(mut cmd: Command) -> Output {
     out
 }
 
+/// The `adb` program the driver runs.
+pub fn adb_path() -> PathBuf {
+    tool("adb", "platform-tools")
+}
+
 /// `adb` with `args`; panics when it fails.
 pub fn adb(args: &[&str]) -> String {
     let mut cmd = Command::new(tool("adb", "platform-tools"));

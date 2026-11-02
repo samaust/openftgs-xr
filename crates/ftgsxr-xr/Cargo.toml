@@ -31,6 +31,8 @@ openxr.workspace = true
 # a tracing subscriber of their own, as Q-106's `layer_messages` does; the testkit and the
 # probe fixtures for the model I-15 draws.
 [dev-dependencies]
+# #225: Dv-2's pixel check decodes the headset's screenshot (PNG). Q-T225.5
+image = { workspace = true, features = ["png"] }
 ftgsxr-testkit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
