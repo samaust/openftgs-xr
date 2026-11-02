@@ -70,7 +70,7 @@ The main world loads on the async compute task pool (`SplatLoad`, Q-99), uploads
 
 ## Where the frame skips stages 1–4
 
-§1.4 and §2.4 rule 2: when nothing that stages 1–4 read has changed, they are skipped and the previous frame's records, sorted payloads, counters and draw constants are drawn again, identical by construction. The adapter compares, per view, the view's `ViewParams` (E6's camera and the target size) and each drawn instance's GPU model, pose, τ (bit for bit), render mode, color transform and degree with the previous frame's; a new frame buffer set (another capacity, sort mode or layer format) always prepares. The draw, the resolve and the statistics copy run every frame: stage 3's statistics block holds the skipped frame's counts already. The headless renderer prepares every render.
+§1.4 and §2.4 rule 2: when nothing that stages 1–4 read has changed, they are skipped and the previous frame's records, sorted payloads, counters and draw constants are drawn again, identical by construction. The adapter compares, per view, the view's `ViewParams` (E6's camera and the target size) and each drawn instance's GPU model, pose, τ (bit for bit), render mode, color transform and degree with the previous frame's; a new frame buffer set (another capacity, sort mode or layer format) always prepares, while a change of the output alone, such as a `LinearOver` background, keeps the set and does not (§2.4 rule 4, #201). The draw, the resolve and the statistics copy run every frame: stage 3's statistics block holds the skipped frame's counts already. The headless renderer prepares every render.
 
 ## What waits on later milestones
 
