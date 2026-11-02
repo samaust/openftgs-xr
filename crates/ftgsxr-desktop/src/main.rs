@@ -205,6 +205,11 @@ fn run(matches: &ArgMatches) -> Result<bool, HeadlessError> {
             if out.is_none() {
                 print!("{}", report.json);
             }
+            for note in stderr_notes(&report.json) {
+                eprintln!("ftgsxr: {name}: {note}");
+            }
+            // Q-103: the form `report_json_puts_a_budget_not_met_on_a_pass_false_line`
+            // (ftgsxr-app's bench) pins (#198).
             for line in report.json.lines() {
                 if line.trim_start().starts_with("\"pass\": false") {
                     eprintln!("ftgsxr: {name}: a budget is not met (see \"pass\": false)");
@@ -221,6 +226,52 @@ fn run(matches: &ArgMatches) -> Result<bool, HeadlessError> {
     Ok(true)
 }
 
+/// The starts of the `notes` the library logs and the binary prints on standard error
+/// (Q-110's split, #193): a baseline not compared (Q-103) and GPU validation messages
+/// (Q-116).
+// Q-103, Q-116
+const STDERR_NOTES: [&str; 2] = ["baseline not compared: ", "GPU validation reported "];
+
+/// The notes of a benchmark file's text that go to standard error, unescaped: each is a
+/// string member of `notes` on a line of its own (Q-103's two-space indented form).
+fn stderr_notes(json: &str) -> Vec<String> {
+    json.lines()
+        .filter_map(|line| {
+            let text = line.trim().strip_suffix(',').unwrap_or(line.trim());
+            let inner = text.strip_prefix('"')?.strip_suffix('"')?;
+            STDERR_NOTES
+                .iter()
+                .any(|p| inner.starts_with(p))
+                .then(|| unescape(inner))
+        })
+        .collect()
+}
+
+/// A JSON string's text with its escapes `\"`, `\\`, `\n` and `\t` undone; any other
+/// escape is kept as written.
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 /// The entry point (§1.7): exit 0 on success, `exit_code`'s 2 or 3 on a failure, 3 on a
 /// benchmark's regression (Q-67), clap's 2 on a usage error.
 // Q-77, Q-67
@@ -233,5 +284,23 @@ fn main() -> ExitCode {
             eprintln!("ftgsxr: {e}");
             ExitCode::from(u8::try_from(exit_code(&e)).unwrap_or(2))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stderr_notes_picks_the_baseline_and_validation_notes() {
+        // #193, Q-103, Q-116: of the notes, only these two kinds reach standard error.
+        let json = "{\n  \"notes\": [\n    \"a frame's time is the wall time (Q-102)\",\n    \"GPU validation reported 1 messages (Q-116): say \\\"x\\\"\",\n    \"baseline not compared: profile debug against release (Q-103)\"\n  ]\n}\n";
+        assert_eq!(
+            stderr_notes(json),
+            vec![
+                "GPU validation reported 1 messages (Q-116): say \"x\"".to_owned(),
+                "baseline not compared: profile debug against release (Q-103)".to_owned(),
+            ]
+        );
     }
 }
