@@ -8,11 +8,13 @@
 #![warn(missing_docs)]
 
 mod desktop_log;
+pub mod governor;
 pub mod headless;
 pub mod intent;
 pub mod library;
 pub mod persist;
 pub mod platform;
+pub mod playback;
 pub mod plugin;
 
 // Q-67: `BenchReport` and `cmd_bench`.
@@ -20,6 +22,8 @@ pub use headless::{
     BenchReport, HeadlessError, cmd_bench, cmd_export, cmd_import, cmd_info, cmd_render,
     cmd_validate, exit_code,
 };
+// §2.1 `ftgsxr_app::governor`; Q-153, Q-178: the knobs, the ladders and the pure step.
+pub use governor::{DESKTOP_LADDER, Governor, GovernorCounters, HEADSET_LADDER, Knob, govern};
 // §2.1 `ftgsxr_app::intent`.
 pub use intent::{
     CameraCommand, Feature, GizmoMode, Hand, InstanceAction, Intent, OverlayToggle,
@@ -27,6 +31,8 @@ pub use intent::{
 };
 // §2.1 `ftgsxr_app::library`.
 pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel};
+// §2.1 `ftgsxr_app::playback`.
+pub use playback::Playback;
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
 pub use persist::{SettingsPath, SettingsRes};
 // §2.1 `ftgsxr_app::platform`.

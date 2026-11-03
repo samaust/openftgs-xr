@@ -12,9 +12,11 @@ use bevy_egui::EguiPlugin;
 use ftgsxr_io::ModelRef;
 use ftgsxr_render::{QualityTier, SplatPlugin};
 
+use crate::governor::GovernorPlugin;
 use crate::library::LibraryPlugin;
 use crate::persist;
 use crate::platform::{Platform, PlatformRes};
+use crate::playback::PlaybackPlugin;
 
 pub use crate::desktop_log::init_desktop_log;
 
@@ -52,5 +54,8 @@ impl Plugin for AppPlugin {
         app.add_plugins(LibraryPlugin {
             initial: self.initial.clone(),
         });
+        app.add_plugins(PlaybackPlugin);
+        // E16 (#288).
+        app.add_plugins(GovernorPlugin);
     }
 }
