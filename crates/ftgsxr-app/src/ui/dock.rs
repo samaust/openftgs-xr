@@ -12,7 +12,7 @@ use bevy::math::{EulerRot, Quat};
 use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
 use ftgsxr_core::{EndRule, LoopMode, PlayState};
-use ftgsxr_io::EntryKind;
+use ftgsxr_io::{EntryKind, SourceSpec, Url};
 use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransform};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
@@ -272,6 +272,36 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
     world.resource_mut::<UiState>().dock_width = r.response.rect.width();
 }
 
+/// The source a Library tab entry names: an `http(s)` URL is an HTTP index, an absolute
+/// path a local folder; anything else none. Its label is the URL's host or the folder's
+/// name.
+pub(crate) fn source_from_input(text: &str) -> Option<SourceSpec> {
+    let text = text.trim();
+    if let Ok(url) = Url::parse(text)
+        && matches!(url.scheme(), "http" | "https")
+    {
+        return Some(SourceSpec {
+            kind: "http".into(),
+            name: url.host_str().unwrap_or(text).to_owned(),
+            location: text.to_owned(),
+            flavor: None,
+        });
+    }
+    let path = std::path::Path::new(text);
+    if path.is_absolute() {
+        let name = path
+            .file_name()
+            .map_or_else(|| text.to_owned(), |n| n.to_string_lossy().into_owned());
+        return Some(SourceSpec {
+            kind: "dir".into(),
+            name,
+            location: text.to_owned(),
+            flavor: None,
+        });
+    }
+    None
+}
+
 fn kind_index(k: EntryKind) -> Option<usize> {
     match k {
         EntryKind::Exchange => Some(0),
@@ -304,8 +334,30 @@ fn library_tab(
             if button(ui, "Refresh", out, hv) {
                 out.push(Out::Library(LibraryCommand::Refresh(i)));
             }
+            // The platform's models directory (the first, Q-49) stays.
+            if i > 0 && button(ui, "Remove", out, hv) {
+                out.push(Out::Library(LibraryCommand::RemoveSource(i)));
+            }
         });
     }
+    // §1.5 Sources, §1.7 Panels: an HTTP index URL or a local folder (Q-160).
+    ui.horizontal(|ui| {
+        let mut state = world.resource_mut::<UiState>();
+        ui.add(
+            egui::TextEdit::singleline(&mut state.new_source)
+                .hint_text("https://… index or /path/to/folder"),
+        );
+        let spec = source_from_input(&state.new_source);
+        if ui
+            .add_enabled(spec.is_some(), egui::Button::new("Add source"))
+            .clicked()
+            && let Some(spec) = spec
+        {
+            state.new_source.clear();
+            out.push(Out::Cue(UiCue::Click));
+            out.push(Out::Library(LibraryCommand::AddSource(spec)));
+        }
+    });
     ui.horizontal(|ui| {
         if button(ui, "Open files…", out, hv) {
             out.push(Out::Library(LibraryCommand::Pick(PickKind::Files)));
@@ -892,4 +944,23 @@ fn scene_files(world: &World) -> Vec<PathBuf> {
         .collect();
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
     files.into_iter().map(|(_, p)| p).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_from_input;
+
+    #[test]
+    fn a_url_is_an_http_source_and_an_absolute_path_a_folder() {
+        let s = source_from_input(" https://example.org/models/ ").unwrap();
+        assert_eq!(
+            (s.kind.as_str(), s.name.as_str(), s.location.as_str()),
+            ("http", "example.org", "https://example.org/models/")
+        );
+        let s = source_from_input("/data/scans").unwrap();
+        assert_eq!((s.kind.as_str(), s.name.as_str()), ("dir", "scans"));
+        assert!(source_from_input("relative/dir").is_none());
+        assert!(source_from_input("ftp://x/").is_none());
+        assert!(source_from_input("").is_none());
+    }
 }

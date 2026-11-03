@@ -318,6 +318,9 @@ pub(crate) struct UiState {
     pub(crate) filter_kinds: [bool; 4],
     /// Load the next model reduced to the budget (D-13).
     pub(crate) reduce: bool,
+    /// The Library tab's new source: an HTTP index URL or a local folder path (§1.5
+    /// Sources; the path field is Q-160's fallback for the picker).
+    pub(crate) new_source: String,
 }
 
 impl Default for UiState {
@@ -334,6 +337,7 @@ impl Default for UiState {
             filter_name: String::new(),
             filter_kinds: [true; 4],
             reduce: false,
+            new_source: String::new(),
         }
     }
 }
