@@ -156,6 +156,11 @@ pub struct LoadedModel {
     pub frame_step_s: f64,
 }
 
+/// The system that reads `LibraryCommand`s, for the modules that write them to order
+/// themselves before it (persist's first settings sync, #279).
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct LibraryCommands;
+
 /// The library's systems and observers, added by `AppPlugin` with its `initial` models.
 pub(crate) struct LibraryPlugin {
     pub(crate) initial: Vec<ModelRef>,
@@ -173,7 +178,13 @@ impl Plugin for LibraryPlugin {
             .add_observer(on_splat_event)
             .add_systems(
                 Update,
-                (read_drops, run_commands, poll_tasks, poll_picks).chain(),
+                (
+                    read_drops,
+                    run_commands.in_set(LibraryCommands),
+                    poll_tasks,
+                    poll_picks,
+                )
+                    .chain(),
             )
             .add_systems(PostUpdate, follow_in_use);
         let paths = app.world().resource::<PlatformRes>().0.paths().clone();

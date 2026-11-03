@@ -220,7 +220,13 @@ impl Plugin for PersistPlugin {
                     save_settings_debounced,
                     save_poses,
                 )
-                    .chain(),
+                    .chain()
+                    // Before the library reads its commands: the first sync compares the
+                    // settings' sources with the library's as they were before this
+                    // frame's commands, so a source a command adds in the first frame is
+                    // not removed as absent from the settings. Unordered, the
+                    // multi-threaded executor could run the library first (§2.4 Threads).
+                    .before(crate::library::LibraryCommands),
             )
             .add_systems(
                 PostUpdate,
