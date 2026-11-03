@@ -164,7 +164,7 @@ fn an_entry_without_an_etag_is_compared_as_before() {
 }
 
 /// The probe's file name on the refresh server.
-const FILE: &str = "probe.safetensors";
+const REFRESH_FILE: &str = "probe.safetensors";
 
 /// What the refresh server answers with, changed by the test between two refreshes.
 struct Served {
@@ -207,12 +207,12 @@ impl RefreshServer {
             honour_none_match: true,
         }));
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let (s, r, body) = (served.clone(), seen.clone(), Arc::new(body));
+        let (shared, log, body) = (served.clone(), seen.clone(), Arc::new(body));
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { return };
-                let (s, r, body) = (s.clone(), r.clone(), body.clone());
-                std::thread::spawn(move || answer(stream, &body, &s, &r));
+                let (served, log, body) = (shared.clone(), log.clone(), body.clone());
+                std::thread::spawn(move || answer(stream, &body, &served, &log));
             }
         });
         RefreshServer {
@@ -281,12 +281,12 @@ fn answer(
         let etag = format!("ETag: {}\r\n", s.etag);
         if path == "/m/" && method == "GET" {
             let listing = format!(
-                r#"[{{ "name":"{FILE}", "type":"file", "mtime":"{}", "size":{} }}]"#,
+                r#"[{{ "name":"{REFRESH_FILE}", "type":"file", "mtime":"{}", "size":{} }}]"#,
                 s.mtime,
                 body.len()
             );
             let _ = write!(stream, "{}{listing}", head("200 OK", listing.len(), ""));
-        } else if path == format!("/m/{FILE}") {
+        } else if path == format!("/m/{REFRESH_FILE}") {
             let status = if method == "HEAD" {
                 if s.honour_none_match && none_match.as_deref() == Some(s.etag.as_str()) {
                     let _ = write!(stream, "{}", head("304 Not Modified", 0, &etag));
@@ -345,12 +345,12 @@ fn refresh_until(
 }
 
 /// A header read: a `GET` of the probe.
-fn reads(seen: &[Seen]) -> bool {
+fn header_read(seen: &[Seen]) -> bool {
     seen.iter().any(|s| s.method == "GET")
 }
 
 /// The refresh's ETag check: a `HEAD` sent with `If-None-Match` (Q-230).
-fn check(seen: &[Seen]) -> Option<&Seen> {
+fn etag_check(seen: &[Seen]) -> Option<&Seen> {
     seen.iter()
         .find(|s| s.method == "HEAD" && s.none_match.is_some())
 }
@@ -363,21 +363,25 @@ fn a_changed_nginx_mtime_drops_the_information_and_reads_it_again() {
     nginx_source(&mut t, &server);
     // The same listing: the entry keeps its information and is checked, not read.
     let before = server.seen().len();
-    assert!(refresh_until(&mut t, &server, before, |s| check(s).is_some()));
-    pump_until(&mut t, 200, |_| false);
+    assert!(refresh_until(&mut t, &server, before, |s| etag_check(s).is_some()));
+    t.until(200, |_| false);
     assert!(probe_has_info(t.app.world().resource::<Library>()));
-    assert!(!reads(&server.seen()[before..]), "{:?}", server.seen());
+    assert!(
+        !header_read(&server.seen()[before..]),
+        "{:?}",
+        server.seen()
+    );
     // A new mtime, the size, the ETag and the bytes unchanged: the information is dropped
     // and the header read again, with no ETag check of the old information.
     server.change(|s| s.mtime = "Fri, 30 Oct 2026 12:00:00 GMT".into());
     let before = server.seen().len();
     assert!(
-        refresh_until(&mut t, &server, before, reads),
+        refresh_until(&mut t, &server, before, header_read),
         "the header is read again: {:?}",
         server.seen()
     );
     let seen = server.seen()[before..].to_vec();
-    assert!(check(&seen).is_none(), "{seen:?}");
+    assert!(etag_check(&seen).is_none(), "{seen:?}");
     assert!(
         t.until(2000, |app| probe_has_info(
             app.world().resource::<Library>()
@@ -395,12 +399,12 @@ fn a_200_with_another_etag_drops_the_information_and_reads_it_again() {
     server.change(|s| s.etag = "\"v2\"".into());
     let before = server.seen().len();
     assert!(
-        refresh_until(&mut t, &server, before, reads),
+        refresh_until(&mut t, &server, before, header_read),
         "the header is read again: {:?}",
         server.seen()
     );
     let seen = server.seen()[before..].to_vec();
-    let head = check(&seen).expect("the refresh checks the ETag");
+    let head = etag_check(&seen).expect("the refresh checks the ETag");
     assert_eq!(head.none_match.as_deref(), Some("\"v1\""));
     assert_eq!(head.status, 200);
     assert!(
@@ -420,13 +424,14 @@ fn a_200_with_the_same_etag_keeps_the_information() {
     // A server that ignores `If-None-Match`: 200 with the ETag the entry was kept with.
     server.change(|s| s.honour_none_match = false);
     let before = server.seen().len();
-    assert!(refresh_until(&mut t, &server, before, |s| check(s).is_some()));
-    let head = check(&server.seen()[before..]).cloned().unwrap();
+    assert!(refresh_until(&mut t, &server, before, |s| etag_check(s).is_some()));
+    let head = etag_check(&server.seen()[before..]).cloned().unwrap();
     assert_eq!(head.status, 200, "{head:?}");
-    pump_until(&mut t, 200, |_| false);
+    assert_eq!(head.none_match.as_deref(), Some("\"v1\""), "the ETag kept");
+    t.until(200, |_| false);
     assert!(probe_has_info(t.app.world().resource::<Library>()));
     assert!(
-        !reads(&server.seen()[before..]),
+        !header_read(&server.seen()[before..]),
         "no header read: {:?}",
         server.seen()
     );
