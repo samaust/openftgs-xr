@@ -452,6 +452,7 @@ fn edit_state(world: &mut World, draw: impl FnOnce(&mut AudioState)) {
     }
 }
 
+// Q-T286.7
 /// The Scene tab's audio (§1.7 Panels, §1.10): the mute, the soundtracks' volume and each
 /// instance's soundtrack.
 fn scene_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
@@ -474,6 +475,7 @@ fn scene_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
     }
 }
 
+// Q-T286.7
 /// The Settings tab's `[audio]` table (§1.10, §1.11), in percent (Q-188).
 fn settings_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
     bevy_egui::egui::CollapsingHeader::new("[audio]").show(ui, |ui| {
@@ -937,6 +939,24 @@ mod kira_output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Draws a dock section once on a headless egui context (#286).
+    fn draw_once(world: &mut World, hook: fn(&mut World, &mut bevy_egui::egui::Ui)) {
+        let ctx = bevy_egui::egui::Context::default();
+        let mut out = ctx.run_ui(bevy_egui::egui::RawInput::default(), |ui| hook(world, ui));
+        out.textures_delta.clear();
+    }
+
+    // Q-T286.7
+    #[test]
+    fn the_audio_sections_draw_without_changing_the_state() {
+        let mut world = World::new();
+        world.insert_resource(AudioState::default());
+        world.clear_trackers();
+        draw_once(&mut world, scene_section);
+        draw_once(&mut world, settings_section);
+        assert!(!world.resource_ref::<AudioState>().is_changed());
+    }
 
     #[test]
     fn every_clip_is_short_bounded_and_finite() {

@@ -335,6 +335,33 @@ fn run_governor(
 mod tests {
     use super::*;
 
+    /// Draws a dock section once on a headless egui context (#286).
+    fn draw_once(world: &mut World, hook: fn(&mut World, &mut bevy_egui::egui::Ui)) {
+        let ctx = bevy_egui::egui::Context::default();
+        let mut out = ctx.run_ui(bevy_egui::egui::RawInput::default(), |ui| hook(world, ui));
+        out.textures_delta.clear();
+    }
+
+    // Q-T286.7
+    #[test]
+    fn the_display_section_draws_without_changing_the_tier() {
+        let mut world = World::new();
+        world.insert_resource(Governor::default());
+        world.insert_resource(SettingsRes::default());
+        let tier = ftgsxr_render::QualityTier::desktop();
+        world.insert_resource(SplatTierState {
+            render_scale: tier.render_scale,
+            sh_cap: 3,
+            sort_mode: tier.sort_mode,
+            foveation: tier.foveation,
+            tier,
+        });
+        world.clear_trackers();
+        draw_once(&mut world, display_section);
+        assert!(!world.resource_ref::<SplatTierState>().is_changed());
+        assert!(!world.resource_ref::<SettingsRes>().is_changed());
+    }
+
     #[test]
     fn budget_is_one_period_less_1_5_ms() {
         assert!((budget_ms(60.0) - (1000.0 / 60.0 - 1.5)).abs() < 1e-5);

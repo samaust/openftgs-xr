@@ -106,16 +106,28 @@ fn find_manifest(add: On<Add, LoadedModel>, models: Query<&LoadedModel>, mut com
 
 /// The `ftgs-render-request` files at the top of each directory source, in name order,
 /// found again whenever the library changes (Q-T286.8).
-fn find_requests(library: Option<Res<Library>>, mut view: ResMut<TrainingView>) {
+// Q-T286.8
+fn find_requests(
+    library: Option<Res<Library>>,
+    mut scanned: Local<Option<Vec<String>>>,
+    mut view: ResMut<TrainingView>,
+) {
     let Some(library) = library.filter(|l| l.is_changed()) else {
         return;
     };
+    // Only a change of the directory sources rescans, not their entries' states.
+    let dirs: Vec<String> = library
+        .sources
+        .iter()
+        .filter(|(s, _)| s.kind == "dir")
+        .map(|(s, _)| s.location.clone())
+        .collect();
+    if scanned.as_ref() == Some(&dirs) {
+        return;
+    }
     let mut found = Vec::new();
-    for (spec, _) in &library.sources {
-        if spec.kind != "dir" {
-            continue;
-        }
-        let Ok(dir) = std::fs::read_dir(&spec.location) else {
+    for location in &dirs {
+        let Ok(dir) = std::fs::read_dir(location) else {
             continue;
         };
         let mut jsons: Vec<PathBuf> = dir
@@ -126,6 +138,7 @@ fn find_requests(library: Option<Res<Library>>, mut view: ResMut<TrainingView>) 
         jsons.sort();
         found.extend(jsons);
     }
+    *scanned = Some(dirs);
     if view.requests != found {
         view.requests = found;
     }

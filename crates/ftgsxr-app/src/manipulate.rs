@@ -255,6 +255,7 @@ fn hints(source: &ModelRef, kind: ModelKind) -> PoseExtras {
 
 /// The first `ftgs-scene` manifest beside a model, in name order: any `*.json` of `dir`
 /// that reads as one (§1.5, §1.7 Training cameras and requests).
+// Q-T286.8
 pub(crate) fn manifest_beside(dir: &Path) -> Option<(PathBuf, SceneManifest)> {
     let mut jsons: Vec<_> = std::fs::read_dir(dir)
         .ok()?
