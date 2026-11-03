@@ -17,6 +17,7 @@ pub mod persist;
 pub mod platform;
 pub mod playback;
 pub mod plugin;
+pub mod rig;
 
 // Q-67: `BenchReport` and `cmd_bench`.
 pub use headless::{
@@ -36,6 +37,10 @@ pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LoadedModel
 pub use playback::Playback;
 // §2.1 `ftgsxr_app::manipulate`.
 pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick_instance};
+// §2.1 `ftgsxr_app::rig`.
+pub use rig::{
+    ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
+};
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
 pub use persist::{SettingsPath, SettingsRes};
 // §2.1 `ftgsxr_app::platform`.
