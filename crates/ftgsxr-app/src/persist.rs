@@ -30,7 +30,7 @@ use ftgsxr_io::{
 use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 
 use crate::audio::AudioState;
-use crate::intent::{InstanceAction, Intent, PlaybackCommand, UiCommand};
+use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{
     EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel, ShowOnUpload,
 };
@@ -296,12 +296,30 @@ fn raise_startup(mut startup: ResMut<StartupFailures>, mut out: MessageWriter<Pe
 
 /// `Intent::Ui(SaveScene)` saves a scene named by the time (Q-200); `LoadScene` is the
 /// UI's, which confirms and sends `PersistCommand::LoadScene`.
-fn run_intents(mut reader: MessageReader<Intent>, mut out: MessageWriter<PersistCommand>) {
+/// `SaveScene` and the overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
+/// is a `[display.overlays]` setting, flipped here and mapped onto every instance by
+/// `sync_settings` (Q-207).
+fn run_intents(
+    mut reader: MessageReader<Intent>,
+    mut out: MessageWriter<PersistCommand>,
+    mut settings: ResMut<SettingsRes>,
+) {
     for intent in reader.read() {
-        if let Intent::Ui(UiCommand::SaveScene) = intent {
-            out.write(PersistCommand::SaveScene(PathBuf::from(
-                default_scene_name(),
-            )));
+        match intent {
+            Intent::Ui(UiCommand::SaveScene) => {
+                out.write(PersistCommand::SaveScene(PathBuf::from(
+                    default_scene_name(),
+                )));
+            }
+            Intent::Overlay(o) => {
+                let ov = &mut settings.0.display.overlays;
+                match o {
+                    OverlayToggle::Boxes => ov.boxes = !ov.boxes,
+                    OverlayToggle::Velocities => ov.velocities = !ov.velocities,
+                    OverlayToggle::TimeTint => ov.time_tint = !ov.time_tint,
+                }
+            }
+            _ => {}
         }
     }
 }
