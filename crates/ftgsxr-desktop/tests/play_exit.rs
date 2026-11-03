@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! `ftgsxr play`'s exit in its first frames (#376, §1.7 Command line, §2.4 Threads, Q-230,
+//! `ftgsxr play`'s exit in its first frames (#376, §1.7 Command line, §2.4 Threads, Q-233,
 //! `gpu` lane). With bevy's `multi_threaded`, render pipelines compile on the async compute
 //! pool; a process that exited while one was compiling left the worker inside the NVIDIA
 //! Vulkan driver, whose exit-time teardown crashed it (SIGSEGV or SIGABRT). `AppPlugin`
-//! now holds the `AppExit` until no pipeline compiles, at most Q-230's cap.
+//! now holds the `AppExit` until no pipeline compiles, at most Q-233's cap.
 //!
 //! Each run sends one SIGINT, which bevy's Ctrl-C handler turns into an `AppExit` with
 //! code 130, early after the window appears, when pipelines are still compiling, and
@@ -114,7 +114,7 @@ fn run_once(home: &Path, model: &Path, delay: Duration) -> (Option<ExitStatus>, 
     (status, log)
 }
 
-/// #376 (§1.7 Command line, Q-230): `play` asked to exit in its first frames, while its
+/// #376 (§1.7 Command line, Q-233): `play` asked to exit in its first frames, while its
 /// render pipelines compile, exits by its own code (130 for Ctrl-C), never by a signal.
 #[test]
 #[ignore = "gpu"]

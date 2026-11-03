@@ -1257,7 +1257,7 @@ fn save_poses(
     }
 }
 
-/// The settings at `AppExit` (§1.11); after `exit_wait`'s hold (#376, Q-230).
+/// The settings at `AppExit` (§1.11); after `exit_wait`'s hold (#376, Q-233).
 pub(crate) fn save_at_exit(world: &mut World, mut cursor: Local<MessageCursor<AppExit>>) {
     let Some(exits) = world.get_resource::<Messages<AppExit>>() else {
         return;
