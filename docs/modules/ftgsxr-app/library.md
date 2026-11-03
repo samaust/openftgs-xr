@@ -1,0 +1,28 @@
+# The library in `ftgsxr-app`
+
+How `ftgsxr_app::library` meets §1.5's library and §2.1's `Library`, `LibraryEntry`, `EntryState`, `LibraryCommand`, `LoadedModel` and `LibraryFailure`: the model sources and their listings, header-only reads, loads and unloads, the pickers and dropped files (§1.7). The spec items are §1.5, §1.7 (Library tab, file drops), §1.2, §2.1 `ftgsxr_app::library`, §2.4 Threads, D-31, D-40 and D-49; this doc explains them and never overrides them. Built in M-4 (#278, #279).
+
+## Structure
+
+A private `LibraryPlugin`, added by `AppPlugin` first among the feature plugins, holds the sources, the pending tasks and the commands' system set `LibraryCommands`. Its systems run in `Update`: the commands, then the polling of the I/O tasks, the pickers and the drops; `PostUpdate` follows which entries are in use. `persist`'s chain runs before `LibraryCommands`, so a scene's unloads and loads land in the same frame's commands.
+
+- **Threads.** Listings, header reads and HTTP fetches run on the I/O task pool; the CPU part of a load is `SplatLoad` on the compute pool (§2.4 Threads, Q-99). Nothing blocks the frame.
+- **Entries.** One `LibraryEntry` per model a source offers, keyed by the source and the model's reference; its `EntryState` carries every state and failure text the Library tab shows. No toast is raised here: a failure with no entry to carry it (a `LoadRef`, a picked file, a drop, a failed listing) is a `LibraryFailure { name, reference, code, text }` message that `ui` turns into a toast (Q-173, Q-193).
+- **Directories.** A listed subdirectory stays an entry; loading it lists it and puts its entries right after it; a source's `Refresh` relists the root only (Q-192). On a first run the default models directory may not exist: it lists as empty, with no toast, and is not created (Q-216, Q-14).
+- **HTTP.** A model is fetched into the cache, whose size limit `AppPlugin` passes from the settings' `[cache]`; an index entry's soundtrack is downloaded with the model and handed on in `LoadedModel.audio` (#279).
+
+## A load's life
+
+1. `Load` or `LoadRef` spawns the instance with `SplatLoad` and the entry goes to its loading state.
+2. When `SplatModel` appears (the CPU load done), `LoadedModel` is inserted with the model's information and `frame_step_s` (Q-174, from `SplatAsset`), and the instance is `Hidden` (Q-148). Instances are parented under `ContentGroup` (`rig`).
+3. `SplatEvent::Uploaded` shows the instance, unless the crate-private `ShowOnUpload` that `persist` set false for a scene's hidden instance says otherwise (Q-202), and the entry becomes `Loaded(entity)`. `SplatEvent::Failed` despawns it and the entry becomes `Failed(text)`, or a `LibraryFailure` is sent.
+
+A model over the memory budget is refused with E-MEM-BUDGET and the reduce-to-budget count N in its text (Q-117). N is the budget's remaining bytes, from the public `SplatGpu`'s device (Q-172), divided by the static bytes per primitive under the tier's layout and the governor's SH cap, floored (Q-158).
+
+## Unloads
+
+`Unload` and `UnloadAll` despawn the instances; the model's GPU memory is released by the render plugin, which I-1 checks through `SplatGpu`. An unload asked for from the keyboard goes through `ui`'s confirmation first (Q-199, `ui.md`).
+
+## Q-n rows relied on
+
+Q-148, Q-158, Q-166 (messages), Q-172, Q-173, Q-174, Q-192, Q-193, Q-202, Q-203 (missing entries from a scene, `persist.md`), Q-216; with Q-99, Q-117 and Q-14 from earlier milestones.
