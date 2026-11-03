@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# The public HTTPS index of I-21 (D-20, §1.5 HTTP index; Q-156): GitHub Pages serves the
+# fixtures' `ftgsxr-index` and the three entries it lists, at
+# https://samaust.github.io/openftgs-xr/models/ (the `net` lane's FTGSXR_NET_INDEX).
+# Only these files are published (about 23 KB); the step below fails above 64 KiB.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tests/fixtures/listing/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: publish the index
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        run: |
+          set -eu
+          src=tests/fixtures/listing
+          out=_site/models
+          mkdir -p "$out/tiny"
+          cp "$src/index.json" "$out/index.json"
+          cp "$src/models/probe p1.safetensors" "$src/models/snapshot.ply" "$out/"
+          cp "$src/models/tiny/manifest.json" "$src/models/tiny/params.safetensors" "$out/tiny/"
+          find _site -type f -printf '%s\t%P\n'
+          total=$(find _site -type f -printf '%s\n' | awk '{ s += $1 } END { print s }')
+          echo "total: $total bytes"
+          test "$total" -le 65536
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

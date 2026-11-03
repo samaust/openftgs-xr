@@ -2,7 +2,7 @@
 
 //! Added for #375 (`cpu`): a library refresh keeps an entry's information only while its
 //! file is unchanged, the ETag of an HTTP entry included (§1.5 Library: "entries whose file
-//! changed (size, ETag or SHA-256) lose their cached information"; Q-229, Q-231). No §3 row
+//! changed (size, ETag or SHA-256) lose their cached information"; Q-230, Q-232). No §3 row
 //! pins a refresh; §1.5's sentence is the source of truth.
 
 mod support;
@@ -116,7 +116,7 @@ fn another_etag_drops_the_information_and_reads_it_again() {
     assert!(!probe_has_info(t.app.world().resource::<Library>()));
 }
 
-// Q-231
+// Q-232
 #[test]
 fn a_failed_check_keeps_the_information() {
     let mut t = TestApp::new("refresh-failed");

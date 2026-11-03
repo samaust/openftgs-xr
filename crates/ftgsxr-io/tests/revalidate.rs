@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Added for #375 (§1.5 Library's ETag on refresh, Q-229, Q-231): `HttpClient::revalidate`
+//! Added for #375 (§1.5 Library's ETag on refresh, Q-230, Q-232): `HttpClient::revalidate`
 //! against `ftgsxr_testkit::serve_fixtures`, whose ETag is the file's quoted SHA-256 (Q-39).
 //! No §3 row pins it; the source of truth is §1.5's "size, ETag or SHA-256".
 
@@ -85,7 +85,7 @@ fn a_2xx_without_an_etag_is_current_with_none() {
     assert_eq!(answer, Ok(Revalidation::Current(None)));
 }
 
-// Q-231
+// Q-232
 #[test]
 fn an_error_status_or_no_server_is_e_net_fetch() {
     let server = serve_fixtures();

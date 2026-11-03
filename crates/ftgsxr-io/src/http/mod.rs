@@ -188,7 +188,7 @@ impl HttpClient {
     /// `HEAD`, with `If-None-Match: <etag>` when given. A 304 is `Unchanged`; a 2xx is
     /// `Current` with the response's ETag, if any. E-NET-FETCH on any other answer or when
     /// the server cannot be reached.
-    // Q-229
+    // Q-230
     pub fn revalidate(&self, url: &Url, etag: Option<&str>) -> Result<Revalidation, IoError> {
         let mut request = self.agent.head(url.as_str());
         if let Some(etag) = etag {
@@ -205,7 +205,7 @@ impl HttpClient {
     }
 }
 
-/// What `HttpClient::revalidate` learned of a file's ETag (§1.5 Library, Q-229).
+/// What `HttpClient::revalidate` learned of a file's ETag (§1.5 Library, Q-230).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Revalidation {
     /// The server answered 304: the file still has the ETag sent.
