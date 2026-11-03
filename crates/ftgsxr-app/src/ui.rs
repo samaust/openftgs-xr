@@ -434,7 +434,8 @@ impl Plugin for UiPlugin {
                 (ui_commands, library_toasts, clock_toasts).in_set(UiSet),
             )
             .add_systems(PostUpdate, (raise_toasts, fill_hud).chain())
-            .add_observer(splat_toasts);
+            .add_observer(splat_toasts)
+            .add_observer(triggered_toasts);
         // §1.7 Training cameras and requests.
         cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
@@ -560,6 +561,13 @@ fn splat_toasts(
 // Q-209
 pub(crate) fn overflow_text(visible: u32, capacity: u32) -> String {
     format!("Too many primitives: {visible} visible, capacity {capacity}; some were dropped")
+}
+
+/// A `Toast` triggered from outside the crate (`ftgsxr_xr::display`'s E-XR-UNSUPPORTED,
+/// Q-161) asks for a toast like any module's `ToastRequest`, through the rate limit.
+// Q-T289.2
+fn triggered_toasts(toast: On<Toast>, mut out: MessageWriter<ToastRequest>) {
+    out.write(ToastRequest(toast.event().clone()));
 }
 
 /// The rate limit (§1.13: one per second per site, the site being the text): the
