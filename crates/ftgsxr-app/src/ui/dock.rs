@@ -11,7 +11,7 @@ use bevy::ecs::prelude::*;
 use bevy::math::{EulerRot, Quat};
 use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
-use ftgsxr_core::{EndRule, LoopMode, PlayState};
+use ftgsxr_core::{EndRule, LoopMode, PlayState, Preset};
 use ftgsxr_io::{EntryKind, SourceSpec, Url};
 use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransform};
 
@@ -19,6 +19,7 @@ use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
 use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
+use crate::manipulate::{FIT_RANGE_M, PoseExtras, SetPoseExtras};
 use crate::platform::{PickKind, PlatformRes};
 use crate::playback::Playback;
 
@@ -449,10 +450,12 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         Option<&Visibility>,
         Option<&SplatMode>,
         Option<&SplatTransform>,
+        Option<&PoseExtras>,
     )>();
     let mut ask = None;
     let mut gains = Vec::new();
-    for (e, m, mut tf, vis, mode, color) in q.iter_mut(world) {
+    let mut extras_out = Vec::new();
+    for (e, m, mut tf, vis, mode, color, extras) in q.iter_mut(world) {
         ui.separator();
         ui.strong(if m.reduced {
             format!("{} (reduced)", m.name)
@@ -574,12 +577,52 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         if g != gain {
             gains.push((e, g));
         }
+        // §1.5 Poses: the orientation preset and L_fit the fit uses.
+        let x = extras.copied().unwrap_or(PoseExtras {
+            preset: Preset::YUp,
+            fit_size_m: 1.0,
+        });
+        let mut next = x;
         ui.horizontal(|ui| {
+            ui.label("up");
+            for (label, p) in [
+                ("Y-up", Preset::YUp),
+                ("Z-up", Preset::ZUp),
+                ("−Y-up", Preset::NegYUp),
+                ("custom", Preset::Custom(tf.rotation)),
+            ] {
+                let on = std::mem::discriminant(&x.preset) == std::mem::discriminant(&p);
+                // "custom" takes the instance's current rotation.
+                if ui.selectable_label(on, label).clicked() {
+                    next.preset = p;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("fit size");
+            ui.add(
+                egui::DragValue::new(&mut next.fit_size_m)
+                    .range(FIT_RANGE_M.0..=FIT_RANGE_M.1)
+                    .speed(0.01)
+                    .suffix(" m"),
+            );
+        });
+        if next != x {
+            extras_out.push(SetPoseExtras {
+                instance: e,
+                preset: next.preset,
+                fit_size_m: next.fit_size_m,
+            });
+        }
+        ui.horizontal_wrapped(|ui| {
             for (label, action) in [
                 ("Select", InstanceAction::Select),
                 ("Fit", InstanceAction::Fit),
+                ("Snap to floor", InstanceAction::SnapToFloor),
                 ("Save pose", InstanceAction::SavePose),
                 ("Reset pose", InstanceAction::ResetPose),
+                // §1.5: "the panel's second button" forgets the saved pose.
+                ("Forget pose", InstanceAction::ForgetPose),
             ] {
                 if button(ui, label, out, hv) {
                     out.push(Out::Intent(Intent::Instance {
@@ -593,6 +636,9 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 ask = Some(e);
             }
         });
+    }
+    for x in extras_out {
+        world.write_message(x);
     }
     training_cameras(world, ui, out, hv);
     for (e, gain) in gains {
