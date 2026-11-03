@@ -808,16 +808,12 @@ fn request_replay(
         let governor = world
             .get_resource::<ftgsxr_render::SplatTierState>()
             .map(|t| t.sh_cap);
-        match (r.request.sh_degree, governor) {
-            (Some(d), Some(g)) if g < d => {
-                ui.label(format!(
-                    "SH degree {g}: the governor's cap, below the request's {d}"
-                ));
-            }
-            (Some(d), _) => {
-                ui.label(format!("SH degree {d}: the request's"));
-            }
-            _ => {}
+        if let (Some(d), Some(g)) = (r.request.sh_degree, governor)
+            && g < d
+        {
+            ui.label(format!(
+                "SH degree {g}: the governor's cap, below the request's {d}"
+            ));
         }
     }
     if close {

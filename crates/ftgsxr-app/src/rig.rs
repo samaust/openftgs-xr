@@ -792,12 +792,15 @@ mod tests {
         })
         .init_resource::<BackgroundOverride>()
         .add_systems(Update, follow_view);
-        let over = |background| SplatCamera {
+        let camera_over = |background| SplatCamera {
             sort: SortMode::PerView,
             output: OutputSpace::LinearOver { background },
         };
-        let eye = app.world_mut().spawn(over(Some([0.5, 0.5, 0.5]))).id();
-        let none = app.world_mut().spawn(over(None)).id();
+        let eye = app
+            .world_mut()
+            .spawn(camera_over(Some([0.5, 0.5, 0.5])))
+            .id();
+        let none = app.world_mut().spawn(camera_over(None)).id();
         let drawn = |app: &App| {
             (
                 app.world().get::<SplatCamera>(eye).unwrap().output,
@@ -816,9 +819,17 @@ mod tests {
         assert_eq!(drawn(&app), (bg(Some([0.0, 0.0, 0.0])), bg(None)));
         app.world_mut().resource_mut::<BackgroundOverride>().0 = None;
         app.update();
+        // The override never reached the view, so neither the settings.
+        assert_eq!(
+            app.world().resource::<DesktopView>().background,
+            [0.2, 0.3, 0.4]
+        );
         assert_eq!(drawn(&app), (bg(Some([0.2, 0.3, 0.4])), bg(None)));
         // A camera spawned later, as an XR eye is, follows too.
-        let late = app.world_mut().spawn(over(Some([0.9, 0.9, 0.9]))).id();
+        let late = app
+            .world_mut()
+            .spawn(camera_over(Some([0.9, 0.9, 0.9])))
+            .id();
         app.update();
         assert_eq!(
             app.world().get::<SplatCamera>(late).unwrap().output,

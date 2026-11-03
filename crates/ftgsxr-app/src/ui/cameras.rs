@@ -179,13 +179,14 @@ fn follow_replay(
     mut background: ResMut<BackgroundOverride>,
     mut limit: ResMut<SplatShLimit>,
 ) {
-    let r = view.replay.as_ref().map(|r| &r.request);
-    let want = (r.map(|r| r.background), r.and_then(|r| r.sh_degree));
-    if background.0 != want.0 {
-        background.0 = want.0;
+    let request = view.replay.as_ref().map(|r| &r.request);
+    let want_background = request.map(|q| q.background);
+    let want_limit = request.and_then(|q| q.sh_degree);
+    if background.0 != want_background {
+        background.0 = want_background;
     }
-    if limit.0 != want.1 {
-        limit.0 = want.1;
+    if limit.0 != want_limit {
+        limit.0 = want_limit;
     }
 }
 
@@ -465,8 +466,8 @@ mod tests {
     // the override and its degree the extra cap; stepping keeps them, the governor's
     // `SplatTierState` and the settings' background are untouched, and Close clears both.
     #[test]
-    fn an_open_request_sets_and_close_clears_the_overrides() {
-        use ftgsxr_render::{Foveation, QualityTier, SortMode, SplatShLimit, SplatTierState};
+    fn follow_replay_sets_the_overrides_while_a_request_is_open() {
+        use ftgsxr_render::{Foveation, QualityTier, SortMode, SplatTierState};
         let mut app = App::new();
         let governor = SplatTierState {
             tier: QualityTier::desktop(),
