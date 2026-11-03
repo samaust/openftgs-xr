@@ -48,7 +48,7 @@ pub struct SplatLoad {
 
 /// A load in progress on the async compute task pool, with the half-precision fields
 /// it packs with; the task hands its `SplatLoad` back, so a load the tier changed under
-/// starts again (Q-230).
+/// starts again (Q-234).
 #[derive(Component)]
 pub(crate) struct LoadTask {
     task: Task<(SplatLoad, Result<SplatAsset, RenderError>)>,
@@ -116,7 +116,7 @@ fn budget(tier_bytes: u64, adapter: Option<&wgpu::Adapter>) -> MemoryBudget {
 }
 
 /// Makes the `SplatDevice` from Bevy's device once the renderer exists, again when
-/// Bevy re-creates it, and again on a change of the running tier, with its budget (Q-230:
+/// Bevy re-creates it, and again on a change of the running tier, with its budget (Q-234:
 /// the views' passes and frame buffers follow the new device); models of an old device
 /// are uploaded again.
 #[expect(
@@ -138,7 +138,7 @@ pub(crate) fn ensure_device(
     let (Some(device), Some(queue), Some(info)) = (device, queue, info) else {
         return;
     };
-    // Q-230
+    // Q-234
     let same_tier = made_for.as_ref() == Some(&tier.tier);
     if gpu.is_some() && !device.is_changed() && same_tier {
         return;
@@ -243,7 +243,7 @@ pub(crate) fn start_loads(
 }
 
 /// Adds each finished load's asset and its `SplatModel`, or reports its failure; a load
-/// packed with other half-precision fields than the running tier's starts again (Q-230).
+/// packed with other half-precision fields than the running tier's starts again (Q-234).
 pub(crate) fn finish_loads(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut LoadTask)>,
@@ -256,7 +256,7 @@ pub(crate) fn finish_loads(
         };
         let mut e = commands.entity(entity);
         e.remove::<LoadTask>();
-        // Q-230
+        // Q-234
         if task.half != tier.tier.layout.half {
             e.insert(load);
             continue;
@@ -311,7 +311,7 @@ pub(crate) fn upload_models(
             continue;
         };
         let p = &asset.packed;
-        // Q-230: a model packed for another tier never meets the running tier's passes;
+        // Q-234: a model packed for another tier never meets the running tier's passes;
         // the app reloads it.
         if p.arrays.half != tier.tier.layout.half {
             continue;

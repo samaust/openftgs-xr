@@ -3,9 +3,9 @@
 //! I-3 (§1.5 Download cache, `cpu`): a fetch shows its progress in
 //! `EntryState::Fetching`, a cancel stops it within one chunk, a load after a cut
 //! resumes with `Range`, and a checksum mismatch is `EntryState::Failed` with
-//! E-NET-CHECKSUM. Also the index entry's `audio` (§1.10) and the cache's pruning after a
-//! load (Q-4, Q-45, Q-56). Progress and cancel are seen through a test-local server that
-//! holds its body after a first part.
+//! E-NET-CHECKSUM. Also the index entry's `audio` (§1.10) and `scene` manifest (§1.7),
+//! and the cache's pruning after a load (Q-4, Q-45, Q-56). Progress and cancel are seen
+//! through a test-local server that holds its body after a first part.
 
 mod support;
 
@@ -90,7 +90,8 @@ const FIRST: usize = 500;
 /// holds the rest until released, so a fetch's progress and a cancel are seen between two
 /// frames (`serve_fixtures` sends each body whole). It serves `index.json` listing the
 /// model `m` (`kind`, no digest), byte ranges of the model whole (header reads), and 404
-/// for anything else.
+/// for anything else, a `HEAD` included (so the ETag check before a header read, Q-230,
+/// finds none and never takes the held body).
 struct HeldServer {
     base: String,
     release: std::sync::mpsc::Sender<()>,
@@ -142,6 +143,7 @@ fn serve(
             return;
         }
         let path = line.split(' ').nth(1).unwrap_or("").to_owned();
+        let is_head = line.starts_with("HEAD ");
         let mut range = None;
         loop {
             let mut h = String::new();
@@ -160,7 +162,9 @@ fn serve(
         let head = |status: &str, len: usize, extra: &str| {
             format!("HTTP/1.1 {status}\r\nContent-Length: {len}\r\n{extra}\r\n")
         };
-        if path == "/m/index.json" {
+        if is_head {
+            let _ = write!(stream, "{}", head("404 Not Found", 0, ""));
+        } else if path == "/m/index.json" {
             let index = format!(
                 r#"{{"format":"ftgsxr-index","version":1,"entries":[{{"name":"m","path":"{file}","kind":"{kind}","size":{}}}]}}"#,
                 body.len()
@@ -457,4 +461,100 @@ fn i03_the_cache_is_pruned_after_a_load_never_a_loaded_models_file() {
     );
     let m = instances(&mut t).remove(0);
     assert_eq!(m.name, "snapshot");
+}
+
+/// The cache entry directories holding a file with `bytes`.
+fn cached_with(dir: &std::path::Path, bytes: &[u8]) -> usize {
+    fs::read_dir(dir.join("cache/http"))
+        .map(|d| {
+            d.filter_map(Result::ok)
+                .filter(|e| {
+                    fs::read_dir(e.path()).is_ok_and(|files| {
+                        files
+                            .filter_map(Result::ok)
+                            .any(|f| fs::read(f.path()).is_ok_and(|b| b == bytes))
+                    })
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+// §1.7 Training cameras and requests ("or an index entry names one"), §1.11 `index.json`
+// (`scene`), Q-4: the index entry's `scene` manifest is downloaded with the model and stays
+// in the cache while the instance is loaded; once it is unloaded, a later prune evicts it.
+#[test]
+fn i03_the_index_entry_scene_is_downloaded_with_the_model_and_kept_in_use() {
+    // A cache limit of one byte: every prune evicts whatever is not in use.
+    let mut settings = Settings::default();
+    settings.cache.max_bytes = 1;
+    let mut t = TestApp::with("i03-scene", Setup::default(), move |app: &mut App| {
+        app.insert_resource(SettingsRes(settings));
+    });
+    let probe = http_source(&mut t);
+    let ply = entry_of(&t, EntryKind::Ply);
+    let url = t.server.url_of("checkpoint/scene/scene.json");
+    t.app.world_mut().resource_mut::<Library>().entries[probe]
+        .entry
+        .scene = Some(url);
+    load(&mut t, probe);
+    assert!(t.until(3000, |app| {
+        app.world_mut()
+            .query::<&LoadedModel>()
+            .iter(app.world())
+            .count()
+            == 1
+    }));
+    t.frames(30);
+    let manifest =
+        fs::read(ftgsxr_testkit::fixtures_dir().join("checkpoint/scene/scene.json")).unwrap();
+    assert_eq!(cached_with(&t.dir, &manifest), 1, "the manifest is cached");
+    assert_eq!(
+        cached(&t.dir),
+        2,
+        "the model's and the manifest's entries stay"
+    );
+    // Unloaded, the manifest leaves the in-use set: the prune after the next load evicts it.
+    t.command(LibraryCommand::UnloadAll);
+    t.frames(2);
+    load(&mut t, ply);
+    assert!(t.until(3000, |app| {
+        app.world_mut()
+            .query::<&LoadedModel>()
+            .iter(app.world())
+            .count()
+            == 1
+    }));
+    let dir = t.dir.clone();
+    assert!(
+        t.until(600, |_| cached(&dir) == 1),
+        "only the PLY's entry stays"
+    );
+    assert_eq!(cached_with(&t.dir, &manifest), 0, "the manifest is evicted");
+}
+
+// §1.7, #374: an index `scene` that fails to download leaves the model to load without
+// training cameras, as a soundtrack's failure does (§1.10).
+#[test]
+fn i03_an_index_scene_that_fails_to_download_still_loads_the_model() {
+    let mut t = TestApp::new("i03-scene-404");
+    let probe = http_source(&mut t);
+    let url = t.server.url_of("listing/models/missing-scene.json");
+    t.app.world_mut().resource_mut::<Library>().entries[probe]
+        .entry
+        .scene = Some(url);
+    load(&mut t, probe);
+    assert!(
+        t.until(3000, |app| {
+            app.world_mut()
+                .query::<&LoadedModel>()
+                .iter(app.world())
+                .count()
+                == 1
+        }),
+        "the model loads: {:?}",
+        t.app.world().resource::<Library>().entries[probe].state
+    );
+    let m = instances(&mut t).remove(0);
+    assert!(matches!(m.source, ModelRef::Http(_)));
 }

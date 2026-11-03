@@ -87,7 +87,7 @@ pub(crate) fn publish_stats(
 }
 
 /// The running tier, in the render world: the plugin's at first, then `SplatTierState.tier`
-/// as extracted (Q-230).
+/// as extracted (Q-234).
 #[derive(Resource)]
 struct RenderTier(QualityTier);
 
@@ -116,7 +116,7 @@ struct Extracted {
     orders: HashMap<Entity, isize>,
     /// The governor's render scale (§1.12, E16).
     render_scale: f32,
-    /// The running tier (Q-230).
+    /// The running tier (Q-234).
     tier: Option<QualityTier>,
 }
 
@@ -235,7 +235,7 @@ fn extract(
     cameras: Extract<Query<(&RenderEntity, &SplatCamera, Option<&::bevy::camera::Camera>)>>,
 ) {
     out.dev = gpu.as_ref().map(|g| Arc::clone(&g.0));
-    // Q-230: the running tier; the device made for it resets the views.
+    // Q-234: the running tier; the device made for it resets the views.
     out.tier = Some(tier_state.tier.clone());
     let sh_cap = tier_state.sh_cap;
     out.render_scale = tier_state.render_scale;
@@ -282,7 +282,7 @@ fn prepare_views(
     let Some(dev) = extracted.dev.clone() else {
         return;
     };
-    // Q-230: a new tier takes new passes and frame buffers.
+    // Q-234: a new tier takes new passes and frame buffers.
     let new_tier = extracted.tier.as_ref().is_some_and(|t| *t != tier.0);
     if new_tier {
         tier.0 = extracted.tier.clone().expect("invariant: checked above");

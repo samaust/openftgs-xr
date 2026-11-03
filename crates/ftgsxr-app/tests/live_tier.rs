@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The live tier switch (#373; §1.7 Panels, §1.12, D-37; Q-179, Q-229, Q-230, Q-231): a
+//! The live tier switch (#373; §1.7 Panels, §1.12, D-37; Q-179, Q-233, Q-234, Q-235): a
 //! change of `[general] tier` while the app runs switches the running tier, the governor
 //! follows Q-179's rule, and the loaded instances are reloaded with the new tier's layout
 //! on their own entities, without a restart.
@@ -22,7 +22,7 @@ fn pick(app: &mut App, tier: &str) {
     app.world_mut().resource_mut::<SettingsRes>().0.general.tier = tier.into();
 }
 
-// Q-231, Q-179
+// Q-235, Q-179
 #[test]
 fn live_tier_switch_follows_the_settings() {
     let mut t = TestApp::new("live_follow");
@@ -49,7 +49,7 @@ fn live_tier_switch_follows_the_settings() {
     assert_eq!(running(&t.app), "desktop");
 }
 
-// Q-231: `--tier` at startup holds until the user picks a tier.
+// Q-235: `--tier` at startup holds until the user picks a tier.
 #[test]
 fn live_tier_switch_leaves_a_startup_override_alone() {
     let setup = Setup {
@@ -96,7 +96,7 @@ fn asset_of(app: &App, e: Entity) -> Option<AssetId<ftgsxr_render::SplatAsset>> 
     app.world().get::<SplatModel>(e).map(|m| m.0.id())
 }
 
-// Q-229: the reload happens on the instance's own entity, which keeps its state.
+// Q-233: the reload happens on the instance's own entity, which keeps its state.
 #[test]
 fn live_tier_switch_keeps_the_instance() {
     let mut t = TestApp::new("live_keep");
@@ -147,7 +147,7 @@ fn uploads(events: &std::sync::Mutex<Vec<ftgsxr_app::SplatEvent>>, entity: Entit
         .collect()
 }
 
-// Q-229, Q-230: the reload is packed with the new tier's layout.
+// Q-233, Q-234: the reload is packed with the new tier's layout.
 #[test]
 #[ignore = "gpu"]
 fn gpu_live_tier_switch_reloads_with_the_new_layout() {
@@ -174,7 +174,7 @@ fn gpu_live_tier_switch_reloads_with_the_new_layout() {
         uploads(&events, e),
         vec![n * (64 + 12 * (l3 + 1) * (l3 + 1))]
     );
-    // A hidden instance stays hidden through the reload (Q-229).
+    // A hidden instance stays hidden through the reload (Q-233).
     t.app.world_mut().entity_mut(e).insert(Visibility::Hidden);
     pick(&mut t.app, "quest-balanced");
     assert!(
@@ -196,7 +196,7 @@ fn gpu_live_tier_switch_reloads_with_the_new_layout() {
     assert!(t.settle_pipelines());
 }
 
-// Q-229, Q-230: the new tier's budget applies to the reloads; a refused instance is
+// Q-233, Q-234: the new tier's budget applies to the reloads; a refused instance is
 // unloaded with §1.15's text, the others stay.
 #[test]
 #[ignore = "gpu"]
