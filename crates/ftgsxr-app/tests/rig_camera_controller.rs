@@ -251,3 +251,65 @@ fn the_settings_reach_the_camera_and_the_speed_returns_to_them() {
     let fov = t.app.world().resource::<SettingsRes>().0.desktop.fov_deg;
     assert_eq!(fov, 90.0, "the settings' fov is left as it is");
 }
+
+/// §1.7 Orbit: while orbiting, selecting an instance moves the orbit's target to its
+/// box centre, the distance kept.
+#[test]
+fn the_orbit_follows_a_new_selection() {
+    use ftgsxr_app::InstanceAction;
+    let mut t = windowed("rig_orbit_follow");
+    t.command(LibraryCommand::LoadRef(ModelRef::File(
+        fixtures_dir().join("probes/P1.safetensors"),
+    )));
+    assert!(
+        t.until(600, |app| app
+            .world_mut()
+            .query::<&LoadedModel>()
+            .iter(app.world())
+            .count()
+            == 1),
+        "P1 loads"
+    );
+    t.frames(1);
+    let e = {
+        let mut q = t
+            .app
+            .world_mut()
+            .query_filtered::<Entity, With<LoadedModel>>();
+        q.single(t.app.world()).unwrap()
+    };
+    t.app
+        .world_mut()
+        .get_mut::<Transform>(e)
+        .unwrap()
+        .translation = Vec3::new(3.0, 0.0, 0.0);
+    send(&mut t, &[cam(CameraCommand::ToggleOrbit)]);
+    let before = camera(&mut t).1.translation();
+    let d0 = before.length();
+    send(
+        &mut t,
+        &[Intent::Instance {
+            instance: e,
+            action: InstanceAction::Select,
+        }],
+    );
+    t.frames(1);
+    let center = {
+        let w = t.app.world();
+        let m = w.get::<SplatModel>(e).unwrap();
+        let b = w.resource::<Assets<SplatAsset>>().get(&m.0).unwrap().bounds;
+        let g = w.get::<GlobalTransform>(e).unwrap();
+        g.transform_point((b.min + b.max) / 2.0)
+    };
+    let g = camera(&mut t).1;
+    assert!(
+        (g.translation().distance(center) - d0).abs() < 1e-3,
+        "the distance kept: {} vs {d0}",
+        g.translation().distance(center)
+    );
+    let to = (center - g.translation()).normalize();
+    assert!(
+        g.forward().as_vec3().distance(to) < 1e-4,
+        "looks at the box centre"
+    );
+}

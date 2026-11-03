@@ -490,6 +490,7 @@ fn run_camera(
     >,
     rigs: Query<&Transform, (With<PlayerRig>, Without<DesktopCamera>)>,
     selected: Instances,
+    newly_selected: Query<(), Added<Selected>>,
     groups: Groups<'_, '_>,
     assets: Option<Res<Assets<SplatAsset>>>,
     time: Res<Time>,
@@ -502,6 +503,17 @@ fn run_camera(
     let rig = rigs.iter().next().map(pose_of).unwrap_or(Pose::IDENTITY);
     let mut pose = pose_of(&local).then(&rig);
     pose.scale = 1.0;
+    // §1.7 Orbit: the orbit follows a new selection, at its distance.
+    if ctl.orbit
+        && !newly_selected.is_empty()
+        && let Some(c) = assets
+            .as_ref()
+            .and_then(|a| selected_corners(&selected, &groups, a))
+    {
+        ctl.target = c.iter().sum::<Vec3>() / 8.0;
+        pose.rotation = look_at(pose.translation, ctl.target);
+        pose.translation = ctl.target - pose.rotation * Vec3::NEG_Z * ctl.distance;
+    }
     let dt = time.delta_secs();
     let (fov_y, aspect) = match &*projection {
         Projection::Perspective(p) => (p.fov, p.aspect_ratio),
