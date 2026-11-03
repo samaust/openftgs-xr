@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod audio;
+pub mod capture;
 pub mod desktop_input;
 mod desktop_log;
 pub mod governor;
@@ -55,6 +56,8 @@ pub use rig::{
 pub use ui::{
     HudData, HudInstance, Toast, ToastLevel, UiSurface, WorldPanel, WristMenu, panel_hit,
 };
+// §2.1 `ftgsxr_app::capture`.
+pub use capture::ScreenshotRequest;
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
 pub use persist::{PersistCommand, SettingsPath, SettingsRes, apply_scene, scene_from_world};
 // §2.1 `ftgsxr_app::platform`.
