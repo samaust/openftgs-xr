@@ -896,6 +896,7 @@ fn gpu_bevy_adapter_sh_limit_caps_the_drawn_degree() {
         .resource_mut::<SplatTierState>()
         .sh_cap = 3;
     let full = image_of(&scene.readback(), w, h);
+    let uploads = scene.uploads();
     let m = metrics(&capped, &full);
     assert!(
         !(m.psnr >= MIN_PSNR && m.share <= MAX_SHARE),
@@ -918,6 +919,7 @@ fn gpu_bevy_adapter_sh_limit_caps_the_drawn_degree() {
         3,
         "the limit leaves the governor's cap alone"
     );
+    assert_eq!(scene.uploads(), uploads, "no reload");
 
     *scene.app.world_mut().resource_mut::<SplatShLimit>() = SplatShLimit(None);
     let again = image_of(&scene.readback(), w, h);
