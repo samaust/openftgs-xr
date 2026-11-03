@@ -23,7 +23,7 @@ use crate::intent::{Feature, Intent, VolumeChannel};
 use crate::library::LoadedModel;
 use crate::platform::PlatformRes;
 use crate::playback::Playback;
-use crate::ui::{ToastRequest, UiCue};
+use crate::ui::{DockHooks, Tab, ToastRequest, UiCue};
 
 /// The volumes, the mute and the per-sound switches (§1.10). The volumes are gains in
 /// \[0, 1\], as `Intent::Volume` gives them; `persist` maps `Settings.audio`'s percent to
@@ -399,6 +399,15 @@ impl Plugin for AudioPlugin {
             let output = default_output();
             app.insert_resource(AudioOutputRes(output));
         }
+        // §1.7 Panels (D-21), §1.10: the Scene tab's audio, the Settings tab's `[audio]`.
+        {
+            let mut hooks = app
+                .init_resource::<DockHooks>()
+                .world_mut()
+                .resource_mut::<DockHooks>();
+            hooks.add(Tab::Scene, scene_section);
+            hooks.add(Tab::Settings, settings_section);
+        }
         app.add_message::<PlayUiSound>()
             .add_message::<AudioFailed>()
             .add_message::<UiCue>()
@@ -413,6 +422,83 @@ impl Plugin for AudioPlugin {
             // After playback's `advance` (in `Update`): the clock of this frame.
             .add_systems(PostUpdate, (apply_gains, follow_clock).chain());
     }
+}
+
+/// A gain in \[0, 1\] edited as §1.10's percent.
+fn percent(ui: &mut bevy_egui::egui::Ui, label: &str, gain: &mut f32) -> bool {
+    let mut p = *gain * 100.0;
+    let changed = ui
+        .add(
+            bevy_egui::egui::Slider::new(&mut p, 0.0..=100.0)
+                .text(label)
+                .suffix(" %"),
+        )
+        .changed();
+    if changed {
+        *gain = p / 100.0;
+    }
+    changed
+}
+
+/// Edits a copy of `AudioState` and writes it back only when it changed.
+fn edit_state(world: &mut World, draw: impl FnOnce(&mut AudioState)) {
+    let Some(a) = world.get_resource::<AudioState>() else {
+        return;
+    };
+    let mut next = a.clone();
+    draw(&mut next);
+    if next != *world.resource::<AudioState>() {
+        *world.resource_mut::<AudioState>() = next;
+    }
+}
+
+// Q-218
+/// The Scene tab's audio (§1.7 Panels, §1.10): the mute, the soundtracks' volume and each
+/// instance's soundtrack.
+fn scene_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
+    ui.strong("Audio");
+    edit_state(world, |a| {
+        ui.checkbox(&mut a.muted, "mute");
+        percent(ui, "soundtrack", &mut a.soundtrack);
+    });
+    let mut q = world.query::<(&LoadedModel, &Soundtrack)>();
+    for (m, t) in q.iter(world) {
+        let file = match &t.source {
+            ModelRef::File(p) => p.file_name().map_or_else(
+                || p.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            ),
+            ModelRef::Http(u) => u.to_string(),
+            ModelRef::Document(d) => d.clone(),
+        };
+        ui.label(format!("{}: {file}", m.name));
+    }
+}
+
+// Q-218
+/// The Settings tab's `[audio]` table (§1.10, §1.11), in percent (Q-188).
+fn settings_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
+    bevy_egui::egui::CollapsingHeader::new("[audio]").show(ui, |ui| {
+        edit_state(world, |a| {
+            ui.checkbox(&mut a.muted, "muted");
+            percent(ui, "master", &mut a.master);
+            percent(ui, "ui", &mut a.ui);
+            percent(ui, "soundtrack", &mut a.soundtrack);
+            ui.checkbox(&mut a.spatial, "spatial");
+            let s = &mut a.sounds;
+            for (on, label) in [
+                (&mut s.hover, "sounds.hover"),
+                (&mut s.select, "sounds.select"),
+                (&mut s.grab, "sounds.grab"),
+                (&mut s.snap_turn, "sounds.snap_turn"),
+                (&mut s.click, "sounds.click"),
+                (&mut s.error, "sounds.error"),
+                (&mut s.confirm, "sounds.confirm"),
+            ] {
+                ui.checkbox(on, label);
+            }
+        });
+    });
 }
 
 /// ui's sound cues become `PlayUiSound`, and E-AUDIO becomes ui's toast: `ui` comes
@@ -853,6 +939,24 @@ mod kira_output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Draws a dock section once on a headless egui context (#286).
+    fn draw_once(world: &mut World, hook: fn(&mut World, &mut bevy_egui::egui::Ui)) {
+        let ctx = bevy_egui::egui::Context::default();
+        let mut out = ctx.run_ui(bevy_egui::egui::RawInput::default(), |ui| hook(world, ui));
+        out.textures_delta.clear();
+    }
+
+    // Q-218
+    #[test]
+    fn the_audio_sections_draw_without_changing_the_state() {
+        let mut world = World::new();
+        world.insert_resource(AudioState::default());
+        world.clear_trackers();
+        draw_once(&mut world, scene_section);
+        draw_once(&mut world, settings_section);
+        assert!(!world.resource_ref::<AudioState>().is_changed());
+    }
 
     #[test]
     fn every_clip_is_short_bounded_and_finite() {

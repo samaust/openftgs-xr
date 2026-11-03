@@ -55,6 +55,12 @@ impl Default for LoopSetting {
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct RangeSetting(pub(crate) Option<(f64, f64)>);
 
+/// A clock warning for the toast line (§1.13): ui, after this module in §2.1's order,
+/// turns it into a Warning toast. The text is the user text (Q-217).
+// Q-217
+#[derive(Message, Clone, Debug, PartialEq)]
+pub(crate) struct PlaybackWarning(pub(crate) String);
+
 /// §1.6's speed presets, in both directions, ascending.
 const PRESETS: [f64; 12] = [
     -4.0, -2.0, -1.0, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0,
@@ -87,6 +93,8 @@ pub(crate) struct PlaybackPlugin;
 impl Plugin for PlaybackPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Intent>()
+            .add_message::<PlaybackWarning>()
+            .add_observer(unknown_unit)
             .init_resource::<Playback>()
             .init_resource::<StepTarget>()
             .init_resource::<LoopSetting>()
@@ -120,6 +128,23 @@ fn step_of(target: Option<Entity>, models: &Query<(Entity, &LoadedModel)>) -> f6
         .unwrap_or(1.0 / 30.0)
 }
 
+/// D-32's unknown time unit, once per instance as it appears (Q-217).
+// Q-217
+fn unknown_unit(
+    add: On<bevy::ecs::lifecycle::Add, LoadedModel>,
+    models: Query<&LoadedModel>,
+    mut out: MessageWriter<PlaybackWarning>,
+) {
+    if let Ok(m) = models.get(add.entity)
+        && m.time.span.rate_per_second().is_err()
+    {
+        out.write(PlaybackWarning(format!(
+            "{}: unknown time unit {:?}; one unit per second assumed",
+            m.name, m.time.span.time_unit
+        )));
+    }
+}
+
 /// Applies `Intent::Playback` and `UiCommand::CycleLoop` (§1.6, Appendix D.1).
 fn run_intents(
     mut reader: MessageReader<Intent>,
@@ -128,6 +153,7 @@ fn run_intents(
     mut looping: ResMut<LoopSetting>,
     mut range: ResMut<RangeSetting>,
     mut models: Query<(Entity, &mut LoadedModel)>,
+    mut warnings: MessageWriter<PlaybackWarning>,
 ) {
     for intent in reader.read() {
         let clock = &mut playback.clock;
@@ -155,6 +181,10 @@ fn run_intents(
                 PlaybackCommand::Speed(s) => {
                     if let Err(e) = clock.set_speed(s) {
                         warn!("speed {s} refused: {e}");
+                        // Q-217
+                        warnings.write(PlaybackWarning(format!(
+                            "Speed {s} refused: the clock runs at −4 to 4, not 0"
+                        )));
                     }
                 }
                 PlaybackCommand::Loop(m) => {
@@ -169,6 +199,10 @@ fn run_intents(
                     // Q-177: a non-finite offset is refused.
                     if !offset_s.is_finite() {
                         warn!("offset {offset_s} refused");
+                        // Q-217
+                        warnings.write(PlaybackWarning(format!(
+                            "Time offset {offset_s} refused: not a number of seconds"
+                        )));
                     } else if let Ok((_, mut m)) = models.get_mut(instance) {
                         m.time.offset_s = offset_s;
                     }

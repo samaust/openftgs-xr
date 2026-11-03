@@ -10,6 +10,7 @@ use bevy::window::{Monitor, OnMonitor, PrimaryWindow};
 use ftgsxr_render::{Foveation, SortMode, SplatStats, SplatTierState};
 
 use crate::persist::SettingsRes;
+use crate::ui::{DockHooks, Tab};
 
 /// The governor's switch and thresholds (§2.1, E16): it steps a knob down after
 /// `down_frames` consecutive frames over budget and up after `up_frames` under;
@@ -224,6 +225,11 @@ pub(crate) struct GovernorPlugin;
 
 impl Plugin for GovernorPlugin {
     fn build(&self, app: &mut App) {
+        // §1.7 Panels (D-21): the Display tab's tier, governor and render scale.
+        app.init_resource::<DockHooks>()
+            .world_mut()
+            .resource_mut::<DockHooks>()
+            .add(Tab::Display, display_section);
         app.init_resource::<Governor>()
             .insert_resource(GovernorState {
                 // The headset's ladder joins with M-8 (Q-153).
@@ -251,6 +257,42 @@ fn follow_settings(
     let enabled = general.governor && tier.tier.name == default_tier;
     if gov.enabled != enabled {
         gov.enabled = enabled;
+    }
+}
+
+/// The Display tab's section (§1.7 Panels): the running tier and its knobs, the
+/// governor's switch (`[general] governor`, which `follow_settings` maps), and the render
+/// scale by hand while the governor is off, in tenths between E16's floor and the tier's
+/// own (Q-218). The tier itself is chosen in the Settings tab, for the next start.
+// Q-218
+fn display_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
+    use bevy_egui::egui;
+    let enabled = world.get_resource::<Governor>().is_some_and(|g| g.enabled);
+    if let Some(t) = world.get_resource::<SplatTierState>() {
+        ui.label(format!(
+            "tier {} · render scale {:.1} · SH ≤ {} · sort {:?} · foveation {:?}",
+            t.tier.name, t.render_scale, t.sh_cap, t.sort_mode, t.foveation
+        ));
+    }
+    if let Some(s) = world.get_resource::<SettingsRes>() {
+        let mut on = s.0.general.governor;
+        if ui.checkbox(&mut on, "governor").changed() {
+            world.resource_mut::<SettingsRes>().0.general.governor = on;
+        }
+    }
+    if !enabled && let Some(t) = world.get_resource::<SplatTierState>() {
+        let top = tenths(t.tier.render_scale).max(SCALE_FLOOR_TENTHS);
+        let mut now = tenths(t.render_scale).clamp(SCALE_FLOOR_TENTHS, top);
+        let r = ui.add(
+            egui::Slider::new(&mut now, SCALE_FLOOR_TENTHS..=top).text("render scale (tenths)"),
+        );
+        if r.changed() {
+            let scale = now as f32 / 10.0;
+            let mut t = world.resource_mut::<SplatTierState>();
+            if t.render_scale != scale {
+                t.render_scale = scale;
+            }
+        }
     }
 }
 
@@ -292,6 +334,33 @@ fn run_governor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Draws a dock section once on a headless egui context (#286).
+    fn draw_once(world: &mut World, hook: fn(&mut World, &mut bevy_egui::egui::Ui)) {
+        let ctx = bevy_egui::egui::Context::default();
+        let mut out = ctx.run_ui(bevy_egui::egui::RawInput::default(), |ui| hook(world, ui));
+        out.textures_delta.clear();
+    }
+
+    // Q-218
+    #[test]
+    fn the_display_section_draws_without_changing_the_tier() {
+        let mut world = World::new();
+        world.insert_resource(Governor::default());
+        world.insert_resource(SettingsRes::default());
+        let tier = ftgsxr_render::QualityTier::desktop();
+        world.insert_resource(SplatTierState {
+            render_scale: tier.render_scale,
+            sh_cap: 3,
+            sort_mode: tier.sort_mode,
+            foveation: tier.foveation,
+            tier,
+        });
+        world.clear_trackers();
+        draw_once(&mut world, display_section);
+        assert!(!world.resource_ref::<SplatTierState>().is_changed());
+        assert!(!world.resource_ref::<SettingsRes>().is_changed());
+    }
 
     #[test]
     fn budget_is_one_period_less_1_5_ms() {

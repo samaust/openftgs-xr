@@ -652,15 +652,27 @@ fn fresh_entries(
     fresh
 }
 
+/// Whether a listing failed only because `AppPaths.models`, the default `dir` source,
+/// does not exist yet (Q-216); any other source's missing directory stays E-IO.
+// Q-216
+fn is_missing_default(spec: &SourceSpec, e: &IoError, default_models: &Path) -> bool {
+    spec.kind == "dir"
+        && Path::new(&spec.location) == default_models
+        && matches!(e, IoError::Io(io) if io.kind() == std::io::ErrorKind::NotFound)
+        && !default_models.exists()
+}
+
 /// Collects finished listings, header reads and fetches.
 fn poll_tasks(
     mut library: ResMut<Library>,
     mut pending: ResMut<Pending>,
     mut failures: MessageWriter<LibraryFailure>,
+    platform: Res<PlatformRes>,
     mut commands: Commands,
 ) {
     pending.sync(library.sources.len());
     let pending = &mut *pending;
+    let default_models = platform.0.paths().models.clone();
     // Listings: entries keep their state and, when the file did not change, their
     // information (§1.5 Refresh). A source's root listing replaces every entry of it,
     // the subdirectories' included (Q-192).
@@ -680,6 +692,11 @@ fn poll_tasks(
         };
         let entries = match result {
             Ok(entries) => entries,
+            // Q-216: a first run has no default models directory yet (Q-14 creates
+            // none); that source lists empty, without a toast.
+            Err(e) if is_missing_default(&library.sources[source].0, &e, &default_models) => {
+                Vec::new()
+            }
             Err(e) => {
                 // Q-193: a listing has no entry to carry its failure.
                 let spec = &library.sources[source].0;

@@ -14,6 +14,7 @@
 //! commands, `HudData`) is added in every app; the drawing and the panel pointer only
 //! when `EguiPlugin` is (PRD #275's spike check 1 and its fallback).
 
+mod cameras;
 mod dock;
 
 use std::collections::HashMap;
@@ -41,7 +42,7 @@ use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
 use crate::library::{EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel};
 use crate::manipulate::Selected;
 use crate::platform::PickKind;
-use crate::playback::Playback;
+use crate::playback::{Playback, PlaybackWarning};
 
 /// Where the UI is drawn (§1.8): on the window (the desktop), or on a world quad whose
 /// entity carries `WorldPanel` and the quad's pose, `size_px` its texture's size and
@@ -420,6 +421,7 @@ impl Plugin for UiPlugin {
             .add_message::<Intent>()
             .add_message::<LibraryCommand>()
             .add_message::<LibraryFailure>()
+            .add_message::<PlaybackWarning>()
             .init_resource::<UiSurface>()
             .init_resource::<UiState>()
             .init_resource::<HudData>()
@@ -427,9 +429,14 @@ impl Plugin for UiPlugin {
             .init_resource::<ToastLimiter>()
             .init_resource::<SeenFailures>()
             .init_resource::<UploadBytes>()
-            .add_systems(Update, (ui_commands, library_toasts).in_set(UiSet))
+            .add_systems(
+                Update,
+                (ui_commands, library_toasts, clock_toasts).in_set(UiSet),
+            )
             .add_systems(PostUpdate, (raise_toasts, fill_hud).chain())
             .add_observer(splat_toasts);
+        // §1.7 Training cameras and requests.
+        cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
             app.init_resource::<PanelPointer>()
                 .add_systems(PreUpdate, panel_pointer)
@@ -513,6 +520,17 @@ fn library_toasts(
     }
     for f in failures.read() {
         out.write(ToastRequest::error(f.text.clone()));
+    }
+}
+
+/// The clock's warnings (§1.13), as Warning toasts (Q-217).
+// Q-217
+fn clock_toasts(
+    mut warnings: MessageReader<PlaybackWarning>,
+    mut out: MessageWriter<ToastRequest>,
+) {
+    for PlaybackWarning(text) in warnings.read() {
+        out.write(ToastRequest::warning(text.clone()));
     }
 }
 

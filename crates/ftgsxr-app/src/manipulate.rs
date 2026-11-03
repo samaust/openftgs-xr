@@ -8,7 +8,7 @@
 //! `persist`'s (`PersistCommand::SavePose`): this module changes `Poses` in memory only.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::app::{App, Plugin, Update};
@@ -23,8 +23,8 @@ use bevy::math::{Quat, Vec3};
 use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 use ftgsxr_core::{
-    Aabb, Grab, ModelKind, Pose, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit,
-    read_scene_manifest, snap_to_floor,
+    Aabb, Grab, ModelKind, Pose, Preset, ScaleLimits, SceneManifest, TwoHandGrab, fit_pose,
+    ray_hit, read_scene_manifest, snap_to_floor,
 };
 use ftgsxr_io::{ModelRef, PoseStore, SavedPose};
 use ftgsxr_render::{SplatAsset, SplatMode, SplatModel};
@@ -253,26 +253,34 @@ fn hints(source: &ModelRef, kind: ModelKind) -> PoseExtras {
     PoseExtras { preset, fit_size_m }
 }
 
-fn manifest_preset(dir: &Path) -> Option<Preset> {
+/// The first `ftgs-scene` manifest beside a model, in name order: any `*.json` of `dir`
+/// that reads as one (§1.5, §1.7 Training cameras and requests).
+// Q-219
+pub(crate) fn manifest_beside(dir: &Path) -> Option<(PathBuf, SceneManifest)> {
     let mut jsons: Vec<_> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "json"))
         .collect();
     jsons.sort();
-    jsons.iter().find_map(|p| {
-        let m = read_scene_manifest(&std::fs::read(p).ok()?).ok()?;
-        // §1.5: each camera's up is −R_wᵀ (0, 1, 0), minus R_w's second row.
-        let ups: Vec<Vec3> = m
-            .cameras
-            .iter()
-            .map(|(_, c)| {
-                let w = c.world_to_camera;
-                Vec3::new(-w.x_axis.y as f32, -w.y_axis.y as f32, -w.z_axis.y as f32)
-            })
-            .collect();
-        Some(Preset::from_camera_ups(&ups))
+    jsons.into_iter().find_map(|p| {
+        let m = read_scene_manifest(&std::fs::read(&p).ok()?).ok()?;
+        Some((p, m))
     })
+}
+
+fn manifest_preset(dir: &Path) -> Option<Preset> {
+    let (_, m) = manifest_beside(dir)?;
+    // §1.5: each camera's up is −R_wᵀ (0, 1, 0), minus R_w's second row.
+    let ups: Vec<Vec3> = m
+        .cameras
+        .iter()
+        .map(|(_, c)| {
+            let w = c.world_to_camera;
+            Vec3::new(-w.x_axis.y as f32, -w.y_axis.y as f32, -w.z_axis.y as f32)
+        })
+        .collect();
+    Some(Preset::from_camera_ups(&ups))
 }
 
 /// D-11: an instance appears at its saved pose, else at the identity, with its hints.

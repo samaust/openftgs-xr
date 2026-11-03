@@ -13,14 +13,14 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
 use ftgsxr_core::{EndRule, LoopMode, PlayState};
 use ftgsxr_io::EntryKind;
-use ftgsxr_render::{Colormap, RenderMode, SplatMode};
+use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransform};
 
+use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
 use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel};
 use crate::platform::{PickKind, PlatformRes};
 use crate::playback::Playback;
-use crate::rig::FloorGrid;
 
 /// What the user did this frame.
 enum Out {
@@ -28,6 +28,8 @@ enum Out {
     Library(LibraryCommand),
     Answer(bool),
     Cue(UiCue),
+    Jump(JumpToCamera),
+    Toast(String),
 }
 
 /// §1.6's speed presets.
@@ -87,6 +89,12 @@ pub(super) fn draw(
             }
             Out::Cue(c) => {
                 world.write_message(c);
+            }
+            Out::Jump(j) => {
+                world.write_message(j);
+            }
+            Out::Toast(text) => {
+                world.write_message(super::ToastRequest::error(text));
             }
             Out::Answer(yes) => {
                 let a = world.resource_mut::<UiState>().answer(yes);
@@ -229,11 +237,14 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 match tab {
-                    Tab::Library => library_tab(world, ui, out, hv),
+                    Tab::Library => {
+                        library_tab(world, ui, out, hv);
+                        request_replay(world, ui, out, hv);
+                    }
                     Tab::Scene => scene_tab(world, ui, out, hv),
                     Tab::Playback => playback_tab(world, ui, out, hv),
                     Tab::Display => display_tab(world, ui, out, hv),
-                    Tab::Environment => environment_tab(world, ui),
+                    Tab::Environment => environment_tab(ui),
                     Tab::Settings => {
                         ui.label("Settings (§1.11)");
                     }
@@ -380,9 +391,11 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         &mut Transform,
         Option<&Visibility>,
         Option<&SplatMode>,
+        Option<&SplatTransform>,
     )>();
     let mut ask = None;
-    for (e, m, mut tf, vis, mode) in q.iter_mut(world) {
+    let mut gains = Vec::new();
+    for (e, m, mut tf, vis, mode, color) in q.iter_mut(world) {
         ui.separator();
         ui.strong(if m.reduced {
             format!("{} (reduced)", m.name)
@@ -488,6 +501,22 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 })));
             }
         });
+        // E14's color transform, per channel (Q-218).
+        let gain = color.map_or(ColorTransform::IDENTITY.gain, |c| c.0.gain);
+        let mut g = gain.to_array();
+        ui.horizontal(|ui| {
+            ui.label("color gain");
+            for v in &mut g {
+                ui.add(egui::DragValue::new(v).range(0.0..=4.0).speed(0.01));
+            }
+            if ui.small_button("reset").clicked() {
+                g = ColorTransform::IDENTITY.gain.to_array();
+            }
+        });
+        let g = bevy::math::Vec3::from_array(g);
+        if g != gain {
+            gains.push((e, g));
+        }
         ui.horizontal(|ui| {
             for (label, action) in [
                 ("Select", InstanceAction::Select),
@@ -508,8 +537,173 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
             }
         });
     }
+    training_cameras(world, ui, out, hv);
+    for (e, gain) in gains {
+        if let Ok(mut ec) = world.get_entity_mut(e) {
+            ec.insert(SplatTransform(ColorTransform { gain }));
+        }
+    }
     if let Some(e) = ask {
         world.resource_mut::<UiState>().confirm = Some(Confirm::Unload(e));
+    }
+}
+
+/// §1.7 Training cameras: each instance's manifest images by split, a jump per image,
+/// the frustums toggle.
+fn training_cameras(
+    world: &mut World,
+    ui: &mut egui::Ui,
+    out: &mut Vec<Out>,
+    hv: &mut Option<egui::Id>,
+) {
+    let mut q = world.query::<(Entity, &LoadedModel, &TrainingCameras)>();
+    let sets: Vec<(Entity, String, TrainingCameras)> = q
+        .iter(world)
+        .map(|(e, m, t)| (e, m.name.clone(), t.clone()))
+        .collect();
+    if sets.is_empty() {
+        return;
+    }
+    let mut view = world.resource::<TrainingView>().clone();
+    ui.separator();
+    ui.strong("Training cameras");
+    ui.checkbox(&mut view.frustums, "frustums");
+    ui.horizontal(|ui| {
+        for (label, split) in [
+            ("all", None),
+            ("train", Some("train")),
+            ("test", Some("test")),
+        ] {
+            let split = split.map(str::to_string);
+            if ui.selectable_label(view.split == split, label).clicked() {
+                view.split = split;
+            }
+        }
+    });
+    for (e, name, tc) in sets {
+        egui::CollapsingHeader::new(format!("{name}: {}", tc.path.display()))
+            .id_salt(("ftgsxr-cams", e))
+            .show(ui, |ui| {
+                for img in &tc.manifest.images {
+                    if view.split.as_ref().is_some_and(|s| *s != img.split) {
+                        continue;
+                    }
+                    let Some(camera) = img.camera_override.or_else(|| {
+                        tc.manifest
+                            .cameras
+                            .iter()
+                            .find(|(n, _)| *n == img.camera)
+                            .map(|(_, c)| *c)
+                    }) else {
+                        continue;
+                    };
+                    let label = format!(
+                        "{} · {} · {:.3} {}",
+                        img.camera, img.split, img.timestamp, tc.manifest.time_unit
+                    );
+                    if button(ui, &label, out, hv) {
+                        out.push(Out::Jump(JumpToCamera {
+                            instance: e,
+                            camera,
+                            timestamp: img.timestamp,
+                            time_unit: tc.manifest.time_unit.clone(),
+                        }));
+                    }
+                }
+            });
+    }
+    let mut res = world.resource_mut::<TrainingView>();
+    if res.frustums != view.frustums || res.split != view.split {
+        res.frustums = view.frustums;
+        res.split = view.split;
+    }
+}
+
+/// §1.7: a `ftgs-render-request` found in a directory source, replayed item by item on
+/// the selected instance, else the first loaded one (Q-219).
+fn request_replay(
+    world: &mut World,
+    ui: &mut egui::Ui,
+    out: &mut Vec<Out>,
+    hv: &mut Option<egui::Id>,
+) {
+    let view = world.resource::<TrainingView>().clone();
+    if view.requests.is_empty() && view.replay.is_none() {
+        return;
+    }
+    ui.separator();
+    ui.strong("Render requests");
+    let mut opened = None;
+    for p in &view.requests {
+        let name = p.file_name().map_or_else(
+            || p.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        if button(ui, &format!("Open {name}"), out, hv) {
+            opened = Some(p.clone());
+        }
+    }
+    let mut replay = view.replay.clone();
+    if let Some(p) = opened {
+        match cameras::open_request(&p) {
+            Ok(r) => replay = Some(r),
+            Err(text) => out.push(Out::Toast(text)),
+        }
+    }
+    let (mut step, mut close) = (None, false);
+    if let Some(r) = &replay {
+        let n = r.request.items.len();
+        ui.horizontal(|ui| {
+            if button(ui, "◀", out, hv) {
+                step = Some((r.item + n - 1) % n);
+            }
+            let item = &r.request.items[r.item];
+            ui.label(format!(
+                "{} / {n} · {} · {:.3} {}",
+                r.item + 1,
+                item.id,
+                item.timestamp,
+                r.request.time_unit
+            ));
+            if button(ui, "▶", out, hv) {
+                step = Some((r.item + 1) % n);
+            }
+            if button(ui, "Show", out, hv) {
+                step = Some(r.item);
+            }
+            if button(ui, "Close", out, hv) {
+                close = true;
+            }
+        });
+    }
+    if close {
+        replay = None;
+        step = None;
+    }
+    if let (Some(r), Some(i)) = (&mut replay, step) {
+        r.item = i;
+        let target = {
+            let mut sel = world
+                .query_filtered::<Entity, (With<LoadedModel>, With<crate::manipulate::Selected>)>();
+            let s = sel.iter(world).next();
+            s.or_else(|| {
+                let mut all = world.query_filtered::<Entity, With<LoadedModel>>();
+                all.iter(world).next()
+            })
+        };
+        if let Some(instance) = target {
+            let item = &r.request.items[i];
+            out.push(Out::Jump(JumpToCamera {
+                instance,
+                camera: item.camera,
+                timestamp: item.timestamp,
+                time_unit: r.request.time_unit.clone(),
+            }));
+        }
+    }
+    let key = |r: &Option<cameras::Replay>| r.as_ref().map(|r| (r.path.clone(), r.item));
+    if key(&view.replay) != key(&replay) {
+        world.resource_mut::<TrainingView>().replay = replay;
     }
 }
 
@@ -560,13 +754,49 @@ fn playback_tab(
     });
 }
 
-/// Display: the overlays and the tier's knobs; the governor adds its own section.
+/// Display: the selected instances' render mode and the overlays; `persist` adds the
+/// centers' radius and colormap and the background, `governor` the tier's knobs.
 fn display_tab(
     world: &mut World,
     ui: &mut egui::Ui,
     out: &mut Vec<Out>,
     hv: &mut Option<egui::Id>,
 ) {
+    let selected: Vec<Entity> = world
+        .query_filtered::<Entity, (With<LoadedModel>, With<crate::manipulate::Selected>)>()
+        .iter(world)
+        .collect();
+    if !selected.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("selected:");
+            for (label, m) in [
+                ("Splats", RenderMode::Splats),
+                (
+                    "Centers",
+                    RenderMode::Centers {
+                        pixel_radius: 3.0,
+                        colormap: Colormap::Dc,
+                    },
+                ),
+                (
+                    "Both",
+                    RenderMode::Both {
+                        pixel_radius: 3.0,
+                        colormap: Colormap::Dc,
+                    },
+                ),
+            ] {
+                if button(ui, label, out, hv) {
+                    for &e in &selected {
+                        out.push(Out::Intent(Intent::Instance {
+                            instance: e,
+                            action: InstanceAction::SetMode(m),
+                        }));
+                    }
+                }
+            }
+        });
+    }
     ui.horizontal(|ui| {
         for (label, o) in [
             ("Boxes", OverlayToggle::Boxes),
@@ -578,26 +808,11 @@ fn display_tab(
             }
         }
     });
-    let hud = world.resource::<super::HudData>();
-    ui.label(format!(
-        "tier {} · render scale {:.2} · SH ≤ {}",
-        hud.tier, hud.knobs.0, hud.knobs.1
-    ));
 }
 
-/// Environment on the desktop: the grid; passthrough is unavailable.
-fn environment_tab(world: &mut World, ui: &mut egui::Ui) {
-    let mut q = world.query_filtered::<&mut Visibility, With<FloorGrid>>();
-    for mut v in q.iter_mut(world) {
-        let mut on = *v != Visibility::Hidden;
-        if ui.checkbox(&mut on, "Floor grid").changed() {
-            *v = if on {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            };
-        }
-    }
+/// Environment on the desktop: passthrough is unavailable; `persist` adds the
+/// background and the grid (they are settings).
+fn environment_tab(ui: &mut egui::Ui) {
     // Q-161: no passthrough on the desktop; the control is not offered.
     ui.label("Passthrough: not available on the desktop");
 }

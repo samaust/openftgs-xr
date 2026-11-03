@@ -269,6 +269,7 @@ impl Plugin for RigPlugin {
         app.insert_resource(RigEntities { rig, group })
             .init_resource::<CameraController>()
             .add_message::<Intent>()
+            .add_message::<CameraJump>()
             .add_observer(parent_instance)
             .add_systems(Startup, (spawn_desktop_camera, spawn_grid))
             .add_systems(
@@ -462,9 +463,20 @@ fn selected_corners(
     Some(out)
 }
 
+/// A jump of the desktop camera to a stage pose and a vertical field of view (§1.7
+/// Training cameras and requests): the fly mode takes it; the settings' field of view is
+/// left as it is, so the jump lasts until the next change of it (Q-219).
+// Q-219
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CameraJump {
+    pub(crate) pose: Pose,
+    pub(crate) fov_deg: f32,
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn run_camera(
     mut intents: MessageReader<Intent>,
+    mut jumps: MessageReader<CameraJump>,
     mut ctl: ResMut<CameraController>,
     mut settings: Option<ResMut<SettingsRes>>,
     mut cameras: Query<
@@ -479,6 +491,7 @@ fn run_camera(
 ) {
     let Ok((mut local, mut projection)) = cameras.single_mut() else {
         intents.clear();
+        jumps.clear();
         return;
     };
     let rig = rigs.iter().next().map(pose_of).unwrap_or(Pose::IDENTITY);
@@ -594,6 +607,18 @@ fn run_camera(
                 }
             }
             _ => {}
+        }
+    }
+    // Q-219
+    for j in jumps.read() {
+        pose = Pose {
+            scale: 1.0,
+            ..j.pose
+        };
+        ctl.orbit = false;
+        *projection = camera_projection(j.fov_deg);
+        if let Projection::Perspective(p) = &mut *projection {
+            p.aspect_ratio = aspect;
         }
     }
     let new_local = transform_of(pose.then(&rig.inverse()));
