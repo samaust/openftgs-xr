@@ -183,6 +183,35 @@ impl HttpClient {
             .map_err(|e| IoError::Fetch(format!("{url} ({e})")))?;
         Ok((body.split_off((skip as usize).min(body.len())), size))
     }
+
+    /// Whether the file at `url` still has the ETag `etag` (§1.5 Library's refresh): one
+    /// `HEAD`, with `If-None-Match: <etag>` when given. A 304 is `Unchanged`; a 2xx is
+    /// `Current` with the response's ETag, if any. E-NET-FETCH on any other answer or when
+    /// the server cannot be reached.
+    // Q-229
+    pub fn revalidate(&self, url: &Url, etag: Option<&str>) -> Result<Revalidation, IoError> {
+        let mut request = self.agent.head(url.as_str());
+        if let Some(etag) = etag {
+            request = request.header("If-None-Match", etag);
+        }
+        let response = request.call().map_err(|e| fetch_error(url, &e))?;
+        match response.status().as_u16() {
+            304 => Ok(Revalidation::Unchanged),
+            200..300 => Ok(Revalidation::Current(
+                header(&response, "ETag").map(str::to_owned),
+            )),
+            status => Err(status_error(url, status)),
+        }
+    }
+}
+
+/// What `HttpClient::revalidate` learned of a file's ETag (§1.5 Library, Q-229).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Revalidation {
+    /// The server answered 304: the file still has the ETag sent.
+    Unchanged,
+    /// The server answered 2xx: the file's current ETag, `None` when it sent none.
+    Current(Option<String>),
 }
 
 /// E-NET-FETCH for a request that failed before a status arrived (§1.15).
