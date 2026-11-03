@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 pub mod desktop;
+pub mod ui;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

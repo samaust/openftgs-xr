@@ -21,6 +21,7 @@ use crate::persist;
 use crate::platform::{Platform, PlatformRes};
 use crate::playback::PlaybackPlugin;
 use crate::rig::RigPlugin;
+use crate::ui::UiPlugin;
 
 pub use crate::desktop_log::init_desktop_log;
 
@@ -66,6 +67,8 @@ impl Plugin for AppPlugin {
         app.add_plugins(PlaybackPlugin);
         app.add_plugins(ManipulatePlugin);
         app.add_plugins(RigPlugin);
+        // #286: after the modules whose state it shows.
+        app.add_plugins(UiPlugin);
         // Q-149: the kira adapter unless `AudioOutputRes` exists already.
         app.add_plugins(AudioPlugin);
         // #285: after the resources it maps; `scene` loads at startup.
