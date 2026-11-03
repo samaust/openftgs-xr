@@ -208,7 +208,7 @@ fn captured(
     let dir = platform.0.paths().screenshots.clone();
     match write_screenshot(&dir, &ev.image, &p.text) {
         Ok(path) => {
-            toasts.write(ToastRequest(Toast {
+            toasts.write(ToastRequest::new(Toast {
                 text: format!("Screenshot saved to {}", path.display()),
                 level: ToastLevel::Info,
             }));

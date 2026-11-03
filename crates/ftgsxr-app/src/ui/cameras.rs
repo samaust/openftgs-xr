@@ -446,6 +446,6 @@ mod tests {
         let toasts: Vec<ToastRequest> =
             w.resource_mut::<Messages<ToastRequest>>().drain().collect();
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].0.text, "Camera time unit ms, model s");
+        assert_eq!(toasts[0].toast.text, "Camera time unit ms, model s");
     }
 }

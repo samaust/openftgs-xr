@@ -156,6 +156,32 @@ fn a_triggered_toast_is_raised_once_through_the_rate_limit() {
     assert_eq!(toasts(&t.app), vec![toast]);
 }
 
+// Q-208, Q-209 (#347): §1.13's "one per second per site" holds for the overflow warning
+// whatever its counts: `SplatEvent::Overflow` comes each frame that drops records, with a
+// visible count that moves, and for 2 s it gives two toasts.
+#[test]
+fn a_per_frame_overflow_with_a_moving_count_is_one_toast_a_second() {
+    use ftgsxr_app::SplatEvent;
+    let mut t = TestApp::new("i13t-overflow");
+    record_toasts(&mut t.app);
+    // 120 frames of `FRAME` span 1.98 s: a toast at the first and one 1 s later.
+    for k in 0..120u32 {
+        t.app.world_mut().trigger(SplatEvent::Overflow {
+            visible: 1_000 + k,
+            capacity: 900,
+        });
+        t.frames(1);
+    }
+    let shown = toasts(&t.app);
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(
+        shown
+            .iter()
+            .all(|t| t.level == ToastLevel::Warning && t.text.starts_with("Too many primitives")),
+        "{shown:?}"
+    );
+}
+
 /// Fixer item 19 (#275; §1.15 E-SETTINGS, §1.11, Q-170): `play` reads the settings
 /// itself before the log and inserts `SettingsRes`; the set-aside file's E-SETTINGS still
 /// reaches a toast through `SettingsWarnings` (Q-224).
