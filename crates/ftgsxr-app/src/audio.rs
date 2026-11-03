@@ -23,6 +23,7 @@ use crate::intent::{Feature, Intent, VolumeChannel};
 use crate::library::LoadedModel;
 use crate::platform::PlatformRes;
 use crate::playback::Playback;
+use crate::ui::{ToastRequest, UiCue};
 
 /// The volumes, the mute and the per-sound switches (§1.10). The volumes are gains in
 /// \[0, 1\], as `Intent::Volume` gives them; `persist` maps `Settings.audio`'s percent to
@@ -348,7 +349,6 @@ impl AudioOutput for StubAudioOutput {
 pub(crate) struct AudioFailed {
     #[allow(dead_code, reason = "read by ui's toasts (PRD #275 step 9)")]
     pub(crate) instance: Option<Entity>,
-    #[allow(dead_code, reason = "read by ui's toasts (PRD #275 step 9)")]
     pub(crate) text: String,
 }
 
@@ -401,15 +401,41 @@ impl Plugin for AudioPlugin {
         }
         app.add_message::<PlayUiSound>()
             .add_message::<AudioFailed>()
+            .add_message::<UiCue>()
+            .add_message::<ToastRequest>()
             .init_resource::<AudioState>()
             .init_resource::<Slots>()
             .add_systems(Startup, start)
             .add_systems(
                 Update,
-                (run_intents, play_ui_sounds, attach, decode).chain(),
+                (ui_bridge, run_intents, play_ui_sounds, attach, decode).chain(),
             )
             // After playback's `advance` (in `Update`): the clock of this frame.
             .add_systems(PostUpdate, (apply_gains, follow_clock).chain());
+    }
+}
+
+/// ui's sound cues become `PlayUiSound`, and E-AUDIO becomes ui's toast: `ui` comes
+/// before `audio` in §2.1's order, so the mapping lives here (PRD #275 "Dependency
+/// direction").
+// Q-189
+fn ui_bridge(
+    mut cues: MessageReader<UiCue>,
+    mut failed: MessageReader<AudioFailed>,
+    mut sounds: MessageWriter<PlayUiSound>,
+    mut toasts: MessageWriter<ToastRequest>,
+) {
+    for c in cues.read() {
+        sounds.write(PlayUiSound(match c {
+            UiCue::Hover => UiSound::Hover,
+            UiCue::Select => UiSound::Select,
+            UiCue::Click => UiSound::Click,
+            UiCue::Error => UiSound::Error,
+            UiCue::Confirm => UiSound::Confirm,
+        }));
+    }
+    for f in failed.read() {
+        toasts.write(ToastRequest::error(f.text.clone()));
     }
 }
 

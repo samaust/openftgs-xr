@@ -27,6 +27,7 @@ use crate::manipulate::Selected;
 use crate::persist::SettingsRes;
 use crate::playback::{Playback, speed_preset};
 use crate::rig::CameraController;
+use crate::ui::{DockHooks, Tab};
 
 /// Appendix D.1's actions under Q-152's names, with their default keys (Q-197's
 /// spelling: winit's `KeyCode` name with `Ctrl+`, `Shift+`, `Alt+` prefixes in that
@@ -227,6 +228,11 @@ pub struct DesktopInputPlugin;
 
 impl Plugin for DesktopInputPlugin {
     fn build(&self, app: &mut App) {
+        // §1.7 Help: the shortcuts, drawn in ui's Help tab.
+        app.init_resource::<DockHooks>()
+            .world_mut()
+            .resource_mut::<DockHooks>()
+            .add(Tab::Help, help_keys);
         app.add_message::<Intent>()
             .add_message::<UnloadRequest>()
             .init_resource::<KeyMap>()
@@ -599,6 +605,20 @@ fn mouse(
             CameraCommand::Speed(steps)
         }));
     }
+}
+
+/// The Help tab's shortcut table (§1.7, Appendix D.1): each action and its key.
+fn help_keys(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
+    let Some(keys) = world.get_resource::<KeyMap>() else {
+        return;
+    };
+    bevy_egui::egui::Grid::new("ftgsxr-keys").show(ui, |ui| {
+        for a in KeyMap::actions() {
+            ui.label(a);
+            ui.label(keys.key(a).unwrap_or_default());
+            ui.end_row();
+        }
+    });
 }
 
 #[cfg(test)]

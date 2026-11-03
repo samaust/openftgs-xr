@@ -38,6 +38,7 @@ use crate::manipulate::{Poses, now_rfc3339};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, Locomotion, PlayerRig};
+use crate::ui::{SceneLoadConfirmed, ToastRequest};
 
 /// The player's settings in the world (§1.11, §2.1).
 #[derive(Resource, Clone, Debug, Default)]
@@ -77,7 +78,6 @@ pub enum PersistCommand {
 pub(crate) struct PersistFailure {
     #[allow(dead_code, reason = "read by ui's toasts (PRD #275 step 9)")]
     pub(crate) code: String,
-    #[allow(dead_code, reason = "read by ui's toasts (PRD #275 step 9)")]
     pub(crate) text: String,
 }
 
@@ -205,6 +205,8 @@ impl Plugin for PersistPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<PersistCommand>()
             .add_message::<PersistFailure>()
+            .add_message::<SceneLoadConfirmed>()
+            .add_message::<ToastRequest>()
             .add_message::<Intent>()
             .add_message::<LibraryCommand>()
             .init_resource::<Saver>()
@@ -214,6 +216,7 @@ impl Plugin for PersistPlugin {
                 Update,
                 (
                     raise_startup,
+                    ui_bridge,
                     run_intents,
                     run_commands,
                     sync_settings,
@@ -243,6 +246,24 @@ impl Plugin for PersistPlugin {
             app.world_mut()
                 .write_message(PersistCommand::LoadScene(scene.clone()));
         }
+    }
+}
+
+/// ui's confirmed scene loads become `PersistCommand::LoadScene`, and persist's failures
+/// ui's toasts: `ui` comes before `persist` in §2.1's order, so the mapping lives here
+/// (PRD #275 "Dependency direction").
+// Q-200, Q-201
+fn ui_bridge(
+    mut confirmed: MessageReader<SceneLoadConfirmed>,
+    mut failures: MessageReader<PersistFailure>,
+    mut commands: MessageWriter<PersistCommand>,
+    mut toasts: MessageWriter<ToastRequest>,
+) {
+    for SceneLoadConfirmed(p) in confirmed.read() {
+        commands.write(PersistCommand::LoadScene(p.clone()));
+    }
+    for f in failures.read() {
+        toasts.write(ToastRequest::error(f.text.clone()));
     }
 }
 

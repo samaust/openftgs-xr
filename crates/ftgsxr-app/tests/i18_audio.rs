@@ -26,6 +26,14 @@ const ALL: [UiSound; 8] = [
     UiSound::Confirm,
 ];
 
+/// The app with its models directory present, so the library's listing raises no E-IO
+/// toast, whose error sound would join the sounds counted here (#286).
+fn app(name: &str) -> TestApp {
+    TestApp::with(name, support::Setup::default(), |_| {
+        std::fs::create_dir_all(support::scratch(name).join("models")).unwrap();
+    })
+}
+
 fn play(t: &mut TestApp, sound: UiSound) -> Vec<(UiSound, f32)> {
     t.app.world_mut().write_message(PlayUiSound(sound));
     t.frames(1);
@@ -40,7 +48,7 @@ fn volume(t: &mut TestApp, channel: VolumeChannel, value: f32) {
 
 /// P1 with a soundtrack, playing at speed 1.
 fn with_soundtrack(name: &str) -> TestApp {
-    let mut t = TestApp::new(name);
+    let mut t = app(name);
     let dir = t.dir.join("beside");
     std::fs::create_dir_all(&dir).unwrap();
     let model = dir.join("P1.safetensors");
@@ -70,7 +78,7 @@ fn sink_gain(t: &TestApp) -> f32 {
 
 #[test]
 fn i18_the_clips_load_at_startup_and_play_at_full_gain() {
-    let mut t = TestApp::new("i18-start");
+    let mut t = app("i18-start");
     t.frames(1);
     assert_eq!(t.audio.loaded(), ALL.to_vec());
     for sound in ALL {
@@ -133,7 +141,7 @@ fn i18_mute_silences_every_sink() {
 
 #[test]
 fn i18_each_switch_silences_its_sounds() {
-    let mut t = TestApp::new("i18-switches");
+    let mut t = app("i18-switches");
     t.frames(1);
     type Switch = fn(&mut AudioState) -> &mut bool;
     let switches: [(Switch, &[UiSound]); 7] = [
