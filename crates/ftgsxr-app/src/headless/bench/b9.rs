@@ -21,10 +21,11 @@ use bevy::image::{Image, ImagePlugin};
 use bevy::input::InputPlugin;
 use bevy::math::Vec3;
 use bevy::mesh::MeshPlugin;
-use bevy::prelude::{MinimalPlugins, On, Transform, TransformPlugin};
+use bevy::prelude::{MinimalPlugins, On, Transform, TransformPlugin, With};
 use bevy::render::RenderPlugin;
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use bevy::window::{ExitCondition, WindowPlugin};
+use bevy_egui::PrimaryEguiContext;
 use ftgsxr_core::write_exchange;
 use ftgsxr_io::{AppPaths, DocumentProvider, ModelRef};
 use ftgsxr_render::{OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatStats};
@@ -189,6 +190,18 @@ fn startup(model: &Path, dir: &Path, ui: bool) -> Result<Startup, HeadlessError>
         if let Some(uploaded_s) = up
             && drawn
         {
+            // With the UI, egui's primary context must sit on the camera, else the
+            // figure would be labelled with a UI it did not draw.
+            let contexts = app
+                .world_mut()
+                .query_filtered::<(), With<PrimaryEguiContext>>()
+                .iter(app.world())
+                .count();
+            if ui != (contexts > 0) {
+                return Err(HeadlessError::Environment(format!(
+                    "B-9: ui {ui} but {contexts} egui primary contexts"
+                )));
+            }
             let frame = ends.len().saturating_sub(3);
             return Ok(Startup {
                 uploaded_s,
