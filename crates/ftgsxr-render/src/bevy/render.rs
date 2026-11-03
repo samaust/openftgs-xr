@@ -378,15 +378,16 @@ fn prepare_view(
     }
     // §1.12, §1.7 Window: the render scale sizes the splat layer only (`LinearOver`);
     // `FileEncoded` draws into the view target, at its size.
-    let draw_size = match camera.output {
-        OutputSpace::FileEncoded => size,
-        OutputSpace::LinearOver { .. } => layer_size(size, render_scale),
-    };
-    if draw_size != size {
-        // Q-T276.1: the layer's draw tests the view's depth, which has the view's size,
-        // and a pass's attachments share one size, so a smaller layer is not drawn.
-        return Err(
-            "a render scale below 1 needs the depth at the layer's size, not yet built (Q-T276.1)",
+    // Q-T276.1: the layer's draw tests the view's depth, which has the view's size, and a
+    // pass's attachments share one size, so until the depth at the layer's size exists a
+    // scaled layer keeps the view's size.
+    let draw_size = size;
+    if matches!(camera.output, OutputSpace::LinearOver { .. })
+        && layer_size(size, render_scale) != draw_size
+    {
+        views.warn_once(
+            entity,
+            "a render scale below 1 is not applied to the layer yet; the depth at the layer's size is not built (Q-T276.1)",
         );
     }
     let layer_format = match camera.output {
