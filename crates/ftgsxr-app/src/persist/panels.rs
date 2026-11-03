@@ -100,13 +100,14 @@ fn background(ui: &mut egui::Ui, c: &mut [f32; 3], training: Option<[f32; 3]>) {
     }
 }
 
-/// The Display tab: the quality tier (for the next start, Q-179), the centers' radius
+/// The Display tab: the quality tier (switched live and saved, Q-240), the centers' radius
 /// and colormap (on every instance drawn with centers), new instances' mode, the
 /// overlays and the background.
+// Q-240
 pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
     let training = training_background(world);
     edit(world, ui, |s, ui| {
-        choice(ui, "quality tier (next start)", &mut s.general.tier, TIERS);
+        choice(ui, "quality tier", &mut s.general.tier, TIERS);
         let d = &mut s.display;
         choice(ui, "mode of new instances", &mut d.mode, RENDER_MODES);
         num(
@@ -140,13 +141,14 @@ fn loop_name(m: LoopMode) -> &'static str {
 }
 
 /// The Settings tab: §1.11's tables but `[audio]` (audio's section). `[general] tier`
-/// and `log_level` take effect at the next start (Q-218).
-// Q-218
+/// switches the running tier as well (Q-240); `log_level` takes effect at the next start
+/// (Q-218).
+// Q-218, Q-240
 pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
     edit(world, ui, |s, ui| {
         egui::CollapsingHeader::new("[general]").show(ui, |ui| {
             let g = &mut s.general;
-            choice(ui, "tier (next start)", &mut g.tier, TIERS);
+            choice(ui, "tier", &mut g.tier, TIERS);
             ui.checkbox(&mut g.governor, "governor");
             num(ui, "ui_scale", &mut g.ui_scale, 0.8, 1.5, 0.01);
             choice(ui, "log_level (next start)", &mut g.log_level, LOG_LEVELS);

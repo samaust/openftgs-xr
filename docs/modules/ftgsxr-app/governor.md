@@ -12,8 +12,10 @@ How `ftgsxr_app::governor` meets E16 and D-47: `Governor`, `GovernorCounters`, `
 
 A private `GovernorPlugin`, added last by `AppPlugin`, feeds `govern` each new statistics block's GPU time against the frame budget and writes the render layer's `SplatTierState` (`pipeline.md`). A frame counts only when `SplatStats` changed and holds a block; a frame without statistics counts to neither streak (Q-153, Q-178). f_budget is the primary window's monitor refresh rate, else a 60 Hz default (Q-153).
 
-`Governor.enabled` is set at startup and whenever `SettingsRes` changes: the settings' governor switch, and the running tier being the build's default; any other tier, from `--tier`, the settings or the Display tab, counts as chosen by hand and turns it off (Q-179). The Display tab's tier and governor switch are this module's dock section (Q-218).
+`Governor.enabled` is set at startup and whenever `SettingsRes` or the running tier changes: the settings' governor switch, and the running tier being the build's default; any other tier, from `--tier`, the settings or the Display tab, counts as chosen by hand and turns it off (Q-179, Q-240). The Display tab's knobs and governor switch are this module's dock section (Q-218).
+
+**The live tier switch.** When `[general] tier` changes while the app runs (the Display or Settings tab's choice, Q-218) to a tier `QualityTier::by_name` knows, the module writes `SplatTierState::of` the new tier, its knobs at the tier's own values, in `PreUpdate` before the library's reload; the render plugin and the library follow (`ftgsxr-render/pipeline.md`, `library.md`, Q-238, Q-239). Only a change of the setting switches: a `--tier` override at startup that differs from the settings holds until the user picks a tier (Q-240).
 
 ## Q-n rows relied on
 
-Q-153, Q-178, Q-179, Q-218.
+Q-153, Q-178, Q-179, Q-218, Q-238, Q-239, Q-240.
