@@ -23,6 +23,8 @@ A model over the memory budget is refused with E-MEM-BUDGET and the reduce-to-bu
 
 `Unload` and `UnloadAll` despawn the instances; the model's GPU memory is released by the render plugin, which I-1 checks through `SplatGpu`. An unload asked for from the keyboard goes through `ui`'s confirmation first (Q-199, `ui.md`).
 
+**A live tier switch** (Q-229). When `SplatTierState.tier` changes, every instance with a `SplatModel` is reloaded on its own entity: its `SplatModel` goes, its entry turns `Loading`, its source is re-read with `open_ref` and a `SplatLoad` with its first load's kind and `reduce_to` goes on the same entity, so the pose, time, mode, visibility, color transform, selection and soundtrack stay; its `LoadedModel` is kept. The upload shows it only if it was shown. A re-read, load or upload that fails, an E-MEM-BUDGET under the new tier's budget say, unloads that instance with §1.15's text on its entry or as a `LibraryFailure`; the others stay.
+
 ## Q-n rows relied on
 
-Q-148, Q-158, Q-166 (messages), Q-172, Q-173, Q-174, Q-192, Q-193, Q-202, Q-203 (missing entries from a scene, `persist.md`), Q-216; with Q-99, Q-117 and Q-14 from earlier milestones.
+Q-148, Q-158, Q-166 (messages), Q-172, Q-173, Q-174, Q-192, Q-193, Q-202, Q-203 (missing entries from a scene, `persist.md`), Q-216, Q-229; with Q-99, Q-117 and Q-14 from earlier milestones.
