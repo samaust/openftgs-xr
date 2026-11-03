@@ -388,7 +388,7 @@ fn gpu_r15_render_writes_the_renders_file() {
 
 #[test]
 fn bench_refuses_a_name_the_desktop_does_not_run() {
-    // Q-103: clap accepts B-1, B-3, B-5 and B-6 only; a usage error exits 2.
+    // Q-103: clap accepts B-1, B-3, B-5, B-6 and B-9 only; a usage error exits 2.
     let o = ftgsxr(&["bench", "B-2"]);
     assert_eq!(o.status.code(), Some(2));
 }
@@ -551,4 +551,51 @@ fn gpu_bench_compares_neither_b6_nor_another_profile() {
         "{}",
         written["notes"]
     );
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_b9_bench_writes_the_desktops_startup_figures() {
+    // §3.5 B-9, Q-155, Q-103: `ftgsxr bench B-9` writes the startup's figures in the
+    // benchmark file, the medians without and with the UI and the process's first
+    // startup (without the UI) apart, and no budget (B-9 is reported).
+    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), "cli", "bench-b9");
+    let baselines = dir.join("baselines");
+    fs::create_dir_all(&baselines).unwrap();
+    let (o, file) = bench_file(&["B-9", "--out"], &dir.join("b9.json"), &baselines);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(file["bench"], "B-9", "{file}");
+    assert_eq!(file["budgets"], serde_json::json!([]));
+    let results = file["results"].as_array().unwrap();
+    for (ui, run) in [(false, "first"), (false, "median"), (true, "median")] {
+        {
+            let first_frame = results
+                .iter()
+                .find(|r| {
+                    r["setup"]["ui"] == ui
+                        && r["setup"]["run"] == run
+                        && r["measure"] == "first_frame_s"
+                })
+                .unwrap_or_else(|| panic!("ui {ui}, run {run}: {file}"));
+            let uploaded = results
+                .iter()
+                .find(|r| {
+                    r["setup"]["ui"] == ui
+                        && r["setup"]["run"] == run
+                        && r["measure"] == "uploaded_s"
+                })
+                .unwrap_or_else(|| panic!("ui {ui}, run {run}: {file}"));
+            let (f, u) = (
+                first_frame["value"].as_f64().unwrap(),
+                uploaded["value"].as_f64().unwrap(),
+            );
+            assert!(u > 0.0 && f >= u, "uploaded {u} s, first frame {f} s");
+            assert_eq!(first_frame["unit"], "s");
+        }
+    }
 }

@@ -158,6 +158,47 @@ fn composite(bytes: &[u8], w: u32, h: u32, background: [f32; 3]) -> RenderImage 
     }
 }
 
+/// #291: a scene dropped while a pipeline compiles would let the process exit with a
+/// worker in the driver; not while panicking, so a failed test reports.
+impl Drop for P1Scene {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            settle_pipelines(&mut self.app);
+        }
+    }
+}
+
+/// #291 (§2.4 Threads): on bevy's `multi_threaded` pools (unified in by the workspace's
+/// build) `PipelineCache` compiles on the async compute pool, so a frame may draw before
+/// the splat or tonemapping pipelines exist, and a test returning while one compiles lets
+/// the process exit with a worker inside the Vulkan driver. Runs frames until no render
+/// pipeline is queued or compiling, at most 10 s of wall time; whether none is.
+fn settle_pipelines(app: &mut App) -> bool {
+    use bevy::render::render_resource::{CachedPipelineState, PipelineCache};
+    let busy = |app: &App| {
+        app.sub_app(RenderApp)
+            .world()
+            .resource::<PipelineCache>()
+            .pipelines()
+            .filter(|p| {
+                matches!(
+                    p.state,
+                    CachedPipelineState::Queued | CachedPipelineState::Creating(_)
+                )
+            })
+            .count()
+    };
+    let start = std::time::Instant::now();
+    while busy(app) > 0 {
+        if start.elapsed() > std::time::Duration::from_secs(10) {
+            return false;
+        }
+        app.update();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    true
+}
+
 /// P1's first item drawn by a Bevy `App` with `SplatPlugin { tier: conformance }`: the
 /// model loaded through `SplatLoad` at the item's timestamp, one `SplatCamera` writing
 /// `output` into an image target of `format`.
@@ -292,6 +333,10 @@ impl P1Scene {
         assert!(
             uploaded_at.is_some(),
             "P1 uploaded within {MAX_FRAMES} frames"
+        );
+        assert!(
+            settle_pipelines(&mut scene.app),
+            "the render pipelines compiled within 10 s"
         );
         scene
     }

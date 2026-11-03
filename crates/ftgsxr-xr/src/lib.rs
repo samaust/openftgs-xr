@@ -23,7 +23,7 @@ pub use ftgsxr_render::Foveation;
 pub use error::XrError;
 // §2.1 (M-3: the declarations I-15 reads).
 pub use passthrough::{Environment, EnvironmentMode, PassthroughStyle};
-// §2.1 `XrPlugin`; Q-120: `add_xr`.
-pub use plugin::{XrPlugin, add_xr};
+// §2.1 `XrPlugin`; Q-120: `add_xr`; Q-220: `runtime_unavailable`.
+pub use plugin::{XrPlugin, add_xr, runtime_unavailable};
 // §2.1 (#227).
 pub use tracking::{HandSource, TrackedHand, XrHands};

@@ -7,7 +7,15 @@ all-features = false
 no-default-features = false
 
 [advisories]
-ignore = []
+# Q-165: two advisories M-4's dependencies bring and no version in §2.3's pins avoids.
+ignore = [
+    # ruzstd 0.8.3 (a decompression bomb, denial of service only): bevy_egui 0.42's
+    # `render` turns on bevy_image's `zstd_rust`, and bevy_image 0.19.1 requires ruzstd
+    # ^0.8; the player decodes no zstd-compressed texture.
+    { id = "RUSTSEC-2026-0344", reason = "Q-165: bevy_egui 0.42 -> bevy_image 0.19.1 pins ruzstd ^0.8; no zstd texture is loaded" },
+    # ttf-parser 0.25 unmaintained: winit 0.30's Wayland decorations (sctk-adwaita).
+    { id = "RUSTSEC-2026-0192", reason = "Q-165: winit 0.30's sctk-adwaita (Wayland decorations); unmaintained, no known vulnerability" },
+]
 
 [licenses]
 # §2.3's allowlist. Anything else (GPL, AGPL, LGPL, an unknown or missing license)

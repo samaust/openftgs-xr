@@ -9,11 +9,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use ::bevy::asset::{AssetEvent, AssetId, Assets};
-use ::bevy::camera::{Camera, ClearColorConfig};
+use ::bevy::camera::{Camera, Camera3d, ClearColorConfig};
 use ::bevy::color::Color;
 use ::bevy::core_pipeline::tonemapping::Tonemapping;
 use ::bevy::ecs::prelude::*;
 use ::bevy::log::{info, warn};
+use ::bevy::render::render_resource::TextureUsages;
 use ::bevy::render::renderer::{RenderAdapter, RenderAdapterInfo, RenderDevice, RenderQueue};
 use ::bevy::render::view::Msaa;
 use ::bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
@@ -49,9 +50,20 @@ pub struct SplatLoad {
 #[derive(Component)]
 pub(crate) struct LoadTask(Task<Result<SplatAsset, RenderError>>);
 
-/// The device the passes run on: Bevy's, with the memory budget (Q-66, Q-86).
+/// The device the passes run on: Bevy's, with the memory budget (Q-66, Q-86), present
+/// once the renderer exists. Public for the library's reduce-to-budget count (Q-158)
+/// and its checks that an unload frees (I-1): `device` reads the budget and the bytes
+/// in use.
+// Q-172
 #[derive(Resource, Clone)]
-pub(crate) struct SplatGpu(pub(crate) Arc<SplatDevice>);
+pub struct SplatGpu(pub(crate) Arc<SplatDevice>);
+
+impl SplatGpu {
+    /// The device, its memory budget and the static bytes its models hold (Q-74).
+    pub fn device(&self) -> &SplatDevice {
+        &self.0
+    }
+}
 
 /// The models on the GPU, those uploading and those that failed, by asset.
 #[derive(Resource, Default)]
@@ -154,6 +166,7 @@ pub(crate) fn ensure_device(
 pub(crate) fn make_camera_follow_d6(
     add: On<Add, SplatCamera>,
     mut cameras: Query<&mut Camera>,
+    mut cameras_3d: Query<&mut Camera3d>,
     mut commands: Commands,
 ) {
     let entity = add.entity;
@@ -162,6 +175,26 @@ pub(crate) fn make_camera_follow_d6(
         .insert((Msaa::Off, Tonemapping::None));
     if let Ok(mut camera) = cameras.get_mut(entity) {
         camera.clear_color = ClearColorConfig::Custom(Color::NONE);
+    }
+    if let Ok(mut camera_3d) = cameras_3d.get_mut(entity) {
+        sample_view_depth(&mut camera_3d);
+    }
+}
+
+/// Q-164: the view's depth is also sampled, by the depth copy below render scale 1.
+fn sample_view_depth(camera_3d: &mut Camera3d) {
+    let usage =
+        TextureUsages::from(camera_3d.depth_texture_usages) | TextureUsages::TEXTURE_BINDING;
+    camera_3d.depth_texture_usages = usage.into();
+}
+
+/// `make_camera_follow_d6`'s depth usage for a `Camera3d` added after its `SplatCamera`.
+pub(crate) fn sample_late_view_depth(
+    add: On<Add, Camera3d>,
+    mut cameras_3d: Query<&mut Camera3d, With<SplatCamera>>,
+) {
+    if let Ok(mut camera_3d) = cameras_3d.get_mut(add.entity) {
+        sample_view_depth(&mut camera_3d);
     }
 }
 

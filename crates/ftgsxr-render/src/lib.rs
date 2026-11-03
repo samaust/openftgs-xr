@@ -9,8 +9,8 @@ pub mod bevy;
 pub mod gpu;
 
 pub use crate::bevy::{
-    DepthFrame, OutputSpace, SplatAsset, SplatCamera, SplatEvent, SplatLoad, SplatMode, SplatModel,
-    SplatOcclusion, SplatOverlays, SplatPlugin, SplatStats, SplatTierState, SplatTime,
+    DepthFrame, OutputSpace, SplatAsset, SplatCamera, SplatEvent, SplatGpu, SplatLoad, SplatMode,
+    SplatModel, SplatOcclusion, SplatOverlays, SplatPlugin, SplatStats, SplatTierState, SplatTime,
     SplatTransform, load_splat_asset,
 };
 pub use gpu::{

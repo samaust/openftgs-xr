@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5): the desktop
-//! benchmarks B-1, B-3, B-5 and B-6, their JSON file and the comparison with the stored
+//! benchmarks B-1, B-3, B-5, B-6 and B-9 (#289, Q-155), their JSON file and the comparison with the stored
 //! baseline (Q-67, Q-102, Q-103).
 
 use std::fs;
@@ -23,6 +23,8 @@ use ftgsxr_render::{
     Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, Overlays, QualityTier,
     RenderError, RenderMode, SortPose, SplatDevice, SplatPasses, ViewParams,
 };
+
+mod b9;
 
 use super::json::Json;
 use super::synthetic::{Persistence, synthetic_model};
@@ -189,7 +191,7 @@ pub(crate) fn compare_against(
 }
 
 /// `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5, Q-67): runs the
-/// desktop benchmark `name` (B-1, B-3, B-5 or B-6) on the high-performance adapter, with
+/// desktop benchmark `name` (B-1, B-3, B-5, B-6 or B-9) on the high-performance adapter, with
 /// the setups of Q-102 or, with `model`, on that one model (any §1.2 input); compares
 /// its budgets with the stored baseline `<NAME>.json` when the baseline has the run's
 /// profile and GPU, else notes why not in the file (Q-103); and writes the file at `out`
@@ -219,9 +221,11 @@ fn cmd_bench_in(
         "B-3" => bench_b3,
         "B-5" => bench_b5,
         "B-6" => bench_b6,
+        // Q-155
+        "B-9" => b9::bench_b9,
         _ => {
             return Err(HeadlessError::Input(format!(
-                "{name}: not a desktop benchmark (B-1, B-3, B-5, B-6)"
+                "{name}: not a desktop benchmark (B-1, B-3, B-5, B-6, B-9)"
             )));
         }
     };

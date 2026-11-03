@@ -204,7 +204,17 @@ pub fn render(dev: &SplatDevice, draws: &[ModelDraw], camera: &Camera, run: &Run
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            // The passes' depth, when they have one, gates the resolve (Q-101).
+            depth_stencil_attachment: depth_view.as_ref().map(|v| {
+                wgpu::RenderPassDepthStencilAttachment {
+                    view: v,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,

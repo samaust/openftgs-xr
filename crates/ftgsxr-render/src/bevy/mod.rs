@@ -12,6 +12,7 @@
 
 mod asset;
 mod camera;
+mod depth_copy;
 mod load;
 mod render;
 
@@ -25,7 +26,7 @@ use ::bevy::transform::components::Transform;
 use ftgsxr_core::{Camera, GpuLayoutOptions};
 
 pub use asset::{SplatAsset, load_splat_asset};
-pub use load::SplatLoad;
+pub use load::{SplatGpu, SplatLoad}; // Q-99; Q-172
 
 use crate::gpu::{
     ColorTransform, Foveation, FrameStats, Overlays, QualityTier, RenderMode, SortMode,
@@ -136,7 +137,8 @@ pub struct SplatTierState {
     pub tier: QualityTier,
     /// The render scale (§1.12).
     pub render_scale: f32,
-    /// The SH degree cap the next loads apply (§1.2 load option 1).
+    /// The SH degree cap (§1.2 load option 1): the next loads apply it, and every
+    /// instance is drawn at the smaller of its loaded degree and it (E16).
     pub sh_cap: u8,
     /// The sort mode (D-4).
     pub sort_mode: SortMode,
@@ -200,6 +202,7 @@ impl Plugin for SplatPlugin {
             .init_resource::<render::StatsInbox>()
             .add_observer(load::make_camera_follow_d6)
             .add_observer(load::clear_late_splat_camera)
+            .add_observer(load::sample_late_view_depth)
             .add_systems(First, (load::ensure_device, render::publish_stats))
             .add_systems(Update, (load::start_loads, load::finish_loads).chain())
             .add_systems(PostUpdate, load::upload_models);

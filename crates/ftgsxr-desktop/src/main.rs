@@ -2,9 +2,12 @@
 
 //! The Linux player and its command line, the binary `ftgsxr` (§1.7, §2.1, D-36). M-2 gives
 //! it the headless commands: `render` (#118), `info [--json]`, `validate`, `import` and
-//! `export` (#117), and `bench` (#122); `play` arrives with its milestone.
+//! `export` (#117), and `bench` (#122); M-4 `play` and `LinuxPlatform` (#277).
 
 #![warn(missing_docs)]
+
+mod linux;
+mod play;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -19,7 +22,7 @@ use ftgsxr_app::{
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The names `--tier` accepts, those of `QualityTier::by_name` (§1.12, Q-89).
-const TIERS: [&str; 5] = [
+pub(crate) const TIERS: [&str; 5] = [
     "conformance",
     "desktop",
     "quest-high",
@@ -28,13 +31,13 @@ const TIERS: [&str; 5] = [
 ];
 
 /// The benchmarks the desktop runs (§3.5, Q-103).
-const BENCHMARKS: [&str; 4] = ["B-1", "B-3", "B-5", "B-6"];
+const BENCHMARKS: [&str; 5] = ["B-1", "B-3", "B-5", "B-6", "B-9"];
 
 /// The exit code of a run whose budgets regressed against the baseline (Q-67).
 const REGRESSION_EXIT: u8 = 3;
 
-/// The command line of §1.7, the subcommands implemented so far.
-fn command() -> Command {
+/// The command line of §1.7.
+pub(crate) fn command() -> Command {
     let path = |name: &'static str, help: &'static str| {
         Arg::new(name)
             .required(true)
@@ -46,6 +49,7 @@ fn command() -> Command {
         .about("openftgs-xr, a player for openftgs models")
         .subcommand_required(true)
         .arg_required_else_help(true)
+        .subcommand(play::command())
         .subcommand(
             Command::new("render")
                 .about("Answer a ftgs-render-request headless and write a ftgs-renders file")
@@ -104,7 +108,7 @@ fn command() -> Command {
                     Arg::new("NAME")
                         .required(true)
                         .value_parser(BENCHMARKS)
-                        .help("The benchmark: B-1, B-3, B-5 or B-6"),
+                        .help("The benchmark: B-1, B-3, B-5, B-6 or B-9"),
                 )
                 .arg(
                     Arg::new("out")
@@ -277,6 +281,9 @@ fn unescape(s: &str) -> String {
 // Q-77, Q-67
 fn main() -> ExitCode {
     let matches = command().get_matches();
+    if let Some(("play", m)) = matches.subcommand() {
+        return play::run(m);
+    }
     match run(&matches) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(REGRESSION_EXIT),

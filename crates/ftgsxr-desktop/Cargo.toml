@@ -13,11 +13,31 @@ publish.workspace = true
 name = "ftgsxr"
 path = "src/main.rs"
 
-# M-2 (#117): the headless commands that need no GPU. `ftgsxr-xr` (feature `xr`) and rfd
-# join with `play` in M-4. clap's builder API, so no derive macro is needed.
+# M-2 (#117): the headless commands that need no GPU. clap's builder API, so no derive
+# macro is needed. M-4 (#277): `play` takes bevy for `DefaultPlugins` and the window
+# (Q-154: winit with X11 and Wayland), rfd's dialogs with its defaults (Q-160: the XDG
+# portal) and `ftgsxr-xr` under the feature `xr`, on by default (§2.1).
+[features]
+default = ["xr"]
+xr = ["dep:ftgsxr-xr"]
+
 [dependencies]
+bevy = { workspace = true, features = [
+    "std",
+    "multi_threaded",
+    "bevy_log",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_window",
+    "bevy_winit",
+    "x11",
+    "wayland",
+    "bevy_gizmos_render",
+] } # Q-154; #289: `bevy_gizmos_render` draws manipulate's gizmo, the boxes and the frustums
 clap.workspace = true
 ftgsxr-app.workspace = true
+ftgsxr-xr = { workspace = true, optional = true }
+rfd.workspace = true # Q-160
 
 [dev-dependencies]
 ftgsxr-testkit.workspace = true

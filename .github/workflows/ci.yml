@@ -49,6 +49,13 @@ jobs:
       - name: cpu lane
         run: cargo test --workspace
 
+      # The workspace run unifies bevy's `multi_threaded` (ftgsxr-desktop's) into the
+      # app's tests; alone, ftgsxr-app's tests run on single-threaded task pools. Both
+      # executors run them, so a system order only one of them happens to give is
+      # caught (§2.4 Threads, #279).
+      - name: cpu lane, app without multi_threaded
+        run: cargo test -p ftgsxr-app
+
       - name: skeleton test
         run: cargo test -p ftgsxr-core skeleton
 
@@ -85,4 +92,5 @@ jobs:
       - name: cargo ndk
         run: |
           command -v cargo-ndk || cargo install --locked cargo-ndk --version ^4.1
-          cargo ndk -t arm64-v8a build --release -p ftgsxr-quest
+          # `-P 32`: the NDK platform at minSdk 32 (D-18), owner 2026-11-02 (#275).
+          cargo ndk -t arm64-v8a -P 32 build --release -p ftgsxr-quest
