@@ -4,7 +4,8 @@
 //! and header-only information, loads, unloads, the pickers and dropped files (§1.7).
 //! Listings, header reads and fetches run on the I/O task pool, the CPU part of a load on
 //! the compute pool through `SplatLoad` (§2.4 Threads, Q-99). No toast is raised here:
-//! the entries' states carry the texts (PRD #275).
+//! the entries' states carry the texts, and a failure with no entry to carry it is a
+//! `LibraryFailure` message that `ui` turns into a toast (PRD #275, Q-173).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +24,7 @@ use bevy::window::FileDragAndDrop;
 use ftgsxr_core::{ModelInfo, ModelKind, ModelTime, memory_estimate};
 use ftgsxr_io::{
     DocumentProvider, Entry, EntryKind, HttpClient, IoError, ModelBytes, ModelRef, ModelSource,
-    Progress, SourceSpec, TlsRoots, open_ref, open_source,
+    Progress, SourceSpec, TlsRoots, Url, open_ref, open_source,
 };
 use ftgsxr_render::{SplatAsset, SplatEvent, SplatGpu, SplatLoad, SplatModel, SplatTierState};
 
@@ -105,6 +106,35 @@ pub enum LibraryCommand {
     Pick(PickKind),
 }
 
+/// A failure the library has no entry state for (Q-173): a load without a library entry
+/// (`LoadRef`, picked and dropped files) whose fetch, read, validation or upload failed,
+/// or a source's listing that failed (Q-193). `ui` turns it into a toast.
+// Q-173, Q-193
+#[derive(Message, Event, Clone, Debug, PartialEq)]
+pub struct LibraryFailure {
+    /// The model's name (its file stem), or the source's label for a listing.
+    pub name: String,
+    /// The model's reference; `None` for a listing.
+    pub reference: Option<ModelRef>,
+    /// The §1.15 code, `E-NET-FETCH` say.
+    pub code: String,
+    /// The full text, `<code>: <user text>`, an E-MEM-BUDGET one followed by ` (N = n)`
+    /// (Q-117).
+    pub text: String,
+}
+
+impl LibraryFailure {
+    fn new(name: String, reference: Option<ModelRef>, text: String) -> LibraryFailure {
+        let code = text.split(": ").next().unwrap_or("").to_owned();
+        LibraryFailure {
+            name,
+            reference,
+            code,
+            text,
+        }
+    }
+}
+
 /// What an instance is (§1.5 Instances), inserted when its model is read (Q-148).
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct LoadedModel {
@@ -120,8 +150,11 @@ pub struct LoadedModel {
     pub time: ModelTime,
     /// Whether it was reduced to the budget (§1.2 option 4, #205).
     pub reduced: bool,
-    /// Its soundtrack (§1.10).
+    /// Its soundtrack (§1.10): a local or document file; an HTTP index entry's is
+    /// downloaded with the model and given as its cached file.
     pub audio: Option<ModelRef>,
+    /// §1.6's Δ_frame in seconds (D-32), the asset's (Q-174).
+    pub frame_step_s: f64,
 }
 
 /// The library's systems and observers, added by `AppPlugin` with its `initial` models.
@@ -132,6 +165,7 @@ pub(crate) struct LibraryPlugin {
 impl Plugin for LibraryPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<LibraryCommand>()
+            .add_message::<LibraryFailure>()
             .add_message::<FileDragAndDrop>()
             .init_resource::<Pending>()
             .add_observer(on_model)
@@ -203,6 +237,8 @@ struct LoadCtx {
 }
 
 type ListTask = Task<Result<Vec<Entry>, IoError>>;
+/// A subdirectory's listing: its source's id, the directory entry's location, the task.
+type SubTask = (u64, String, ListTask);
 type InfoTask = Task<Result<ModelInfo, IoError>>;
 type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>), IoError>;
 
@@ -222,9 +258,13 @@ struct Pending {
     ids: Vec<u64>,
     next_id: u64,
     listings: Vec<(u64, ListTask)>,
+    /// Subdirectories listed on demand (D-31, Q-192).
+    sublistings: Vec<SubTask>,
     infos: Vec<(u64, String, InfoTask)>,
     fetches: Vec<Fetch>,
     picks: Vec<(PickKind, PickHandle)>,
+    /// A fetch completed since the last prune (Q-4, Q-45).
+    prune: bool,
 }
 
 impl Pending {
@@ -372,6 +412,7 @@ fn run_commands(
                 let id = pending.ids.remove(i);
                 pending.listings.retain(|(s, _)| *s != id);
                 pending.infos.retain(|(s, _, _)| *s != id);
+                pending.sublistings.retain(|(s, _, _)| *s != id);
                 library.entries.retain(|e| e.source != i);
                 for e in &mut library.entries {
                     if e.source > i {
@@ -396,6 +437,22 @@ fn run_commands(
                 if matches!(e.state, EntryState::Fetching(_) | EntryState::Loading) {
                     continue;
                 }
+                // Q-192: loading a listed directory lists it (D-31's "on demand").
+                if e.entry.kind == EntryKind::Dir {
+                    e.state = EntryState::Loading;
+                    let location = e.entry.location.clone();
+                    let at = location.clone();
+                    let task = IoTaskPool::get().spawn(async move { source.list(&at) });
+                    pending
+                        .sublistings
+                        .retain(|(s, l, _)| (*s, l) != (id, &location));
+                    pending.sublistings.push((id, location, task));
+                    continue;
+                }
+                // §1.10: the index entry's soundtrack, downloaded with the model, else the
+                // sidecar beside the file.
+                let audio_url = e.entry.audio.as_deref().and_then(|a| Url::parse(a).ok());
+                let http = client.0.clone();
                 let reduce_to = if reduce {
                     e.info
                         .as_ref()
@@ -413,7 +470,18 @@ fn run_commands(
                         &mut |now| *p.lock().unwrap_or_else(|e| e.into_inner()) = Some(now),
                         &c,
                     )?;
-                    let audio = sidecar(&r);
+                    let audio = match (audio_url, http) {
+                        (Some(url), Some(http)) => {
+                            match http.download(&url, None, &mut |_| {}, &c) {
+                                Ok(path) => Some(ModelRef::File(path)),
+                                Err(e) => {
+                                    warn!("the soundtrack {url}: {}", error_text(&e));
+                                    None
+                                }
+                            }
+                        }
+                        _ => sidecar(&r),
+                    };
                     Ok((r, bytes, audio))
                 });
                 e.state = EntryState::Fetching(Progress {
@@ -515,12 +583,63 @@ fn entry_of<'a>(
         .find(|e| e.source == source && &e.entry.location == location)
 }
 
+/// A listing's entries as library entries of `source`: `old`'s state kept for a location
+/// listed again, and its information, identity and thumbnail when the file did not change
+/// (§1.5 Refresh); a header read started for every `Exchange` entry without information.
+/// Directories stay, to list on demand (D-31, Q-192).
+fn fresh_entries(
+    pending: &mut Pending,
+    id: u64,
+    source: usize,
+    model: &Arc<dyn ModelSource>,
+    entries: Vec<Entry>,
+    old: &[LibraryEntry],
+) -> Vec<LibraryEntry> {
+    let mut fresh = Vec::new();
+    for entry in entries {
+        if entry.kind == EntryKind::Other {
+            continue;
+        }
+        let kept = old.iter().find(|o| o.entry.location == entry.location);
+        let same = kept.is_some_and(|o| {
+            o.entry.size == entry.size
+                && o.entry.mtime == entry.mtime
+                && o.entry.sha256 == entry.sha256
+        });
+        let (info, identity, thumbnail) = match kept {
+            Some(o) if same => (o.info.clone(), o.identity.clone(), o.thumbnail.clone()),
+            _ => (None, None, None),
+        };
+        let state = kept.map_or(EntryState::Listed, |o| o.state.clone());
+        if info.is_none() && entry.kind == EntryKind::Exchange {
+            let (m, e) = (model.clone(), entry.clone());
+            let task = IoTaskPool::get().spawn(async move { m.info(&e) });
+            pending.infos.push((id, entry.location.clone(), task));
+        }
+        fresh.push(LibraryEntry {
+            source,
+            entry,
+            info,
+            identity,
+            thumbnail,
+            state,
+        });
+    }
+    fresh
+}
+
 /// Collects finished listings, header reads and fetches.
-fn poll_tasks(mut library: ResMut<Library>, mut pending: ResMut<Pending>, mut commands: Commands) {
+fn poll_tasks(
+    mut library: ResMut<Library>,
+    mut pending: ResMut<Pending>,
+    mut failures: MessageWriter<LibraryFailure>,
+    mut commands: Commands,
+) {
     pending.sync(library.sources.len());
     let pending = &mut *pending;
     // Listings: entries keep their state and, when the file did not change, their
-    // information (§1.5 Refresh).
+    // information (§1.5 Refresh). A source's root listing replaces every entry of it,
+    // the subdirectories' included (Q-192).
     let mut listed = Vec::new();
     pending
         .listings
@@ -538,11 +657,10 @@ fn poll_tasks(mut library: ResMut<Library>, mut pending: ResMut<Pending>, mut co
         let entries = match result {
             Ok(entries) => entries,
             Err(e) => {
-                warn!(
-                    "listing {}: {}",
-                    library.sources[source].0.location,
-                    error_text(&e)
-                );
+                // Q-193: a listing has no entry to carry its failure.
+                let spec = &library.sources[source].0;
+                warn!("listing {}: {}", spec.location, error_text(&e));
+                failures.write(LibraryFailure::new(spec.name.clone(), None, error_text(&e)));
                 continue;
             }
         };
@@ -561,37 +679,55 @@ fn poll_tasks(mut library: ResMut<Library>, mut pending: ResMut<Pending>, mut co
             .position(|e| e.source > source)
             .unwrap_or(library.entries.len());
         let model = library.sources[source].1.clone();
-        let mut fresh = Vec::new();
-        for entry in entries {
-            if matches!(entry.kind, EntryKind::Dir | EntryKind::Other) {
+        let fresh = fresh_entries(pending, id, source, &model, entries, &old);
+        library.entries.splice(at..at, fresh);
+    }
+    // Subdirectories: their entries follow the directory's, replacing any listed before
+    // (Q-192).
+    let mut sublisted = Vec::new();
+    pending
+        .sublistings
+        .retain_mut(|(id, location, task)| match check_ready(task) {
+            Some(result) => {
+                sublisted.push((*id, location.clone(), result));
+                false
+            }
+            None => true,
+        });
+    for (id, location, result) in sublisted {
+        let Some(source) = pending.index(id) else {
+            continue;
+        };
+        let Some(dir) = library
+            .entries
+            .iter()
+            .position(|e| e.source == source && e.entry.location == location)
+        else {
+            continue;
+        };
+        let entries = match result {
+            Ok(entries) => entries,
+            Err(e) => {
+                library.entries[dir].state = EntryState::Failed(error_text(&e));
                 continue;
             }
-            let kept = old.iter().find(|o| o.entry.location == entry.location);
-            let same = kept.is_some_and(|o| {
-                o.entry.size == entry.size
-                    && o.entry.mtime == entry.mtime
-                    && o.entry.sha256 == entry.sha256
-            });
-            let (info, identity, thumbnail) = match kept {
-                Some(o) if same => (o.info.clone(), o.identity.clone(), o.thumbnail.clone()),
-                _ => (None, None, None),
-            };
-            let state = kept.map_or(EntryState::Listed, |o| o.state.clone());
-            if info.is_none() && entry.kind == EntryKind::Exchange {
-                let (m, e) = (model.clone(), entry.clone());
-                let task = IoTaskPool::get().spawn(async move { m.info(&e) });
-                pending.infos.push((id, entry.location.clone(), task));
-            }
-            fresh.push(LibraryEntry {
-                source,
-                entry,
-                info,
-                identity,
-                thumbnail,
-                state,
-            });
-        }
-        library.entries.splice(at..at, fresh);
+        };
+        library.entries[dir].state = EntryState::Listed;
+        let inside = |e: &LibraryEntry| {
+            e.source == source
+                && e.entry.location != location
+                && e.entry.location.starts_with(&location)
+        };
+        let old: Vec<LibraryEntry> = library
+            .entries
+            .iter()
+            .filter(|e| inside(e))
+            .cloned()
+            .collect();
+        library.entries.retain(|e| !inside(e));
+        let model = library.sources[source].1.clone();
+        let fresh = fresh_entries(pending, id, source, &model, entries, &old);
+        library.entries.splice(dir + 1..dir + 1, fresh);
     }
     // Header-only information, filled as it arrives.
     let mut infos = Vec::new();
@@ -651,13 +787,24 @@ fn poll_tasks(mut library: ResMut<Library>, mut pending: ResMut<Pending>, mut co
                 if let Some(e) = entry_of(&mut library, pending, &ctx) {
                     e.state = EntryState::Loading;
                 }
+                pending.prune = true;
+            }
+            // A cancelled fetch returns its entry to the list (§1.5).
+            Err(_) if f.cancel.load(Ordering::Relaxed) => {
+                if let Some(e) = entry_of(&mut library, pending, &f.ctx) {
+                    e.state = EntryState::Listed;
+                }
             }
             Err(err) => {
                 let text = error_text(&err);
                 match entry_of(&mut library, pending, &f.ctx) {
                     Some(e) => e.state = EntryState::Failed(text),
-                    // Q-173: a load without an entry has no state to carry its text.
-                    None => warn!("{}: {text}", f.ctx.name),
+                    // Q-173: a load without an entry sends its own failure.
+                    None => {
+                        warn!("{}: {text}", f.ctx.name);
+                        let reference = Some(f.ctx.source.clone());
+                        failures.write(LibraryFailure::new(f.ctx.name, reference, text));
+                    }
                 }
             }
         }
@@ -734,6 +881,8 @@ fn on_model(
         time: ModelTime::from_span(&asset.info.time),
         reduced,
         audio: ctx.audio.clone(),
+        // Q-174
+        frame_step_s: asset.frame_step_s,
     });
 }
 
@@ -746,6 +895,7 @@ fn on_splat_event(
     assets: Res<Assets<SplatAsset>>,
     mut library: ResMut<Library>,
     pending: Res<Pending>,
+    mut failures: MessageWriter<LibraryFailure>,
     mut commands: Commands,
 ) {
     match event.event() {
@@ -769,11 +919,21 @@ fn on_splat_event(
             {
                 text = format!("{text} (N = {n})");
             }
-            if let Some(e) = entry_of(&mut library, &pending, ctx) {
-                if e.info.is_none() && ctx.reduce_to.is_none() {
-                    e.info = asset.map(|a| a.info.clone());
+            match entry_of(&mut library, &pending, ctx) {
+                Some(e) => {
+                    if e.info.is_none() && ctx.reduce_to.is_none() {
+                        e.info = asset.map(|a| a.info.clone());
+                    }
+                    e.state = EntryState::Failed(text);
                 }
-                e.state = EntryState::Failed(text);
+                // Q-173: a load without an entry sends its own failure.
+                None => {
+                    failures.write(LibraryFailure::new(
+                        ctx.name.clone(),
+                        Some(ctx.source.clone()),
+                        text,
+                    ));
+                }
             }
             commands.entity(*entity).despawn();
         }
@@ -781,27 +941,56 @@ fn on_splat_event(
     }
 }
 
-/// Q-4, Q-56: the HTTP client's in-use set follows every change of the loaded set.
-// Q-4, Q-56
+/// Q-4, Q-56: the HTTP client's in-use set follows every change of the loaded set: a
+/// local file or checkpoint directory by its path, a downloaded file by its cache entry's
+/// directory (§1.11 Cache entries, Q-42). After a fetch completes the cache is pruned on
+/// the I/O pool (Q-45).
+// Q-4, Q-56, Q-45
 fn follow_in_use(
     added: Query<(), Added<LoadCtx>>,
     mut removed: RemovedComponents<LoadCtx>,
     all: Query<&LoadCtx>,
     client: Res<Client>,
+    platform: Res<PlatformRes>,
+    mut pending: ResMut<Pending>,
 ) {
     let changed = !added.is_empty() || removed.read().count() > 0;
     let Some(client) = client.0.as_ref() else {
         return;
     };
-    if !changed {
-        return;
+    if changed {
+        let entries = platform.0.paths().cache.join("http");
+        // A soundtrack downloaded with its model stays with it (§1.10).
+        let paths: Vec<PathBuf> = all
+            .iter()
+            .flat_map(|c| [Some(&c.source), c.audio.as_ref()])
+            .flatten()
+            .filter_map(|r| match r {
+                ModelRef::File(p) if !p.as_os_str().is_empty() => Some(p.clone()),
+                ModelRef::Http(url) => Some(cache_entry(&entries, url)),
+                ModelRef::Document(_) => None,
+                ModelRef::File(_) => None,
+            })
+            .collect();
+        client.set_in_use(&paths);
     }
-    let paths: Vec<PathBuf> = all
-        .iter()
-        .filter_map(|c| match &c.source {
-            ModelRef::File(p) if !p.as_os_str().is_empty() => Some(p.clone()),
-            _ => None,
-        })
-        .collect();
-    client.set_in_use(&paths);
+    if std::mem::take(&mut pending.prune) {
+        let client = client.clone();
+        IoTaskPool::get()
+            .spawn(async move {
+                if let Err(e) = client.prune() {
+                    warn!("pruning the download cache: {}", error_text(&e));
+                }
+            })
+            .detach();
+    }
+}
+
+/// The directory of `url`'s cache entry under the cache's `http/` directory: the SHA-256
+/// of the URL's serialization (§1.11 Cache entries, Q-42).
+// Q-42
+fn cache_entry(entries: &Path, url: &Url) -> PathBuf {
+    entries.join(ftgsxr_core::hex(&ftgsxr_core::sha256(
+        url.as_str().as_bytes(),
+    )))
 }

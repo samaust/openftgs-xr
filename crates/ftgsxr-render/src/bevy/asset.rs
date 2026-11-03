@@ -42,6 +42,9 @@ pub struct SplatAsset {
     pub bounds: Aabb,
     /// The SHA-256 of the file's bytes, of `params.safetensors` for a checkpoint (D-40).
     pub identity: [u8; 32],
+    /// §1.6's Δ_frame in seconds (D-32), from the loaded model's time centers while they
+    /// are in hand (Q-174).
+    pub frame_step_s: f64,
     pub(crate) packed: Arc<Packed>,
 }
 
@@ -82,6 +85,8 @@ pub fn load_splat_asset(
         file_bytes,
     };
     let bounds = model.bounds(BOX_SAMPLES);
+    // Q-174
+    let frame_step_s = ftgsxr_core::ModelTime::from_span(&model.time).frame_step_s(&model);
     let (index, order) = TemporalIndex::build(&model);
     let arrays = pack_for_gpu(&model, &order, opts);
     let speed_p99 = packed_speed_p99(&arrays);
@@ -89,6 +94,7 @@ pub fn load_splat_asset(
         info,
         bounds,
         identity: model.identity,
+        frame_step_s,
         packed: Arc::new(Packed {
             arrays: Arc::new(arrays),
             index,

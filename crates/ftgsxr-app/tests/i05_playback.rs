@@ -145,7 +145,7 @@ fn i05_loop_modes_wrap_reflect_and_stop() {
 fn i05_a_frame_step_moves_by_delta_frame_while_paused() {
     let (mut t, _) = loaded("i05-step", &["P1"]);
     seek(&mut t, 1.0);
-    // Q-174: an exchange file's step is D-32's 1/30 s.
+    // D-32: P1 has one primitive, so no median spacing: the default 1/30 s.
     intent(&mut t, PlaybackCommand::StepFrames(3));
     t.frames(1);
     assert!((clock_t(&t) - (1.0 + 3.0 / 30.0)).abs() < TOL);
@@ -233,4 +233,35 @@ fn i05_a_speed_outside_e9_is_refused() {
         t.frames(1);
         assert_eq!(t.app.world().resource::<Playback>().clock.speed(), -2.0);
     }
+}
+
+// Q-174
+#[test]
+fn i05_an_exchange_model_steps_by_its_median_spacing() {
+    // D-32: four distinct time centers 0.1 s apart (r = 1 for seconds, span 1.9 s): the
+    // median spacing 0.1 s lies within [1/480 s, 1.9 s], so Δ_frame = 0.1 s.
+    let mut model = ftgsxr_testkit::random_model(7, 4, 0);
+    model.time_center = vec![0.4, 0.5, 0.6, 0.7];
+    let mut t = TestApp::new("i05-median");
+    let path = t.dir.join("spaced.safetensors");
+    std::fs::create_dir_all(&t.dir).unwrap();
+    std::fs::write(&path, ftgsxr_testkit::exchange_bytes(&model)).unwrap();
+    t.command(LibraryCommand::LoadRef(ModelRef::File(path)));
+    assert!(t.until(600, |app| {
+        app.world_mut()
+            .query::<&LoadedModel>()
+            .iter(app.world())
+            .count()
+            == 1
+    }));
+    let m = {
+        let mut q = t.app.world_mut().query::<&LoadedModel>();
+        q.single(t.app.world()).unwrap().clone()
+    };
+    assert!((m.frame_step_s - 0.1).abs() < TOL, "{}", m.frame_step_s);
+    t.frames(2);
+    seek(&mut t, 1.0);
+    intent(&mut t, PlaybackCommand::StepFrames(3));
+    t.frames(1);
+    assert!((clock_t(&t) - 1.3).abs() < TOL, "{}", clock_t(&t));
 }
