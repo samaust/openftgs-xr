@@ -49,7 +49,10 @@ fn b_v_and_the_time_tint_toggle_every_instances_overlays() {
     }
     t.frames(2);
     let on = overlays(&mut t)[0];
-    assert!(on.boxes && on.velocities.is_some() && on.time_tint, "{on:?}");
+    assert!(
+        on.boxes && on.velocities.is_some() && on.time_tint,
+        "{on:?}"
+    );
     let s = &t.app.world().resource::<SettingsRes>().0.display.overlays;
     assert!(s.boxes && s.velocities && s.time_tint);
     t.app
