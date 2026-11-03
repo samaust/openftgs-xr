@@ -13,7 +13,7 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
 use ftgsxr_core::{EndRule, LoopMode, PlayState, Preset};
 use ftgsxr_io::{EntryKind, SourceSpec, Url};
-use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransform};
+use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTime, SplatTransform};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
 use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
@@ -447,22 +447,31 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
     });
     let mut q = world.query::<(
         Entity,
-        &LoadedModel,
+        &mut LoadedModel,
         &mut Transform,
         Option<&Visibility>,
         Option<&SplatMode>,
         Option<&SplatTransform>,
         Option<&PoseExtras>,
+        Option<&SplatTime>,
     )>();
     let mut ask = None;
     let mut gains = Vec::new();
     let mut extras_out = Vec::new();
-    for (e, m, mut tf, vis, mode, color, extras) in q.iter_mut(world) {
+    for (e, mut m, mut tf, vis, mode, color, extras, time) in q.iter_mut(world) {
         ui.separator();
-        ui.strong(if m.reduced {
-            format!("{} (reduced)", m.name)
-        } else {
-            m.name.clone()
+        // §1.5: the instance's name is editable; §1.6: an "extrapolating" badge.
+        ui.horizontal(|ui| {
+            let mut name = m.name.clone();
+            if ui.text_edit_singleline(&mut name).changed() && name != m.name {
+                m.name = name;
+            }
+            if m.reduced {
+                ui.label("(reduced)");
+            }
+            if time.is_some_and(|t| t.extrapolating) {
+                ui.colored_label(ui.visuals().warn_fg_color, "extrapolating");
+            }
         });
         let mut visible = vis != Some(&Visibility::Hidden);
         if ui.checkbox(&mut visible, "Visible").changed() {
@@ -538,31 +547,35 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
             tf.scale = bevy::math::Vec3::splat(s);
         }
         let mut offset = m.time.offset_s;
-        ui.horizontal(|ui| {
-            ui.label("offset");
-            if ui
-                .add(egui::DragValue::new(&mut offset).speed(0.01).suffix(" s"))
-                .changed()
-            {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::Offset {
-                    instance: e,
-                    offset_s: offset,
-                })));
-            }
-            let hold = m.time.end_rule == EndRule::Hold;
-            if ui.selectable_label(hold, "hold").clicked() {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
-                    instance: e,
-                    rule: EndRule::Hold,
-                })));
-            }
-            if ui.selectable_label(!hold, "extrapolate").clicked() {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
-                    instance: e,
-                    rule: EndRule::Extrapolate,
-                })));
-            }
-        });
+        // §1.6: a single-timestamp instance has no time controls.
+        let timed = !m.time.span.is_single();
+        if timed {
+            ui.horizontal(|ui| {
+                ui.label("offset");
+                if ui
+                    .add(egui::DragValue::new(&mut offset).speed(0.01).suffix(" s"))
+                    .changed()
+                {
+                    out.push(Out::Intent(Intent::Playback(PlaybackCommand::Offset {
+                        instance: e,
+                        offset_s: offset,
+                    })));
+                }
+                let hold = m.time.end_rule == EndRule::Hold;
+                if ui.selectable_label(hold, "hold").clicked() {
+                    out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
+                        instance: e,
+                        rule: EndRule::Hold,
+                    })));
+                }
+                if ui.selectable_label(!hold, "extrapolate").clicked() {
+                    out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
+                        instance: e,
+                        rule: EndRule::Extrapolate,
+                    })));
+                }
+            });
+        }
         // E14's color transform, per channel (Q-218).
         let gain = color.map_or(ColorTransform::IDENTITY.gain, |c| c.0.gain);
         let mut g = gain.to_array();
