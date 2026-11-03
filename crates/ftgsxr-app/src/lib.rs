@@ -37,7 +37,7 @@ pub use intent::{
     CameraCommand, Feature, GizmoMode, Hand, InstanceAction, Intent, OverlayToggle,
     PlaybackCommand, UiCommand, VolumeChannel,
 };
-// §2.1 `ftgsxr_app::library`.
+// §2.1 `ftgsxr_app::library`; Q-173: `LibraryFailure`.
 pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel};
 // §2.1 `ftgsxr_app::playback`.
 pub use playback::Playback;

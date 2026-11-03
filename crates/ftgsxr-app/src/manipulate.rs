@@ -363,7 +363,8 @@ pub(crate) fn now_rfc3339() -> String {
 
 fn rfc3339(secs: u64, nanos: u32) -> String {
     let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
-    // Days since 1970-01-01 to the civil date (the proleptic Gregorian calendar).
+    // Days since 1970-01-01 to the civil date (the proleptic Gregorian calendar): Howard
+    // Hinnant's `civil_from_days`, from general knowledge (source-log rows 48, T275.2).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
