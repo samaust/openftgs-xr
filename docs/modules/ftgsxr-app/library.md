@@ -9,7 +9,7 @@ A private `LibraryPlugin`, added by `AppPlugin` first among the feature plugins,
 - **Threads.** Listings, header reads and HTTP fetches run on the I/O task pool; the CPU part of a load is `SplatLoad` on the compute pool (§2.4 Threads, Q-99). Nothing blocks the frame.
 - **Entries.** One `LibraryEntry` per model a source offers, keyed by the source and the model's reference; its `EntryState` carries every state and failure text the Library tab shows. No toast is raised here: a failure with no entry to carry it (a `LoadRef`, a picked file, a drop, a failed listing) is a `LibraryFailure { name, reference, code, text }` message that `ui` turns into a toast (Q-173, Q-193).
 - **Directories.** A listed subdirectory stays an entry; loading it lists it and puts its entries right after it; a source's `Refresh` relists the root only (Q-192). On a first run the default models directory may not exist: it lists as empty, with no toast, and is not created (Q-216, Q-14).
-- **HTTP.** A model is fetched into the cache, whose size limit `AppPlugin` passes from the settings' `[cache]`; an index entry's soundtrack is downloaded with the model and handed on in `LoadedModel.audio` (#279).
+- **HTTP.** A model is fetched into the cache, whose size limit `AppPlugin` passes from the settings' `[cache]`; an index entry's soundtrack is downloaded with the model and handed on in `LoadedModel.audio` (#279), and its `scene` manifest is downloaded the same way and put on the instance for `ui`'s training cameras, in a crate-private component (#374). Both stay in the cache's in-use set while the instance is loaded; a failed download is logged and the model loads without them.
 
 ## A load's life
 

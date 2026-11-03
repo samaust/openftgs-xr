@@ -14,6 +14,7 @@ use bevy::ecs::lifecycle::Add;
 use bevy::ecs::prelude::*;
 use bevy::gizmos::config::GizmoConfigStore;
 use bevy::gizmos::gizmos::Gizmos;
+use bevy::log::warn;
 use bevy::math::{Mat3, Quat, Vec3};
 use bevy::transform::components::GlobalTransform;
 use ftgsxr_core::{Camera, DMat3, DVec3, Pose, RenderRequest, SceneManifest, read_request};
@@ -22,7 +23,7 @@ use ftgsxr_render::SplatShLimit;
 
 use super::ToastRequest;
 use crate::intent::{Intent, PlaybackCommand};
-use crate::library::{Library, LoadedModel};
+use crate::library::{IndexScene, Library, LoadedModel};
 use crate::manipulate::manifest_beside;
 use crate::rig::{BackgroundOverride, CameraJump};
 
@@ -85,13 +86,33 @@ pub(super) fn build(app: &mut bevy::app::App) {
         );
 }
 
-/// A local model's manifest, as the instance appears (§1.7: "any `*.json` whose `format`
-/// is `ftgs-scene`" in the model's directory). HTTP models' index `scene` is not fetched
-/// (Q-219).
-fn find_manifest(add: On<Add, LoadedModel>, models: Query<&LoadedModel>, mut commands: Commands) {
-    let Ok(m) = models.get(add.entity) else {
+/// The instance's manifest, as it appears (§1.7): the index entry's `scene`, downloaded
+/// with the model, else for a local model "any `*.json` whose `format` is `ftgs-scene`" in
+/// its directory (Q-219). An index manifest that does not read as `ftgs-scene` offers no
+/// cameras.
+fn find_manifest(
+    add: On<Add, LoadedModel>,
+    models: Query<(&LoadedModel, Option<&IndexScene>)>,
+    mut commands: Commands,
+) {
+    let Ok((m, index)) = models.get(add.entity) else {
         return;
     };
+    if let Some(IndexScene(path)) = index {
+        let read = std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| ftgsxr_core::read_scene_manifest(&b).map_err(|e| e.to_string()));
+        match read {
+            Ok(manifest) => {
+                commands.entity(add.entity).try_insert(TrainingCameras {
+                    path: path.clone(),
+                    manifest,
+                });
+            }
+            Err(e) => warn!("the scene manifest {}: {e}", path.display()),
+        }
+        return;
+    }
     let ModelRef::File(p) = &m.source else {
         return;
     };
@@ -152,7 +173,7 @@ fn find_requests(
 /// While a request is open, its background is the view's (`BackgroundOverride`) and its
 /// `sh_degree` the extra drawing cap (`SplatShLimit`); without one, neither is set. The
 /// governor's `SplatTierState` and the settings are never written.
-// Q-229, Q-230, Q-231
+// Q-230, Q-231, Q-232
 fn follow_replay(
     view: Res<TrainingView>,
     mut background: ResMut<BackgroundOverride>,
@@ -440,7 +461,7 @@ mod tests {
         );
     }
 
-    // Q-229, Q-230: from Open to Close (or its replacement), the request's background is
+    // Q-230, Q-231: from Open to Close (or its replacement), the request's background is
     // the override and its degree the extra cap; stepping keeps them, the governor's
     // `SplatTierState` and the settings' background are untouched, and Close clears both.
     #[test]
@@ -524,5 +545,63 @@ mod tests {
             w.resource_mut::<Messages<ToastRequest>>().drain().collect();
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].toast.text, "Camera time unit ms, model s");
+    }
+
+    // §1.7 ("or an index entry names one"), Q-219: an HTTP model whose index entry's
+    // `scene` manifest was downloaded offers that manifest's cameras; without it, none.
+    #[test]
+    fn an_index_scene_offers_its_cameras_to_an_http_model() {
+        let mut app = app();
+        let manifest_path = fixtures_dir().join("checkpoint/scene/scene.json");
+        let want =
+            ftgsxr_core::read_scene_manifest(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        let mut m = model(fixtures_dir().join("probes/P1.safetensors"));
+        m.source = ModelRef::Http(
+            ftgsxr_io::Url::parse("http://127.0.0.1:1/models/P1.safetensors").unwrap(),
+        );
+        let with = app
+            .world_mut()
+            .spawn((
+                IndexScene(manifest_path.clone()),
+                m.clone(),
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        // A downloaded file that is not a `ftgs-scene` manifest (a checkpoint's) offers none.
+        let not_a_scene = app
+            .world_mut()
+            .spawn((
+                IndexScene(fixtures_dir().join("checkpoint/tiny/manifest.json")),
+                m.clone(),
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        let without = app.world_mut().spawn((m, GlobalTransform::IDENTITY)).id();
+        app.update();
+        let tc = app
+            .world()
+            .get::<TrainingCameras>(with)
+            .expect("the index scene's cameras")
+            .clone();
+        assert_eq!(tc.path, manifest_path);
+        assert_eq!(tc.manifest, want);
+        assert!(app.world().get::<TrainingCameras>(not_a_scene).is_none());
+        assert!(app.world().get::<TrainingCameras>(without).is_none());
+        // A jump to one of its cameras moves the fly camera to that camera's center.
+        let (_, camera) = tc.manifest.cameras[0].clone();
+        app.world_mut().write_message(JumpToCamera {
+            instance: with,
+            camera,
+            timestamp: tc.manifest.images[0].timestamp,
+            time_unit: tc.manifest.time_unit.clone(),
+        });
+        app.update();
+        let jumps: Vec<CameraJump> = app
+            .world_mut()
+            .resource_mut::<Messages<CameraJump>>()
+            .drain()
+            .collect();
+        assert_eq!(jumps.len(), 1);
+        assert!(close(jumps[0].pose.translation, camera.center().as_vec3()));
     }
 }
