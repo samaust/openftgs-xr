@@ -214,18 +214,16 @@ pub enum ToastLevel {
 }
 
 /// A toast asked for by any module; ui's rate limit turns it into a `Toast` (§1.13).
-/// Its site, the rate limit's key, is the toast's text unless the request names one.
+/// Its site, the rate limit's key, is the toast's text.
 // Q-208
 #[derive(Message, Clone, Debug, PartialEq)]
 pub(crate) struct ToastRequest {
     pub(crate) toast: Toast,
-    pub(crate) site: Option<&'static str>,
 }
 
 impl ToastRequest {
-    /// A request whose site is its text.
     pub(crate) fn new(toast: Toast) -> ToastRequest {
-        ToastRequest { toast, site: None }
+        ToastRequest { toast }
     }
 
     pub(crate) fn error(text: impl Into<String>) -> ToastRequest {
@@ -240,21 +238,6 @@ impl ToastRequest {
             text: text.into(),
             level: ToastLevel::Warning,
         })
-    }
-
-    /// The same request under a fixed site, for a toast whose text changes from frame to
-    /// frame (the overflow warning's counts).
-    // Q-208
-    pub(crate) fn at(self, site: &'static str) -> ToastRequest {
-        ToastRequest {
-            site: Some(site),
-            ..self
-        }
-    }
-
-    /// The rate limit's key.
-    fn site(&self) -> &str {
-        self.site.unwrap_or(&self.toast.text)
     }
 }
 
@@ -410,11 +393,11 @@ pub(crate) struct Answered {
 /// How long a toast stays on the line, in seconds.
 // Q-208
 const TOAST_SHOWN_S: f64 = 5.0;
-/// The rate limit: one toast per second per site (§1.13 Logs).
+/// The rate limit: one toast of the same text per second (§1.13 Logs).
 // Q-208
 const TOAST_PERIOD_S: f64 = 1.0;
 
-/// The rate limit's last time per site.
+/// The rate limit's last time per text.
 #[derive(Resource, Default)]
 struct ToastLimiter(HashMap<String, f64>);
 
@@ -575,12 +558,8 @@ fn splat_toasts(
 ) {
     {
         match &*event {
-            SplatEvent::Overflow { visible, capacity } => {
-                // Q-208: one site whatever the counts, so a per-frame overflow
-                // shows once a second.
-                out.write(
-                    ToastRequest::warning(overflow_text(*visible, *capacity)).at(OVERFLOW_SITE),
-                );
+            SplatEvent::Overflow { capacity, .. } => {
+                out.write(ToastRequest::warning(overflow_text(*capacity)));
             }
             SplatEvent::Uploaded { entity, bytes: b } => {
                 bytes.0.insert(*entity, *b);
@@ -590,15 +569,12 @@ fn splat_toasts(
     }
 }
 
-/// The overflow toast's rate-limit site.
-// Q-208
-const OVERFLOW_SITE: &str = "overflow";
-
 /// The overflow toast's text.
 // Q-209
-pub(crate) fn overflow_text(_visible: u32, capacity: u32) -> String {
+pub(crate) fn overflow_text(capacity: u32) -> String {
     // C only: under the overflow flag the visible count is clamped to C (§1.4 stage 3,
-    // Q-78), so it would repeat C.
+    // Q-78), so it would repeat C. The text carries no per-frame number because the rate
+    // limit keys on it (Q-208): a per-frame overflow shows once a second.
     format!("Too many primitives: capacity {capacity} reached; some were dropped")
 }
 
@@ -609,8 +585,8 @@ fn triggered_toasts(toast: On<Toast>, mut out: MessageWriter<ToastRequest>) {
     out.write(ToastRequest::new(toast.event().clone()));
 }
 
-/// The rate limit (§1.13: one per second per site, the site being the request's, its text
-/// by default): the requests become `Toast`s, enter the line, and an error plays its sound.
+/// The rate limit (§1.13: one per second per site, the site being the text): the
+/// requests become `Toast`s, enter the line, and an error plays its sound.
 // Q-208
 fn raise_toasts(
     time: Res<Time>,
@@ -624,11 +600,11 @@ fn raise_toasts(
     limiter.0.retain(|_, t| now - *t < TOAST_PERIOD_S);
     state.line.retain(|(_, until)| *until > now);
     for r in requests.read() {
-        if limiter.0.contains_key(r.site()) {
+        let t = &r.toast;
+        if limiter.0.contains_key(&t.text) {
             continue;
         }
-        limiter.0.insert(r.site().to_owned(), now);
-        let t = &r.toast;
+        limiter.0.insert(t.text.clone(), now);
         if t.level == ToastLevel::Error {
             cues.write(UiCue::Error);
         }
