@@ -13,14 +13,13 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
 use ftgsxr_core::{EndRule, LoopMode, PlayState};
 use ftgsxr_io::EntryKind;
-use ftgsxr_render::{Colormap, RenderMode, SplatMode};
+use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransform};
 
 use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel};
 use crate::platform::{PickKind, PlatformRes};
 use crate::playback::Playback;
-use crate::rig::FloorGrid;
 
 /// What the user did this frame.
 enum Out {
@@ -233,7 +232,7 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
                     Tab::Scene => scene_tab(world, ui, out, hv),
                     Tab::Playback => playback_tab(world, ui, out, hv),
                     Tab::Display => display_tab(world, ui, out, hv),
-                    Tab::Environment => environment_tab(world, ui),
+                    Tab::Environment => environment_tab(ui),
                     Tab::Settings => {
                         ui.label("Settings (§1.11)");
                     }
@@ -380,9 +379,11 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         &mut Transform,
         Option<&Visibility>,
         Option<&SplatMode>,
+        Option<&SplatTransform>,
     )>();
     let mut ask = None;
-    for (e, m, mut tf, vis, mode) in q.iter_mut(world) {
+    let mut gains = Vec::new();
+    for (e, m, mut tf, vis, mode, color) in q.iter_mut(world) {
         ui.separator();
         ui.strong(if m.reduced {
             format!("{} (reduced)", m.name)
@@ -488,6 +489,22 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 })));
             }
         });
+        // E14's color transform, per channel (Q-T286.7).
+        let gain = color.map_or(ColorTransform::IDENTITY.gain, |c| c.0.gain);
+        let mut g = gain.to_array();
+        ui.horizontal(|ui| {
+            ui.label("color gain");
+            for v in &mut g {
+                ui.add(egui::DragValue::new(v).range(0.0..=4.0).speed(0.01));
+            }
+            if ui.small_button("reset").clicked() {
+                g = ColorTransform::IDENTITY.gain.to_array();
+            }
+        });
+        let g = bevy::math::Vec3::from_array(g);
+        if g != gain {
+            gains.push((e, g));
+        }
         ui.horizontal(|ui| {
             for (label, action) in [
                 ("Select", InstanceAction::Select),
@@ -507,6 +524,11 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 ask = Some(e);
             }
         });
+    }
+    for (e, gain) in gains {
+        if let Ok(mut ec) = world.get_entity_mut(e) {
+            ec.insert(SplatTransform(ColorTransform { gain }));
+        }
     }
     if let Some(e) = ask {
         world.resource_mut::<UiState>().confirm = Some(Confirm::Unload(e));
@@ -560,13 +582,49 @@ fn playback_tab(
     });
 }
 
-/// Display: the overlays and the tier's knobs; the governor adds its own section.
+/// Display: the selected instances' render mode and the overlays; `persist` adds the
+/// centers' radius and colormap and the background, `governor` the tier's knobs.
 fn display_tab(
     world: &mut World,
     ui: &mut egui::Ui,
     out: &mut Vec<Out>,
     hv: &mut Option<egui::Id>,
 ) {
+    let selected: Vec<Entity> = world
+        .query_filtered::<Entity, (With<LoadedModel>, With<crate::manipulate::Selected>)>()
+        .iter(world)
+        .collect();
+    if !selected.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("selected:");
+            for (label, m) in [
+                ("Splats", RenderMode::Splats),
+                (
+                    "Centers",
+                    RenderMode::Centers {
+                        pixel_radius: 3.0,
+                        colormap: Colormap::Dc,
+                    },
+                ),
+                (
+                    "Both",
+                    RenderMode::Both {
+                        pixel_radius: 3.0,
+                        colormap: Colormap::Dc,
+                    },
+                ),
+            ] {
+                if button(ui, label, out, hv) {
+                    for &e in &selected {
+                        out.push(Out::Intent(Intent::Instance {
+                            instance: e,
+                            action: InstanceAction::SetMode(m),
+                        }));
+                    }
+                }
+            }
+        });
+    }
     ui.horizontal(|ui| {
         for (label, o) in [
             ("Boxes", OverlayToggle::Boxes),
@@ -578,26 +636,11 @@ fn display_tab(
             }
         }
     });
-    let hud = world.resource::<super::HudData>();
-    ui.label(format!(
-        "tier {} · render scale {:.2} · SH ≤ {}",
-        hud.tier, hud.knobs.0, hud.knobs.1
-    ));
 }
 
-/// Environment on the desktop: the grid; passthrough is unavailable.
-fn environment_tab(world: &mut World, ui: &mut egui::Ui) {
-    let mut q = world.query_filtered::<&mut Visibility, With<FloorGrid>>();
-    for mut v in q.iter_mut(world) {
-        let mut on = *v != Visibility::Hidden;
-        if ui.checkbox(&mut on, "Floor grid").changed() {
-            *v = if on {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            };
-        }
-    }
+/// Environment on the desktop: passthrough is unavailable; `persist` adds the
+/// background and the grid (they are settings).
+fn environment_tab(ui: &mut egui::Ui) {
     // Q-161: no passthrough on the desktop; the control is not offered.
     ui.label("Passthrough: not available on the desktop");
 }

@@ -38,7 +38,9 @@ use crate::manipulate::{Poses, now_rfc3339};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, Locomotion, PlayerRig};
-use crate::ui::{SceneLoadConfirmed, ToastRequest};
+use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest};
+
+mod panels;
 
 /// The player's settings in the world (§1.11, §2.1).
 #[derive(Resource, Clone, Debug, Default)]
@@ -203,6 +205,16 @@ pub(crate) struct PersistPlugin {
 
 impl Plugin for PersistPlugin {
     fn build(&self, app: &mut App) {
+        // §1.7 Panels (D-21): the settings' sections of ui's dock.
+        {
+            let mut hooks = app
+                .init_resource::<DockHooks>()
+                .world_mut()
+                .resource_mut::<DockHooks>();
+            hooks.add(Tab::Display, panels::display_section);
+            hooks.add(Tab::Environment, panels::environment_section);
+            hooks.add(Tab::Settings, panels::settings_tables);
+        }
         app.add_message::<PersistCommand>()
             .add_message::<PersistFailure>()
             .add_message::<SceneLoadConfirmed>()
@@ -220,6 +232,7 @@ impl Plugin for PersistPlugin {
                     run_intents,
                     run_commands,
                     sync_settings,
+                    centers_follow_settings,
                     save_settings_debounced,
                     save_poses,
                 )
@@ -1015,6 +1028,33 @@ fn sync_settings(
         }
     }
     *snap = settings.0.clone();
+}
+
+/// An instance switched to centers (the Scene tab, a key) takes `[display]`'s radius and
+/// colormap, as `sync_settings` gives them on a change of the settings (Q-T286.7).
+// Q-T286.7
+fn centers_follow_settings(
+    settings: Res<SettingsRes>,
+    mut modes: Query<&mut SplatMode, Changed<SplatMode>>,
+) {
+    let d = &settings.0.display;
+    let (pixel_radius, colormap) = (d.centers_radius, colormap_of(&d.colormap));
+    for mut m in &mut modes {
+        let next = match m.0 {
+            RenderMode::Centers { .. } => RenderMode::Centers {
+                pixel_radius,
+                colormap,
+            },
+            RenderMode::Both { .. } => RenderMode::Both {
+                pixel_radius,
+                colormap,
+            },
+            other => other,
+        };
+        if m.0 != next {
+            m.0 = next;
+        }
+    }
 }
 
 fn save_to(world: &World) {
