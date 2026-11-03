@@ -28,6 +28,7 @@ use ::bevy::transform::components::GlobalTransform;
 use ftgsxr_core::Pose;
 
 use super::camera::view_camera;
+use super::depth_copy::DepthCopy;
 use super::load::{GpuModels, SplatGpu};
 use super::{
     OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOverlays, SplatStats,
@@ -131,6 +132,8 @@ struct ViewState {
     passes: Arc<SplatPasses>,
     frame: FrameBuffers,
     layer: Option<(wgpu::TextureView, UVec2)>,
+    /// The view's depth copied at the layer's size, below render scale 1 (Q-164).
+    layer_depth: Option<(wgpu::TextureView, UVec2)>,
     view: ViewParams,
     sort_pose: SortPose,
     instances: Vec<Instance>,
@@ -144,6 +147,8 @@ struct ViewState {
 struct Views {
     dev: Option<Arc<SplatDevice>>,
     passes: HashMap<(TextureFormat, bool), Arc<SplatPasses>>,
+    /// The depth copy's pipeline (Q-164), made on first use.
+    depth_copy: Option<Arc<DepthCopy>>,
     states: HashMap<Entity, ViewState>,
     /// What was warned about once: (render entity, reason).
     warned: HashSet<(Entity, &'static str)>,
@@ -378,18 +383,10 @@ fn prepare_view(
     }
     // §1.12, §1.7 Window: the render scale sizes the splat layer only (`LinearOver`);
     // `FileEncoded` draws into the view target, at its size.
-    // Q-164: the layer's draw tests the view's depth, which has the view's size, and a
-    // pass's attachments share one size, so until the depth at the layer's size exists a
-    // scaled layer keeps the view's size.
-    let draw_size = size;
-    if matches!(camera.output, OutputSpace::LinearOver { .. })
-        && layer_size(size, render_scale) != draw_size
-    {
-        views.warn_once(
-            entity,
-            "a render scale below 1 is not applied to the layer yet; the depth at the layer's size is not built (Q-164)",
-        );
-    }
+    let draw_size = match camera.output {
+        OutputSpace::FileEncoded => size,
+        OutputSpace::LinearOver { .. } => layer_size(size, render_scale),
+    };
     let layer_format = match camera.output {
         OutputSpace::FileEncoded => {
             if let Some(warning) = file_encoded_rule(view.target_format)? {
@@ -457,6 +454,7 @@ fn prepare_view(
             passes: Arc::clone(&passes),
             frame: FrameBuffers::new(dev, &view_tier, c),
             layer: None,
+            layer_depth: None,
             view: params,
             sort_pose: sort_pose(&core_camera),
             instances: Vec::new(),
@@ -495,6 +493,37 @@ fn prepare_view(
             texture.create_view(&wgpu::TextureViewDescriptor::default()),
             draw_size,
         ));
+    }
+    // Q-164: a layer smaller than the view is drawn against the view's depth copied at
+    // its size, since a pass's attachments share one size.
+    if state.layer.is_none() || draw_size == size {
+        state.layer_depth = None;
+    } else if state
+        .layer_depth
+        .as_ref()
+        .is_none_or(|(_, s)| *s != draw_size)
+    {
+        let texture = dev.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("ftgsxr splat layer depth"),
+            size: wgpu::Extent3d {
+                width: draw_size.x,
+                height: draw_size.y,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: CORE_3D_DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        state.layer_depth = Some((
+            texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            draw_size,
+        ));
+    }
+    if state.layer_depth.is_some() && views.depth_copy.is_none() {
+        views.depth_copy = Some(Arc::new(DepthCopy::new(dev.device(), CORE_3D_DEPTH_FORMAT)));
     }
     views.states.insert(entity, state);
     Ok(())
@@ -573,6 +602,29 @@ fn draw_node(
                 .encode_draw(pass.wgpu_pass(), frame, &state.view, None);
         }
         (OutputSpace::LinearOver { background }, Some((layer, _))) => {
+            // Q-164: below render scale 1, the view's depth at the layer's size first.
+            let layer_depth = match (&state.layer_depth, &views.depth_copy) {
+                (Some((target, s)), Some(copy)) => {
+                    if let Some(dev) = &views.dev {
+                        copy.encode(
+                            dev.device(),
+                            ctx.command_encoder(),
+                            depth.view(),
+                            target,
+                            [s.x, s.y],
+                        );
+                    }
+                    Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: target,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    })
+                }
+                _ => depth_attachment,
+            };
             {
                 let color = [Some(wgpu::RenderPassColorAttachment {
                     view: layer,
@@ -586,7 +638,7 @@ fn draw_node(
                 let mut pass = ctx.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
                     label: Some("ftgsxr splats"),
                     color_attachments: &color,
-                    depth_stencil_attachment: depth_attachment,
+                    depth_stencil_attachment: layer_depth,
                     timestamp_writes,
                     occlusion_query_set: None,
                     multiview_mask: None,
