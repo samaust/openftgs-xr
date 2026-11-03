@@ -32,7 +32,7 @@ pub use intent::{
     PlaybackCommand, UiCommand, VolumeChannel,
 };
 // §2.1 `ftgsxr_app::library`.
-pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LoadedModel};
+pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel};
 // §2.1 `ftgsxr_app::playback`.
 pub use playback::Playback;
 // §2.1 `ftgsxr_app::audio`; Q-149, Q-187: the output port, its sinks and the stub.
