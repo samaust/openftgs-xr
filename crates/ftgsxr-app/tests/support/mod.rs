@@ -5,8 +5,8 @@
 //! plugins, `AppPlugin` with a stub `Platform`), the fixture server, frames advanced
 //! under a controlled `Time`; its `gpu_` variant adds `RenderPlugin` and the camera and
 //! pipeline plugins, as the adapter's own tests do (`gpu_` tests hold Q-105's layer
-//! guard). Each test file includes it with `mod support;`. Later tickets add the stub
-//! audio output and the toasts' drain as their modules arrive.
+//! guard). Each test file includes it with `mod support;`. The app runs on
+//! `StubAudioOutput` (#281); later tickets add the toasts' drain as their modules arrive.
 
 #![allow(dead_code)]
 
@@ -24,8 +24,8 @@ use bevy::input::InputPlugin;
 use bevy::time::TimeUpdateStrategy;
 use bevy::transform::TransformPlugin;
 use ftgsxr_app::{
-    AppPaths, AppPlugin, CameraFrames, DocumentProvider, ModelRef, Permission, PermissionHandle,
-    PickHandle, PickKind, Platform, QualityTier,
+    AppPaths, AppPlugin, AudioOutputRes, CameraFrames, DocumentProvider, ModelRef, Permission,
+    PermissionHandle, PickHandle, PickKind, Platform, QualityTier, StubAudioOutput,
 };
 use ftgsxr_testkit::{LocalServer, scratch_dir, serve_fixtures};
 
@@ -140,6 +140,8 @@ pub struct TestApp {
     pub dir: PathBuf,
     /// The fixture server (`serve_fixtures`).
     pub server: LocalServer,
+    /// The audio output (#281), inserted before `before` runs, which may replace it.
+    pub audio: Arc<StubAudioOutput>,
 }
 
 /// What a test sets before `AppPlugin` builds.
@@ -215,6 +217,8 @@ impl TestApp {
             add_render(&mut app);
         }
         app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
+        let audio = Arc::new(StubAudioOutput::new());
+        app.insert_resource(AudioOutputRes(audio.clone()));
         before(&mut app);
         app.add_plugins(AppPlugin {
             platform: platform.clone(),
@@ -232,6 +236,7 @@ impl TestApp {
             platform,
             dir,
             server: serve_fixtures(),
+            audio,
         }
     }
 

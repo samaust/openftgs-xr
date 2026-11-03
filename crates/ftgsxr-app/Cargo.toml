@@ -40,3 +40,7 @@ serde_json.workspace = true # Q-104
 # (API level 21 by default) cannot find.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 bevy_kira_audio = { workspace = true, features = ["ogg", "wav", "flac", "mp3"] }
+# Q-T281.1: the adapter drives kira (§2.3's row under bevy_kira_audio, at its pin) itself, since
+# bevy_kira_audio keeps its `AudioManager` crate-private and only logs a missing device;
+# bevy_kira_audio's features above choose kira's decoders.
+kira.workspace = true # Q-T281.1
