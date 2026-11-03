@@ -18,14 +18,14 @@ use ::bevy::render::render_resource::TextureUsages;
 use ::bevy::render::renderer::{RenderAdapter, RenderAdapterInfo, RenderDevice, RenderQueue};
 use ::bevy::render::view::Msaa;
 use ::bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
-use ftgsxr_core::ModelKind;
+use ftgsxr_core::{HalfFields, ModelKind};
 use ftgsxr_io::ModelBytes;
 
 use super::{SplatAsset, SplatCamera, SplatEvent, SplatModel, SplatTierState, load_splat_asset};
 use crate::gpu::device::{BudgetSource, MemoryBudget, SplatDevice, largest_device_local_heap};
 use crate::gpu::model::ModelUpload;
 use crate::gpu::tier::DESKTOP_FALLBACK_BUDGET;
-use crate::gpu::{GpuModel, RenderError};
+use crate::gpu::{GpuModel, QualityTier, RenderError};
 
 /// The bytes uploaded per frame at most (§1.5, §2.4 rule 1: "at most 64 MB"), in MB of
 /// 10⁶ bytes as §1.15's texts count them (Q-74).
@@ -46,9 +46,14 @@ pub struct SplatLoad {
     pub reduce_to: Option<usize>,
 }
 
-/// A load in progress on the async compute task pool.
+/// A load in progress on the async compute task pool, with the half-precision fields
+/// it packs with; the task hands its `SplatLoad` back, so a load the tier changed under
+/// starts again (Q-230).
 #[derive(Component)]
-pub(crate) struct LoadTask(Task<Result<SplatAsset, RenderError>>);
+pub(crate) struct LoadTask {
+    task: Task<(SplatLoad, Result<SplatAsset, RenderError>)>,
+    half: HalfFields,
+}
 
 /// The device the passes run on: Bevy's, with the memory budget (Q-66, Q-86), present
 /// once the renderer exists. Public for the library's reduce-to-budget count (Q-158)
@@ -110,8 +115,10 @@ fn budget(tier_bytes: u64, adapter: Option<&wgpu::Adapter>) -> MemoryBudget {
     MemoryBudget::desktop(adapter.and_then(largest_device_local_heap))
 }
 
-/// Makes the `SplatDevice` from Bevy's device once the renderer exists, and again when
-/// Bevy re-creates it; models of an old device are uploaded again.
+/// Makes the `SplatDevice` from Bevy's device once the renderer exists, again when
+/// Bevy re-creates it, and again on a change of the running tier, with its budget (Q-230:
+/// the views' passes and frame buffers follow the new device); models of an old device
+/// are uploaded again.
 #[expect(
     clippy::too_many_arguments,
     reason = "a Bevy system: one parameter per resource it reads"
@@ -126,13 +133,17 @@ pub(crate) fn ensure_device(
     tier: Res<SplatTierState>,
     mut models: ResMut<GpuModels>,
     reported: Query<Entity, With<Reported>>,
+    mut made_for: Local<Option<QualityTier>>,
 ) {
     let (Some(device), Some(queue), Some(info)) = (device, queue, info) else {
         return;
     };
-    if gpu.is_some() && !device.is_changed() {
+    // Q-230
+    let same_tier = made_for.as_ref() == Some(&tier.tier);
+    if gpu.is_some() && !device.is_changed() && same_tier {
         return;
     }
+    *made_for = Some(tier.tier.clone());
     let budget = budget(
         tier.tier.memory_budget_bytes,
         adapter.as_ref().map(|a| &**a.0),
@@ -221,26 +232,35 @@ pub(crate) fn start_loads(
             let Some(load) = world.entity_mut(entity).take::<SplatLoad>() else {
                 return;
             };
+            let half = opts.half;
             let task = AsyncComputeTaskPool::get().spawn(async move {
-                load_splat_asset(&load.bytes, load.kind_hint, &opts, load.reduce_to)
+                let result = load_splat_asset(&load.bytes, load.kind_hint, &opts, load.reduce_to);
+                (load, result)
             });
-            world.entity_mut(entity).insert(LoadTask(task));
+            world.entity_mut(entity).insert(LoadTask { task, half });
         });
     }
 }
 
-/// Adds each finished load's asset and its `SplatModel`, or reports its failure.
+/// Adds each finished load's asset and its `SplatModel`, or reports its failure; a load
+/// packed with other half-precision fields than the running tier's starts again (Q-230).
 pub(crate) fn finish_loads(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut LoadTask)>,
     mut assets: ResMut<Assets<SplatAsset>>,
+    tier: Res<SplatTierState>,
 ) {
     for (entity, mut task) in &mut tasks {
-        let Some(result) = check_ready(&mut task.0) else {
+        let Some((load, result)) = check_ready(&mut task.task) else {
             continue;
         };
         let mut e = commands.entity(entity);
         e.remove::<LoadTask>();
+        // Q-230
+        if task.half != tier.tier.layout.half {
+            e.insert(load);
+            continue;
+        }
         match result {
             Ok(asset) => {
                 e.insert(SplatModel(assets.add(asset)));
@@ -266,6 +286,7 @@ pub(crate) fn upload_models(
     assets: Res<Assets<SplatAsset>>,
     mut events: MessageReader<AssetEvent<SplatAsset>>,
     instances: Query<(Entity, &SplatModel, Option<&Reported>)>,
+    tier: Res<SplatTierState>,
 ) {
     for event in events.read() {
         match *event {
@@ -290,6 +311,11 @@ pub(crate) fn upload_models(
             continue;
         };
         let p = &asset.packed;
+        // Q-230: a model packed for another tier never meets the running tier's passes;
+        // the app reloads it.
+        if p.arrays.half != tier.tier.layout.half {
+            continue;
+        }
         match ModelUpload::begin(
             dev,
             Arc::clone(&p.arrays),

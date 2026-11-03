@@ -123,3 +123,75 @@ fn live_tier_switch_keeps_the_instance() {
     let mut q = t.app.world_mut().query::<&ftgsxr_app::LoadedModel>();
     assert_eq!(q.iter(t.app.world()).count(), 1, "one instance, not two");
 }
+
+/// Every `SplatEvent` the app raises, in order.
+fn record_events(app: &mut App) -> std::sync::Arc<std::sync::Mutex<Vec<ftgsxr_app::SplatEvent>>> {
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = events.clone();
+    app.add_observer(move |e: On<ftgsxr_app::SplatEvent>| {
+        seen.lock().unwrap().push(e.event().clone());
+    });
+    events
+}
+
+/// The bytes of each `Uploaded` of `entity`, in order.
+fn uploads(events: &std::sync::Mutex<Vec<ftgsxr_app::SplatEvent>>, entity: Entity) -> Vec<u64> {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            ftgsxr_app::SplatEvent::Uploaded { entity: x, bytes } if *x == entity => Some(*bytes),
+            _ => None,
+        })
+        .collect()
+}
+
+// Q-229, Q-230: the reload is packed with the new tier's layout.
+#[test]
+#[ignore = "gpu"]
+fn gpu_live_tier_switch_reloads_with_the_new_layout() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+    let mut t = TestApp::gpu("live_layout");
+    let events = record_events(&mut t.app);
+    let e = load_p2(&mut t);
+    assert!(
+        t.until_for(std::time::Duration::from_secs(30), |_| !uploads(&events, e)
+            .is_empty()),
+        "the first upload"
+    );
+    let info = t
+        .app
+        .world()
+        .get::<ftgsxr_app::LoadedModel>(e)
+        .unwrap()
+        .info
+        .clone();
+    let (n, l) = (info.n, u64::from(info.sh_degree));
+    // §1.12 Memory: float32 storage 64 + 12 (L+1)² bytes per primitive (`desktop`, cap 3).
+    let l3 = l.min(3);
+    assert_eq!(
+        uploads(&events, e),
+        vec![n * (64 + 12 * (l3 + 1) * (l3 + 1))]
+    );
+    // A hidden instance stays hidden through the reload (Q-229).
+    t.app.world_mut().entity_mut(e).insert(Visibility::Hidden);
+    pick(&mut t.app, "quest-balanced");
+    assert!(
+        t.until_for(std::time::Duration::from_secs(30), |_| uploads(&events, e)
+            .len()
+            == 2),
+        "the reload's upload"
+    );
+    // §1.12: `quest-balanced` stores velocity, scale, rotation, opacity and sh in half
+    // precision, 42 + 6 (L+1)² bytes per primitive, with its SH cap 2.
+    let l2 = l.min(2);
+    assert_eq!(uploads(&events, e)[1], n * (42 + 6 * (l2 + 1) * (l2 + 1)));
+    let w = t.app.world();
+    assert_eq!(*w.get::<Visibility>(e).unwrap(), Visibility::Hidden);
+    let gpu = w.resource::<ftgsxr_render::SplatGpu>().device();
+    assert_eq!(gpu.model_bytes_in_use(), uploads(&events, e)[1]);
+    // §1.12: the new tier's memory budget, 1.5 GiB on a Quest tier.
+    assert_eq!(gpu.memory_budget().bytes, 1_610_612_736);
+    assert!(t.settle_pipelines());
+}

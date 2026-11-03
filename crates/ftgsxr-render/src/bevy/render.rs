@@ -86,7 +86,8 @@ pub(crate) fn publish_stats(
     }
 }
 
-/// The plugin's tier, in the render world.
+/// The running tier, in the render world: the plugin's at first, then `SplatTierState.tier`
+/// as extracted (Q-230).
 #[derive(Resource)]
 struct RenderTier(QualityTier);
 
@@ -115,6 +116,8 @@ struct Extracted {
     orders: HashMap<Entity, isize>,
     /// The governor's render scale (§1.12, E16).
     render_scale: f32,
+    /// The running tier (Q-230).
+    tier: Option<QualityTier>,
 }
 
 /// What stages 1–4 depend on (§1.4): when it equals the previous frame's, they are
@@ -232,6 +235,8 @@ fn extract(
     cameras: Extract<Query<(&RenderEntity, &SplatCamera, Option<&::bevy::camera::Camera>)>>,
 ) {
     out.dev = gpu.as_ref().map(|g| Arc::clone(&g.0));
+    // Q-230: the running tier; the device made for it resets the views.
+    out.tier = Some(tier_state.tier.clone());
     let sh_cap = tier_state.sh_cap;
     out.render_scale = tier_state.render_scale;
     let mut found: Vec<(Entity, Instance)> = instances
@@ -270,14 +275,19 @@ fn extract(
 /// run this frame.
 fn prepare_views(
     extracted: Res<Extracted>,
-    tier: Res<RenderTier>,
+    mut tier: ResMut<RenderTier>,
     mut views: ResMut<Views>,
     cameras: Query<(&ExtractedView, &ExtractedCamera, Option<&Msaa>)>,
 ) {
     let Some(dev) = extracted.dev.clone() else {
         return;
     };
-    if views.dev.as_ref().is_none_or(|d| !Arc::ptr_eq(d, &dev)) {
+    // Q-230: a new tier takes new passes and frame buffers.
+    let new_tier = extracted.tier.as_ref().is_some_and(|t| *t != tier.0);
+    if new_tier {
+        tier.0 = extracted.tier.clone().expect("invariant: checked above");
+    }
+    if new_tier || views.dev.as_ref().is_none_or(|d| !Arc::ptr_eq(d, &dev)) {
         // A new device: everything made on the old one goes.
         *views = Views {
             dev: Some(Arc::clone(&dev)),
