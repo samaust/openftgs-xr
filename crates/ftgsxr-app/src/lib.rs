@@ -9,9 +9,11 @@
 
 pub mod audio;
 mod desktop_log;
+pub mod governor;
 pub mod headless;
 pub mod intent;
 pub mod library;
+pub mod manipulate;
 pub mod persist;
 pub mod platform;
 pub mod playback;
@@ -22,6 +24,8 @@ pub use headless::{
     BenchReport, HeadlessError, cmd_bench, cmd_export, cmd_import, cmd_info, cmd_render,
     cmd_validate, exit_code,
 };
+// §2.1 `ftgsxr_app::governor`; Q-153, Q-178: the knobs, the ladders and the pure step.
+pub use governor::{DESKTOP_LADDER, Governor, GovernorCounters, HEADSET_LADDER, Knob, govern};
 // §2.1 `ftgsxr_app::intent`.
 pub use intent::{
     CameraCommand, Feature, GizmoMode, Hand, InstanceAction, Intent, OverlayToggle,
@@ -36,6 +40,8 @@ pub use audio::{
     AudioOutput, AudioOutputRes, AudioState, PlayUiSound, SinkId, Soundtrack, StubAudioOutput,
     StubSink, UiSound,
 };
+// §2.1 `ftgsxr_app::manipulate`.
+pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick_instance};
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
 pub use persist::{SettingsPath, SettingsRes};
 // §2.1 `ftgsxr_app::platform`.
