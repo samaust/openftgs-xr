@@ -146,6 +146,14 @@ pub struct SplatTierState {
     pub foveation: Foveation,
 }
 
+/// An extra SH degree cap on drawing, besides the governor's (Q-231): while a render
+/// request is replayed, its `sh_degree` (§1.7, openftgs §2.2). Every instance is drawn at
+/// the smallest of its loaded degree, `SplatTierState::sh_cap` and this; `None` adds no
+/// cap. Loads never read it, so clearing it draws the loaded degree again.
+// Q-231
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SplatShLimit(pub Option<u8>);
+
 /// What the plugin reports (§1.5, §1.13), triggered for observers.
 #[derive(Event, Clone, Debug, PartialEq)]
 pub enum SplatEvent {
@@ -198,6 +206,7 @@ impl Plugin for SplatPlugin {
         app.init_asset::<SplatAsset>()
             .insert_resource(SplatTierState::of(&self.tier))
             .init_resource::<SplatStats>()
+            .init_resource::<SplatShLimit>()
             .init_resource::<load::GpuModels>()
             .init_resource::<render::StatsInbox>()
             .add_observer(load::make_camera_follow_d6)
