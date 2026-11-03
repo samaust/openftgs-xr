@@ -4,7 +4,7 @@
 //! `AppExit` while render pipelines are queued or compiling, until a render frame after
 //! it reports none, at most Q-233's 2 s; then lets it through with the code it had, and
 //! the settings are saved at that exit, not before. An exit the window's close action
-//! writes (bevy's `ExitSystems`, in `Last`) is held the same way. An exit with nothing
+//! writes (bevy's `exit_on_all_closed`, in `Last`'s `ExitSystems`) is held the same way. An exit with nothing
 //! compiling passes within the frame after it.
 
 mod support;
@@ -12,9 +12,8 @@ mod support;
 use std::time::{Duration, Instant};
 
 use bevy::app::{AppExit, Last};
-use bevy::ecs::message::MessageWriter;
 use bevy::ecs::prelude::{IntoScheduleConfigs, Res, Resource};
-use bevy::window::ExitSystems;
+use bevy::window::{ExitSystems, exit_on_all_closed};
 use support::TestApp;
 
 /// Q-233's cap, and the slack a loaded machine may add to it.
@@ -74,15 +73,13 @@ fn gpu_an_exit_while_pipelines_compile_waits_for_them() {
     assert!(settings.exists(), "saved at the released exit");
 }
 
-/// Whether the window-side writer sends its exit this frame.
+/// Whether bevy's `exit_on_all_closed` runs this frame (the gpu app has no window, so
+/// it would exit from the first frame).
 #[derive(Resource)]
 struct CloseNow(bool);
 
-/// Stands in for bevy's `exit_on_all_closed`: an exit written inside `ExitSystems`.
-fn write_like_the_window(now: Res<CloseNow>, mut out: MessageWriter<AppExit>) {
-    if now.0 {
-        out.write(AppExit::Success);
-    }
+fn close_now(now: Res<CloseNow>) -> bool {
+    now.0
 }
 
 #[test]
@@ -90,9 +87,10 @@ fn write_like_the_window(now: Res<CloseNow>, mut out: MessageWriter<AppExit>) {
 fn gpu_an_exit_from_the_window_systems_waits_too() {
     let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let mut t = TestApp::gpu("gpu-exit-wait-window");
-    t.app
-        .insert_resource(CloseNow(false))
-        .add_systems(Last, write_like_the_window.in_set(ExitSystems));
+    t.app.insert_resource(CloseNow(false)).add_systems(
+        Last,
+        exit_on_all_closed.run_if(close_now).in_set(ExitSystems),
+    );
     assert!(
         until_compiling(&mut t),
         "a pipeline compiles in the first frames (bevy's multi_threaded)"

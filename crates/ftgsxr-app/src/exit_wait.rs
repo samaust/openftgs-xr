@@ -5,9 +5,12 @@
 //! async compute pool; a process that exits while one compiles leaves the worker inside
 //! the GPU driver, whose exit-time teardown can crash it. On an `AppExit` the app holds the
 //! exit until a render frame that ran after it reports no pipeline queued or compiling, at
-//! most `CAP` of wall time, then lets it through. The hold runs in `Last` after bevy's
-//! `ExitSystems` (the window's close action writes its exit there) and before the settings'
-//! save at exit, so the save sees the exit once, when it passes.
+//! most `CAP` of wall time, then lets it through. The hold runs in `Last`, in bevy's
+//! `ExitSystems` after the systems that write the window's exit there, so that exit is held
+//! too; still inside the set, so before bevy_winit's `despawn_windows`, which drops every
+//! window once it sees an exit (dropped while the frames go on, they hang the render
+//! thread); and before the settings' save at exit, so the save sees the exit once, when it
+//! passes.
 //!
 //! With pipelined rendering the render world lives on its own thread, so its report
 //! reaches the main world through a handle both worlds hold. A compile first queued in the
@@ -23,7 +26,7 @@ use bevy::ecs::prelude::{IntoScheduleConfigs, Local, Res, Resource, World};
 use bevy::log::warn;
 use bevy::render::render_resource::{CachedPipelineState, PipelineCache, PipelineDescriptor};
 use bevy::render::{Render, RenderApp, RenderSystems};
-use bevy::window::ExitSystems;
+use bevy::window::{ExitSystems, exit_on_all_closed, exit_on_primary_closed};
 
 /// Q-233: the longest an exit waits for in-flight compiles.
 // Q-233
@@ -62,7 +65,9 @@ pub(crate) fn add(app: &mut App) {
     app.insert_resource(shared).add_systems(
         Last,
         hold_exit
-            .after(ExitSystems)
+            .in_set(ExitSystems)
+            .after(exit_on_all_closed)
+            .after(exit_on_primary_closed)
             .before(crate::persist::save_at_exit),
     );
 }
@@ -113,7 +118,8 @@ struct Held {
     released: bool,
 }
 
-/// Main world, in `Last` after `ExitSystems` and before the settings' save at exit: holds a new `AppExit` (taking
+/// Main world, in `Last`'s `ExitSystems` after the window's exit systems, before the
+/// settings' save at exit: holds a new `AppExit` (taking
 /// it out of the messages, so neither the save nor the runner sees it) until a render
 /// frame after it reports nothing pending, or `CAP` passes; then writes it back.
 fn hold_exit(world: &mut World, mut cursor: Local<MessageCursor<AppExit>>, mut held: Local<Held>) {
