@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod audio;
 mod desktop_log;
 pub mod governor;
 pub mod headless;
@@ -35,6 +36,11 @@ pub use intent::{
 pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LoadedModel};
 // §2.1 `ftgsxr_app::playback`.
 pub use playback::Playback;
+// §2.1 `ftgsxr_app::audio`; Q-149, Q-187: the output port, its sinks and the stub.
+pub use audio::{
+    AudioOutput, AudioOutputRes, AudioState, PlayUiSound, SinkId, Soundtrack, StubAudioOutput,
+    StubSink, UiSound,
+};
 // §2.1 `ftgsxr_app::manipulate`.
 pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick_instance};
 // §2.1 `ftgsxr_app::rig`.

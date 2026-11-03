@@ -2517,6 +2517,7 @@ dependencies = [
  "ftgsxr-render",
  "ftgsxr-testkit",
  "image",
+ "kira",
  "serde_json",
  "tracing-subscriber",
 ]
