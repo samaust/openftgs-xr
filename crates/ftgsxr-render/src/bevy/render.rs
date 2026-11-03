@@ -31,8 +31,8 @@ use super::camera::view_camera;
 use super::depth_copy::DepthCopy;
 use super::load::{GpuModels, SplatGpu};
 use super::{
-    OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOverlays, SplatStats,
-    SplatTierState, SplatTime, SplatTransform,
+    OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOverlays, SplatShLimit,
+    SplatStats, SplatTierState, SplatTime, SplatTransform,
 };
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::sort_pose;
@@ -197,6 +197,13 @@ pub(crate) fn finish(render_app: &mut SubApp) {
     );
 }
 
+/// The degree an instance is drawn at: the smallest of its loaded degree, the governor's
+/// cap (E16) and a replayed request's limit (Q-235), `None` adding no cap.
+// Q-233
+fn drawn_degree(loaded: u8, governor_cap: u8, limit: Option<u8>) -> u8 {
+    loaded.min(governor_cap).min(limit.unwrap_or(u8::MAX))
+}
+
 /// P_m from the instance's global transform (E5): translation, rotation and the x scale
 /// as the uniform s_m (Q-99).
 fn pose_of(t: &GlobalTransform) -> Pose {
@@ -229,10 +236,12 @@ fn extract(
     models: Extract<Res<GpuModels>>,
     instances: Extract<InstanceQuery>,
     tier_state: Extract<Res<SplatTierState>>,
+    sh_limit: Extract<Option<Res<SplatShLimit>>>,
     cameras: Extract<Query<(&RenderEntity, &SplatCamera, Option<&::bevy::camera::Camera>)>>,
 ) {
     out.dev = gpu.as_ref().map(|g| Arc::clone(&g.0));
     let sh_cap = tier_state.sh_cap;
+    let sh_limit = sh_limit.as_deref().and_then(|l| l.0);
     out.render_scale = tier_state.render_scale;
     let mut found: Vec<(Entity, Instance)> = instances
         .iter()
@@ -245,7 +254,7 @@ fn extract(
                     entity,
                     Instance {
                         model: Arc::clone(gpu_model),
-                        sh_degree: gpu_model.sh_degree.min(sh_cap),
+                        sh_degree: drawn_degree(gpu_model.sh_degree, sh_cap, sh_limit),
                         pose: pose_of(transform),
                         // Q-99: without a time, the model's τ₀.
                         tau: time.map_or(gpu_model.tau0, |t| t.tau),
@@ -692,6 +701,18 @@ fn poll_stats(views: Res<Views>, extracted: Res<Extracted>, inbox: Res<StatsInbo
 mod tests {
     use super::*;
 
+    // Q-233, Q-235: an instance is drawn at the smallest of its loaded degree L, the
+    // governor's cap and a replayed request's limit; no limit imposes none, and a limit
+    // above L keeps L.
+    #[test]
+    fn drawn_degree_is_the_smallest_cap() {
+        assert_eq!(drawn_degree(3, 3, None), 3);
+        assert_eq!(drawn_degree(3, 3, Some(1)), 1);
+        assert_eq!(drawn_degree(3, 1, Some(2)), 1);
+        assert_eq!(drawn_degree(2, 3, Some(3)), 2);
+        assert_eq!(drawn_degree(1, 3, None), 1);
+        assert_eq!(drawn_degree(3, 2, Some(0)), 0);
+    }
     #[test]
     fn layer_size_is_the_scale_times_the_views_size_rounded_at_least_one_pixel() {
         assert_eq!(

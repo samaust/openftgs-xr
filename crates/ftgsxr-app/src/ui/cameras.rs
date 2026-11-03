@@ -19,12 +19,13 @@ use bevy::math::{Mat3, Quat, Vec3};
 use bevy::transform::components::GlobalTransform;
 use ftgsxr_core::{Camera, DMat3, DVec3, Pose, RenderRequest, SceneManifest, read_request};
 use ftgsxr_io::ModelRef;
+use ftgsxr_render::SplatShLimit;
 
 use super::ToastRequest;
 use crate::intent::{Intent, PlaybackCommand};
 use crate::library::{IndexScene, Library, LoadedModel};
 use crate::manipulate::manifest_beside;
-use crate::rig::CameraJump;
+use crate::rig::{BackgroundOverride, CameraJump};
 
 /// The `ftgs-scene` manifest found beside an instance's model (§1.7), with its path.
 // Q-219
@@ -69,11 +70,15 @@ pub(super) fn build(app: &mut bevy::app::App) {
     app.add_message::<JumpToCamera>()
         .add_message::<CameraJump>()
         .init_resource::<TrainingView>()
+        // `SplatPlugin` and `RigPlugin` init them too; an app without them still runs.
+        .init_resource::<BackgroundOverride>()
+        .init_resource::<SplatShLimit>()
         .add_observer(find_manifest)
         .add_systems(
             Update,
             (
                 find_requests,
+                follow_replay,
                 run_jumps,
                 frustums.run_if(resource_exists::<GizmoConfigStore>),
             )
@@ -162,6 +167,26 @@ fn find_requests(
     *scanned = Some(dirs);
     if view.requests != found {
         view.requests = found;
+    }
+}
+
+/// While a request is open, its background is the view's (`BackgroundOverride`) and its
+/// `sh_degree` the extra drawing cap (`SplatShLimit`); without one, neither is set. The
+/// governor's `SplatTierState` and the settings are never written.
+// Q-233, Q-234, Q-235
+fn follow_replay(
+    view: Res<TrainingView>,
+    mut background: ResMut<BackgroundOverride>,
+    mut limit: ResMut<SplatShLimit>,
+) {
+    let request = view.replay.as_ref().map(|r| &r.request);
+    let want_background = request.map(|q| q.background);
+    let want_limit = request.and_then(|q| q.sh_degree);
+    if background.0 != want_background {
+        background.0 = want_background;
+    }
+    if limit.0 != want_limit {
+        limit.0 = want_limit;
     }
 }
 
@@ -435,6 +460,59 @@ mod tests {
                 Intent::Playback(PlaybackCommand::Seek(t))
             ]
         );
+    }
+
+    // Q-233, Q-234: from Open to Close (or its replacement), the request's background is
+    // the override and its degree the extra cap; stepping keeps them, the governor's
+    // `SplatTierState` and the settings' background are untouched, and Close clears both.
+    #[test]
+    fn follow_replay_sets_the_overrides_while_a_request_is_open() {
+        use ftgsxr_render::{Foveation, QualityTier, SortMode, SplatTierState};
+        let mut app = App::new();
+        let governor = SplatTierState {
+            tier: QualityTier::desktop(),
+            render_scale: 1.0,
+            sh_cap: 2,
+            sort_mode: SortMode::PerView,
+            foveation: Foveation::Off,
+        };
+        app.init_resource::<TrainingView>()
+            .init_resource::<BackgroundOverride>()
+            .init_resource::<SplatShLimit>()
+            .insert_resource(governor.clone())
+            .add_systems(bevy::app::Update, follow_replay);
+        let overrides = |app: &App| {
+            (
+                app.world().resource::<BackgroundOverride>().0,
+                app.world().resource::<SplatShLimit>().0,
+            )
+        };
+        app.update();
+        assert_eq!(overrides(&app), (None, None));
+        let mut replay = open_request(&fixtures_dir().join("probes/P1.request.json")).unwrap();
+        assert!(replay.request.items.len() > 1);
+        replay.request.background = [0.2, 0.3, 0.4];
+        replay.request.sh_degree = Some(1);
+        app.world_mut().resource_mut::<TrainingView>().replay = Some(replay);
+        app.update();
+        assert_eq!(overrides(&app), (Some([0.2, 0.3, 0.4]), Some(1)));
+        app.world_mut()
+            .resource_mut::<TrainingView>()
+            .replay
+            .as_mut()
+            .unwrap()
+            .item = 1;
+        app.update();
+        assert_eq!(overrides(&app), (Some([0.2, 0.3, 0.4]), Some(1)));
+        // Another request in its place: P1's own, black and of the model's degree.
+        let other = open_request(&fixtures_dir().join("probes/P1.request.json")).unwrap();
+        app.world_mut().resource_mut::<TrainingView>().replay = Some(other);
+        app.update();
+        assert_eq!(overrides(&app), (Some([0.0, 0.0, 0.0]), None));
+        app.world_mut().resource_mut::<TrainingView>().replay = None;
+        app.update();
+        assert_eq!(overrides(&app), (None, None));
+        assert_eq!(*app.world().resource::<SplatTierState>(), governor);
     }
 
     // Q-219: a camera of another time unit is refused with a warning.
