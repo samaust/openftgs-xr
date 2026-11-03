@@ -10,7 +10,7 @@ use bevy::app::{App, Plugin, Update};
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
 use bevy::time::Time;
-use ftgsxr_core::{Clock, LoopMode, Model, PlayState};
+use ftgsxr_core::{Clock, LoopMode, PlayState};
 use ftgsxr_render::SplatTime;
 
 use crate::intent::{Intent, PlaybackCommand, UiCommand};
@@ -96,27 +96,11 @@ impl Plugin for PlaybackPlugin {
     }
 }
 
-/// Δ_frame of an instance (D-32). Q-174: the time centers are not kept after a load,
-/// so the median branch is not reached: a checkpoint's Δt_f, else 1/30 s.
+/// Δ_frame of an instance (D-32): the one its load computed from the model's time
+/// centers (Q-174).
 // Q-174
 fn frame_step(m: &LoadedModel) -> f64 {
-    let model = Model {
-        position: Vec::new(),
-        time_center: Vec::new(),
-        duration: Vec::new(),
-        velocity: Vec::new(),
-        scale: Vec::new(),
-        rotation: Vec::new(),
-        opacity: Vec::new(),
-        sh: Vec::new(),
-        sh_degree: m.info.sh_degree,
-        time: m.info.time.clone(),
-        conventions: m.info.conventions.clone(),
-        producer: m.info.producer.clone(),
-        identity: [0; 32],
-        kind: m.info.kind,
-    };
-    m.time.frame_step_s(&model)
+    m.frame_step_s
 }
 
 /// The frame step `StepFrames` uses: the target's when it is a timed instance, else the

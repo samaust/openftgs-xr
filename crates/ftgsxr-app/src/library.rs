@@ -150,8 +150,11 @@ pub struct LoadedModel {
     pub time: ModelTime,
     /// Whether it was reduced to the budget (§1.2 option 4, #205).
     pub reduced: bool,
-    /// Its soundtrack (§1.10).
+    /// Its soundtrack (§1.10): a local or document file; an HTTP index entry's is
+    /// downloaded with the model and given as its cached file.
     pub audio: Option<ModelRef>,
+    /// §1.6's Δ_frame in seconds (D-32), the asset's (Q-174).
+    pub frame_step_s: f64,
 }
 
 /// The library's systems and observers, added by `AppPlugin` with its `initial` models.
@@ -446,13 +449,10 @@ fn run_commands(
                     pending.sublistings.push((id, location, task));
                     continue;
                 }
-                // §1.10: the index entry's soundtrack, else the sidecar beside the file.
-                let audio = e
-                    .entry
-                    .audio
-                    .as_deref()
-                    .and_then(|a| Url::parse(a).ok())
-                    .map(ModelRef::Http);
+                // §1.10: the index entry's soundtrack, downloaded with the model, else the
+                // sidecar beside the file.
+                let audio_url = e.entry.audio.as_deref().and_then(|a| Url::parse(a).ok());
+                let http = client.0.clone();
                 let reduce_to = if reduce {
                     e.info
                         .as_ref()
@@ -470,7 +470,18 @@ fn run_commands(
                         &mut |now| *p.lock().unwrap_or_else(|e| e.into_inner()) = Some(now),
                         &c,
                     )?;
-                    let audio = audio.or_else(|| sidecar(&r));
+                    let audio = match (audio_url, http) {
+                        (Some(url), Some(http)) => {
+                            match http.download(&url, None, &mut |_| {}, &c) {
+                                Ok(path) => Some(ModelRef::File(path)),
+                                Err(e) => {
+                                    warn!("the soundtrack {url}: {}", error_text(&e));
+                                    None
+                                }
+                            }
+                        }
+                        _ => sidecar(&r),
+                    };
                     Ok((r, bytes, audio))
                 });
                 e.state = EntryState::Fetching(Progress {
@@ -870,6 +881,8 @@ fn on_model(
         time: ModelTime::from_span(&asset.info.time),
         reduced,
         audio: ctx.audio.clone(),
+        // Q-174
+        frame_step_s: asset.frame_step_s,
     });
 }
 
@@ -947,12 +960,16 @@ fn follow_in_use(
     };
     if changed {
         let entries = platform.0.paths().cache.join("http");
+        // A soundtrack downloaded with its model stays with it (§1.10).
         let paths: Vec<PathBuf> = all
             .iter()
-            .filter_map(|c| match &c.source {
+            .flat_map(|c| [Some(&c.source), c.audio.as_ref()])
+            .flatten()
+            .filter_map(|r| match r {
                 ModelRef::File(p) if !p.as_os_str().is_empty() => Some(p.clone()),
                 ModelRef::Http(url) => Some(cache_entry(&entries, url)),
-                _ => None,
+                ModelRef::Document(_) => None,
+                ModelRef::File(_) => None,
             })
             .collect();
         client.set_in_use(&paths);

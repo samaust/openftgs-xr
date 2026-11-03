@@ -13,7 +13,7 @@ use std::fs;
 
 use bevy::prelude::*;
 use ftgsxr_app::{
-    EntryState, Library, LibraryCommand, LoadedModel, ModelRef, Settings, SettingsRes, Url,
+    EntryState, Library, LibraryCommand, LoadedModel, ModelRef, Settings, SettingsRes,
 };
 use ftgsxr_io::{EntryKind, ListingFlavor, Progress, SourceSpec};
 use support::{Setup, TestApp};
@@ -224,8 +224,8 @@ fn held_fetch(t: &mut TestApp, server: &HeldServer, size: u64) -> usize {
 #[test]
 // The tests' task pools are single-threaded (bevy's `multi_threaded` is only the
 // binaries'), so a fetch runs whole inside one frame and the held body blocks the frame:
-// this test needs multi-threaded pools, which break the `gpu_` app tests (#279's question).
-#[ignore = "needs bevy's multi_threaded task pools (#279)"]
+// this test needs multi-threaded pools: the multi_threaded follow-up ticket.
+#[ignore = "needs bevy's multi_threaded task pools: the multi_threaded follow-up ticket"]
 fn i03_progress_reaches_the_entry() {
     let body = fs::read(ftgsxr_testkit::fixtures_dir().join("probes/P1.safetensors")).unwrap();
     let size = body.len() as u64;
@@ -261,8 +261,8 @@ fn i03_progress_reaches_the_entry() {
 #[test]
 // The tests' task pools are single-threaded (bevy's `multi_threaded` is only the
 // binaries'), so a fetch runs whole inside one frame and the held body blocks the frame:
-// this test needs multi-threaded pools, which break the `gpu_` app tests (#279's question).
-#[ignore = "needs bevy's multi_threaded task pools (#279)"]
+// this test needs multi-threaded pools: the multi_threaded follow-up ticket.
+#[ignore = "needs bevy's multi_threaded task pools: the multi_threaded follow-up ticket"]
 fn i03_cancel_stops_within_one_chunk() {
     let size = 4 * CHUNK;
     let server = HeldServer::start(vec![0; size as usize], "ply");
@@ -363,14 +363,22 @@ fn i03_a_checksum_mismatch_is_e_net_checksum_and_a_refresh_retries() {
     );
 }
 
+// §1.10: the index entry's soundtrack is downloaded with the model and given to the
+// instance as its cached file. Any served file stands in for the audio: the library does
+// not decode it.
 #[test]
-fn i03_the_index_entry_audio_reaches_the_instance() {
-    let mut t = TestApp::new("i03-audio");
+fn i03_the_index_entry_audio_is_downloaded_with_the_model() {
+    // A cache limit of one byte: the prune after the load keeps both files in use.
+    let mut settings = Settings::default();
+    settings.cache.max_bytes = 1;
+    let mut t = TestApp::with("i03-audio", Setup::default(), move |app: &mut App| {
+        app.insert_resource(SettingsRes(settings));
+    });
     let i = http_source(&mut t);
-    let url = t.server.url_of("listing/models/probe%20p1.ogg");
+    let url = t.server.url_of("listing/models/notes.txt");
     t.app.world_mut().resource_mut::<Library>().entries[i]
         .entry
-        .audio = Some(url.clone());
+        .audio = Some(url);
     load(&mut t, i);
     assert!(t.until(3000, |app| {
         app.world_mut()
@@ -380,8 +388,24 @@ fn i03_the_index_entry_audio_reaches_the_instance() {
             == 1
     }));
     let m = instances(&mut t).remove(0);
-    assert_eq!(m.audio, Some(ModelRef::Http(Url::parse(&url).unwrap())));
     assert!(matches!(m.source, ModelRef::Http(_)));
+    let Some(ModelRef::File(path)) = m.audio else {
+        panic!("a local soundtrack: {:?}", m.audio);
+    };
+    assert!(
+        path.starts_with(t.dir.join("cache/http")),
+        "{}",
+        path.display()
+    );
+    let served = fs::read(ftgsxr_testkit::fixtures_dir().join("listing/models/notes.txt")).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), served);
+    t.frames(30);
+    assert_eq!(
+        cached(&t.dir),
+        2,
+        "the model's and the soundtrack's entries stay"
+    );
+    assert!(path.is_file());
 }
 
 /// The cache entry directories under `<cache>/http/`.
