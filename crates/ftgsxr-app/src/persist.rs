@@ -32,7 +32,7 @@ use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 use crate::audio::AudioState;
 use crate::intent::{InstanceAction, Intent, PlaybackCommand, UiCommand};
 use crate::library::{
-    EntryState, Library, LibraryCommand, LibraryEntry, LoadedModel, ShowOnUpload,
+    EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel, ShowOnUpload,
 };
 use crate::manipulate::{Poses, now_rfc3339};
 use crate::platform::PlatformRes;
@@ -103,6 +103,10 @@ struct Files {
     models: PathBuf,
 }
 
+/// `poses.json`'s content as last read or written.
+#[derive(Resource)]
+struct PosesSaved(PoseStore);
+
 /// What the load at build time reported, raised in the first frame.
 #[derive(Resource, Default)]
 struct StartupFailures(Vec<PersistFailure>);
@@ -144,15 +148,13 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
             Ok((settings, warnings)) => {
                 for w in warnings {
                     bevy::log::warn!("{}: {w}", path.display());
-                    let text = if w.starts_with("E-SETTINGS") {
-                        w
-                    } else {
-                        format!("E-SETTINGS: {w}")
-                    };
-                    failures.push(PersistFailure {
-                        code: "E-SETTINGS".into(),
-                        text,
-                    });
+                    // §1.15: E-SETTINGS is the set-aside file; other warnings are logged.
+                    if w.starts_with("E-SETTINGS") {
+                        failures.push(PersistFailure {
+                            code: "E-SETTINGS".into(),
+                            text: w,
+                        });
+                    }
                 }
                 settings
             }
@@ -178,6 +180,8 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
         };
         world.insert_resource(Poses(store));
     }
+    let baseline = world.resource::<Poses>().0.clone();
+    world.insert_resource(PosesSaved(baseline));
     let paths = world
         .get_resource::<PlatformRes>()
         .map(|p| p.0.paths().clone());
@@ -711,10 +715,22 @@ pub fn apply_scene(
 /// instances take `[display]`'s mode and overlays.
 fn apply_pending_instances(
     mut pending: ResMut<ScenePending>,
+    mut failures: MessageReader<LibraryFailure>,
     settings: Res<SettingsRes>,
     mut fresh: Query<(Entity, &mut LoadedModel, &mut Transform), Added<LoadedModel>>,
     mut commands: Commands,
 ) {
+    // A scene model whose load failed waits no more (Q-T285.4, Q-173).
+    for f in failures.read() {
+        if let Some(r) = &f.reference
+            && let Some(at) = pending
+                .models
+                .iter()
+                .position(|p| model_ref(&p.source).as_ref() == Some(r))
+        {
+            pending.models.remove(at);
+        }
+    }
     let display = &settings.0.display;
     for (e, mut m, mut t) in &mut fresh {
         let at = pending.models.iter().position(|p| p.identity == m.identity);
@@ -829,6 +845,7 @@ fn sync_settings(
     mut settings: ResMut<SettingsRes>,
     mut last: Local<Option<Settings>>,
     mut outstanding: Local<u8>,
+    mut seen: Local<Vec<SourceSpec>>,
     files: Res<Files>,
     mut intents: MessageReader<Intent>,
     mut audio: ResMut<AudioState>,
@@ -841,6 +858,9 @@ fn sync_settings(
     mut commands: Commands,
 ) {
     let first = last.is_none();
+    if first {
+        *seen = listed_sources(&library, &files.models);
+    }
     let snap = last.get_or_insert_with(|| settings.0.clone());
     // The world into the settings.
     if !first {
@@ -874,8 +894,14 @@ fn sync_settings(
         }
         if *outstanding > 0 {
             *outstanding -= 1;
-        } else if library.is_changed() {
+            if *outstanding == 0 {
+                *seen = listed_sources(&library, &files.models);
+            }
+        } else if library.is_changed() && listed_sources(&library, &files.models) != *seen {
+            // Only a change of the source list itself, not of its entries: a settings
+            // source the library could not open stays in the settings.
             let actual = listed_sources(&library, &files.models);
+            *seen = actual.clone();
             if actual != snap.sources {
                 if settings.0.sources != actual {
                     settings.0.sources = actual.clone();
@@ -917,12 +943,25 @@ fn sync_settings(
     if !first && s.display != snap.display {
         let mode = mode_of(&s.display.mode, &s.display);
         let overlays = overlays_of(&s.display.overlays);
+        // Each instance keeps its mode (§1.5 Instances); its centers take the radius
+        // and colormap; `[display] mode` is new instances' (Q-T285.8).
+        let _ = mode;
+        let (radius, colormap) = (s.display.centers_radius, colormap_of(&s.display.colormap));
         for (e, m) in &mut instances {
-            match m {
-                Some(mut m) if m.0 != mode => m.0 = mode,
-                Some(_) => {}
-                None => {
-                    commands.entity(e).try_insert(SplatMode(mode));
+            if let Some(mut m) = m {
+                let next = match m.0 {
+                    RenderMode::Centers { .. } => RenderMode::Centers {
+                        pixel_radius: radius,
+                        colormap,
+                    },
+                    RenderMode::Both { .. } => RenderMode::Both {
+                        pixel_radius: radius,
+                        colormap,
+                    },
+                    other => other,
+                };
+                if m.0 != next {
+                    m.0 = next;
                 }
             }
             commands.entity(e).try_insert(SplatOverlays(overlays));
@@ -1001,18 +1040,14 @@ fn save_settings_debounced(
 fn save_poses(
     poses: Res<Poses>,
     files: Res<Files>,
-    mut last: Local<Option<PoseStore>>,
+    mut last: ResMut<PosesSaved>,
     mut out: MessageWriter<PersistFailure>,
 ) {
-    let Some(prev) = last.as_ref() else {
-        *last = Some(poses.0.clone());
-        return;
-    };
-    if !poses.is_changed() || *prev == poses.0 {
+    if !poses.is_changed() || last.0 == poses.0 {
         return;
     }
     match poses.0.save(&files.poses) {
-        Ok(()) => *last = Some(poses.0.clone()),
+        Ok(()) => last.0 = poses.0.clone(),
         Err(e) => {
             warn!("{}: {}: {e}", files.poses.display(), e.code());
             out.write(PersistFailure::of(&e));

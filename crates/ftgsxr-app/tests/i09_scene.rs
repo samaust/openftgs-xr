@@ -36,7 +36,7 @@ fn wait_for(t: &mut TestApp, n: usize) {
             == n),
         "{n} instances"
     );
-    t.frames(2);
+    t.frames(3);
 }
 
 fn entity_named(t: &mut TestApp, name: &str) -> Entity {
@@ -185,4 +185,27 @@ fn i09_a_missing_model_is_listed_as_missing() {
     assert_eq!(entry.state, EntryState::Missing);
     assert_eq!(entry.identity.as_deref(), Some(id.as_str()));
     assert_eq!(count(&mut t), 0);
+}
+
+#[test]
+fn i09_the_startup_scene_loads() {
+    let dir = support::scratch("i09_startup_files");
+    let scene = dir.join("start.ftgsxr-scene.json");
+    let model = fixtures_dir().join("probes/P1.safetensors");
+    // A scene written by a first player.
+    {
+        let mut t = TestApp::new("i09_startup_first");
+        t.command(LibraryCommand::LoadRef(ModelRef::File(model)));
+        wait_for(&mut t, 1);
+        t.app
+            .world_mut()
+            .write_message(PersistCommand::SaveScene(scene.clone()));
+        t.frames(1);
+    }
+    let setup = support::Setup {
+        scene: Some(scene),
+        ..Default::default()
+    };
+    let mut t = TestApp::with("i09_startup", setup, |_| {});
+    wait_for(&mut t, 1);
 }
