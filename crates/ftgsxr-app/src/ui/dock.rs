@@ -769,6 +769,8 @@ fn request_replay(
         }
     }
     let (mut step, mut close) = (None, false);
+    // Q-219: the instance the replay steps on, found once for the label and for stepping.
+    let target = replay.as_ref().and_then(|_| replay_target(world));
     if let Some(r) = &replay {
         let n = r.request.items.len();
         ui.horizontal(|ui| {
@@ -801,7 +803,8 @@ fn request_replay(
         let governor = world
             .get_resource::<ftgsxr_render::SplatTierState>()
             .map(|t| t.sh_cap);
-        let loaded = replay_target(world)
+        // Q-241: its loaded degree is taken as the file's.
+        let loaded = target
             .and_then(|e| world.get::<LoadedModel>(e))
             .map(|m| m.info.sh_degree);
         for line in replay_lines(&r.request, governor, loaded, passthrough) {
@@ -814,7 +817,7 @@ fn request_replay(
     }
     if let (Some(r), Some(i)) = (&mut replay, step) {
         r.item = i;
-        if let Some(instance) = replay_target(world) {
+        if let Some(instance) = target {
             let item = &r.request.items[i];
             out.push(Out::Jump(JumpToCamera {
                 instance,
