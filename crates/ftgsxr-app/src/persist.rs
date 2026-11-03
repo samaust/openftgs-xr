@@ -319,8 +319,7 @@ fn raise_startup(mut startup: ResMut<StartupFailures>, mut out: MessageWriter<Pe
 }
 
 /// `Intent::Ui(SaveScene)` saves a scene named by the time (Q-200); `LoadScene` is the
-/// UI's, which confirms and sends `PersistCommand::LoadScene`.
-/// `SaveScene` and the overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
+/// UI's, which confirms and sends `PersistCommand::LoadScene`. The overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
 /// is a `[display.overlays]` setting, flipped here and mapped onto every instance by
 /// `sync_settings` (Q-207).
 fn run_intents(
@@ -1150,7 +1149,8 @@ fn centers_follow_settings(
     }
 }
 
-fn save_to(world: &World) {
+/// §1.13: a failed save is logged and raised as an E-IO (or its own code's) toast.
+fn save_to(world: &mut World) {
     let (Some(path), Some(s)) = (
         world.get_resource::<SettingsPath>(),
         world.get_resource::<SettingsRes>(),
@@ -1159,6 +1159,7 @@ fn save_to(world: &World) {
     };
     if let Err(e) = save_settings(&path.0, &s.0) {
         warn!("{}: {}: {e}", path.0.display(), e.code());
+        world.write_message(PersistFailure::of(&e));
     }
 }
 
@@ -1177,6 +1178,7 @@ fn save_settings_debounced(
     path: Res<SettingsPath>,
     time: Res<Time<Real>>,
     mut saver: ResMut<Saver>,
+    mut failures: MessageWriter<PersistFailure>,
 ) {
     if settings.is_changed() && !settings.is_added() {
         saver.dirty = true;
@@ -1188,6 +1190,7 @@ fn save_settings_debounced(
     if saver.dirty && due {
         if let Err(e) = save_settings(&path.0, &settings.0) {
             warn!("{}: {}: {e}", path.0.display(), e.code());
+            failures.write(PersistFailure::of(&e));
         }
         saver.dirty = false;
         saver.last = Some(now);
