@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 mod desktop_log;
+pub mod governor;
 pub mod headless;
 pub mod intent;
 pub mod library;
@@ -20,6 +21,8 @@ pub use headless::{
     BenchReport, HeadlessError, cmd_bench, cmd_export, cmd_import, cmd_info, cmd_render,
     cmd_validate, exit_code,
 };
+// §2.1 `ftgsxr_app::governor`; Q-153, Q-T288.1: the knobs, the ladders and the pure step.
+pub use governor::{DESKTOP_LADDER, Governor, GovernorCounters, HEADSET_LADDER, Knob, govern};
 // §2.1 `ftgsxr_app::intent`.
 pub use intent::{
     CameraCommand, Feature, GizmoMode, Hand, InstanceAction, Intent, OverlayToggle,
