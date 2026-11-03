@@ -133,7 +133,8 @@ pub struct SplatStats(pub Option<FrameStats>);
 /// The governor's copy of the tier (E16): the knobs it steps.
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct SplatTierState {
-    /// The tier the plugin was built with.
+    /// The running tier: the plugin's at first; replacing it (with `SplatTierState::of`)
+    /// switches the tier while the app runs (Q-230).
     pub tier: QualityTier,
     /// The render scale (§1.12).
     pub render_scale: f32,
@@ -173,7 +174,9 @@ pub enum SplatEvent {
 }
 
 impl SplatTierState {
-    fn of(tier: &QualityTier) -> SplatTierState {
+    /// The tier with its knobs at the tier's own values (Q-230).
+    // Q-230
+    pub fn of(tier: &QualityTier) -> SplatTierState {
         SplatTierState {
             tier: tier.clone(),
             render_scale: tier.render_scale,

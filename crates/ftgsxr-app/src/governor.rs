@@ -236,20 +236,48 @@ impl Plugin for GovernorPlugin {
                 ladder: &DESKTOP_LADDER,
                 counters: GovernorCounters::default(),
             })
-            .add_systems(Update, (follow_settings, run_governor).chain());
+            .add_systems(Update, (follow_tier, follow_settings, run_governor).chain());
     }
 }
 
-/// `Governor.enabled` from the settings and the running tier, whenever the settings
-/// change (§1.12).
-// Q-179
+/// The live tier switch (§1.7 Panels, §1.12): when `[general] tier` changes while the
+/// app runs to a tier `by_name` knows, the running tier becomes it, its knobs at its own
+/// values. Only a change switches, so a `--tier` override at startup holds (Q-231).
+// Q-231, Q-230
+fn follow_tier(
+    settings: Option<Res<SettingsRes>>,
+    mut tier: ResMut<SplatTierState>,
+    mut seen: Local<Option<String>>,
+) {
+    let Some(settings) = settings else { return };
+    let wanted = &settings.0.general.tier;
+    if seen.as_ref() == Some(wanted) {
+        return;
+    }
+    let first = seen.is_none();
+    *seen = Some(wanted.clone());
+    if first || tier.tier.name == *wanted {
+        return;
+    }
+    match ftgsxr_render::QualityTier::by_name(wanted) {
+        Some(next) => {
+            bevy::log::info!("quality tier {} -> {}", tier.tier.name, next.name);
+            *tier = SplatTierState::of(&next);
+        }
+        None => bevy::log::warn!("quality tier {wanted}: no such tier; the tier stays"),
+    }
+}
+
+/// `Governor.enabled` from the settings and the running tier, whenever either changes
+/// (§1.12).
+// Q-179, Q-231
 fn follow_settings(
     settings: Option<Res<SettingsRes>>,
     tier: Res<SplatTierState>,
     mut gov: ResMut<Governor>,
 ) {
     let Some(settings) = settings else { return };
-    if !settings.is_changed() {
+    if !settings.is_changed() && !tier.is_changed() {
         return;
     }
     let general = &settings.0.general;
@@ -263,7 +291,8 @@ fn follow_settings(
 /// The Display tab's section (§1.7 Panels): the running tier and its knobs, the
 /// governor's switch (`[general] governor`, which `follow_settings` maps), and the render
 /// scale by hand while the governor is off, in tenths between E16's floor and the tier's
-/// own (Q-218). The tier itself is chosen in the Settings tab, for the next start.
+/// own (Q-218). The tier itself is `persist`'s choice of `[general] tier`, which
+/// `follow_tier` switches to (Q-231).
 // Q-218
 fn display_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
     use bevy_egui::egui;
