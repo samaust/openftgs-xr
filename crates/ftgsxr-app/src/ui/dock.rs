@@ -15,6 +15,7 @@ use ftgsxr_core::{EndRule, LoopMode, PlayState};
 use ftgsxr_io::EntryKind;
 use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransform};
 
+use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
 use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel};
@@ -27,6 +28,8 @@ enum Out {
     Library(LibraryCommand),
     Answer(bool),
     Cue(UiCue),
+    Jump(JumpToCamera),
+    Toast(String),
 }
 
 /// §1.6's speed presets.
@@ -86,6 +89,12 @@ pub(super) fn draw(
             }
             Out::Cue(c) => {
                 world.write_message(c);
+            }
+            Out::Jump(j) => {
+                world.write_message(j);
+            }
+            Out::Toast(text) => {
+                world.write_message(super::ToastRequest::error(text));
             }
             Out::Answer(yes) => {
                 let a = world.resource_mut::<UiState>().answer(yes);
@@ -228,7 +237,10 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 match tab {
-                    Tab::Library => library_tab(world, ui, out, hv),
+                    Tab::Library => {
+                        library_tab(world, ui, out, hv);
+                        request_replay(world, ui, out, hv);
+                    }
                     Tab::Scene => scene_tab(world, ui, out, hv),
                     Tab::Playback => playback_tab(world, ui, out, hv),
                     Tab::Display => display_tab(world, ui, out, hv),
@@ -525,6 +537,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
             }
         });
     }
+    training_cameras(world, ui, out, hv);
     for (e, gain) in gains {
         if let Ok(mut ec) = world.get_entity_mut(e) {
             ec.insert(SplatTransform(ColorTransform { gain }));
@@ -532,6 +545,165 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
     }
     if let Some(e) = ask {
         world.resource_mut::<UiState>().confirm = Some(Confirm::Unload(e));
+    }
+}
+
+/// §1.7 Training cameras: each instance's manifest images by split, a jump per image,
+/// the frustums toggle.
+fn training_cameras(
+    world: &mut World,
+    ui: &mut egui::Ui,
+    out: &mut Vec<Out>,
+    hv: &mut Option<egui::Id>,
+) {
+    let mut q = world.query::<(Entity, &LoadedModel, &TrainingCameras)>();
+    let sets: Vec<(Entity, String, TrainingCameras)> = q
+        .iter(world)
+        .map(|(e, m, t)| (e, m.name.clone(), t.clone()))
+        .collect();
+    if sets.is_empty() {
+        return;
+    }
+    let mut view = world.resource::<TrainingView>().clone();
+    ui.separator();
+    ui.strong("Training cameras");
+    ui.checkbox(&mut view.frustums, "frustums");
+    ui.horizontal(|ui| {
+        for (label, split) in [
+            ("all", None),
+            ("train", Some("train")),
+            ("test", Some("test")),
+        ] {
+            let split = split.map(str::to_string);
+            if ui.selectable_label(view.split == split, label).clicked() {
+                view.split = split;
+            }
+        }
+    });
+    for (e, name, tc) in sets {
+        egui::CollapsingHeader::new(format!("{name}: {}", tc.path.display()))
+            .id_salt(("ftgsxr-cams", e))
+            .show(ui, |ui| {
+                for img in &tc.manifest.images {
+                    if view.split.as_ref().is_some_and(|s| *s != img.split) {
+                        continue;
+                    }
+                    let Some(camera) = img.camera_override.or_else(|| {
+                        tc.manifest
+                            .cameras
+                            .iter()
+                            .find(|(n, _)| *n == img.camera)
+                            .map(|(_, c)| *c)
+                    }) else {
+                        continue;
+                    };
+                    let label = format!(
+                        "{} · {} · {:.3} {}",
+                        img.camera, img.split, img.timestamp, tc.manifest.time_unit
+                    );
+                    if button(ui, &label, out, hv) {
+                        out.push(Out::Jump(JumpToCamera {
+                            instance: e,
+                            camera,
+                            timestamp: img.timestamp,
+                            time_unit: tc.manifest.time_unit.clone(),
+                        }));
+                    }
+                }
+            });
+    }
+    let mut res = world.resource_mut::<TrainingView>();
+    if res.frustums != view.frustums || res.split != view.split {
+        res.frustums = view.frustums;
+        res.split = view.split;
+    }
+}
+
+/// §1.7: a `ftgs-render-request` found in a directory source, replayed item by item on
+/// the selected instance, else the first loaded one (Q-T286.8).
+fn request_replay(
+    world: &mut World,
+    ui: &mut egui::Ui,
+    out: &mut Vec<Out>,
+    hv: &mut Option<egui::Id>,
+) {
+    let view = world.resource::<TrainingView>().clone();
+    if view.requests.is_empty() && view.replay.is_none() {
+        return;
+    }
+    ui.separator();
+    ui.strong("Render requests");
+    let mut opened = None;
+    for p in &view.requests {
+        let name = p.file_name().map_or_else(
+            || p.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        if button(ui, &format!("Open {name}"), out, hv) {
+            opened = Some(p.clone());
+        }
+    }
+    let mut replay = view.replay.clone();
+    if let Some(p) = opened {
+        match cameras::open_request(&p) {
+            Ok(r) => replay = Some(r),
+            Err(text) => out.push(Out::Toast(text)),
+        }
+    }
+    let (mut step, mut close) = (None, false);
+    if let Some(r) = &replay {
+        let n = r.request.items.len();
+        ui.horizontal(|ui| {
+            if button(ui, "◀", out, hv) {
+                step = Some((r.item + n - 1) % n);
+            }
+            let item = &r.request.items[r.item];
+            ui.label(format!(
+                "{} / {n} · {} · {:.3} {}",
+                r.item + 1,
+                item.id,
+                item.timestamp,
+                r.request.time_unit
+            ));
+            if button(ui, "▶", out, hv) {
+                step = Some((r.item + 1) % n);
+            }
+            if button(ui, "Show", out, hv) {
+                step = Some(r.item);
+            }
+            if button(ui, "Close", out, hv) {
+                close = true;
+            }
+        });
+    }
+    if close {
+        replay = None;
+        step = None;
+    }
+    if let (Some(r), Some(i)) = (&mut replay, step) {
+        r.item = i;
+        let target = {
+            let mut sel = world
+                .query_filtered::<Entity, (With<LoadedModel>, With<crate::manipulate::Selected>)>();
+            let s = sel.iter(world).next();
+            s.or_else(|| {
+                let mut all = world.query_filtered::<Entity, With<LoadedModel>>();
+                all.iter(world).next()
+            })
+        };
+        if let Some(instance) = target {
+            let item = &r.request.items[i];
+            out.push(Out::Jump(JumpToCamera {
+                instance,
+                camera: item.camera,
+                timestamp: item.timestamp,
+                time_unit: r.request.time_unit.clone(),
+            }));
+        }
+    }
+    let key = |r: &Option<cameras::Replay>| r.as_ref().map(|r| (r.path.clone(), r.item));
+    if key(&view.replay) != key(&replay) {
+        world.resource_mut::<TrainingView>().replay = replay;
     }
 }
 

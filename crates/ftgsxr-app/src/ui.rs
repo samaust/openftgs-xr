@@ -14,6 +14,7 @@
 //! commands, `HudData`) is added in every app; the drawing and the panel pointer only
 //! when `EguiPlugin` is (PRD #275's spike check 1 and its fallback).
 
+mod cameras;
 mod dock;
 
 use std::collections::HashMap;
@@ -435,6 +436,8 @@ impl Plugin for UiPlugin {
             )
             .add_systems(PostUpdate, (raise_toasts, fill_hud).chain())
             .add_observer(splat_toasts);
+        // §1.7 Training cameras and requests.
+        cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
             app.init_resource::<PanelPointer>()
                 .add_systems(PreUpdate, panel_pointer)
