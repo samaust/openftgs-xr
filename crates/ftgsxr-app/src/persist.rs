@@ -36,7 +36,7 @@ use crate::manipulate::{Poses, now_rfc3339, pose_of, transform_of};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
-use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest};
+use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest, UiState};
 
 mod panels;
 
@@ -113,6 +113,19 @@ struct Files {
 #[derive(Resource)]
 struct PosesSaved(PoseStore);
 
+/// Whether no settings file existed at startup: Help opens once (§1.7, Q-T275.4).
+#[derive(Resource, Default)]
+struct FirstRun(bool);
+
+/// §1.7 Help: "opened once on the first run".
+// Q-T275.4
+fn open_help_on_first_run(first: Res<FirstRun>, mut ui: ResMut<UiState>) {
+    if first.0 {
+        ui.dock_open = true;
+        ui.tab = Tab::Help;
+    }
+}
+
 /// What the load at build time reported, raised in the first frame.
 #[derive(Resource, Default)]
 struct StartupFailures(Vec<PersistFailure>);
@@ -161,6 +174,8 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
             });
         }
     };
+    // Q-T275.4: the first run is the one without a settings file.
+    world.insert_resource(FirstRun(!path.exists()));
     if world.contains_resource::<SettingsRes>() {
         // Q-T275.2: the caller's own load.
         if let Some(w) = world.remove_resource::<SettingsWarnings>() {
@@ -256,6 +271,7 @@ impl Plugin for PersistPlugin {
             .init_resource::<Saver>()
             .init_resource::<ScenePending>()
             .init_resource::<StartupFailures>()
+            .init_resource::<FirstRun>()
             .add_systems(
                 Update,
                 (
@@ -277,6 +293,10 @@ impl Plugin for PersistPlugin {
                     .before(crate::library::LibraryCommands),
             )
             .add_systems(Update, ui_scale_follows_settings)
+            .add_systems(
+                bevy::app::Startup,
+                open_help_on_first_run.run_if(resource_exists::<UiState>),
+            )
             .add_systems(
                 PostUpdate,
                 (apply_pending_instances, apply_pending_clock).chain(),
