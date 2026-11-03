@@ -9,6 +9,7 @@ A private `LibraryPlugin`, added by `AppPlugin` first among the feature plugins,
 - **Threads.** Listings, header reads and HTTP fetches run on the I/O task pool; the CPU part of a load is `SplatLoad` on the compute pool (§2.4 Threads, Q-99). Nothing blocks the frame.
 - **Entries.** One `LibraryEntry` per model a source offers, keyed by the source and the model's reference; its `EntryState` carries every state and failure text the Library tab shows. No toast is raised here: a failure with no entry to carry it (a `LoadRef`, a picked file, a drop, a failed listing) is a `LibraryFailure { name, reference, code, text }` message that `ui` turns into a toast (Q-173, Q-193).
 - **Directories.** A listed subdirectory stays an entry; loading it lists it and puts its entries right after it; a source's `Refresh` relists the root only (Q-192). On a first run the default models directory may not exist: it lists as empty, with no toast, and is not created (Q-216, Q-14).
+- **Refresh.** Relisting keeps an entry's state, and its information, identity and thumbnail while its size, mtime (nginx listings only) and SHA-256 are unchanged (§1.5, Q-230). An HTTP entry's header read is preceded by a `HEAD` whose ETag the library keeps privately, since `Entry` and `LibraryEntry` carry none; a refresh checks it with `HttpClient::revalidate` in the background: a 304 keeps the information, another ETag drops it and reads the header again, and a failed check changes nothing (Q-229, Q-231).
 - **HTTP.** A model is fetched into the cache, whose size limit `AppPlugin` passes from the settings' `[cache]`; an index entry's soundtrack is downloaded with the model and handed on in `LoadedModel.audio` (#279).
 
 ## A load's life
@@ -25,4 +26,4 @@ A model over the memory budget is refused with E-MEM-BUDGET and the reduce-to-bu
 
 ## Q-n rows relied on
 
-Q-148, Q-158, Q-166 (messages), Q-172, Q-173, Q-174, Q-192, Q-193, Q-202, Q-203 (missing entries from a scene, `persist.md`), Q-216; with Q-99, Q-117 and Q-14 from earlier milestones.
+Q-148, Q-158, Q-166 (messages), Q-172, Q-173, Q-174, Q-192, Q-193, Q-202, Q-203 (missing entries from a scene, `persist.md`), Q-216, Q-229, Q-230, Q-231; with Q-99, Q-117 and Q-14 from earlier milestones.
