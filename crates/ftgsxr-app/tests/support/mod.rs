@@ -256,6 +256,51 @@ impl TestApp {
         false
     }
 
+    /// Runs frames (sleeping a millisecond between them) until `done` holds, for at most
+    /// `limit` of wall time; whether it held. For work on the task pools whose length is
+    /// wall time, not frames (#291, §2.4 Threads): with bevy's `multi_threaded` a load runs
+    /// beside the frames instead of inside one.
+    pub fn until_for(&mut self, limit: Duration, mut done: impl FnMut(&mut App) -> bool) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < limit {
+            self.app.update();
+            if done(&mut self.app) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// The render pipelines still compiling on the async compute pool (0 for a CPU app).
+    pub fn pipelines_compiling(&self) -> usize {
+        use bevy::render::RenderApp;
+        use bevy::render::render_resource::{CachedPipelineState, PipelineCache};
+        let Some(render) = self.app.get_sub_app(RenderApp) else {
+            return 0;
+        };
+        render
+            .world()
+            .resource::<PipelineCache>()
+            .pipelines()
+            .filter(|p| matches!(p.state, CachedPipelineState::Creating(_)))
+            .count()
+    }
+
+    /// Runs frames until no render pipeline is compiling, at most 10 s; whether none is.
+    pub fn settle_pipelines(&mut self) -> bool {
+        let limit = Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        while self.pipelines_compiling() > 0 {
+            if start.elapsed() > limit {
+                return false;
+            }
+            self.app.update();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
     /// Writes a library command.
     pub fn command(&mut self, c: ftgsxr_app::LibraryCommand) {
         self.app.world_mut().write_message(c);
@@ -265,6 +310,20 @@ impl TestApp {
     pub fn frames(&mut self, n: usize) {
         for _ in 0..n {
             self.app.update();
+        }
+    }
+}
+
+/// #291 (§2.4 Threads): with bevy's `multi_threaded`, `PipelineCache` compiles pipelines on
+/// the async compute pool. A test that returns while one is compiling (bevy's tonemapping
+/// pipeline, say) lets the harness exit the process with that worker inside the Vulkan
+/// driver, and the driver's exit-time destructors crash (SIGSEGV after the tests passed).
+/// Dropping a `gpu_` app first lets its compiles finish. Not while panicking: a failed test
+/// must report, not abort on a second panic.
+impl Drop for TestApp {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            self.settle_pipelines();
         }
     }
 }
