@@ -126,7 +126,9 @@ impl Write for RotatingWriter {
     }
 }
 
+// Q-T277.3
 /// The per-frame messages' limit (§1.13): one per `period` per call site.
+// Q-T277.3
 struct RateLimit {
     period: Duration,
     last: Mutex<HashMap<Identifier, Instant>>,
