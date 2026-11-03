@@ -533,6 +533,126 @@ fn gpu_bevy_adapter_depth_gated_resolve_keeps_the_quad_and_shows_the_splat_over_
     );
 }
 
+/// Q-164: at render scale 0.5 the layer is drawn at its size against the depth copied
+/// at that size, and the depth-gated resolve still keeps the quad where no splat covers
+/// it and shows the splat over it, opaque everywhere (Q-101, §1.12, §1.7 Window).
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_below_render_scale_1_keeps_the_depth_gated_resolve() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let (w, h) = SIZE;
+    let (camera, projection) = floor_camera();
+    let over = OutputSpace::LinearOver {
+        background: Some(BACKGROUND),
+    };
+    // The layer's alpha at scale 1, for where the splat covers pixels.
+    let alpha: Vec<f32> = layer_of(
+        &Scene::settled(
+            OutputSpace::FileEncoded,
+            TextureFormat::Rgba16Float,
+            SIZE,
+            camera,
+            projection.clone(),
+            Some(p1_above_the_quad()),
+            false,
+        )
+        .readback(),
+        w,
+        h,
+    )
+    .iter()
+    .map(|p| p[3])
+    .collect();
+    let quad_only = target_of(
+        &Scene::settled(
+            over,
+            TextureFormat::Rgba8UnormSrgb,
+            SIZE,
+            camera,
+            projection.clone(),
+            None,
+            true,
+        )
+        .readback(),
+        w,
+        h,
+    );
+    let near = |a: f32, b: f32| (a - b).abs() <= TOLERANCE;
+    let is_quad = |p: &[f32; 4]| (0..3).all(|c| near(p[c], QUAD[c]));
+    let mut scene = Scene::settled(
+        over,
+        TextureFormat::Rgba8UnormSrgb,
+        SIZE,
+        camera,
+        projection,
+        Some(p1_above_the_quad()),
+        true,
+    );
+    let full = target_of(&scene.readback(), w, h);
+    scene
+        .app
+        .world_mut()
+        .resource_mut::<SplatTierState>()
+        .render_scale = 0.5;
+    let scaled = target_of(&scene.readback(), w, h);
+
+    // The splat's reach at scale 1, widened by 2 pixels for the half-size layer's filter.
+    let (wi, hi) = (w as i64, h as i64);
+    let covered = |x: i64, y: i64| {
+        (-2..=2).any(|dy| {
+            (-2..=2).any(|dx| {
+                let (u, v) = (x + dx, y + dy);
+                (0..wi).contains(&u)
+                    && (0..hi).contains(&v)
+                    && alpha[(v * wi + u) as usize] >= 1.0 / 255.0
+            })
+        })
+    };
+    let (mut kept, mut shown, mut failures) = (0, 0, Vec::new());
+    let mut max_change = 0.0f32;
+    for i in 0..scaled.len() {
+        let (x, y) = ((i as i64) % wi, (i as i64) / wi);
+        let p = scaled[i];
+        if p[3] != 1.0 {
+            failures.push(format!("pixel {i} not opaque: {p:?}"));
+        }
+        for k in 0..3 {
+            max_change = max_change.max((p[k] - full[i][k]).abs());
+        }
+        if !is_quad(&quad_only[i]) {
+            continue;
+        }
+        if !covered(x, y) {
+            kept += 1;
+            if !is_quad(&p) {
+                failures.push(format!("quad pixel {i} not kept: {p:?}"));
+            }
+        } else if alpha[i] > 0.3 {
+            shown += 1;
+            if is_quad(&p) || !(0..3).all(|k| (p[k] - full[i][k]).abs() <= 0.1) {
+                failures.push(format!(
+                    "splat pixel {i} over the quad: {p:?} against {:?} at scale 1",
+                    full[i]
+                ));
+            }
+        }
+    }
+    eprintln!(
+        "quad pixels kept {kept}, splat pixels over the quad {shown}, max change {max_change}"
+    );
+    assert!(kept > 0 && shown > 0, "both regions exist");
+    assert!(
+        max_change > TOLERANCE,
+        "the half-size layer changes the image, so the scale applies"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} pixels off:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 /// The probes' camera (openftgs's) as a Bevy transform and projection.
 fn probe_camera(camera: &FtgsCamera) -> (Transform, Projection) {
     let r = DMat3::from_mat4(camera.world_to_camera);

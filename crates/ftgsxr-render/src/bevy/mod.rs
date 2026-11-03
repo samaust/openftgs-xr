@@ -12,6 +12,7 @@
 
 mod asset;
 mod camera;
+mod depth_copy;
 mod load;
 mod render;
 
@@ -201,6 +202,7 @@ impl Plugin for SplatPlugin {
             .init_resource::<render::StatsInbox>()
             .add_observer(load::make_camera_follow_d6)
             .add_observer(load::clear_late_splat_camera)
+            .add_observer(load::sample_late_view_depth)
             .add_systems(First, (load::ensure_device, render::publish_stats))
             .add_systems(Update, (load::start_loads, load::finish_loads).chain())
             .add_systems(PostUpdate, load::upload_models);
