@@ -291,3 +291,13 @@ pub enum VolumeChannel {
     /// The soundtracks.
     Soundtrack,
 }
+
+/// Appendix D.1's Delete: a request to unload `.0` that `ui`'s confirmation dialog
+/// turns into `Intent::Instance { action: Unload }` once confirmed; `desktop_input`
+/// writes it, since D.1 unloads only after confirmation and the intent itself asks
+/// nothing (PRD #275).
+// Q-199
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UnloadRequest(
+    #[allow(dead_code, reason = "read by ui's confirmation dialog (#286)")] pub(crate) Entity,
+);

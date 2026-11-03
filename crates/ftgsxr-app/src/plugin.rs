@@ -13,6 +13,7 @@ use ftgsxr_io::ModelRef;
 use ftgsxr_render::{QualityTier, SplatPlugin};
 
 use crate::audio::AudioPlugin;
+use crate::desktop_input::DesktopInputPlugin;
 use crate::governor::GovernorPlugin;
 use crate::library::LibraryPlugin;
 use crate::manipulate::ManipulatePlugin;
@@ -71,6 +72,8 @@ impl Plugin for AppPlugin {
         app.add_plugins(persist::PersistPlugin {
             scene: self.scene.clone(),
         });
+        // Appendix D.1 (#284).
+        app.add_plugins(DesktopInputPlugin);
         // E16 (#288).
         app.add_plugins(GovernorPlugin);
     }
