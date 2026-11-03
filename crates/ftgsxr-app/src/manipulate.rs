@@ -31,6 +31,7 @@ use ftgsxr_render::{SplatAsset, SplatMode, SplatModel};
 
 use crate::intent::{GizmoMode, Hand, InstanceAction, Intent};
 use crate::library::{LibraryCommand, LoadedModel};
+use crate::playback::StepTarget;
 
 /// What the grabs and rays obey (§1.5, §1.8, E10, E11).
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -129,12 +130,30 @@ impl Plugin for ManipulatePlugin {
             .init_resource::<HandStates>()
             .init_resource::<GizmoState>()
             .add_observer(on_loaded)
-            .add_systems(Update, run_intents)
+            .add_systems(Update, (run_intents, step_target_follows_selection).chain())
             .add_systems(
                 Update,
                 draw.after(run_intents)
                     .run_if(resource_exists::<GizmoConfigStore>),
             );
+    }
+}
+
+/// playback's `StepTarget` follows the selection (Q-175): the selected instance, else
+/// none (playback's fallback).
+// Q-175
+fn step_target_follows_selection(
+    selected: Query<Entity, With<Selected>>,
+    added: Query<(), Added<Selected>>,
+    mut removed: RemovedComponents<Selected>,
+    mut target: ResMut<StepTarget>,
+) {
+    if added.is_empty() && removed.read().count() == 0 {
+        return;
+    }
+    let next = selected.iter().next();
+    if target.0 != next {
+        target.0 = next;
     }
 }
 
@@ -589,7 +608,9 @@ fn run_intents(
                 let mut p = pose_of(&t);
                 p.translation += step * dir;
                 *t = transform_of(p);
-                hs.hands.get_mut(&hand).unwrap().held = Some((e, (dist + step).max(0.0)));
+                if let Some(h) = hs.hands.get_mut(&hand) {
+                    h.held = Some((e, (dist + step).max(0.0)));
+                }
                 rebase(&mut hs, e, p);
             }
             Intent::Gizmo(mode) => {
