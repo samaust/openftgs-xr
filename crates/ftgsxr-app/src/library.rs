@@ -1341,6 +1341,8 @@ fn on_model(
         .retain(|e| !(e.state == EntryState::Missing && e.identity.as_ref() == Some(&identity)));
     if let Some(e) = entry_of(&mut library, &pending, ctx) {
         e.identity = Some(identity.clone());
+        // Q-242: an HTTP entry's information a load fills keeps no ETag; a refresh
+        // compares the entry by size, mtime and SHA-256 only (Q-230's entry without one).
         if e.info.is_none() {
             e.info = Some(asset.info.clone());
         }
@@ -1399,6 +1401,7 @@ fn on_splat_event(
             }
             match entry_of(&mut library, &pending, ctx) {
                 Some(e) => {
+                    // Q-242: an HTTP entry's information a load fills keeps no ETag.
                     if e.info.is_none() && ctx.reduce_to.is_none() {
                         e.info = asset.map(|a| a.info.clone());
                     }
