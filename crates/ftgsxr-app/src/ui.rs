@@ -563,8 +563,10 @@ fn splat_toasts(
 
 /// The overflow toast's text.
 // Q-209
-pub(crate) fn overflow_text(visible: u32, capacity: u32) -> String {
-    format!("Too many primitives: {visible} visible, capacity {capacity}; some were dropped")
+pub(crate) fn overflow_text(_visible: u32, capacity: u32) -> String {
+    // C only: under the overflow flag the visible count is clamped to C (§1.4 stage 3,
+    // Q-78), so it would repeat C.
+    format!("Too many primitives: capacity {capacity} reached; some were dropped")
 }
 
 /// A `Toast` triggered from outside the crate (`ftgsxr_xr::display`'s E-XR-UNSUPPORTED,

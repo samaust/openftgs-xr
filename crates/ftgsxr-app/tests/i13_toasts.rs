@@ -208,3 +208,27 @@ fn i13_a_failed_settings_save_raises_e_io() {
     });
     assert!(ok, "{:?}", toasts(&t.app));
 }
+
+// Q-209, Q-208 (#348; §1.4 Several models, D-34): an overflow is a Warning toast naming
+// C, the one number it can give, since under the flag the visible count is clamped to C;
+// a repeat in the same second shows once.
+#[test]
+fn an_overflow_is_a_warning_toast_naming_c() {
+    use ftgsxr_app::SplatEvent;
+    let mut t = TestApp::new("i13t-overflow-text");
+    record_toasts(&mut t.app);
+    let overflow = SplatEvent::Overflow {
+        visible: 1000,
+        capacity: 1000,
+    };
+    t.app.world_mut().trigger(overflow.clone());
+    t.app.world_mut().trigger(overflow);
+    t.frames(3);
+    let all = toasts(&t.app);
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(all[0].level, ToastLevel::Warning);
+    assert_eq!(
+        all[0].text,
+        "Too many primitives: capacity 1000 reached; some were dropped"
+    );
+}
