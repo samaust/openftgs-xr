@@ -13,6 +13,7 @@ use ftgsxr_io::ModelRef;
 use ftgsxr_render::{QualityTier, SplatPlugin};
 
 use crate::library::LibraryPlugin;
+use crate::manipulate::ManipulatePlugin;
 use crate::persist;
 use crate::platform::{Platform, PlatformRes};
 
@@ -51,6 +52,7 @@ impl Plugin for AppPlugin {
         // `initial` loads through the library; `scene` is `persist`'s (#285).
         app.add_plugins(LibraryPlugin {
             initial: self.initial.clone(),
-        });
+        })
+        .add_plugins(ManipulatePlugin);
     }
 }

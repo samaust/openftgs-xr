@@ -11,6 +11,7 @@ mod desktop_log;
 pub mod headless;
 pub mod intent;
 pub mod library;
+pub mod manipulate;
 pub mod persist;
 pub mod platform;
 pub mod plugin;
@@ -27,6 +28,8 @@ pub use intent::{
 };
 // §2.1 `ftgsxr_app::library`.
 pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LoadedModel};
+// §2.1 `ftgsxr_app::manipulate`.
+pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick_instance};
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
 pub use persist::{SettingsPath, SettingsRes};
 // §2.1 `ftgsxr_app::platform`.
