@@ -14,6 +14,7 @@ use ftgsxr_render::{QualityTier, SplatPlugin};
 
 use crate::governor::GovernorPlugin;
 use crate::library::LibraryPlugin;
+use crate::manipulate::ManipulatePlugin;
 use crate::persist;
 use crate::platform::{Platform, PlatformRes};
 use crate::playback::PlaybackPlugin;
@@ -55,6 +56,7 @@ impl Plugin for AppPlugin {
             initial: self.initial.clone(),
         });
         app.add_plugins(PlaybackPlugin);
+        app.add_plugins(ManipulatePlugin);
         // E16 (#288).
         app.add_plugins(GovernorPlugin);
     }
