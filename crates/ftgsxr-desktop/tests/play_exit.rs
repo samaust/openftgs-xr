@@ -44,8 +44,8 @@ fn scratch(name: &str) -> PathBuf {
 
 /// `ftgsxr play model` with its home and XDG directories under `home`, on the session's
 /// display, standard error piped, its validation layer configured by the settings
-/// directory `layer_settings`.
-fn spawn_play(home: &Path, model: &Path, layer_settings: &Path) -> Child {
+/// directory `layer_settings_dir`.
+fn spawn_play(home: &Path, model: &Path, layer_settings_dir: &Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
         .arg("play")
         .arg(model)
@@ -54,7 +54,7 @@ fn spawn_play(home: &Path, model: &Path, layer_settings: &Path) -> Child {
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_CACHE_HOME", home.join("cache"))
         .env("XDG_DATA_HOME", home.join("data"))
-        .env("VK_LAYER_SETTINGS_PATH", layer_settings)
+        .env("VK_LAYER_SETTINGS_PATH", layer_settings_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -83,8 +83,8 @@ fn run_once(
     model: &Path,
     delay: Duration,
 ) -> (Option<ExitStatus>, String, (bool, Vec<String>)) {
-    let layer = home.join("validation.log");
-    let settings = layer_settings(home, &layer);
+    let layer_log_path = home.join("validation.log");
+    let settings = layer_settings(home, &layer_log_path);
     let mut child = spawn_play(home, model, &settings);
     let stderr = child.stderr.take().expect("standard error is piped");
     let (tx, rx) = mpsc::channel::<String>();
@@ -128,7 +128,7 @@ fn run_once(
         window,
         "the player showed no window within {LIMIT:?} (status {status:?}):\n{log}"
     );
-    (status, log, layer_log(&layer))
+    (status, log, layer_log(&layer_log_path))
 }
 
 /// #376 (§1.7 Command line, Q-236, Q-237): `play` asked to exit in its first frames, while
