@@ -204,6 +204,14 @@ fn gpu_live_tier_switch_unloads_a_model_the_new_budget_refuses() {
     let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let mut t = TestApp::gpu("live_budget");
     let events = record_events(&mut t.app);
+    let toasts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = toasts.clone();
+    t.app.add_systems(
+        Update,
+        move |mut r: MessageReader<ftgsxr_app::LibraryFailure>| {
+            seen.lock().unwrap().extend(r.read().cloned());
+        },
+    );
     for p in ["P1", "P2"] {
         let path = ftgsxr_testkit::fixtures_dir().join(format!("probes/{p}.safetensors"));
         t.command(ftgsxr_app::LibraryCommand::LoadRef(
@@ -224,6 +232,20 @@ fn gpu_live_tier_switch_unloads_a_model_the_new_budget_refuses() {
         "two uploads"
     );
     let all = instances(&mut t.app);
+    let rows: Vec<(Entity, u64)> = all
+        .iter()
+        .map(|e| {
+            (
+                *e,
+                t.app
+                    .world()
+                    .get::<ftgsxr_app::LoadedModel>(*e)
+                    .unwrap()
+                    .info
+                    .n,
+            )
+        })
+        .collect();
     let larger = all.iter().map(|e| uploads(&events, *e)[0]).max().unwrap();
     // The same layout as `desktop`, with a budget that holds the larger model alone: the
     // reloads arrive in either order, and whichever comes second is refused.
@@ -251,6 +273,21 @@ fn gpu_live_tier_switch_unloads_a_model_the_new_budget_refuses() {
     let refused = failed(&events);
     assert_eq!(refused.len(), 1);
     assert!(refused[0].1.starts_with("E-MEM-BUDGET"), "{}", refused[0].1);
+    // §1.15's text, and with no library entry a `LibraryFailure` (Q-173) carrying the
+    // reduce-to-budget count of the model refused (Q-117).
+    let n = rows.iter().find(|(e, _)| *e == refused[0].0).unwrap().1;
+    // The failure is a message, read the frame after it is written.
+    t.frames(2);
+    let toasts = toasts.lock().unwrap().clone();
+    assert_eq!(toasts.len(), 1);
+    let text = &toasts[0].text;
+    assert!(text.starts_with("E-MEM-BUDGET: Needs "), "{text}");
+    assert!(
+        text.contains(" MB; reduce to budget or choose a tier") && text.contains(" MB, budget "),
+        "{text}"
+    );
+    assert!(text.ends_with(&format!(" (N = {n})")), "{text}");
+    assert_eq!(toasts[0].code, "E-MEM-BUDGET");
     let kept = instances(&mut t.app)[0];
     assert_ne!(kept, refused[0].0);
     assert!(
@@ -264,4 +301,36 @@ fn gpu_live_tier_switch_unloads_a_model_the_new_budget_refuses() {
     let gpu = t.app.world().resource::<ftgsxr_render::SplatGpu>().device();
     assert_eq!(gpu.memory_budget().bytes, larger);
     assert!(t.settle_pipelines());
+}
+
+// Q-235: a pick is also saved, so the next start runs it.
+#[test]
+fn live_tier_switch_is_saved_for_the_next_start() {
+    let target = support::scratch("live_saved_target").join("s.toml");
+    let given = target.clone();
+    let mut t = TestApp::with("live_saved", Setup::default(), move |app| {
+        app.insert_resource(ftgsxr_app::SettingsPath(given));
+    });
+    t.frames(2);
+    pick(&mut t.app, "quest-high");
+    // The settings are written within a second (§1.11; 60 frames at 60 Hz).
+    let saved = |p: &std::path::Path| {
+        p.exists()
+            && ftgsxr_app::load_settings(p)
+                .expect("the settings read")
+                .0
+                .general
+                .tier
+                == "quest-high"
+    };
+    let mut written = false;
+    for _ in 0..61 {
+        t.frames(1);
+        if saved(&target) {
+            written = true;
+            break;
+        }
+    }
+    assert!(written, "the pick is saved");
+    assert_eq!(running(&t.app), "quest-high");
 }

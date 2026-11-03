@@ -18,7 +18,7 @@ use ::bevy::render::render_resource::TextureUsages;
 use ::bevy::render::renderer::{RenderAdapter, RenderAdapterInfo, RenderDevice, RenderQueue};
 use ::bevy::render::view::Msaa;
 use ::bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
-use ftgsxr_core::{HalfFields, ModelKind};
+use ftgsxr_core::ModelKind;
 use ftgsxr_io::ModelBytes;
 
 use super::{SplatAsset, SplatCamera, SplatEvent, SplatModel, SplatTierState, load_splat_asset};
@@ -46,13 +46,13 @@ pub struct SplatLoad {
     pub reduce_to: Option<usize>,
 }
 
-/// A load in progress on the async compute task pool, with the half-precision fields
-/// it packs with; the task hands its `SplatLoad` back, so a load the tier changed under
-/// starts again (Q-234).
+/// A load in progress on the async compute task pool, with the tier whose options it
+/// packs with; the task hands its `SplatLoad` back, so a load the tier changed under
+/// starts again with the new tier's options (§1.2, Q-234).
 #[derive(Component)]
 pub(crate) struct LoadTask {
     task: Task<(SplatLoad, Result<SplatAsset, RenderError>)>,
-    half: HalfFields,
+    tier: QualityTier,
 }
 
 /// The device the passes run on: Bevy's, with the memory budget (Q-66, Q-86), present
@@ -228,22 +228,25 @@ pub(crate) fn start_loads(
 ) {
     for entity in &loads {
         let opts = tier.load_options();
+        let running = tier.tier.clone();
         commands.queue(move |world: &mut World| {
             let Some(load) = world.entity_mut(entity).take::<SplatLoad>() else {
                 return;
             };
-            let half = opts.half;
             let task = AsyncComputeTaskPool::get().spawn(async move {
                 let result = load_splat_asset(&load.bytes, load.kind_hint, &opts, load.reduce_to);
                 (load, result)
             });
-            world.entity_mut(entity).insert(LoadTask { task, half });
+            world.entity_mut(entity).insert(LoadTask {
+                task,
+                tier: running,
+            });
         });
     }
 }
 
 /// Adds each finished load's asset and its `SplatModel`, or reports its failure; a load
-/// packed with other half-precision fields than the running tier's starts again (Q-234).
+/// started under another tier than the running one starts again (Q-234).
 pub(crate) fn finish_loads(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut LoadTask)>,
@@ -257,7 +260,7 @@ pub(crate) fn finish_loads(
         let mut e = commands.entity(entity);
         e.remove::<LoadTask>();
         // Q-234
-        if task.half != tier.tier.layout.half {
+        if task.tier != tier.tier {
             e.insert(load);
             continue;
         }

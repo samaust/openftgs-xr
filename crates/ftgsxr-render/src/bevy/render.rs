@@ -283,10 +283,13 @@ fn prepare_views(
         return;
     };
     // Q-234: a new tier takes new passes and frame buffers.
-    let new_tier = extracted.tier.as_ref().is_some_and(|t| *t != tier.0);
-    if new_tier {
-        tier.0 = extracted.tier.clone().expect("invariant: checked above");
-    }
+    let new_tier = match &extracted.tier {
+        Some(t) if *t != tier.0 => {
+            tier.0 = t.clone();
+            true
+        }
+        _ => false,
+    };
     if new_tier || views.dev.as_ref().is_none_or(|d| !Arc::ptr_eq(d, &dev)) {
         // A new device: everything made on the old one goes.
         *views = Views {

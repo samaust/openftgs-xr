@@ -14,7 +14,7 @@ A private `GovernorPlugin`, added last by `AppPlugin`, feeds `govern` each new s
 
 `Governor.enabled` is set at startup and whenever `SettingsRes` or the running tier changes: the settings' governor switch, and the running tier being the build's default; any other tier, from `--tier`, the settings or the Display tab, counts as chosen by hand and turns it off (Q-179, Q-235). The Display tab's knobs and governor switch are this module's dock section (Q-218).
 
-**The live tier switch.** When `[general] tier` changes while the app runs (the Display or Settings tab's choice, Q-218) to a tier `QualityTier::by_name` knows, the module writes `SplatTierState::of` the new tier, its knobs at the tier's own values; the render plugin and the library follow (`ftgsxr-render/pipeline.md`, `library.md`, Q-233, Q-234). Only a change of the setting switches: a `--tier` override at startup that differs from the settings holds until the user picks a tier (Q-235).
+**The live tier switch.** When `[general] tier` changes while the app runs (the Display or Settings tab's choice, Q-218) to a tier `QualityTier::by_name` knows, the module writes `SplatTierState::of` the new tier, its knobs at the tier's own values, in `PreUpdate` before the library's reload; the render plugin and the library follow (`ftgsxr-render/pipeline.md`, `library.md`, Q-233, Q-234). Only a change of the setting switches: a `--tier` override at startup that differs from the settings holds until the user picks a tier (Q-235).
 
 ## Q-n rows relied on
 

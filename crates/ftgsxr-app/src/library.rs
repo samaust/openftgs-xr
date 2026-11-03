@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
-use bevy::app::{App, Plugin, PostUpdate, Update};
+use bevy::app::{App, Plugin, PostUpdate, PreUpdate, Update};
 use bevy::asset::{Assets, Handle};
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::prelude::*;
@@ -162,6 +162,11 @@ pub struct LoadedModel {
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct LibraryCommands;
 
+/// The live tier switch's reload, in `PreUpdate`, for `governor`'s switch to run before
+/// it (Q-233).
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TierReload;
+
 /// The library's systems and observers, added by `AppPlugin` with its `initial` models.
 pub(crate) struct LibraryPlugin {
     pub(crate) initial: Vec<ModelRef>,
@@ -184,12 +189,13 @@ impl Plugin for LibraryPlugin {
                     read_drops,
                     run_locates,
                     run_commands.in_set(LibraryCommands),
-                    reload_on_tier_switch,
                     poll_tasks,
                     poll_picks,
                 )
                     .chain(),
             )
+            // Q-233: before `Update`, so no load lands between a switch and its reload.
+            .add_systems(PreUpdate, reload_on_tier_switch.in_set(TierReload))
             .add_systems(PostUpdate, follow_in_use);
         let paths = app.world().resource::<PlatformRes>().0.paths().clone();
         let max_bytes = self.cache_max_bytes;
@@ -312,7 +318,6 @@ struct Fetch {
     ctx: LoadCtx,
     /// The instance a reload re-reads the model of (Q-233); `None` for a new instance.
     target: Option<Entity>,
-    kind_hint: Option<ModelKind>,
     cancel: Arc<AtomicBool>,
     progress: Arc<Mutex<Option<Progress>>>,
     task: Task<Fetched>,
@@ -629,7 +634,6 @@ fn run_commands(
                         locate: None,
                         kind_hint: kind_hint(e.entry.kind),
                     },
-                    kind_hint: kind_hint(e.entry.kind),
                     cancel,
                     progress,
                     task,
@@ -642,14 +646,7 @@ fn run_commands(
                     .iter()
                     .position(|(x, _)| *x == r)
                     .map(|i| pending.locating.remove(i).1);
-                let (client, provider) = (client.0.clone(), provider.clone());
-                let at = r.clone();
-                let task = IoTaskPool::get().spawn(async move {
-                    let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
-                    let audio = sidecar(&at);
-                    // Q-229: a reference names no index entry, so no index `scene`.
-                    Ok((at, bytes, audio, None))
-                });
+                let task = fetch_ref(r.clone(), client.0.clone(), provider.clone(), true);
                 pending.fetches.push(Fetch {
                     target: None,
                     ctx: LoadCtx {
@@ -662,7 +659,6 @@ fn run_commands(
                         locate,
                         kind_hint: None,
                     },
-                    kind_hint: None,
                     cancel: Arc::new(AtomicBool::new(false)),
                     progress: Arc::new(Mutex::new(None)),
                     task,
@@ -695,6 +691,22 @@ fn run_commands(
             }
         }
     }
+}
+
+/// Reads the model a reference names on the I/O pool, with its sidecar soundtrack when
+/// `with_sidecar` (§1.10).
+fn fetch_ref(
+    at: ModelRef,
+    client: Option<Arc<HttpClient>>,
+    provider: Option<Arc<dyn DocumentProvider>>,
+    with_sidecar: bool,
+) -> Task<Fetched> {
+    IoTaskPool::get().spawn(async move {
+        let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
+        let audio = if with_sidecar { sidecar(&at) } else { None };
+        // Q-229: a reference names no index entry, so no index `scene`.
+        Ok((at, bytes, audio, None))
+    })
 }
 
 /// Despawns an instance; its entry, if any, returns to `Listed` (§1.5).
@@ -1045,10 +1057,9 @@ fn poll_tasks(
             pending.fetches.push(f);
             continue;
         };
-        match result {
-            // Q-233: a reload goes on its own instance, whose state stays.
-            Ok((_, bytes, _, _)) if f.target.is_some() => {
-                let target = f.target.expect("invariant: the guard checked it");
+        // Q-233: a reload goes on its own instance, whose state stays.
+        let result = match (f.target, result) {
+            (Some(target), Ok((_, bytes, _, _))) => {
                 if let Ok(mut e) = commands.get_entity(target) {
                     e.insert(SplatLoad {
                         bytes,
@@ -1056,7 +1067,11 @@ fn poll_tasks(
                         reduce_to: f.ctx.reduce_to,
                     });
                 }
+                continue;
             }
+            (_, result) => result,
+        };
+        match result {
             Ok((source, bytes, audio, scene)) => {
                 let mut ctx = f.ctx;
                 ctx.source = source;
@@ -1064,7 +1079,7 @@ fn poll_tasks(
                 let mut instance = commands.spawn((
                     SplatLoad {
                         bytes,
-                        kind_hint: f.kind_hint,
+                        kind_hint: ctx.kind_hint,
                         reduce_to: ctx.reduce_to,
                     },
                     Transform::IDENTITY,
@@ -1197,16 +1212,16 @@ fn reload_on_tier_switch(
         if let Some(e) = entry_of(&mut library, &pending, ctx) {
             e.state = EntryState::Loading;
         }
-        let (client, provider) = (client.0.clone(), provider.clone());
-        let at = ctx.source.clone();
-        let task = IoTaskPool::get().spawn(async move {
-            let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
-            Ok((at, bytes, None, None))
-        });
+        // The soundtrack stays the instance's own (`LoadCtx.audio`).
+        let task = fetch_ref(
+            ctx.source.clone(),
+            client.0.clone(),
+            provider.clone(),
+            false,
+        );
         pending.fetches.push(Fetch {
             ctx: ctx.clone(),
             target: Some(entity),
-            kind_hint: ctx.kind_hint,
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(Mutex::new(None)),
             task,

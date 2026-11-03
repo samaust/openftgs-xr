@@ -103,6 +103,7 @@ fn background(ui: &mut egui::Ui, c: &mut [f32; 3], training: Option<[f32; 3]>) {
 /// The Display tab: the quality tier (switched live and saved, Q-235), the centers' radius
 /// and colormap (on every instance drawn with centers), new instances' mode, the
 /// overlays and the background.
+// Q-235
 pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
     let training = training_background(world);
     edit(world, ui, |s, ui| {

@@ -4,11 +4,12 @@
 //! a ladder of knobs given as data (Q-153), and the system that feeds it each new
 //! statistics block's GPU time against the frame budget and writes `SplatTierState`.
 
-use bevy::app::{App, Plugin, Update};
+use bevy::app::{App, Plugin, PreUpdate, Update};
 use bevy::ecs::prelude::*;
 use bevy::window::{Monitor, OnMonitor, PrimaryWindow};
 use ftgsxr_render::{Foveation, SortMode, SplatStats, SplatTierState};
 
+use crate::library::TierReload;
 use crate::persist::SettingsRes;
 use crate::ui::{DockHooks, Tab};
 
@@ -236,7 +237,10 @@ impl Plugin for GovernorPlugin {
                 ladder: &DESKTOP_LADDER,
                 counters: GovernorCounters::default(),
             })
-            .add_systems(Update, (follow_tier, follow_settings, run_governor).chain());
+            .add_systems(Update, (follow_settings, run_governor).chain())
+            // Q-233, Q-235: the switch lands before `Update` and before the library's
+            // reload, so no load or upload of the frame sees the old tier.
+            .add_systems(PreUpdate, follow_tier.before(TierReload));
     }
 }
 
@@ -293,7 +297,7 @@ fn follow_settings(
 /// scale by hand while the governor is off, in tenths between E16's floor and the tier's
 /// own (Q-218). The tier itself is `persist`'s choice of `[general] tier`, which
 /// `follow_tier` switches to (Q-235).
-// Q-218
+// Q-218, Q-235
 fn display_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
     use bevy_egui::egui;
     let enabled = world.get_resource::<Governor>().is_some_and(|g| g.enabled);
