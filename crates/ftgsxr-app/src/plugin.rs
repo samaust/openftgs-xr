@@ -12,6 +12,7 @@ use bevy_egui::EguiPlugin;
 use ftgsxr_io::ModelRef;
 use ftgsxr_render::{QualityTier, SplatPlugin};
 
+use crate::audio::AudioPlugin;
 use crate::governor::GovernorPlugin;
 use crate::library::LibraryPlugin;
 use crate::manipulate::ManipulatePlugin;
@@ -57,6 +58,8 @@ impl Plugin for AppPlugin {
         });
         app.add_plugins(PlaybackPlugin);
         app.add_plugins(ManipulatePlugin);
+        // Q-149: the kira adapter unless `AudioOutputRes` exists already.
+        app.add_plugins(AudioPlugin);
         // E16 (#288).
         app.add_plugins(GovernorPlugin);
     }

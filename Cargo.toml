@@ -90,7 +90,9 @@ bevy_egui = { version = "0.42", default-features = false }
 egui = "0.36"
 # Default features off: `ftgsxr-app` turns on the four formats of §1.10 (Q-149).
 bevy_kira_audio = { version = "0.26", default-features = false }
-kira = "0.12.1"
+# Default features off, as bevy_kira_audio takes it: the cpal backend without the realtime
+# D-Bus feature (Q-187).
+kira = { version = "0.12.1", default-features = false, features = ["cpal"] }
 image = { version = "0.25", default-features = false }
 clap = "4"
 rfd = "0.17"
