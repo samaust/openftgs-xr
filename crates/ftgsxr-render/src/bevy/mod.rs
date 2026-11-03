@@ -136,7 +136,8 @@ pub struct SplatTierState {
     pub tier: QualityTier,
     /// The render scale (§1.12).
     pub render_scale: f32,
-    /// The SH degree cap the next loads apply (§1.2 load option 1).
+    /// The SH degree cap (§1.2 load option 1): the next loads apply it, and every
+    /// instance is drawn at the smaller of its loaded degree and it (E16).
     pub sh_cap: u8,
     /// The sort mode (D-4).
     pub sort_mode: SortMode,

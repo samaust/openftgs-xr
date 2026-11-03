@@ -31,7 +31,7 @@ use super::camera::view_camera;
 use super::load::{GpuModels, SplatGpu};
 use super::{
     OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOverlays, SplatStats,
-    SplatTime, SplatTransform,
+    SplatTierState, SplatTime, SplatTransform,
 };
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::sort_pose;
@@ -93,6 +93,9 @@ struct RenderTier(QualityTier);
 #[derive(Clone)]
 struct Instance {
     model: Arc<GpuModel>,
+    /// The degree drawn: the smaller of the loaded degree and the governor's cap (E16,
+    /// §1.2 load option 1), so a cap change acts without a reload.
+    sh_degree: u8,
     pose: Pose,
     tau: f64,
     mode: RenderMode,
@@ -109,6 +112,8 @@ struct Extracted {
     cameras: HashMap<Entity, SplatCamera>,
     /// Each splat camera's order, by render entity.
     orders: HashMap<Entity, isize>,
+    /// The governor's render scale (§1.12, E16).
+    render_scale: f32,
 }
 
 /// What stages 1–4 depend on (§1.4): when it equals the previous frame's, they are
@@ -218,9 +223,12 @@ fn extract(
     gpu: Extract<Option<Res<SplatGpu>>>,
     models: Extract<Res<GpuModels>>,
     instances: Extract<InstanceQuery>,
+    tier_state: Extract<Res<SplatTierState>>,
     cameras: Extract<Query<(&RenderEntity, &SplatCamera, Option<&::bevy::camera::Camera>)>>,
 ) {
     out.dev = gpu.as_ref().map(|g| Arc::clone(&g.0));
+    let sh_cap = tier_state.sh_cap;
+    out.render_scale = tier_state.render_scale;
     let mut found: Vec<(Entity, Instance)> = instances
         .iter()
         .filter(|(.., vis, _, _, _, _)| vis.is_none_or(|v| v.get()))
@@ -232,6 +240,7 @@ fn extract(
                     entity,
                     Instance {
                         model: Arc::clone(gpu_model),
+                        sh_degree: gpu_model.sh_degree.min(sh_cap),
                         pose: pose_of(transform),
                         // Q-99: without a time, the model's τ₀.
                         tau: time.map_or(gpu_model.tau0, |t| t.tau),
@@ -281,6 +290,7 @@ fn prepare_views(
             &mut views,
             &dev,
             &tier.0,
+            extracted.render_scale,
             &extracted.instances,
             entity,
             camera,
@@ -327,6 +337,13 @@ fn file_encoded_rule(format: TextureFormat) -> Result<Option<&'static str>, &'st
     }
 }
 
+/// The splat layer's size at render scale `scale` (§1.12): the view's size times the
+/// scale, rounded, at least one pixel; §1.7 Window: the scale applies to the layer only.
+fn layer_size(view: UVec2, scale: f32) -> UVec2 {
+    let side = |n: u32| ((n as f32 * scale).round() as u32).max(1);
+    UVec2::new(side(view.x), side(view.y))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "one view's inputs, gathered by the system above"
@@ -335,6 +352,7 @@ fn prepare_view(
     views: &mut Views,
     dev: &Arc<SplatDevice>,
     tier: &QualityTier,
+    render_scale: f32,
     instances: &[Instance],
     entity: Entity,
     camera: SplatCamera,
@@ -356,6 +374,19 @@ fn prepare_view(
         views.warn_once(
             entity,
             "the projection's near plane is not 0.01 m (§1.7); the splats' depth test assumes it",
+        );
+    }
+    // §1.12, §1.7 Window: the render scale sizes the splat layer only (`LinearOver`);
+    // `FileEncoded` draws into the view target, at its size.
+    let draw_size = match camera.output {
+        OutputSpace::FileEncoded => size,
+        OutputSpace::LinearOver { .. } => layer_size(size, render_scale),
+    };
+    if draw_size != size {
+        // Q-T276.1: the layer's draw tests the view's depth, which has the view's size,
+        // and a pass's attachments share one size, so a smaller layer is not drawn.
+        return Err(
+            "a render scale below 1 needs the depth at the layer's size, not yet built (Q-T276.1)",
         );
     }
     let layer_format = match camera.output {
@@ -391,7 +422,7 @@ fn prepare_view(
     let c = capacity(&view_tier, instances);
     let params = ViewParams {
         camera: core_camera,
-        target_size: size,
+        target_size: draw_size,
     };
     let new_key = PrepareKey {
         view: params,
@@ -404,7 +435,7 @@ fn prepare_view(
                     i.tau.to_bits(),
                     i.mode,
                     i.transform,
-                    i.model.sh_degree,
+                    i.sh_degree,
                 )
             })
             .collect(),
@@ -443,13 +474,13 @@ fn prepare_view(
     state.sort_pose = sort_pose(&core_camera);
     state.instances = instances.to_vec();
     if matches!(camera.output, OutputSpace::LinearOver { .. })
-        && state.layer.as_ref().is_none_or(|(_, s)| *s != size)
+        && state.layer.as_ref().is_none_or(|(_, s)| *s != draw_size)
     {
         let texture = dev.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("ftgsxr splat layer"),
             size: wgpu::Extent3d {
-                width: size.x,
-                height: size.y,
+                width: draw_size.x,
+                height: draw_size.y,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -461,14 +492,14 @@ fn prepare_view(
         });
         state.layer = Some((
             texture.create_view(&wgpu::TextureViewDescriptor::default()),
-            size,
+            draw_size,
         ));
     }
     views.states.insert(entity, state);
     Ok(())
 }
 
-/// The instances of a view as `ModelDraw`s, at their loaded degrees.
+/// The instances of a view as `ModelDraw`s, at their drawn degrees.
 fn draws(instances: &[Instance]) -> Vec<ModelDraw<'_>> {
     instances
         .iter()
@@ -478,7 +509,7 @@ fn draws(instances: &[Instance]) -> Vec<ModelDraw<'_>> {
             tau: i.tau,
             mode: i.mode,
             transform: i.transform,
-            sh_degree: i.model.sh_degree,
+            sh_degree: i.sh_degree,
             overlays: i.overlays,
         })
         .collect()
@@ -567,7 +598,8 @@ fn draw_node(
             let mut pass = ctx.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
                 label: Some("ftgsxr splat resolve"),
                 color_attachments: &color,
-                depth_stencil_attachment: None,
+                // Q-101: the view's depth gates the resolve's two branches.
+                depth_stencil_attachment: Some(depth.get_attachment(StoreOp::Store)),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
@@ -606,6 +638,20 @@ fn poll_stats(views: Res<Views>, extracted: Res<Extracted>, inbox: Res<StatsInbo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_size_is_the_scale_times_the_views_size_rounded_at_least_one_pixel() {
+        assert_eq!(
+            layer_size(UVec2::new(1680, 1760), 1.0),
+            UVec2::new(1680, 1760)
+        );
+        // 0.7 × 1280 = 896, 0.7 × 721 = 504.7 → 505.
+        assert_eq!(layer_size(UVec2::new(1280, 721), 0.7), UVec2::new(896, 505));
+        // 0.6 × 5 = 3, 0.6 × 3 = 1.8 → 2; 0.6 × 1 = 0.6 → 1.
+        assert_eq!(layer_size(UVec2::new(5, 3), 0.6), UVec2::new(3, 2));
+        assert_eq!(layer_size(UVec2::new(1, 1), 0.6), UVec2::new(1, 1));
+        assert_eq!(layer_size(UVec2::new(3, 1), 0.1), UVec2::new(1, 1));
+    }
 
     #[test]
     fn file_encoded_rule_draws_unwarned_on_a_16_bit_float_target() {

@@ -90,6 +90,8 @@ pub struct SplatPasses {
     centers: wgpu::RenderPipeline,
     resolve_layout: wgpu::BindGroupLayout,
     resolve: wgpu::RenderPipeline,
+    /// The mesh branch of the depth-gated resolve, with a depth format only (Q-101).
+    resolve_mesh: Option<wgpu::RenderPipeline>,
     resolve_sampler: wgpu::Sampler,
 }
 
@@ -217,7 +219,8 @@ impl SplatPasses {
         let sort = RadixSort::new(&device, tier.sort_key);
         let (draw_layout, splat) = splat_pipeline(&device, layer_format, depth_format);
         let centers = centers_pipeline(&device, &draw_layout, layer_format, depth_format, mode);
-        let (resolve_layout, resolve) = resolve_pipeline(&device, RESOLVE_TARGET_FORMAT);
+        let (resolve_layout, resolve, resolve_mesh) =
+            resolve_pipelines(&device, RESOLVE_TARGET_FORMAT, depth_format);
         let resolve_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("ftgsxr resolve"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -244,6 +247,7 @@ impl SplatPasses {
             centers,
             resolve_layout,
             resolve,
+            resolve_mesh,
             resolve_sampler,
         })
     }
@@ -528,12 +532,15 @@ impl SplatPasses {
     /// Stage 7: the layer over the engine target, decoded for display, with an optional opaque background.
     ///
     /// One full-screen triangle (`resolve.wgsl`, D-6) into `pass`, whose one color target
-    /// is the view target in `Rgba8UnormSrgb` with no depth attachment (Q-91): each
+    /// is the view target in `Rgba8UnormSrgb` (Q-91), with the view's depth in the
+    /// passes' depth format when they have one and no depth attachment otherwise: each
     /// pixel of `layer` (sampled at the target pixel's center, Q-95) is un-premultiplied,
     /// decoded from sRGB, re-premultiplied and composited over the target with the over
     /// operator, so the target keeps the layer's alpha (passthrough, D-14). With
     /// `background` (VR mode, a file-space color) E7's C + (1 − A)·c_bg is decoded and
-    /// written opaque (Q-94).
+    /// written opaque (Q-94), only where the depth holds its clear value when there is a
+    /// depth; where opaque geometry wrote depth the passthrough form is blended over it
+    /// (Q-101).
     pub fn encode_resolve(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -560,6 +567,11 @@ impl SplatPasses {
         pass.set_pipeline(&self.resolve);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
+        // Q-101
+        if let Some(mesh) = &self.resolve_mesh {
+            pass.set_pipeline(mesh);
+            pass.draw(0..3, 0..1);
+        }
     }
 
     /// Stage 8: the statistics block to the staging buffer; `FrameStats::poll` reads it two frames later.
@@ -797,13 +809,22 @@ fn centers_pipeline(
     })
 }
 
-/// Stage 7's pipeline (`resolve.wgsl`) and its layout: the layer as a filterable float
+/// Stage 7's pipelines (`resolve.wgsl`) and their layout: the layer as a filterable float
 /// texture, its sampler, the resolve block; blended `One, OneMinusSrcAlpha` on color and
-/// alpha into `target_format`, no depth (Q-91).
-fn resolve_pipeline(
+/// alpha into `target_format`. Without `depth_format` one pipeline and no depth (Q-91);
+/// with it the depth-gated pair, depth write off (Q-101): `fs_resolve` where the stored
+/// depth equals the triangle's z = 0, reverse-Z's clear value (compare `Equal`), and
+/// `fs_resolve_mesh` where opaque geometry stored a depth greater than it, which wgpu's
+/// compare (fragment against stored) writes as `Less`.
+fn resolve_pipelines(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
-) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    depth_format: Option<wgpu::TextureFormat>,
+) -> (
+    wgpu::BindGroupLayout,
+    wgpu::RenderPipeline,
+    Option<wgpu::RenderPipeline>,
+) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ftgsxr resolve.wgsl"),
         source: wgpu::ShaderSource::Wgsl(RESOLVE_WGSL.into()),
@@ -851,35 +872,46 @@ fn resolve_pipeline(
         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
         operation: wgpu::BlendOperation::Add,
     };
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("ftgsxr resolve"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &module,
-            entry_point: Some("vs_resolve"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: &module,
-            entry_point: Some("fs_resolve"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: Some(wgpu::BlendState {
-                    color: over,
-                    alpha: over,
-                }),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    });
-    (layout, pipeline)
+    let make = |entry: &str, compare: wgpu::CompareFunction| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ftgsxr resolve"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_resolve"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+                format,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(compare),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState {
+                        color: over,
+                        alpha: over,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let pipeline = make("fs_resolve", wgpu::CompareFunction::Equal);
+    // Q-101
+    let mesh = depth_format.map(|_| make("fs_resolve_mesh", wgpu::CompareFunction::Less));
+    (layout, pipeline, mesh)
 }
 
 /// The resolve block (`resolve.wgsl`'s `Resolve`): the background and whether there is one.
@@ -1112,7 +1144,7 @@ mod tests {
         .expect("cull.wgsl validates");
         for entry in ["cull_splats", "cull_centers", "size"] {
             assert!(
-                module.entry_points.iter().any(|e| e.name == entry),
+                module.entry_points.iter().any(|e| e.name == *entry),
                 "entry point {entry}"
             );
         }
@@ -1130,7 +1162,7 @@ mod tests {
         .expect("splat.wgsl validates");
         for entry in ["vs_splat", "fs_splat"] {
             assert!(
-                module.entry_points.iter().any(|e| e.name == entry),
+                module.entry_points.iter().any(|e| e.name == *entry),
                 "entry point {entry}"
             );
         }
@@ -1141,8 +1173,16 @@ mod tests {
     #[test]
     fn centers_and_resolve_wgsl_are_valid_wgsl() {
         for (name, source, entries) in [
-            ("centers.wgsl", CENTERS_WGSL, ["vs_center", "fs_center"]),
-            ("resolve.wgsl", RESOLVE_WGSL, ["vs_resolve", "fs_resolve"]),
+            (
+                "centers.wgsl",
+                CENTERS_WGSL,
+                &["vs_center", "fs_center"][..],
+            ),
+            (
+                "resolve.wgsl",
+                RESOLVE_WGSL,
+                &["vs_resolve", "fs_resolve", "fs_resolve_mesh"],
+            ),
         ] {
             let module = naga::front::wgsl::parse_str(source)
                 .unwrap_or_else(|e| panic!("{name} parses: {}", e.emit_to_string(source)));
@@ -1154,7 +1194,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{name} validates: {e:?}"));
             for entry in entries {
                 assert!(
-                    module.entry_points.iter().any(|e| e.name == entry),
+                    module.entry_points.iter().any(|e| e.name == *entry),
                     "{name}: entry point {entry}"
                 );
             }
