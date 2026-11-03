@@ -30,7 +30,7 @@ use bevy::window::{ExitSystems, exit_on_all_closed, exit_on_primary_closed};
 
 /// Q-236: the longest an exit waits for in-flight compiles.
 // Q-236
-const CAP: Duration = Duration::from_secs(2);
+const CAP: Duration = Duration::from_secs(5);
 
 /// The render world's latest report.
 #[derive(Default)]
