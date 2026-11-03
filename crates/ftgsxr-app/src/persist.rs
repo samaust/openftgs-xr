@@ -276,6 +276,7 @@ impl Plugin for PersistPlugin {
                     // multi-threaded executor could run the library first (§2.4 Threads).
                     .before(crate::library::LibraryCommands),
             )
+            .add_systems(Update, ui_scale_follows_settings)
             .add_systems(
                 PostUpdate,
                 (apply_pending_instances, apply_pending_clock).chain(),
@@ -1120,6 +1121,24 @@ fn sync_settings(
         }
     }
     *snap = settings.0.clone();
+}
+
+/// `[general] ui_scale` on the screen's egui context (§1.7 DPI-aware UI, §1.11): egui's
+/// zoom factor, over the window's own scale factor.
+fn ui_scale_follows_settings(
+    settings: Res<SettingsRes>,
+    mut contexts: Query<&mut bevy_egui::EguiContext, With<bevy_egui::PrimaryEguiContext>>,
+) {
+    let scale = settings.0.general.ui_scale;
+    if !(scale.is_finite() && scale > 0.0) {
+        return;
+    }
+    for mut c in &mut contexts {
+        let ctx = c.get_mut();
+        if ctx.zoom_factor() != scale {
+            ctx.set_zoom_factor(scale);
+        }
+    }
 }
 
 /// An instance switched to centers (the Scene tab, a key) takes `[display]`'s radius and
