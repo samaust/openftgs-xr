@@ -8,7 +8,10 @@
 //!   shows a splat in front of it over the quad;
 //! - the governor's SH cap without a reload (source of truth: E16, §1.2 load option 1):
 //!   `SplatTierState.sh_cap` at 1 on a degree-3 probe renders as the probe capped at
-//!   degree 1 renders.
+//!   degree 1 renders;
+//! - a replay's SH limit (source of truth: Q-233, Q-235, E16): `SplatShLimit(Some(1))`
+//!   under a governor's cap of 3 renders a degree-3 probe as the probe capped at degree 1
+//!   renders, and `SplatShLimit(None)` renders it at its loaded degree again (#388).
 
 use std::sync::{Arc, Mutex};
 
@@ -37,7 +40,7 @@ use ftgsxr_core::{Camera as FtgsCamera, DMat3, Pose, RenderImage};
 use ftgsxr_io::ModelBytes;
 use ftgsxr_render::{
     HeadlessRenderer, OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatLoad,
-    SplatPlugin, SplatTierState, SplatTime,
+    SplatPlugin, SplatShLimit, SplatTierState, SplatTime,
 };
 use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe};
 use wgpu::util::DeviceExt;
@@ -849,5 +852,78 @@ fn gpu_bevy_adapter_sh_cap_takes_effect_without_a_reload() {
     assert!(
         m.psnr >= MIN_PSNR && m.share <= MAX_SHARE && m.alpha <= MAX_SHARE,
         "E15's tier: {m:?}"
+    );
+}
+
+// Q-233, Q-235 (#388): the extraction applies `SplatShLimit`: with the governor's cap
+// at 3, a limit of 1 draws the degree-3 probe at degree 1, and no limit draws it at 3.
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_sh_limit_caps_the_drawn_degree() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let (model, request) = probe("P5");
+    assert_eq!(model.sh_degree, 3);
+    let item = &request.items[1];
+    let (w, h) = (item.camera.width, item.camera.height);
+    let mut renderer = HeadlessRenderer::new(QualityTier::conformance()).expect("an adapter");
+    let id = renderer.load(&model, Some(1)).expect("P5 loads");
+    let capped = renderer
+        .render(
+            &[(id, Pose::IDENTITY)],
+            &item.camera,
+            item.timestamp,
+            [0.0; 3],
+        )
+        .expect("the capped render");
+
+    let (camera, projection) = probe_camera(&item.camera);
+    let mut scene = Scene::settled(
+        OutputSpace::FileEncoded,
+        TextureFormat::Rgba16Float,
+        (w, h),
+        camera,
+        projection,
+        Some(SceneModel {
+            file: "probes/P5.safetensors",
+            tau: item.timestamp,
+            transform: Transform::IDENTITY,
+        }),
+        false,
+    );
+    scene
+        .app
+        .world_mut()
+        .resource_mut::<SplatTierState>()
+        .sh_cap = 3;
+    let full = image_of(&scene.readback(), w, h);
+    let m = metrics(&capped, &full);
+    assert!(
+        !(m.psnr >= MIN_PSNR && m.share <= MAX_SHARE),
+        "degree 3 differs from degree 1, or the test is vacuous: {m:?}"
+    );
+
+    *scene.app.world_mut().resource_mut::<SplatShLimit>() = SplatShLimit(Some(1));
+    let limited = image_of(&scene.readback(), w, h);
+    let m = metrics(&capped, &limited);
+    eprintln!(
+        "P5 limited to 1 by SplatShLimit: PSNR {:.2} dB, s {:.4}, s_alpha {:.4}",
+        m.psnr, m.share, m.alpha
+    );
+    assert!(
+        m.psnr >= MIN_PSNR && m.share <= MAX_SHARE && m.alpha <= MAX_SHARE,
+        "E15's tier: {m:?}"
+    );
+    assert_eq!(
+        scene.app.world().resource::<SplatTierState>().sh_cap,
+        3,
+        "the limit leaves the governor's cap alone"
+    );
+
+    *scene.app.world_mut().resource_mut::<SplatShLimit>() = SplatShLimit(None);
+    let again = image_of(&scene.readback(), w, h);
+    let m = metrics(&full, &again);
+    assert!(
+        m.psnr >= MIN_PSNR && m.share <= MAX_SHARE && m.alpha <= MAX_SHARE,
+        "no limit draws the loaded degree again: {m:?}"
     );
 }
