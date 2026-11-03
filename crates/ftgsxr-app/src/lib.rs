@@ -26,7 +26,7 @@ pub use intent::{
     PlaybackCommand, UiCommand, VolumeChannel,
 };
 // §2.1 `ftgsxr_app::library`.
-pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LoadedModel};
+pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel};
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
 pub use persist::{SettingsPath, SettingsRes};
 // §2.1 `ftgsxr_app::platform`.
