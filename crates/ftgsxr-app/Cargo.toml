@@ -16,7 +16,8 @@ publish.workspace = true
 # wgpu conversion; it logs through `bevy_log`'s `tracing` (§2.6, #189, #193). The other crates of §2.1's row join with the modules that use them.
 [dependencies]
 # #282: `manipulate` draws its boxes and gizmo with Bevy's gizmo lines (PRD #275).
-bevy = { workspace = true, features = ["bevy_render", "bevy_color", "bevy_log", "bevy_gizmos", "bevy_pbr"] }
+# #289: B-9 builds the desktop's render plugins without a window (`bevy_core_pipeline`).
+bevy = { workspace = true, features = ["bevy_render", "bevy_color", "bevy_log", "bevy_gizmos", "bevy_pbr", "bevy_core_pipeline"] }
 ftgsxr-core.workspace = true
 ftgsxr-io.workspace = true # Q-127: `SettingsRes` holds `ftgsxr_io::Settings`
 ftgsxr-render.workspace = true
