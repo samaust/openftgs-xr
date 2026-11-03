@@ -53,6 +53,13 @@ pub struct SettingsRes(pub Settings);
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct SettingsPath(pub PathBuf);
 
+/// The warnings of a settings load the caller made itself before inserting `SettingsRes`
+/// (`play` reads the file for the log level and the tier first, Q-170): `AppPlugin`
+/// raises each E-SETTINGS one as a toast, as for its own load (§1.15).
+// Q-T275.2
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsWarnings(pub Vec<String>);
+
 /// What the UI and the input adapters ask of `persist` (§2.1). Like `LibraryCommand`, it
 /// derives `Message` and `Event` (Q-166). A relative scene path names a file under the
 /// config directory's `scenes/`, `.ftgsxr-scene.json` appended when it lacks it; the
@@ -145,18 +152,35 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
             default.clone()
         }
     };
-    if !world.contains_resource::<SettingsRes>() {
+    // §1.15: E-SETTINGS is the set-aside file; other warnings are logged.
+    let set_aside = |w: &str, failures: &mut Vec<PersistFailure>| {
+        if w.starts_with("E-SETTINGS") {
+            failures.push(PersistFailure {
+                code: "E-SETTINGS".into(),
+                text: w.to_owned(),
+            });
+        }
+    };
+    if world.contains_resource::<SettingsRes>() {
+        // Q-T275.2: the caller's own load.
+        if let Some(w) = world.remove_resource::<SettingsWarnings>() {
+            for w in &w.0 {
+                if let Some(text) = w.strip_prefix("E-IO") {
+                    failures.push(PersistFailure {
+                        code: "E-IO".into(),
+                        text: format!("E-IO{text}"),
+                    });
+                } else {
+                    set_aside(w, &mut failures);
+                }
+            }
+        }
+    } else {
         let settings = match load_settings(&path) {
             Ok((settings, warnings)) => {
                 for w in warnings {
                     bevy::log::warn!("{}: {w}", path.display());
-                    // §1.15: E-SETTINGS is the set-aside file; other warnings are logged.
-                    if w.starts_with("E-SETTINGS") {
-                        failures.push(PersistFailure {
-                            code: "E-SETTINGS".into(),
-                            text: w,
-                        });
-                    }
+                    set_aside(&w, &mut failures);
                 }
                 settings
             }

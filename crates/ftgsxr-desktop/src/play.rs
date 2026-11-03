@@ -16,8 +16,8 @@ use bevy::window::{PresentMode, Window, WindowPlugin};
 use clap::ArgAction;
 use clap::{Arg, ArgMatches, Command, value_parser};
 use ftgsxr_app::{
-    AppPlugin, ModelRef, Platform, QualityTier, SettingsPath, SettingsRes, Url, init_desktop_log,
-    load_settings,
+    AppPlugin, ModelRef, Platform, QualityTier, SettingsPath, SettingsRes, SettingsWarnings, Url,
+    init_desktop_log, load_settings,
 };
 
 use crate::TIERS;
@@ -171,7 +171,7 @@ pub(crate) fn run(m: &ArgMatches) -> ExitCode {
         // Q-170: the player runs on without the log rather than not at all.
         eprintln!("ftgsxr: warning: no log: {}: {e}", e.code());
     }
-    for w in warnings {
+    for w in &warnings {
         bevy::log::warn!("{}: {w}", path.display());
     }
     let tier_name = m
@@ -196,8 +196,10 @@ pub(crate) fn run(m: &ArgMatches) -> ExitCode {
         });
     let mut app = App::new();
     // Q-163: the binary's settings, so `--tier` and `--log-level` stay unsaved.
+    // Q-T275.2: the load's warnings, for the E-SETTINGS toast.
     app.insert_resource(SettingsPath(path))
-        .insert_resource(SettingsRes(settings));
+        .insert_resource(SettingsRes(settings))
+        .insert_resource(SettingsWarnings(warnings));
     if let Err(code) = add_plugins(&mut app, group, m) {
         return code;
     }

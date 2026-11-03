@@ -155,3 +155,28 @@ fn a_triggered_toast_is_raised_once_through_the_rate_limit() {
     t.frames(3);
     assert_eq!(toasts(&t.app), vec![toast]);
 }
+
+/// Fixer item 19 (#275; §1.15 E-SETTINGS, §1.11, Q-170): `play` reads the settings
+/// itself before the log and inserts `SettingsRes`; the set-aside file's E-SETTINGS still
+/// reaches a toast through `SettingsWarnings` (Q-T275.2).
+#[test]
+fn i13_a_set_aside_settings_file_read_by_the_caller_raises_e_settings() {
+    use ftgsxr_app::{SettingsPath, SettingsRes, SettingsWarnings, load_settings};
+    let dir = support::scratch("i13-settings-caller");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.toml");
+    fs::write(&path, "this is = = not toml [").unwrap();
+    let (settings, warnings) = load_settings(&path).expect("a corrupt file loads the defaults");
+    assert!(
+        warnings.iter().any(|w| w.starts_with("E-SETTINGS")),
+        "{warnings:?}"
+    );
+    let mut t = TestApp::with("i13-settings-caller", Setup::default(), |app| {
+        app.insert_resource(SettingsPath(path.clone()))
+            .insert_resource(SettingsRes(settings))
+            .insert_resource(SettingsWarnings(warnings));
+    });
+    record_toasts(&mut t.app);
+    t.frames(3);
+    assert!(toasted(&t.app, "E-SETTINGS"), "{:?}", toasts(&t.app));
+}
