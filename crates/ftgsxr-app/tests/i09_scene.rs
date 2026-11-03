@@ -209,3 +209,55 @@ fn i09_the_startup_scene_loads() {
     let mut t = TestApp::with("i09_startup", setup, |_| {});
     wait_for(&mut t, 1);
 }
+
+/// A scene naming P1 at a path that is gone (§1.5 Scene files); its missing entry.
+fn p1_missing(t: &mut TestApp, name: &str) -> String {
+    let p1 = std::fs::read(fixtures_dir().join("probes/P1.safetensors")).unwrap();
+    let id = ftgsxr_core::hex(&ftgsxr_core::sha256(&p1));
+    let scenes = t.dir.join("config/scenes");
+    std::fs::create_dir_all(&scenes).unwrap();
+    let json = format!(
+        r#"{{"format": "ftgsxr-scene", "version": 1,
+        "models": [{{"source": {{"kind": "dir", "location": "moved.safetensors"}},
+            "identity": "{id}", "name": "moved",
+            "pose": {{"translation": [0.5, 0, 0], "rotation": [0, 0, 0, 1], "scale": 1}},
+            "visible": true, "mode": "splats", "time_offset_s": 0, "end_rule": "hold",
+            "lighting": null, "audio": null}}],
+        "clock": {{"t": 0, "speed": 1, "loop": "loop", "range": null}},
+        "environment": {{}}, "anchor": null, "rig": null, "camera": null, "bookmarks": []}}"#
+    );
+    std::fs::write(scenes.join(format!("{name}.ftgsxr-scene.json")), json).unwrap();
+    t.frames(2);
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::LoadScene(name.into()));
+    t.frames(30);
+    let lib = t.app.world().resource::<Library>();
+    assert!(
+        lib.entries.iter().any(|e| e.state == EntryState::Missing),
+        "the moved model is missing"
+    );
+    id
+}
+
+// Q-T275.3
+#[test]
+fn i09_loading_the_missing_models_file_from_elsewhere_clears_the_entry() {
+    // PRD #275's Library decision: a file of the missing model's identity is the model,
+    // wherever it is; its load clears `EntryState::Missing` and takes the scene's pose.
+    let mut t = TestApp::new("i09_locate");
+    p1_missing(&mut t, "moved");
+    t.command(LibraryCommand::LoadRef(ModelRef::File(
+        fixtures_dir().join("probes/P1.safetensors"),
+    )));
+    wait_for(&mut t, 1);
+    t.frames(2);
+    let lib = t.app.world().resource::<Library>();
+    assert!(
+        !lib.entries.iter().any(|e| e.state == EntryState::Missing),
+        "located"
+    );
+    let mut q = t.app.world_mut().query::<(&LoadedModel, &Transform)>();
+    let (_, tf) = q.single(t.app.world()).unwrap();
+    assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
+}

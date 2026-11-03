@@ -18,7 +18,7 @@ use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransf
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
 use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
-use crate::library::{EntryState, Library, LibraryCommand, LoadedModel};
+use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
 use crate::platform::{PickKind, PlatformRes};
 use crate::playback::Playback;
 
@@ -26,6 +26,7 @@ use crate::playback::Playback;
 enum Out {
     Intent(Intent),
     Library(LibraryCommand),
+    Locate(usize),
     Answer(bool),
     Cue(UiCue),
     Jump(JumpToCamera),
@@ -86,6 +87,9 @@ pub(super) fn draw(
             }
             Out::Library(c) => {
                 world.write_message(c);
+            }
+            Out::Locate(i) => {
+                world.write_message(LocateEntry(i));
             }
             Out::Cue(c) => {
                 world.write_message(c);
@@ -365,8 +369,9 @@ fn library_tab(
                 }
                 EntryState::Missing => {
                     ui.label("missing");
+                    // Q-T275.3: only a file of the entry's identity is accepted.
                     if button(ui, "Locate…", out, hv) {
-                        out.push(Out::Library(LibraryCommand::Pick(PickKind::Files)));
+                        out.push(Out::Locate(i));
                     }
                 }
             }

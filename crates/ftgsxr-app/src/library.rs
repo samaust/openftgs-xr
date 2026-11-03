@@ -173,6 +173,7 @@ impl Plugin for LibraryPlugin {
         app.add_message::<LibraryCommand>()
             .add_message::<LibraryFailure>()
             .add_message::<FileDragAndDrop>()
+            .add_message::<LocateEntry>()
             .init_resource::<Pending>()
             .add_observer(on_model)
             .add_observer(on_splat_event)
@@ -180,6 +181,7 @@ impl Plugin for LibraryPlugin {
                 Update,
                 (
                     read_drops,
+                    run_locates,
                     run_commands.in_set(LibraryCommands),
                     poll_tasks,
                     poll_picks,
@@ -228,6 +230,35 @@ impl Plugin for LibraryPlugin {
     }
 }
 
+/// "Locate…" on a missing entry (§1.5 Scene files, PRD #275's Library decision): opens
+/// the file picker; the picked file loads only if its identity is the entry's, and its
+/// load clears the entry (Q-T275.3). The UI writes it.
+// Q-T275.3
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LocateEntry(pub(crate) usize);
+
+/// Opens a picker for each `LocateEntry` on a missing entry with an identity.
+fn run_locates(
+    mut reader: MessageReader<LocateEntry>,
+    library: Res<Library>,
+    mut pending: ResMut<Pending>,
+    platform: Res<PlatformRes>,
+) {
+    for LocateEntry(i) in reader.read() {
+        let Some(e) = library.entries.get(*i) else {
+            continue;
+        };
+        if e.state != EntryState::Missing {
+            continue;
+        }
+        let Some(id) = e.identity.clone() else {
+            continue;
+        };
+        let h = platform.0.pick(PickKind::Files);
+        pending.locates.push((id, h));
+    }
+}
+
 /// Whether an instance not yet uploaded shows when its upload completes (Q-148): true
 /// from the library, false for a scene's hidden instance (`persist`); removed at the
 /// upload.
@@ -250,6 +281,8 @@ struct LoadCtx {
     file_n: Option<u64>,
     reduce_to: Option<usize>,
     audio: Option<ModelRef>,
+    /// The identity a "Locate…" pick must have (Q-T275.3).
+    locate: Option<String>,
 }
 
 type ListTask = Task<Result<Vec<Entry>, IoError>>;
@@ -285,6 +318,10 @@ struct Pending {
     pruning: Option<Task<()>>,
     /// The commands read while it ran, in their order (#291).
     deferred: Vec<LibraryCommand>,
+    /// The open "Locate…" pickers, each with the identity it looks for (Q-T275.3).
+    locates: Vec<(String, PickHandle)>,
+    /// Picked files answering a "Locate…", until their `LoadRef` is read.
+    locating: Vec<(ModelRef, String)>,
 }
 
 impl Pending {
@@ -543,6 +580,7 @@ fn run_commands(
                         file_n: e.info.as_ref().map(|i| i.n),
                         reduce_to,
                         audio: None,
+                        locate: None,
                     },
                     kind_hint: kind_hint(e.entry.kind),
                     cancel,
@@ -551,6 +589,12 @@ fn run_commands(
                 });
             }
             LibraryCommand::LoadRef(r) => {
+                // Q-T275.3: a pick answering "Locate…" carries the identity it must have.
+                let locate = pending
+                    .locating
+                    .iter()
+                    .position(|(x, _)| *x == r)
+                    .map(|i| pending.locating.remove(i).1);
                 let (client, provider) = (client.0.clone(), provider.clone());
                 let at = r.clone();
                 let task = IoTaskPool::get().spawn(async move {
@@ -566,6 +610,7 @@ fn run_commands(
                         file_n: None,
                         reduce_to: None,
                         audio: None,
+                        locate,
                     },
                     kind_hint: None,
                     cancel: Arc::new(AtomicBool::new(false)),
@@ -891,6 +936,20 @@ fn poll_picks(
     platform: Res<PlatformRes>,
     mut commands: MessageWriter<LibraryCommand>,
 ) {
+    // Q-T275.3: the first picked file answers a "Locate…".
+    let locates = std::mem::take(&mut pending.locates);
+    for (id, h) in locates {
+        match platform.0.poll_pick(h) {
+            Poll::Pending => pending.locates.push((id, h)),
+            Poll::Ready(Err(e)) => warn!("the picker failed: {e}"),
+            Poll::Ready(Ok(refs)) => {
+                if let Some(r) = refs.into_iter().next() {
+                    pending.locating.push((r.clone(), id));
+                    commands.write(LibraryCommand::LoadRef(r));
+                }
+            }
+        }
+    }
     let picks = std::mem::take(&mut pending.picks);
     for (kind, h) in picks {
         match platform.0.poll_pick(h) {
@@ -928,6 +987,7 @@ fn on_model(
     assets: Res<Assets<SplatAsset>>,
     mut library: ResMut<Library>,
     pending: Res<Pending>,
+    mut failures: MessageWriter<LibraryFailure>,
     mut commands: Commands,
 ) {
     let Ok((ctx, model)) = loads.get(add.entity) else {
@@ -937,6 +997,30 @@ fn on_model(
         return;
     };
     let identity: String = asset.identity.iter().map(|b| format!("{b:02x}")).collect();
+    // Q-T275.3: a located file of another identity is refused; a load of a missing
+    // entry's identity, located or not, clears the entry.
+    if let Some(want) = &ctx.locate
+        && *want != identity
+    {
+        let missing = library
+            .entries
+            .iter()
+            .find(|e| e.state == EntryState::Missing && e.identity.as_ref() == Some(want))
+            .map_or_else(|| ctx.name.clone(), |e| stem(Path::new(&e.entry.name)));
+        failures.write(LibraryFailure::new(
+            ctx.name.clone(),
+            Some(ctx.source.clone()),
+            format!(
+                "E-SCENE-MISSING: Model {missing} not found; locate it ({} is another model)",
+                ctx.name
+            ),
+        ));
+        commands.entity(add.entity).despawn();
+        return;
+    }
+    library
+        .entries
+        .retain(|e| !(e.state == EntryState::Missing && e.identity.as_ref() == Some(&identity)));
     // #205: reduced when the rows requested are fewer than the file's.
     let file_n = ctx.file_n.unwrap_or(asset.info.n);
     let reduced = ctx.reduce_to.is_some_and(|k| (k as u64) < file_n);

@@ -135,6 +135,9 @@ struct ScenePending {
     /// Set once every instance appeared: the clock waits a frame for `playback` to
     /// follow their T_len.
     settled: bool,
+    /// The missing models' attributes, for an instance of their identity that appears
+    /// once located (Q-T275.3); the clock does not wait for them.
+    located: Vec<SceneModel>,
 }
 
 /// Q-163: when `SettingsRes` is absent, reads the settings from `SettingsPath`, else
@@ -694,6 +697,7 @@ pub fn apply_scene(
     library: &mut Library,
 ) -> Vec<String> {
     let mut missing = Vec::new();
+    let mut located = Vec::new();
     let mut pending = Vec::new();
     for m in &scene.models {
         let Some(r) = model_ref(&m.source) else {
@@ -704,6 +708,7 @@ pub fn apply_scene(
             && !p.exists()
         {
             missing.push(m.name.clone());
+            located.push(m.clone());
             let source = library
                 .sources
                 .iter()
@@ -795,6 +800,7 @@ pub fn apply_scene(
         }
         let mut sp = world.get_resource_or_init::<ScenePending>();
         sp.models = pending;
+        sp.located = located;
         sp.clock = Some(clock);
         sp.settled = false;
     });
@@ -824,7 +830,16 @@ fn apply_pending_instances(
     let display = &settings.0.display;
     for (e, mut m, mut t) in &mut fresh {
         let at = pending.models.iter().position(|p| p.identity == m.identity);
-        let Some(at) = at else {
+        // Q-T275.3: a located model takes its scene attributes too.
+        let p = match at {
+            Some(at) => Some(pending.models.remove(at)),
+            None => pending
+                .located
+                .iter()
+                .position(|p| p.identity == m.identity)
+                .map(|at| pending.located.remove(at)),
+        };
+        let Some(p) = p else {
             let mode = mode_of(&display.mode, display);
             if mode != RenderMode::Splats {
                 commands.entity(e).try_insert(SplatMode(mode));
@@ -834,7 +849,6 @@ fn apply_pending_instances(
                 .try_insert(SplatOverlays(overlays_of(&display.overlays)));
             continue;
         };
-        let p = pending.models.remove(at);
         *t = transform_of(&p.pose);
         m.name = p.name.clone();
         m.time.offset_s = p.time_offset_s;
