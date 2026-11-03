@@ -14,6 +14,7 @@ pub mod library;
 pub mod manipulate;
 pub mod persist;
 pub mod platform;
+pub mod playback;
 pub mod plugin;
 
 // Q-67: `BenchReport` and `cmd_bench`.
@@ -28,6 +29,8 @@ pub use intent::{
 };
 // §2.1 `ftgsxr_app::library`.
 pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LoadedModel};
+// §2.1 `ftgsxr_app::playback`.
+pub use playback::Playback;
 // §2.1 `ftgsxr_app::manipulate`.
 pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick_instance};
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).

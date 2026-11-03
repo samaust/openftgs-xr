@@ -16,6 +16,7 @@ use crate::library::LibraryPlugin;
 use crate::manipulate::ManipulatePlugin;
 use crate::persist;
 use crate::platform::{Platform, PlatformRes};
+use crate::playback::PlaybackPlugin;
 
 pub use crate::desktop_log::init_desktop_log;
 
@@ -52,7 +53,8 @@ impl Plugin for AppPlugin {
         // `initial` loads through the library; `scene` is `persist`'s (#285).
         app.add_plugins(LibraryPlugin {
             initial: self.initial.clone(),
-        })
-        .add_plugins(ManipulatePlugin);
+        });
+        app.add_plugins(PlaybackPlugin);
+        app.add_plugins(ManipulatePlugin);
     }
 }
