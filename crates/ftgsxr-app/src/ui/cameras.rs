@@ -490,14 +490,41 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
+        // A downloaded file that is not a `ftgs-scene` manifest (a checkpoint's) offers none.
+        let not_a_scene = app
+            .world_mut()
+            .spawn((
+                IndexScene(fixtures_dir().join("checkpoint/tiny/manifest.json")),
+                m.clone(),
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
         let without = app.world_mut().spawn((m, GlobalTransform::IDENTITY)).id();
         app.update();
         let tc = app
             .world()
             .get::<TrainingCameras>(with)
-            .expect("the index scene's cameras");
+            .expect("the index scene's cameras")
+            .clone();
         assert_eq!(tc.path, manifest_path);
         assert_eq!(tc.manifest, want);
+        assert!(app.world().get::<TrainingCameras>(not_a_scene).is_none());
         assert!(app.world().get::<TrainingCameras>(without).is_none());
+        // A jump to one of its cameras moves the fly camera to that camera's center.
+        let (_, camera) = tc.manifest.cameras[0].clone();
+        app.world_mut().write_message(JumpToCamera {
+            instance: with,
+            camera,
+            timestamp: tc.manifest.images[0].timestamp,
+            time_unit: tc.manifest.time_unit.clone(),
+        });
+        app.update();
+        let jumps: Vec<CameraJump> = app
+            .world_mut()
+            .resource_mut::<Messages<CameraJump>>()
+            .drain()
+            .collect();
+        assert_eq!(jumps.len(), 1);
+        assert!(close(jumps[0].pose.translation, camera.center().as_vec3()));
     }
 }

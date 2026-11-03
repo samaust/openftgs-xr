@@ -393,6 +393,24 @@ fn stem(p: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// A file an index entry names beside its model (its `audio`, §1.10; its `scene`, §1.7),
+/// downloaded into the cache with the model; a failure is logged and gives `None`, and the
+/// model loads without it.
+fn download_with(
+    http: Option<&HttpClient>,
+    url: &Url,
+    what: &str,
+    cancel: &AtomicBool,
+) -> Option<PathBuf> {
+    match http?.download(url, None, &mut |_| {}, cancel) {
+        Ok(path) => Some(path),
+        Err(e) => {
+            warn!("{what} {url}: {}", error_text(&e));
+            None
+        }
+    }
+}
+
 /// §1.10: a file with the model's stem and `.ogg`, `.wav`, `.flac` or `.mp3` beside a
 /// local model, the first that exists in that order.
 fn sidecar(r: &ModelRef) -> Option<ModelRef> {
@@ -566,30 +584,15 @@ fn run_commands(
                         &mut |now| *p.lock().unwrap_or_else(|e| e.into_inner()) = Some(now),
                         &c,
                     )?;
-                    let audio = match (audio_url, http.clone()) {
-                        (Some(url), Some(http)) => {
-                            match http.download(&url, None, &mut |_| {}, &c) {
-                                Ok(path) => Some(ModelRef::File(path)),
-                                Err(e) => {
-                                    warn!("the soundtrack {url}: {}", error_text(&e));
-                                    None
-                                }
-                            }
+                    let http = http.as_deref();
+                    let audio = match audio_url {
+                        Some(url) => {
+                            download_with(http, &url, "the soundtrack", &c).map(ModelRef::File)
                         }
-                        _ => sidecar(&r),
+                        None => sidecar(&r),
                     };
-                    let scene = match (scene_url, http) {
-                        (Some(url), Some(http)) => {
-                            match http.download(&url, None, &mut |_| {}, &c) {
-                                Ok(path) => Some(path),
-                                Err(e) => {
-                                    warn!("the scene manifest {url}: {}", error_text(&e));
-                                    None
-                                }
-                            }
-                        }
-                        _ => None,
-                    };
+                    let scene = scene_url
+                        .and_then(|url| download_with(http, &url, "the scene manifest", &c));
                     Ok((r, bytes, audio, scene))
                 });
                 e.state = EntryState::Fetching(Progress {
@@ -1154,18 +1157,21 @@ fn follow_in_use(
         let entries = platform.0.paths().cache.join("http");
         // A soundtrack downloaded with its model stays with it (§1.10), and so does its
         // index `scene` manifest (§1.7, #374).
-        let mut paths: Vec<PathBuf> = all
+        let paths: Vec<PathBuf> = all
             .iter()
-            .flat_map(|(c, _)| [Some(&c.source), c.audio.as_ref()])
-            .flatten()
-            .filter_map(|r| match r {
-                ModelRef::File(p) if !p.as_os_str().is_empty() => Some(p.clone()),
-                ModelRef::Http(url) => Some(cache_entry(&entries, url)),
-                ModelRef::Document(_) => None,
-                ModelRef::File(_) => None,
+            .flat_map(|(c, scene)| {
+                [Some(&c.source), c.audio.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| match r {
+                        ModelRef::File(p) if !p.as_os_str().is_empty() => Some(p.clone()),
+                        ModelRef::Http(url) => Some(cache_entry(&entries, url)),
+                        ModelRef::Document(_) => None,
+                        ModelRef::File(_) => None,
+                    })
+                    .chain(scene.map(|s| s.0.clone()))
             })
             .collect();
-        paths.extend(all.iter().filter_map(|(_, s)| s.map(|s| s.0.clone())));
         client.set_in_use(&paths);
     }
     // #291: only once every fetch has landed in the in-use set above; `run_commands`
