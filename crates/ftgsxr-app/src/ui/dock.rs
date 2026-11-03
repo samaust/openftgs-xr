@@ -249,7 +249,9 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
                     Tab::Scene => scene_tab(world, ui, out, hv),
                     Tab::Playback => playback_tab(world, ui, out, hv),
                     Tab::Display => display_tab(world, ui, out, hv),
-                    Tab::Environment => environment_tab(ui),
+                    // Q-161, §1.1: no passthrough control on the desktop (absent, not
+                    // disabled); `persist` adds the background and the grid.
+                    Tab::Environment => {}
                     Tab::Settings => {
                         ui.label("Settings (§1.11)");
                     }
@@ -911,13 +913,6 @@ fn display_tab(
             }
         }
     });
-}
-
-/// Environment on the desktop: passthrough is unavailable; `persist` adds the
-/// background and the grid (they are settings).
-fn environment_tab(ui: &mut egui::Ui) {
-    // Q-161: no passthrough on the desktop; the control is not offered.
-    ui.label("Passthrough: not available on the desktop");
 }
 
 /// The open question as a dialog.
