@@ -51,7 +51,7 @@ pub use rig::{
     ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
 };
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
-pub use persist::{SettingsPath, SettingsRes};
+pub use persist::{PersistCommand, SettingsPath, SettingsRes, apply_scene, scene_from_world};
 // §2.1 `ftgsxr_app::platform`.
 pub use platform::{
     CameraFrames, CameraThumb, Permission, PermissionHandle, PickHandle, PickKind, Platform,

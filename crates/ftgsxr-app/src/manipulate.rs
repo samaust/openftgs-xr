@@ -299,7 +299,7 @@ fn on_loaded(
 }
 
 /// `saved_at`: RFC 3339 in UTC with nine fractional digits (Q-52).
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();

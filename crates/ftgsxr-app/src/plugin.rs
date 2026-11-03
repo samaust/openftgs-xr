@@ -54,16 +54,25 @@ impl Plugin for AppPlugin {
         if app.get_sub_app(RenderApp).is_some() && !app.is_plugin_added::<EguiPlugin>() {
             app.add_plugins(EguiPlugin::default());
         }
-        // `initial` loads through the library; `scene` is `persist`'s (#285).
+        // `initial` loads through the library.
+        let cache_max_bytes = app
+            .world()
+            .get_resource::<persist::SettingsRes>()
+            .map_or(20 << 30, |s| s.0.cache.max_bytes);
         app.add_plugins(LibraryPlugin {
             initial: self.initial.clone(),
+            cache_max_bytes,
         });
         app.add_plugins(PlaybackPlugin);
         app.add_plugins(ManipulatePlugin);
         app.add_plugins(RigPlugin);
         // Q-149: the kira adapter unless `AudioOutputRes` exists already.
         app.add_plugins(AudioPlugin);
-        // Appendix D.1 (#284); `persist`'s plugin (#285) goes before it.
+        // #285: after the resources it maps; `scene` loads at startup.
+        app.add_plugins(persist::PersistPlugin {
+            scene: self.scene.clone(),
+        });
+        // Appendix D.1 (#284).
         app.add_plugins(DesktopInputPlugin);
         // E16 (#288).
         app.add_plugins(GovernorPlugin);

@@ -49,6 +49,12 @@ impl Default for LoopSetting {
     }
 }
 
+/// The playback range last set through `PlaybackCommand::Range`, which `Clock` does not
+/// report: the scene file keeps it (`persist`), as `LoopSetting` keeps the loop mode.
+// Q-204
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct RangeSetting(pub(crate) Option<(f64, f64)>);
+
 /// §1.6's speed presets, in both directions, ascending.
 const PRESETS: [f64; 12] = [
     -4.0, -2.0, -1.0, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0,
@@ -84,6 +90,7 @@ impl Plugin for PlaybackPlugin {
             .init_resource::<Playback>()
             .init_resource::<StepTarget>()
             .init_resource::<LoopSetting>()
+            .init_resource::<RangeSetting>()
             .add_systems(Update, (run_intents, follow_length, advance).chain());
     }
 }
@@ -119,6 +126,7 @@ fn run_intents(
     mut playback: ResMut<Playback>,
     target: Res<StepTarget>,
     mut looping: ResMut<LoopSetting>,
+    mut range: ResMut<RangeSetting>,
     mut models: Query<(Entity, &mut LoadedModel)>,
 ) {
     for intent in reader.read() {
@@ -153,7 +161,10 @@ fn run_intents(
                     looping.0 = m;
                     clock.set_loop(m);
                 }
-                PlaybackCommand::Range(r) => clock.set_range(r),
+                PlaybackCommand::Range(r) => {
+                    clock.set_range(r);
+                    range.0 = r;
+                }
                 PlaybackCommand::Offset { instance, offset_s } => {
                     // Q-177: a non-finite offset is refused.
                     if !offset_s.is_finite() {

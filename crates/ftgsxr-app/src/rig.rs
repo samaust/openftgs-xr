@@ -66,7 +66,7 @@ impl Default for Locomotion {
 }
 
 impl Locomotion {
-    fn from_settings(s: &LocomotionSettings, enabled: bool) -> Locomotion {
+    pub(crate) fn from_settings(s: &LocomotionSettings, enabled: bool) -> Locomotion {
         Locomotion {
             speed_mps: s.speed_mps,
             snap: s.snap_turn,
