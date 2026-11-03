@@ -49,9 +49,20 @@ pub struct SplatLoad {
 #[derive(Component)]
 pub(crate) struct LoadTask(Task<Result<SplatAsset, RenderError>>);
 
-/// The device the passes run on: Bevy's, with the memory budget (Q-66, Q-86).
+/// The device the passes run on: Bevy's, with the memory budget (Q-66, Q-86), present
+/// once the renderer exists. Public for the library's reduce-to-budget count (Q-158)
+/// and its checks that an unload frees (I-1): `device` reads the budget and the bytes
+/// in use.
+// Q-T278.1
 #[derive(Resource, Clone)]
-pub(crate) struct SplatGpu(pub(crate) Arc<SplatDevice>);
+pub struct SplatGpu(pub(crate) Arc<SplatDevice>);
+
+impl SplatGpu {
+    /// The device, its memory budget and the static bytes its models hold (Q-74).
+    pub fn device(&self) -> &SplatDevice {
+        &self.0
+    }
+}
 
 /// The models on the GPU, those uploading and those that failed, by asset.
 #[derive(Resource, Default)]
