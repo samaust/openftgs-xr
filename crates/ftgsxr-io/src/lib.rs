@@ -32,5 +32,5 @@ pub use settings::{
 };
 pub use sources::{
     DocumentProvider, DocumentSource, HttpIndex, LocalDir, ModelBytes, ModelRef, ModelSource,
-    SourceSpec, open_ref, open_source,
+    SourceSpec, Url, open_ref, open_source,
 };
