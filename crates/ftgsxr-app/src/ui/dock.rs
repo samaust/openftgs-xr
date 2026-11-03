@@ -21,7 +21,7 @@ use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCo
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
 use crate::manipulate::{FIT_RANGE_M, PoseExtras, SetPoseExtras};
 use crate::platform::{PickKind, PlatformRes};
-use crate::playback::Playback;
+use crate::playback::{Playback, RangeSetting};
 
 /// What the user did this frame.
 enum Out {
@@ -860,10 +860,21 @@ fn playback_tab(
             }
         }
     });
+    // §1.6: [T_a, T_b] settable at both ends from the scrub position.
+    let (a, b) = world
+        .get_resource::<RangeSetting>()
+        .and_then(|r| r.0)
+        .unwrap_or((0.0, len));
     ui.horizontal(|ui| {
-        if button(ui, "Range from here", out, hv) {
+        ui.label(format!("range [{a:.3}, {b:.3}] s"));
+        if button(ui, "T_a here", out, hv) {
             out.push(Out::Intent(Intent::Playback(PlaybackCommand::Range(Some(
-                (t, len),
+                (t, b.max(t)),
+            )))));
+        }
+        if button(ui, "T_b here", out, hv) {
+            out.push(Out::Intent(Intent::Playback(PlaybackCommand::Range(Some(
+                (a.min(t), t),
             )))));
         }
         if button(ui, "Clear range", out, hv) {
