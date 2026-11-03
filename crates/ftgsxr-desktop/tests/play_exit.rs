@@ -114,8 +114,8 @@ fn run_once(home: &Path, model: &Path, delay: Duration) -> (Option<ExitStatus>, 
     (status, log)
 }
 
-/// #376 (§1.7 Command line, Q-233): `play` asked to exit in its first frames, while its
-/// render pipelines compile, exits by its own code (130 for Ctrl-C), never by a signal.
+/// #376 (§1.7 Command line, Q-233, Q-234): `play` asked to exit in its first frames, while
+/// its render pipelines compile, exits by its own code (130 for Ctrl-C), never by a signal.
 #[test]
 #[ignore = "gpu"]
 fn gpu_play_interrupted_in_its_first_frames_exits_by_its_code() {
@@ -129,6 +129,7 @@ fn gpu_play_interrupted_in_its_first_frames_exits_by_its_code() {
     for (i, ms) in delays_ms.iter().enumerate() {
         let home = scratch(&format!("interrupted-{i}"));
         let (status, log) = run_once(&home, &model, Duration::from_millis(*ms));
+        // Q-234
         let ok = status.is_some_and(|s| s.signal().is_none() && s.code() == Some(130));
         if !ok {
             let tail: Vec<&str> = log.lines().rev().take(8).collect();

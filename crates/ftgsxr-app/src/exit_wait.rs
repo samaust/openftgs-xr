@@ -5,15 +5,16 @@
 //! async compute pool; a process that exits while one compiles leaves the worker inside
 //! the GPU driver, whose exit-time teardown can crash it. On an `AppExit` the app holds the
 //! exit until a render frame that ran after it reports no pipeline queued or compiling, at
-//! most `CAP` of wall time, then lets it through, in the same `Last` run as the settings'
-//! save at exit, which so sees it once.
+//! most `CAP` of wall time, then lets it through. The hold runs in `Last` after bevy's
+//! `ExitSystems` (the window's close action writes its exit there) and before the settings'
+//! save at exit, so the save sees the exit once, when it passes.
 //!
 //! With pipelined rendering the render world lives on its own thread, so its report
 //! reaches the main world through a handle both worlds hold. A compile first queued in the
 //! render frame that runs after the release can still race the exit; pipelines queue when
 //! something first draws, which a quiet frame doesn't.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use bevy::app::{App, AppExit, Last};
@@ -22,6 +23,7 @@ use bevy::ecs::prelude::{IntoScheduleConfigs, Local, Res, Resource, World};
 use bevy::log::warn;
 use bevy::render::render_resource::{CachedPipelineState, PipelineCache, PipelineDescriptor};
 use bevy::render::{Render, RenderApp, RenderSystems};
+use bevy::window::ExitSystems;
 
 /// Q-233: the longest an exit waits for in-flight compiles.
 // Q-233
@@ -30,9 +32,9 @@ pub(crate) const CAP: Duration = Duration::from_secs(2);
 /// The render world's latest report.
 #[derive(Default)]
 struct Report {
-    /// The render frames reported so far.
-    frame: u64,
-    /// The pipelines queued or compiling at that frame, by label.
+    /// How many render frames have reported.
+    frames_reported: u64,
+    /// The pipelines queued or compiling at the latest of them, by label.
     pending: Vec<String>,
 }
 
@@ -41,7 +43,7 @@ struct Report {
 struct PendingPipelines(Arc<Mutex<Report>>);
 
 impl PendingPipelines {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Report> {
+    fn lock(&self) -> MutexGuard<'_, Report> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -57,8 +59,12 @@ pub(crate) fn add(app: &mut App) {
     render
         .insert_resource(shared.clone())
         .add_systems(Render, report_pending.in_set(RenderSystems::Cleanup));
-    app.insert_resource(shared)
-        .add_systems(Last, hold_exit.before(crate::persist::save_at_exit));
+    app.insert_resource(shared).add_systems(
+        Last,
+        hold_exit
+            .after(ExitSystems)
+            .before(crate::persist::save_at_exit),
+    );
 }
 
 /// Render world: the pipelines queued or compiling after this frame's queue processing.
@@ -74,16 +80,26 @@ fn report_pending(cache: Res<PipelineCache>, shared: Res<PendingPipelines>) {
         .map(|p| label(&p.descriptor))
         .collect();
     let mut report = shared.lock();
-    report.frame += 1;
+    report.frames_reported += 1;
     report.pending = pending;
 }
 
-fn label(d: &PipelineDescriptor) -> String {
-    let l = match d {
-        PipelineDescriptor::RenderPipelineDescriptor(d) => d.label.as_deref(),
-        PipelineDescriptor::ComputePipelineDescriptor(d) => d.label.as_deref(),
+/// A pipeline's label for the cap's warning.
+fn label(descriptor: &PipelineDescriptor) -> String {
+    let label = match descriptor {
+        PipelineDescriptor::RenderPipelineDescriptor(render) => render.label.as_deref(),
+        PipelineDescriptor::ComputePipelineDescriptor(compute) => compute.label.as_deref(),
     };
-    l.unwrap_or("unlabelled").to_owned()
+    label.unwrap_or("unlabelled").to_owned()
+}
+
+/// When an exit was first held.
+#[derive(Clone, Copy)]
+struct HeldSince {
+    /// The wall time, for `CAP`.
+    started: Instant,
+    /// The render frames reported by then: a quiet report must come from a later one.
+    frames_reported: u64,
 }
 
 /// What the main world holds.
@@ -91,13 +107,13 @@ fn label(d: &PipelineDescriptor) -> String {
 struct Held {
     /// The exit held, an error over a success as `App::should_exit` chooses.
     exit: Option<AppExit>,
-    /// When it was first held, and the render frames reported then.
-    since: Option<(Instant, u64)>,
+    /// When it was first held.
+    since: Option<HeldSince>,
     /// Once released, every later exit passes.
     released: bool,
 }
 
-/// Main world, in `Last` before the settings' save at exit: holds a new `AppExit` (taking
+/// Main world, in `Last` after `ExitSystems` and before the settings' save at exit: holds a new `AppExit` (taking
 /// it out of the messages, so neither the save nor the runner sees it) until a render
 /// frame after it reports nothing pending, or `CAP` passes; then writes it back.
 fn hold_exit(world: &mut World, mut cursor: Local<MessageCursor<AppExit>>, mut held: Local<Held>) {
@@ -117,13 +133,16 @@ fn hold_exit(world: &mut World, mut cursor: Local<MessageCursor<AppExit>>, mut h
         return;
     };
     let shared = world.resource::<PendingPipelines>().clone();
-    let (frame, pending) = {
-        let r = shared.lock();
-        (r.frame, r.pending.clone())
+    let (frames_reported, pending) = {
+        let report = shared.lock();
+        (report.frames_reported, report.pending.clone())
     };
-    let (start, at) = *held.since.get_or_insert((Instant::now(), frame));
-    let quiet = frame > at && pending.is_empty();
-    let late = start.elapsed() >= CAP;
+    let since = *held.since.get_or_insert(HeldSince {
+        started: Instant::now(),
+        frames_reported,
+    });
+    let quiet = frames_reported > since.frames_reported && pending.is_empty();
+    let late = since.started.elapsed() >= CAP;
     let mut messages = world.resource_mut::<Messages<AppExit>>();
     messages.clear();
     if quiet || late {
