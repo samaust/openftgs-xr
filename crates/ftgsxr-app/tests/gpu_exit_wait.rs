@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! #376 (§1.7 Command line, §2.4 Threads, §1.11, Q-229, `gpu` lane): `AppPlugin` holds an
+//! #376 (§1.7 Command line, §2.4 Threads, §1.11, Q-230, `gpu` lane): `AppPlugin` holds an
 //! `AppExit` while render pipelines are queued or compiling, until a render frame after
-//! it reports none, at most Q-229's 2 s; then lets it through with the code it had, and
+//! it reports none, at most Q-230's 2 s; then lets it through with the code it had, and
 //! the settings are saved at that exit, not before. An exit with nothing compiling passes
 //! within the frame after it.
 
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use bevy::app::AppExit;
 use support::TestApp;
 
-/// Q-229's cap, and the slack a loaded machine may add to it.
+/// Q-230's cap, and the slack a loaded machine may add to it.
 const CAP: Duration = Duration::from_secs(2);
 const SLACK: Duration = Duration::from_secs(1);
 

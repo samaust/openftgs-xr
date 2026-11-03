@@ -85,7 +85,7 @@ impl Plugin for AppPlugin {
         app.add_plugins(DesktopInputPlugin);
         // E16 (#288).
         app.add_plugins(GovernorPlugin);
-        // #376 (§2.4 Threads, Q-229): an exit waits for in-flight pipeline compiles.
+        // #376 (§2.4 Threads, Q-230): an exit waits for in-flight pipeline compiles.
         crate::exit_wait::add(app);
     }
 }

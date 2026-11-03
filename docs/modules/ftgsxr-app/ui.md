@@ -20,7 +20,7 @@ What runs without egui (the toasts and their limit, the confirmations, the UI co
 - **Confirmations.** Delete's `UnloadRequest` (Q-199) and `Intent::Ui(LoadScene)` (Q-200) open a dialog; only a confirmation sends the unload or the load.
 - **HUD.** `HudData` holds Q-159's fields, filled each frame from `SplatStats`, the clock, the instances and the tier state.
 - **The world panel.** `panel_hit` maps a ray to a pixel of a `WorldPanel` quad, front side only, the top-left corner pixel (0, 0) (Q-210); the headset's drawing of it is later work.
-- **Training cameras and requests.** `ui/cameras.rs` offers a manifest's cameras beside a model in the Scene tab (the list by split, "jump to camera", the frustums in the instance's frame) and replays a `ftgs-render-request` file found in a directory source from the Library tab. A jump moves the fly camera through `rig`'s `CameraJump` and seeks the clock to the image's timestamp (E9, Q-219). Cameras follow openftgs's conventions (E6, §1.14 Frames).
+- **Training cameras and requests.** `ui/cameras.rs` offers in the Scene tab the cameras of a manifest beside a model, or of the one an HTTP index entry names, which `library` downloads with the model (#374): the list by split, "jump to camera", the frustums in the instance's frame. It also replays a `ftgs-render-request` file found in a directory source from the Library tab. A jump moves the fly camera through `rig`'s `CameraJump` and seeks the clock to the image's timestamp (E9, Q-219). Cameras follow openftgs's conventions (E6, §1.14 Frames).
 
 ## Screenshots (`capture`)
 

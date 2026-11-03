@@ -266,6 +266,13 @@ fn run_locates(
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ShowOnUpload(pub(crate) bool);
 
+/// The `ftgs-scene` manifest an index entry names (§1.7, §1.11 `index.json` `scene`),
+/// downloaded with the model into the download cache: on the instance from its fetch, read
+/// by the Scene tab's training cameras and kept in use while the instance is loaded.
+// Q-219
+#[derive(Component, Clone, Debug, PartialEq)]
+pub(crate) struct IndexScene(pub(crate) PathBuf);
+
 /// The HTTP client the sources and references share (Q-4, Q-47).
 #[derive(Resource)]
 struct Client(Option<Arc<HttpClient>>);
@@ -289,7 +296,9 @@ type ListTask = Task<Result<Vec<Entry>, IoError>>;
 /// A subdirectory's listing: its source's id, the directory entry's location, the task.
 type SubTask = (u64, String, ListTask);
 type InfoTask = Task<Result<ModelInfo, IoError>>;
-type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>), IoError>;
+/// The model's reference and bytes, its soundtrack and its index `scene` manifest's cached
+/// file.
+type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>, Option<PathBuf>), IoError>;
 
 /// A fetch on the I/O task pool.
 struct Fetch {
@@ -382,6 +391,24 @@ fn stem(p: &Path) -> String {
     p.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// A file an index entry names beside its model (its `audio`, §1.10; its `scene`, §1.7),
+/// downloaded into the cache with the model; a failure is logged and gives `None`, and the
+/// model loads without it.
+fn download_with(
+    http: Option<&HttpClient>,
+    url: &Url,
+    what: &str,
+    cancel: &AtomicBool,
+) -> Option<PathBuf> {
+    match http?.download(url, None, &mut |_| {}, cancel) {
+        Ok(path) => Some(path),
+        Err(e) => {
+            warn!("{what} {url}: {}", error_text(&e));
+            None
+        }
+    }
 }
 
 /// §1.10: a file with the model's stem and `.ogg`, `.wav`, `.flac` or `.mp3` beside a
@@ -536,6 +563,9 @@ fn run_commands(
                 // §1.10: the index entry's soundtrack, downloaded with the model, else the
                 // sidecar beside the file.
                 let audio_url = e.entry.audio.as_deref().and_then(|a| Url::parse(a).ok());
+                // §1.7: the index entry's `scene` manifest, downloaded with the model; a failure
+                // leaves the model without training cameras (#374).
+                let scene_url = e.entry.scene.as_deref().and_then(|a| Url::parse(a).ok());
                 let http = client.0.clone();
                 let reduce_to = if reduce {
                     e.info
@@ -554,19 +584,16 @@ fn run_commands(
                         &mut |now| *p.lock().unwrap_or_else(|e| e.into_inner()) = Some(now),
                         &c,
                     )?;
-                    let audio = match (audio_url, http) {
-                        (Some(url), Some(http)) => {
-                            match http.download(&url, None, &mut |_| {}, &c) {
-                                Ok(path) => Some(ModelRef::File(path)),
-                                Err(e) => {
-                                    warn!("the soundtrack {url}: {}", error_text(&e));
-                                    None
-                                }
-                            }
+                    let http = http.as_deref();
+                    let audio = match audio_url {
+                        Some(url) => {
+                            download_with(http, &url, "the soundtrack", &c).map(ModelRef::File)
                         }
-                        _ => sidecar(&r),
+                        None => sidecar(&r),
                     };
-                    Ok((r, bytes, audio))
+                    let scene = scene_url
+                        .and_then(|url| download_with(http, &url, "the scene manifest", &c));
+                    Ok((r, bytes, audio, scene))
                 });
                 e.state = EntryState::Fetching(Progress {
                     done: 0,
@@ -600,7 +627,8 @@ fn run_commands(
                 let task = IoTaskPool::get().spawn(async move {
                     let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
                     let audio = sidecar(&at);
-                    Ok((at, bytes, audio))
+                    // Q-229: a reference names no index entry, so no index `scene`.
+                    Ok((at, bytes, audio, None))
                 });
                 pending.fetches.push(Fetch {
                     ctx: LoadCtx {
@@ -887,11 +915,11 @@ fn poll_tasks(
             continue;
         };
         match result {
-            Ok((source, bytes, audio)) => {
+            Ok((source, bytes, audio, scene)) => {
                 let mut ctx = f.ctx;
                 ctx.source = source;
                 ctx.audio = audio;
-                commands.spawn((
+                let mut instance = commands.spawn((
                     SplatLoad {
                         bytes,
                         kind_hint: f.kind_hint,
@@ -902,6 +930,9 @@ fn poll_tasks(
                     ShowOnUpload(true),
                     ctx.clone(),
                 ));
+                if let Some(path) = scene {
+                    instance.insert(IndexScene(path));
+                }
                 if let Some(e) = entry_of(&mut library, pending, &ctx) {
                     e.state = EntryState::Loading;
                 }
@@ -1113,7 +1144,7 @@ fn on_splat_event(
 fn follow_in_use(
     added: Query<(), Added<LoadCtx>>,
     mut removed: RemovedComponents<LoadCtx>,
-    all: Query<&LoadCtx>,
+    all: Query<(&LoadCtx, Option<&IndexScene>)>,
     client: Res<Client>,
     platform: Res<PlatformRes>,
     mut pending: ResMut<Pending>,
@@ -1124,16 +1155,21 @@ fn follow_in_use(
     };
     if changed {
         let entries = platform.0.paths().cache.join("http");
-        // A soundtrack downloaded with its model stays with it (§1.10).
+        // A soundtrack downloaded with its model stays with it (§1.10), and so does its
+        // index `scene` manifest (§1.7, #374).
         let paths: Vec<PathBuf> = all
             .iter()
-            .flat_map(|c| [Some(&c.source), c.audio.as_ref()])
-            .flatten()
-            .filter_map(|r| match r {
-                ModelRef::File(p) if !p.as_os_str().is_empty() => Some(p.clone()),
-                ModelRef::Http(url) => Some(cache_entry(&entries, url)),
-                ModelRef::Document(_) => None,
-                ModelRef::File(_) => None,
+            .flat_map(|(c, scene)| {
+                [Some(&c.source), c.audio.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| match r {
+                        ModelRef::File(p) if !p.as_os_str().is_empty() => Some(p.clone()),
+                        ModelRef::Http(url) => Some(cache_entry(&entries, url)),
+                        ModelRef::Document(_) => None,
+                        ModelRef::File(_) => None,
+                    })
+                    .chain(scene.map(|s| s.0.clone()))
             })
             .collect();
         client.set_in_use(&paths);
