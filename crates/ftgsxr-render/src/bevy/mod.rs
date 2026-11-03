@@ -26,7 +26,7 @@ use ::bevy::transform::components::Transform;
 use ftgsxr_core::{Camera, GpuLayoutOptions};
 
 pub use asset::{SplatAsset, load_splat_asset};
-pub use load::SplatLoad;
+pub use load::{SplatGpu, SplatLoad}; // Q-99; Q-172
 
 use crate::gpu::{
     ColorTransform, Foveation, FrameStats, Overlays, QualityTier, RenderMode, SortMode,
