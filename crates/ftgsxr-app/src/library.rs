@@ -163,7 +163,7 @@ pub struct LoadedModel {
 pub(crate) struct LibraryCommands;
 
 /// The live tier switch's reload, in `PreUpdate`, for `governor`'s switch to run before
-/// it (Q-233).
+/// it (Q-238).
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TierReload;
 
@@ -194,7 +194,7 @@ impl Plugin for LibraryPlugin {
                 )
                     .chain(),
             )
-            // Q-233: before `Update`, so no load lands between a switch and its reload.
+            // Q-238: before `Update`, so no load lands between a switch and its reload.
             .add_systems(PreUpdate, reload_on_tier_switch.in_set(TierReload))
             .add_systems(PostUpdate, follow_in_use);
         let paths = app.world().resource::<PlatformRes>().0.paths().clone();
@@ -298,7 +298,7 @@ struct LoadCtx {
     audio: Option<ModelRef>,
     /// The identity a "Locate…" pick must have (Q-225).
     locate: Option<String>,
-    /// The kind the first load was read as, for a reload (Q-233).
+    /// The kind the first load was read as, for a reload (Q-238).
     kind_hint: Option<ModelKind>,
 }
 
@@ -316,7 +316,7 @@ type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>, Option<PathBuf>),
 /// A fetch on the I/O task pool.
 struct Fetch {
     ctx: LoadCtx,
-    /// The instance a reload re-reads the model of (Q-233); `None` for a new instance.
+    /// The instance a reload re-reads the model of (Q-238); `None` for a new instance.
     target: Option<Entity>,
     cancel: Arc<AtomicBool>,
     progress: Arc<Mutex<Option<Progress>>>,
@@ -1057,7 +1057,7 @@ fn poll_tasks(
             pending.fetches.push(f);
             continue;
         };
-        // Q-233: a reload goes on its own instance, whose state stays.
+        // Q-238: a reload goes on its own instance, whose state stays.
         let result = match (f.target, result) {
             (Some(target), Ok((_, bytes, _, _))) => {
                 if let Ok(mut e) = commands.get_entity(target) {
@@ -1103,7 +1103,7 @@ fn poll_tasks(
             }
             Err(err) => {
                 let text = error_text(&err);
-                // Q-233: a reload that cannot re-read its file unloads the instance.
+                // Q-238: a reload that cannot re-read its file unloads the instance.
                 if let Some(target) = f.target
                     && let Ok(mut e) = commands.get_entity(target)
                 {
@@ -1174,12 +1174,12 @@ fn poll_picks(
     }
 }
 
-/// The live tier switch's reload (§1.12: storage and capacity "need a reload"; Q-233):
+/// The live tier switch's reload (§1.12: storage and capacity "need a reload"; Q-238):
 /// when the running tier changes, every instance with a model is re-read from its
 /// source on the I/O pool and loaded again on its own entity with the new tier's
 /// options; its entry is `Loading` meanwhile, and the upload shows it only if it was
-/// shown. Instances still loading pick the new options up in the render plugin (Q-234).
-// Q-233
+/// shown. Instances still loading pick the new options up in the render plugin (Q-239).
+// Q-238
 #[expect(
     clippy::too_many_arguments,
     reason = "a Bevy system: one parameter per resource it reads"
@@ -1247,7 +1247,7 @@ fn on_model(
         return;
     };
     let identity: String = asset.identity.iter().map(|b| format!("{b:02x}")).collect();
-    // Q-233: a reload of the same file keeps its `LoadedModel`, so nothing that follows
+    // Q-238: a reload of the same file keeps its `LoadedModel`, so nothing that follows
     // it (the scene's poses, the soundtrack) starts again.
     if loaded.is_some_and(|m| m.identity == identity) {
         return;

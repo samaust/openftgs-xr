@@ -11,6 +11,7 @@ pub mod audio;
 pub mod capture;
 pub mod desktop_input;
 mod desktop_log;
+mod exit_wait;
 pub mod governor;
 pub mod headless;
 pub mod intent;

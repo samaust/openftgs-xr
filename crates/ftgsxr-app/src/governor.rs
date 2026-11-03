@@ -238,7 +238,7 @@ impl Plugin for GovernorPlugin {
                 counters: GovernorCounters::default(),
             })
             .add_systems(Update, (follow_settings, run_governor).chain())
-            // Q-233, Q-235: the switch lands before `Update` and before the library's
+            // Q-238, Q-240: the switch lands before `Update` and before the library's
             // reload, so no load or upload of the frame sees the old tier.
             .add_systems(PreUpdate, follow_tier.before(TierReload));
     }
@@ -246,8 +246,8 @@ impl Plugin for GovernorPlugin {
 
 /// The live tier switch (§1.7 Panels, §1.12): when `[general] tier` changes while the
 /// app runs to a tier `by_name` knows, the running tier becomes it, its knobs at its own
-/// values. Only a change switches, so a `--tier` override at startup holds (Q-235).
-// Q-235, Q-234
+/// values. Only a change switches, so a `--tier` override at startup holds (Q-240).
+// Q-240, Q-239
 fn follow_tier(
     settings: Option<Res<SettingsRes>>,
     mut tier: ResMut<SplatTierState>,
@@ -274,7 +274,7 @@ fn follow_tier(
 
 /// `Governor.enabled` from the settings and the running tier, whenever either changes
 /// (§1.12).
-// Q-179, Q-235
+// Q-179, Q-240
 fn follow_settings(
     settings: Option<Res<SettingsRes>>,
     tier: Res<SplatTierState>,
@@ -296,8 +296,8 @@ fn follow_settings(
 /// governor's switch (`[general] governor`, which `follow_settings` maps), and the render
 /// scale by hand while the governor is off, in tenths between E16's floor and the tier's
 /// own (Q-218). The tier itself is `persist`'s choice of `[general] tier`, which
-/// `follow_tier` switches to (Q-235).
-// Q-218, Q-235
+/// `follow_tier` switches to (Q-240).
+// Q-218, Q-240
 fn display_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
     use bevy_egui::egui;
     let enabled = world.get_resource::<Governor>().is_some_and(|g| g.enabled);
