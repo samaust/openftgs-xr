@@ -28,7 +28,7 @@ use ftgsxr_io::{
 use ftgsxr_render::{OutputSpace, SortMode, SplatAsset, SplatCamera, SplatLoad, SplatModel};
 
 use crate::intent::{CameraCommand, Intent};
-use crate::manipulate::Selected;
+use crate::manipulate::{Selected, pose_of, transform_of};
 
 /// The user's origin: the desktop camera's parent, the XR tracking space (§2.1).
 #[derive(Component)]
@@ -405,22 +405,6 @@ fn spawn_grid(
             Visibility::Hidden
         },
     ));
-}
-
-fn pose_of(t: &Transform) -> Pose {
-    Pose {
-        translation: t.translation,
-        rotation: t.rotation,
-        scale: t.scale.x,
-    }
-}
-
-fn transform_of(p: Pose) -> Transform {
-    Transform {
-        translation: p.translation,
-        rotation: p.rotation,
-        scale: Vec3::splat(p.scale),
-    }
 }
 
 /// The yaw (positive counterclockwise from above) and pitch of a camera rotation.

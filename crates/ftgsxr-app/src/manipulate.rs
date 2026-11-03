@@ -247,7 +247,9 @@ enum Handle {
 
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
-fn pose_of(t: &Transform) -> Pose {
+/// An instance's or the rig's local transform as a pose (scale from x), shared by
+/// `rig` and `persist`.
+pub(crate) fn pose_of(t: &Transform) -> Pose {
     Pose {
         translation: t.translation,
         rotation: t.rotation,
@@ -255,7 +257,8 @@ fn pose_of(t: &Transform) -> Pose {
     }
 }
 
-fn transform_of(p: Pose) -> Transform {
+/// A pose as a transform with uniform scale.
+pub(crate) fn transform_of(p: Pose) -> Transform {
     Transform {
         translation: p.translation,
         rotation: p.rotation,

@@ -18,10 +18,8 @@ use bevy::ecs::message::MessageCursor;
 use bevy::ecs::prelude::*;
 use bevy::ecs::world::CommandQueue;
 use bevy::log::warn;
-use bevy::math::Vec3;
 use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
-use ftgsxr_core::Pose;
 use ftgsxr_io::{
     AudioSettings, CameraState, ClockState, Entry, IoError, LocomotionSettings, ModelRef,
     PoseStore, SceneFile, SceneModel, Settings, SourceSpec, Url, classify_name, load_settings,
@@ -34,7 +32,7 @@ use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCo
 use crate::library::{
     EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel, ShowOnUpload,
 };
-use crate::manipulate::{Poses, now_rfc3339};
+use crate::manipulate::{Poses, now_rfc3339, pose_of, transform_of};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
@@ -576,21 +574,6 @@ fn overlays_of(o: &ftgsxr_io::OverlaySettings) -> Overlays {
     }
 }
 
-fn pose_of(t: &Transform) -> Pose {
-    Pose {
-        translation: t.translation,
-        rotation: t.rotation,
-        scale: t.scale.x,
-    }
-}
-
-fn transform_of(p: &Pose) -> Transform {
-    Transform {
-        translation: p.translation,
-        rotation: p.rotation,
-        scale: Vec3::splat(p.scale),
-    }
-}
 
 /// The scene as the world holds it (§1.5 Scene files, §1.11): every instance in entity
 /// order with its local pose (under `ContentGroup`), the clock, `SettingsRes.environment`,
@@ -775,7 +758,7 @@ pub fn apply_scene(
             && let Some(mut q) = world.try_query_filtered::<&mut Transform, With<PlayerRig>>()
         {
             for mut t in q.iter_mut(world) {
-                *t = transform_of(&rig);
+                *t = transform_of(rig);
             }
         }
         if let Some(cam) = &camera
@@ -783,7 +766,7 @@ pub fn apply_scene(
                 world.try_query_filtered::<(&mut Transform, &mut Projection), With<DesktopCamera>>()
         {
             for (mut t, mut p) in q.iter_mut(world) {
-                *t = transform_of(&cam.pose);
+                *t = transform_of(cam.pose);
                 if let Projection::Perspective(PerspectiveProjection { fov, .. }) = &mut *p {
                     *fov = cam.fov_deg.to_radians();
                 }
@@ -849,7 +832,7 @@ fn apply_pending_instances(
                 .try_insert(SplatOverlays(overlays_of(&display.overlays)));
             continue;
         };
-        *t = transform_of(&p.pose);
+        *t = transform_of(p.pose);
         m.name = p.name.clone();
         m.time.offset_s = p.time_offset_s;
         m.time.end_rule = p.end_rule;
