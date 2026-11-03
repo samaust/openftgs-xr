@@ -653,6 +653,67 @@ fn gpu_bevy_adapter_below_render_scale_1_keeps_the_depth_gated_resolve() {
     );
 }
 
+/// Q-164: at render scale 0.5 a splat behind the opaque quad (P1 at y = −0.5, under the
+/// floor) is hidden by the depth copied at the layer's size: the image is the quad-only
+/// image wherever the quad is, while without the quad the splat covers pixels. A copy
+/// that wrote the clear value (or no depth) would let the splat over the quad.
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_below_render_scale_1_hides_a_splat_behind_the_quad() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let (w, h) = SIZE;
+    let (camera, projection) = floor_camera();
+    let over = OutputSpace::LinearOver {
+        background: Some(BACKGROUND),
+    };
+    let below = || {
+        let mut m = p1_above_the_quad();
+        m.transform.translation = Vec3::new(0.0, -0.5, 0.0);
+        m
+    };
+    let scaled = |model: Option<SceneModel>, quad: bool| {
+        let mut scene = Scene::settled(
+            over,
+            TextureFormat::Rgba8UnormSrgb,
+            SIZE,
+            camera,
+            projection.clone(),
+            model,
+            quad,
+        );
+        scene
+            .app
+            .world_mut()
+            .resource_mut::<SplatTierState>()
+            .render_scale = 0.5;
+        target_of(&scene.readback(), w, h)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() <= TOLERANCE;
+    // Not vacuous: without the quad the splat shows at scale 0.5.
+    let bare = scaled(Some(below()), false);
+    let shown = bare
+        .iter()
+        .filter(|p| (0..3).any(|k| !near(p[k], BACKGROUND[k])))
+        .count();
+    assert!(shown > 0, "the splat under the floor is in view");
+    let quad_only = scaled(None, true);
+    let both = scaled(Some(below()), true);
+    let is_quad = |p: &[f32; 4]| (0..3).all(|c| near(p[c], QUAD[c]));
+    let mut failures = Vec::new();
+    for i in 0..both.len() {
+        if is_quad(&quad_only[i]) && !is_quad(&both[i]) {
+            failures.push(format!("pixel {i}: {:?} over the quad", both[i]));
+        }
+    }
+    eprintln!("splat pixels without the quad {shown}");
+    assert!(
+        failures.is_empty(),
+        "{} pixels off:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 /// The probes' camera (openftgs's) as a Bevy transform and projection.
 fn probe_camera(camera: &FtgsCamera) -> (Transform, Projection) {
     let r = DMat3::from_mat4(camera.world_to_camera);
