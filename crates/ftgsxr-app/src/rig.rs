@@ -292,6 +292,7 @@ impl Plugin for RigPlugin {
         app.insert_resource(RigEntities { rig, group })
             .init_resource::<Locomotion>()
             .init_resource::<DesktopView>()
+            .init_resource::<BackgroundOverride>()
             .init_resource::<CameraController>()
             .add_message::<Intent>()
             .add_message::<CameraJump>()
@@ -695,13 +696,38 @@ fn run_locomotion(
     }
 }
 
-/// `DesktopView`'s field of view and background on the desktop camera, its grid on the
-/// floor grid.
+/// A background drawn instead of `DesktopView`'s while it is set: a replayed render
+/// request's (§1.7, Q-230). It is never written to the settings.
+// Q-230
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct BackgroundOverride(pub(crate) Option<[f32; 3]>);
+
+/// `DesktopView`'s field of view on the desktop camera, its grid on the floor grid, and
+/// its background (or the override's) on every splat camera that draws one: the desktop
+/// camera and the XR eyes in VR mode; a camera that draws none (passthrough) is left
+/// alone (§1.4 Backgrounds).
+// Q-230
 fn follow_view(
     view: Res<DesktopView>,
-    mut cameras: Query<(&mut Projection, &mut SplatCamera), With<DesktopCamera>>,
+    over: Res<BackgroundOverride>,
+    mut projections: Query<&mut Projection, With<DesktopCamera>>,
+    mut cameras: Query<&mut SplatCamera>,
     mut grids: Query<&mut Visibility, With<FloorGrid>>,
 ) {
+    // Every frame, not on change alone: an XR eye is made a splat camera later, over
+    // the settings' background (Q-127).
+    let background = over.0.unwrap_or(view.background);
+    for mut camera in &mut cameras {
+        if let OutputSpace::LinearOver {
+            background: Some(c),
+        } = camera.output
+            && c != background
+        {
+            camera.output = OutputSpace::LinearOver {
+                background: Some(background),
+            };
+        }
+    }
     if !view.is_changed() {
         return;
     }
@@ -715,18 +741,12 @@ fn follow_view(
             *v = shown;
         }
     }
-    for (mut projection, mut camera) in &mut cameras {
+    for mut projection in &mut projections {
         if let Projection::Perspective(p) = &mut *projection {
             let fov = view.fov_deg.to_radians();
             if p.fov != fov {
                 p.fov = fov;
             }
-        }
-        let output = OutputSpace::LinearOver {
-            background: Some(view.background),
-        };
-        if camera.output != output {
-            camera.output = output;
         }
     }
 }
@@ -758,6 +778,52 @@ mod tests {
         let fov = 60f32.to_radians();
         assert!((frame_distance(1.0, fov, 2.0) - 2.0).abs() < 1e-5);
         assert!(frame_distance(1.0, fov, 0.5) > 2.0);
+    }
+
+    // Q-230: every splat camera that draws a background (the desktop camera, the XR eyes
+    // in VR mode) draws `[environment] background` through `DesktopView`, or the
+    // override while one is set; a camera that draws none (passthrough) is left alone.
+    #[test]
+    fn follow_view_draws_the_override_on_cameras_that_draw_a_background() {
+        let mut app = App::new();
+        app.insert_resource(DesktopView {
+            background: [0.1, 0.1, 0.1],
+            ..DesktopView::default()
+        })
+        .init_resource::<BackgroundOverride>()
+        .add_systems(Update, follow_view);
+        let over = |background| SplatCamera {
+            sort: SortMode::PerView,
+            output: OutputSpace::LinearOver { background },
+        };
+        let eye = app.world_mut().spawn(over(Some([0.5, 0.5, 0.5]))).id();
+        let none = app.world_mut().spawn(over(None)).id();
+        let drawn = |app: &App| {
+            (
+                app.world().get::<SplatCamera>(eye).unwrap().output,
+                app.world().get::<SplatCamera>(none).unwrap().output,
+            )
+        };
+        let bg = |c| OutputSpace::LinearOver { background: c };
+        app.update();
+        assert_eq!(drawn(&app), (bg(Some([0.1, 0.1, 0.1])), bg(None)));
+        app.world_mut().resource_mut::<BackgroundOverride>().0 = Some([0.0, 0.0, 0.0]);
+        app.update();
+        assert_eq!(drawn(&app), (bg(Some([0.0, 0.0, 0.0])), bg(None)));
+        // A settings edit during the override shows after it ends.
+        app.world_mut().resource_mut::<DesktopView>().background = [0.2, 0.3, 0.4];
+        app.update();
+        assert_eq!(drawn(&app), (bg(Some([0.0, 0.0, 0.0])), bg(None)));
+        app.world_mut().resource_mut::<BackgroundOverride>().0 = None;
+        app.update();
+        assert_eq!(drawn(&app), (bg(Some([0.2, 0.3, 0.4])), bg(None)));
+        // A camera spawned later, as an XR eye is, follows too.
+        let late = app.world_mut().spawn(over(Some([0.9, 0.9, 0.9]))).id();
+        app.update();
+        assert_eq!(
+            app.world().get::<SplatCamera>(late).unwrap().output,
+            bg(Some([0.2, 0.3, 0.4]))
+        );
     }
 
     #[test]
