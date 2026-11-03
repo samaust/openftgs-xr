@@ -793,6 +793,32 @@ fn request_replay(
                 close = true;
             }
         });
+        // Q-229, Q-230: what the open request changes in the view.
+        let [red, green, blue] = r.request.background;
+        ui.label(format!(
+            "background: request ({red:.3}, {green:.3}, {blue:.3})"
+        ));
+        let mut cams = world.query::<&ftgsxr_render::SplatCamera>();
+        if cams
+            .iter(world)
+            .any(|c| c.output == ftgsxr_render::OutputSpace::LinearOver { background: None })
+        {
+            ui.label("background not applied in passthrough");
+        }
+        let governor = world
+            .get_resource::<ftgsxr_render::SplatTierState>()
+            .map(|t| t.sh_cap);
+        match (r.request.sh_degree, governor) {
+            (Some(d), Some(g)) if g < d => {
+                ui.label(format!(
+                    "SH degree {g}: the governor's cap, below the request's {d}"
+                ));
+            }
+            (Some(d), _) => {
+                ui.label(format!("SH degree {d}: the request's"));
+            }
+            _ => {}
+        }
     }
     if close {
         replay = None;
