@@ -183,6 +183,7 @@ impl Plugin for LibraryPlugin {
                     read_drops,
                     run_locates,
                     run_commands.in_set(LibraryCommands),
+                    reload_on_tier_switch,
                     poll_tasks,
                     poll_picks,
                 )
@@ -283,6 +284,8 @@ struct LoadCtx {
     audio: Option<ModelRef>,
     /// The identity a "Locate…" pick must have (Q-225).
     locate: Option<String>,
+    /// The kind the first load was read as, for a reload (Q-229).
+    kind_hint: Option<ModelKind>,
 }
 
 type ListTask = Task<Result<Vec<Entry>, IoError>>;
@@ -294,6 +297,8 @@ type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>), IoError>;
 /// A fetch on the I/O task pool.
 struct Fetch {
     ctx: LoadCtx,
+    /// The instance a reload re-reads the model of (Q-229); `None` for a new instance.
+    target: Option<Entity>,
     kind_hint: Option<ModelKind>,
     cancel: Arc<AtomicBool>,
     progress: Arc<Mutex<Option<Progress>>>,
@@ -573,6 +578,7 @@ fn run_commands(
                     total: e.entry.size,
                 });
                 pending.fetches.push(Fetch {
+                    target: None,
                     ctx: LoadCtx {
                         source: ModelRef::File(PathBuf::new()),
                         name: stem(Path::new(&e.entry.name)),
@@ -581,6 +587,7 @@ fn run_commands(
                         reduce_to,
                         audio: None,
                         locate: None,
+                        kind_hint: kind_hint(e.entry.kind),
                     },
                     kind_hint: kind_hint(e.entry.kind),
                     cancel,
@@ -603,6 +610,7 @@ fn run_commands(
                     Ok((at, bytes, audio))
                 });
                 pending.fetches.push(Fetch {
+                    target: None,
                     ctx: LoadCtx {
                         name: ref_name(&r),
                         source: r,
@@ -611,6 +619,7 @@ fn run_commands(
                         reduce_to: None,
                         audio: None,
                         locate,
+                        kind_hint: None,
                     },
                     kind_hint: None,
                     cancel: Arc::new(AtomicBool::new(false)),
@@ -887,6 +896,17 @@ fn poll_tasks(
             continue;
         };
         match result {
+            // Q-229: a reload goes on its own instance, whose state stays.
+            Ok((_, bytes, _)) if f.target.is_some() => {
+                let target = f.target.expect("invariant: the guard checked it");
+                if let Ok(mut e) = commands.get_entity(target) {
+                    e.insert(SplatLoad {
+                        bytes,
+                        kind_hint: f.ctx.kind_hint,
+                        reduce_to: f.ctx.reduce_to,
+                    });
+                }
+            }
             Ok((source, bytes, audio)) => {
                 let mut ctx = f.ctx;
                 ctx.source = source;
@@ -915,6 +935,12 @@ fn poll_tasks(
             }
             Err(err) => {
                 let text = error_text(&err);
+                // Q-229: a reload that cannot re-read its file unloads the instance.
+                if let Some(target) = f.target
+                    && let Ok(mut e) = commands.get_entity(target)
+                {
+                    e.despawn();
+                }
                 match entry_of(&mut library, pending, &f.ctx) {
                     Some(e) => e.state = EntryState::Failed(text),
                     // Q-173: a load without an entry sends its own failure.
@@ -980,24 +1006,84 @@ fn poll_picks(
     }
 }
 
+/// The live tier switch's reload (§1.12: storage and capacity "need a reload"; Q-229):
+/// when the running tier changes, every instance with a model is re-read from its
+/// source on the I/O pool and loaded again on its own entity with the new tier's
+/// options; its entry is `Loading` meanwhile, and the upload shows it only if it was
+/// shown. Instances still loading pick the new options up in the render plugin (Q-230).
+// Q-229
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a Bevy system: one parameter per resource it reads"
+)]
+fn reload_on_tier_switch(
+    tier: Res<SplatTierState>,
+    mut seen: Local<Option<ftgsxr_render::QualityTier>>,
+    mut library: ResMut<Library>,
+    mut pending: ResMut<Pending>,
+    client: Res<Client>,
+    platform: Res<PlatformRes>,
+    instances: Query<(Entity, &LoadCtx, &Visibility, Option<&ShowOnUpload>), With<SplatModel>>,
+    mut commands: Commands,
+) {
+    if seen.as_ref() == Some(&tier.tier) {
+        return;
+    }
+    let first = seen.is_none();
+    *seen = Some(tier.tier.clone());
+    if first {
+        return;
+    }
+    let provider: Option<Arc<dyn DocumentProvider>> = platform.0.document_provider();
+    for (entity, ctx, visibility, show) in &instances {
+        let shown = show.map_or(*visibility != Visibility::Hidden, |s| s.0);
+        commands
+            .entity(entity)
+            .remove::<SplatModel>()
+            .insert(ShowOnUpload(shown));
+        if let Some(e) = entry_of(&mut library, &pending, ctx) {
+            e.state = EntryState::Loading;
+        }
+        let (client, provider) = (client.0.clone(), provider.clone());
+        let at = ctx.source.clone();
+        let task = IoTaskPool::get().spawn(async move {
+            let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
+            Ok((at, bytes, None))
+        });
+        pending.fetches.push(Fetch {
+            ctx: ctx.clone(),
+            target: Some(entity),
+            kind_hint: ctx.kind_hint,
+            cancel: Arc::new(AtomicBool::new(false)),
+            progress: Arc::new(Mutex::new(None)),
+            task,
+        });
+    }
+}
+
 /// `LoadedModel` as soon as the model is read (Q-148).
 // Q-148
 fn on_model(
     add: On<Add, SplatModel>,
-    loads: Query<(&LoadCtx, &SplatModel)>,
+    loads: Query<(&LoadCtx, &SplatModel, Option<&LoadedModel>)>,
     assets: Res<Assets<SplatAsset>>,
     mut library: ResMut<Library>,
     pending: Res<Pending>,
     mut failures: MessageWriter<LibraryFailure>,
     mut commands: Commands,
 ) {
-    let Ok((ctx, model)) = loads.get(add.entity) else {
+    let Ok((ctx, model, loaded)) = loads.get(add.entity) else {
         return;
     };
     let Some(asset) = assets.get(&model.0) else {
         return;
     };
     let identity: String = asset.identity.iter().map(|b| format!("{b:02x}")).collect();
+    // Q-229: a reload of the same file keeps its `LoadedModel`, so nothing that follows
+    // it (the scene's poses, the soundtrack) starts again.
+    if loaded.is_some_and(|m| m.identity == identity) {
+        return;
+    }
     // Q-225: a located file of another identity is refused; a load of a missing
     // entry's identity, located or not, clears the entry.
     if let Some(want) = &ctx.locate
