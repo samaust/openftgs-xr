@@ -53,3 +53,4 @@ A baseline is a recorded timing: it is run alone on the machine, from a release 
 ## Dependencies
 
 The module takes `ftgsxr-core` and, for `render`, `ftgsxr-render`'s `HeadlessRenderer` (§2.1's band table), which brings Bevy's render crates into the build; `bench` takes the render layer's passes and Bevy's re-exported wgpu descriptors (`bevy` with `bevy_render` and `bevy_color`, both in §2.1's row through bevy). The binary depends on `ftgsxr-app` and clap alone (§2.1). So it cannot name the core's `ModelKind`, and it tells a model's kind by its variant's name when printing `validate`'s lines. `ftgsxr_app` re-exports `QualityTier`, the type `cmd_render` takes, so the binary can turn `--tier`'s name into a tier with `QualityTier::by_name` (Q-89).
+B-9 builds the app through `AppPlugin`, so `headless` comes after `plugin` in the crate's module order (Q-T275.1, owner 2026-11-03).

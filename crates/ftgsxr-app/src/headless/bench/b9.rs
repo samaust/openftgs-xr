@@ -34,6 +34,7 @@ use super::super::synthetic::{Persistence, synthetic_model};
 use super::super::{HeadlessError, core_input, input_error};
 use super::{Given, Gpu, HEIGHT, Json, Measured, WIDTH};
 use crate::platform::{CameraFrames, Permission, PermissionHandle, PickHandle, PickKind, Platform};
+// Q-T275.1: `headless` after `plugin` in §2.1's order (owner, 2026-11-03).
 use crate::plugin::AppPlugin;
 
 /// The probe's N and degree when no `--model` is given (Q-222).
