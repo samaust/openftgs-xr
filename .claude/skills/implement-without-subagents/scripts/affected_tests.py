@@ -17,7 +17,7 @@ A workspace member (from `cargo metadata`) is affected when:
   (its tests compile against them);
 - a file under the shared fixtures directory, `tests/fixtures/`, changed: every crate's tests
   may read it;
-- it holds a test that walks every crate's files (ALWAYS_CRATES), so it always runs:
+- it holds a test that walks files across every crate (ALWAYS_CRATES), so it always runs:
   `ftgsxr-core` holds U-35's skeleton test (spec §2.7) and `ftgsxr-testkit` R-16's layer-guard
   check (Q-105, Q-113), and a change in a crate above them reaches neither by its dependencies.
 
@@ -39,7 +39,7 @@ import sys
 from collections import deque
 from pathlib import Path, PurePosixPath
 
-# The crates whose tests walk every crate's files: U-35's skeleton test (spec §2.7) and R-16's
+# The crates whose tests walk files across every crate: U-35's skeleton test (spec §2.7) and R-16's
 # layer-guard check (Q-105, Q-113). Every test of theirs runs, since `-p` can't pick one target.
 ALWAYS_CRATES: tuple[str, ...] = ("ftgsxr-core", "ftgsxr-testkit")
 FIXTURES = "tests/fixtures"
@@ -129,7 +129,9 @@ def affected(root: Path, changed: set[str]) -> tuple[list[str], list[str]]:
                 via[user] = crate
                 queue.append(user)
     for name in ALWAYS_CRATES:
-        if name in ws.dependents and name not in via:
+        if name not in ws.dependents:
+            print(f"{name}: in ALWAYS_CRATES but not a workspace member, not run", file=sys.stderr)
+        elif name not in via:
             via[name] = "always"
     chosen = [name for name in ws.names if name in via]
     why = []
