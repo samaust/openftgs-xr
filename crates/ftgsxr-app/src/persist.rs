@@ -83,7 +83,6 @@ pub enum PersistCommand {
 // Q-201
 #[derive(Message, Clone, Debug, PartialEq)]
 pub(crate) struct PersistFailure {
-    #[allow(dead_code, reason = "read by ui's toasts (PRD #275 step 9)")]
     pub(crate) code: String,
     pub(crate) text: String,
 }
@@ -573,7 +572,6 @@ fn overlays_of(o: &ftgsxr_io::OverlaySettings) -> Overlays {
         time_tint: o.time_tint,
     }
 }
-
 
 /// The scene as the world holds it (§1.5 Scene files, §1.11): every instance in entity
 /// order with its local pose (under `ContentGroup`), the clock, `SettingsRes.environment`,

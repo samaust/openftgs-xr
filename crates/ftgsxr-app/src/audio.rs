@@ -347,7 +347,6 @@ impl AudioOutput for StubAudioOutput {
 // Q-189
 #[derive(Message, Clone, Debug, PartialEq)]
 pub(crate) struct AudioFailed {
-    #[allow(dead_code, reason = "read by ui's toasts (PRD #275 step 9)")]
     pub(crate) instance: Option<Entity>,
     pub(crate) text: String,
 }

@@ -60,7 +60,10 @@ impl Plugin for AppPlugin {
         let cache_max_bytes = app
             .world()
             .get_resource::<persist::SettingsRes>()
-            .map_or(20 << 30, |s| s.0.cache.max_bytes);
+            .map_or_else(
+                || ftgsxr_io::Settings::default().cache.max_bytes,
+                |s| s.0.cache.max_bytes,
+            );
         app.add_plugins(LibraryPlugin {
             initial: self.initial.clone(),
             cache_max_bytes,
