@@ -236,7 +236,8 @@ fn advance(
                 s.set_if_neq(new);
             }
             None => {
-                commands.entity(e).insert(new);
+                // `try_insert`: an instance the library despawns in the same frame needs no time.
+                commands.entity(e).try_insert(new);
             }
         }
     }
