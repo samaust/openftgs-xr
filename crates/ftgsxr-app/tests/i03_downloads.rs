@@ -222,10 +222,8 @@ fn held_fetch(t: &mut TestApp, server: &HeldServer, size: u64) -> usize {
 }
 
 #[test]
-// The tests' task pools are single-threaded (bevy's `multi_threaded` is only the
-// binaries'), so a fetch runs whole inside one frame and the held body blocks the frame:
-// this test needs multi-threaded pools: the multi_threaded follow-up ticket.
-#[ignore = "needs bevy's multi_threaded task pools: the multi_threaded follow-up ticket"]
+// Needs bevy's `multi_threaded` task pools (a dev-dependency feature, #291): a fetch then
+// runs beside the frames, so the held body holds only the fetch.
 fn i03_progress_reaches_the_entry() {
     let body = fs::read(ftgsxr_testkit::fixtures_dir().join("probes/P1.safetensors")).unwrap();
     let size = body.len() as u64;
@@ -259,10 +257,8 @@ fn i03_progress_reaches_the_entry() {
 }
 
 #[test]
-// The tests' task pools are single-threaded (bevy's `multi_threaded` is only the
-// binaries'), so a fetch runs whole inside one frame and the held body blocks the frame:
-// this test needs multi-threaded pools: the multi_threaded follow-up ticket.
-#[ignore = "needs bevy's multi_threaded task pools: the multi_threaded follow-up ticket"]
+// Needs bevy's `multi_threaded` task pools (a dev-dependency feature, #291): a fetch then
+// runs beside the frames, so the held body holds only the fetch.
 fn i03_cancel_stops_within_one_chunk() {
     let size = 4 * CHUNK;
     let server = HeldServer::start(vec![0; size as usize], "ply");
@@ -453,7 +449,11 @@ fn i03_the_cache_is_pruned_after_a_load_never_a_loaded_models_file() {
     let ok = t.until(600, |_| cached(&dir) == 1);
     assert!(
         ok,
-        "the unloaded probe's entry is evicted, the loaded PLY's kept"
+        "the unloaded probe's entry is evicted, the loaded PLY's kept: {:?}",
+        fs::read_dir(t.dir.join("cache/http"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect::<Vec<_>>()
     );
     let m = instances(&mut t).remove(0);
     assert_eq!(m.name, "snapshot");

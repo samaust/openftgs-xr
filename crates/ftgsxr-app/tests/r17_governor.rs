@@ -108,7 +108,10 @@ fn gpu_r17_the_desktop_knobs_step_down_and_back_up_on_gpu_times() {
     drop(model);
     t.command(LibraryCommand::LoadRef(ModelRef::File(path)));
     assert!(
-        t.until(600, |_| *uploaded.lock().unwrap()),
+        // Wall time, not frames (#291): the load runs on the task pools beside the frames.
+        t.until_for(std::time::Duration::from_secs(120), |_| *uploaded
+            .lock()
+            .unwrap()),
         "the model uploaded"
     );
     t.frames(10);

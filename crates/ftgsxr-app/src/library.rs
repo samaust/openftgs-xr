@@ -281,6 +281,20 @@ struct Pending {
     picks: Vec<(PickKind, PickHandle)>,
     /// A fetch completed since the last prune (Q-4, Q-45).
     prune: bool,
+    /// The prune on the I/O pool, until it finishes (#291).
+    pruning: Option<Task<()>>,
+    /// The commands read while it ran, in their order (#291).
+    deferred: Vec<LibraryCommand>,
+}
+
+impl Pending {
+    /// Whether a prune is still running on the I/O pool.
+    fn is_pruning(&mut self) -> bool {
+        if self.pruning.as_ref().is_some_and(Task::is_finished) {
+            self.pruning = None;
+        }
+        self.pruning.is_some()
+    }
 }
 
 impl Pending {
@@ -405,10 +419,27 @@ fn run_commands(
     instances: Query<(Entity, &LoadCtx)>,
     mut commands: Commands,
 ) {
+    // #291: no fetch runs beside a prune. A download holds the cache lock, so a prune
+    // spawned before it would wait behind it on multi-threaded pools and then read an
+    // in-use set without the model just fetched, evicting its new entry. A load read
+    // while a prune runs waits for it (a few milliseconds), and so does every command
+    // after it, to keep their order.
+    let read: Vec<LibraryCommand> = reader.read().cloned().collect();
+    let mut queue = std::mem::take(&mut pending.deferred);
+    queue.extend(read);
+    let pruning = pending.is_pruning();
     let provider: Option<Arc<dyn DocumentProvider>> = platform.0.document_provider();
-    for command in reader.read() {
+    for command in queue {
+        let fetches = matches!(
+            command,
+            LibraryCommand::Load { .. } | LibraryCommand::LoadRef(_)
+        );
+        if !pending.deferred.is_empty() || (pruning && fetches) {
+            pending.deferred.push(command);
+            continue;
+        }
         pending.sync(library.sources.len());
-        match command.clone() {
+        match command {
             LibraryCommand::AddSource(spec) => {
                 match open_source(&spec, client.0.clone(), provider.clone()) {
                     Ok(source) => {
@@ -1022,15 +1053,16 @@ fn follow_in_use(
             .collect();
         client.set_in_use(&paths);
     }
-    if std::mem::take(&mut pending.prune) {
+    // #291: only once every fetch has landed in the in-use set above; `run_commands`
+    // starts no fetch while the prune runs.
+    if pending.prune && pending.fetches.is_empty() && !pending.is_pruning() {
+        pending.prune = false;
         let client = client.clone();
-        IoTaskPool::get()
-            .spawn(async move {
-                if let Err(e) = client.prune() {
-                    warn!("pruning the download cache: {}", error_text(&e));
-                }
-            })
-            .detach();
+        pending.pruning = Some(IoTaskPool::get().spawn(async move {
+            if let Err(e) = client.prune() {
+                warn!("pruning the download cache: {}", error_text(&e));
+            }
+        }));
     }
 }
 
