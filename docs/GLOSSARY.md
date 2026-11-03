@@ -649,7 +649,7 @@ One saved desktop camera, its pose, field of view and mode, kept in the scene fi
 _Avoid_: viewpoint, saved view, camera preset
 
 **Gizmo**:
-The selected instance's manipulator on the desktop, translate arrows, rotation rings and a uniform-scale cube. §1.7
+The translate arrows, rotation rings and uniform-scale cube drawn on the selected instance on the desktop, which the mouse drags to change its pose. §1.7
 _Avoid_: handles (unqualified), manipulator, Bevy gizmos (the engine's line-drawing API)
 
 **Soundtrack**:
