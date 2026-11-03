@@ -1180,6 +1180,8 @@ fn on_model(
     let reduced = ctx.reduce_to.is_some_and(|k| (k as u64) < file_n);
     if let Some(e) = entry_of(&mut library, &pending, ctx) {
         e.identity = Some(identity.clone());
+        // Q-238: information a load fills keeps no ETag; a refresh compares the entry
+        // by size, mtime and SHA-256 only (Q-230's entry without an ETag).
         if e.info.is_none() {
             e.info = Some(asset.info.clone());
         }
@@ -1238,6 +1240,7 @@ fn on_splat_event(
             }
             match entry_of(&mut library, &pending, ctx) {
                 Some(e) => {
+                    // Q-238: no ETag kept with information a load fills.
                     if e.info.is_none() && ctx.reduce_to.is_none() {
                         e.info = asset.map(|a| a.info.clone());
                     }
