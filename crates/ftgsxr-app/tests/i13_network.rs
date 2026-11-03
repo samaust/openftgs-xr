@@ -150,3 +150,39 @@ fn i13_a_dropped_non_model_reports_its_validation_failure() {
     assert_eq!(seen[0].name, "notes");
     no_instance(&mut t);
 }
+
+// Q-173, Q-117
+#[test]
+#[ignore = "gpu"]
+fn gpu_i13_an_entry_less_load_over_budget_reports_e_mem_budget_with_n() {
+    use ftgsxr_app::QualityTier;
+    use ftgsxr_core::memory_estimate;
+    use ftgsxr_testkit::{fixtures_dir, layer_messages, probe};
+    use support::Setup;
+    let _layer = layer_messages(); // R-16, Q-105
+    let (model, _) = probe("P1");
+    let n = model.len() as u64;
+    let mut tier = QualityTier::by_name("desktop").unwrap();
+    let full = memory_estimate(n, model.sh_degree, &tier.layout, false).static_bytes;
+    tier.memory_budget_bytes = full / 2;
+    let mut t = TestApp::gpu_with(
+        "i13-budget-ref",
+        Setup {
+            tier,
+            ..Setup::default()
+        },
+    );
+    let path = fixtures_dir().join("probes/P1.safetensors");
+    t.command(LibraryCommand::LoadRef(ModelRef::File(path.clone())));
+    let seen = failures(&mut t, 1200);
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].code, "E-MEM-BUDGET");
+    assert!(
+        seen[0].text.starts_with("E-MEM-BUDGET: ")
+            && seen[0].text.ends_with(&format!(" (N = {n})")),
+        "{}",
+        seen[0].text
+    );
+    assert_eq!(seen[0].reference, Some(ModelRef::File(path)));
+    no_instance(&mut t);
+}
