@@ -16,7 +16,7 @@ pub mod sources;
 mod util;
 
 pub use error::IoError;
-pub use http::{HttpClient, Progress, TlsRoots};
+pub use http::{HttpClient, Progress, Revalidation, TlsRoots};
 pub use listing::{
     Entry, EntryKind, ListingFlavor, classify_name, list_dir, parse_html_listing,
     parse_index_manifest, parse_nginx_json,

@@ -90,7 +90,8 @@ const FIRST: usize = 500;
 /// holds the rest until released, so a fetch's progress and a cancel are seen between two
 /// frames (`serve_fixtures` sends each body whole). It serves `index.json` listing the
 /// model `m` (`kind`, no digest), byte ranges of the model whole (header reads), and 404
-/// for anything else.
+/// for anything else, a `HEAD` included (so the ETag check before a header read, Q-230,
+/// finds none and never takes the held body).
 struct HeldServer {
     base: String,
     release: std::sync::mpsc::Sender<()>,
@@ -142,6 +143,7 @@ fn serve(
             return;
         }
         let path = line.split(' ').nth(1).unwrap_or("").to_owned();
+        let is_head = line.starts_with("HEAD ");
         let mut range = None;
         loop {
             let mut h = String::new();
@@ -160,7 +162,9 @@ fn serve(
         let head = |status: &str, len: usize, extra: &str| {
             format!("HTTP/1.1 {status}\r\nContent-Length: {len}\r\n{extra}\r\n")
         };
-        if path == "/m/index.json" {
+        if is_head {
+            let _ = write!(stream, "{}", head("404 Not Found", 0, ""));
+        } else if path == "/m/index.json" {
             let index = format!(
                 r#"{{"format":"ftgsxr-index","version":1,"entries":[{{"name":"m","path":"{file}","kind":"{kind}","size":{}}}]}}"#,
                 body.len()
