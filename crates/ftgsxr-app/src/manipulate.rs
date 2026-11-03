@@ -163,11 +163,22 @@ struct HandStates {
     grabs: HashMap<Entity, (Grabbed, Option<(Hand, Hand)>)>,
 }
 
-/// The desktop gizmo: its handle set and the drag under way.
-#[derive(Resource, Default)]
+/// The desktop gizmo: its handle set (translate until `Intent::Gizmo` chooses) and the
+/// drag under way.
+// Q-T282.7
+#[derive(Resource)]
 struct GizmoState {
-    mode: Option<GizmoMode>,
+    mode: GizmoMode,
     drag: Option<Drag>,
+}
+
+impl Default for GizmoState {
+    fn default() -> Self {
+        GizmoState {
+            mode: GizmoMode::Translate,
+            drag: None,
+        }
+    }
 }
 
 struct Drag {
@@ -292,7 +303,10 @@ fn now_rfc3339() -> String {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = d.as_secs();
+    rfc3339(d.as_secs(), d.subsec_nanos())
+}
+
+fn rfc3339(secs: u64, nanos: u32) -> String {
     let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
     // Days since 1970-01-01 to the civil date (the proleptic Gregorian calendar).
     let z = days + 719_468;
@@ -309,7 +323,7 @@ fn now_rfc3339() -> String {
         rem / 3_600,
         rem / 60 % 60,
         rem % 60,
-        d.subsec_nanos()
+        nanos
     )
 }
 
@@ -322,22 +336,25 @@ type Instances<'w, 's> = Query<
         &'static LoadedModel,
         Option<&'static SplatModel>,
         Option<&'static PoseExtras>,
+        Option<&'static Hovered>,
+        Option<&'static Grabbed>,
     ),
 >;
 
 /// Every instance's (entity, pose, B_m); an instance whose asset is gone has no box.
 fn boxes(q: &Instances, assets: &Assets<SplatAsset>) -> Vec<(Entity, Pose, Aabb)> {
     q.iter()
-        .filter_map(|(e, t, _, m, _)| Some((e, pose_of(t), assets.get(&m?.0)?.bounds)))
+        .filter_map(|(e, t, _, m, ..)| Some((e, pose_of(t), assets.get(&m?.0)?.bounds)))
         .collect()
 }
 
 fn bounds_of(q: &Instances, assets: &Assets<SplatAsset>, e: Entity) -> Option<Aabb> {
-    let (_, _, _, m, _) = q.get(e).ok()?;
+    let (_, _, _, m, ..) = q.get(e).ok()?;
     Some(assets.get(&m?.0)?.bounds)
 }
 
 /// After a pose changed outside a grab, the grab takes hold again from the new pose.
+// Q-T282.4
 fn rebase(hs: &mut HandStates, e: Entity, pose: Pose) {
     let Some((g, hands)) = hs.grabs.get_mut(&e) else {
         return;
@@ -430,7 +447,7 @@ fn run_intents(
                 let ray = hs.hands.get(&hand).and_then(|h| h.ray);
                 // The desktop gizmo's handles come before the instances behind them.
                 if hand == Hand::Mouse
-                    && let (Some(mode), Some(e), Some(ray)) = (gizmo.mode, sel, ray)
+                    && let (mode, Some(e), Some(ray)) = (gizmo.mode, sel, ray)
                     && let Some(bounds) = bounds_of(&q, &assets, e)
                     && let Ok((_, t, ..)) = q.get(e)
                 {
@@ -568,7 +585,7 @@ fn run_intents(
                 rebase(&mut hs, e, p);
             }
             Intent::Gizmo(mode) => {
-                gizmo.mode = Some(mode);
+                gizmo.mode = mode;
                 gizmo.drag = None;
             }
             Intent::Nudge { instance, delta } => {
@@ -623,7 +640,7 @@ fn run_intents(
                     }
                 }
                 InstanceAction::SavePose => {
-                    if let Ok((_, t, m, _, x)) = q.get(instance) {
+                    if let Ok((_, t, m, _, x, ..)) = q.get(instance) {
                         let x = x.copied().unwrap_or(PoseExtras {
                             preset: Preset::YUp,
                             fit_size_m: 1.0,
@@ -641,7 +658,7 @@ fn run_intents(
                 InstanceAction::ResetPose | InstanceAction::Fit | InstanceAction::SnapToFloor => {
                     let bounds = bounds_of(&q, &assets, instance);
                     let head = head_pose(&cameras);
-                    let Ok((_, mut t, m, _, x)) = q.get_mut(instance) else {
+                    let Ok((_, mut t, m, _, x, ..)) = q.get_mut(instance) else {
                         continue;
                     };
                     let current = pose_of(&t);
@@ -696,23 +713,28 @@ fn run_intents(
             hovered.insert(e, Hovered { hand, distance });
         }
     }
-    for (e, ..) in &q {
+    // Written only when they change, so `Changed` and the insert observers mean a change.
+    for (e, _, _, _, _, h, g) in &q {
         let mut c = commands.entity(e);
-        match hovered.get(&e) {
-            Some(v) => {
+        match (hovered.get(&e), h) {
+            (Some(v), Some(old)) if v == old => {}
+            (Some(v), _) => {
                 c.insert(*v);
             }
-            None => {
+            (None, Some(_)) => {
                 c.remove::<Hovered>();
             }
+            (None, None) => {}
         }
-        match hs.grabs.get(&e) {
-            Some((g, _)) => {
-                c.insert(*g);
+        match (hs.grabs.get(&e).map(|(g, _)| g), g) {
+            (Some(new), Some(old)) if new == old => {}
+            (Some(new), _) => {
+                c.insert(*new);
             }
-            None => {
+            (None, Some(_)) => {
                 c.remove::<Grabbed>();
             }
+            (None, None) => {}
         }
     }
 }
@@ -897,9 +919,10 @@ fn draw(
         } else if hovered {
             box_lines(&mut gizmos, &asset.bounds, &pose, HOVER);
         }
-        let Some(mode) = gizmo.mode.filter(|_| selected) else {
+        if !selected {
             continue;
-        };
+        }
+        let mode = gizmo.mode;
         let c = posed_center(&asset.bounds, &pose);
         let size = gizmo_size(c, eye);
         for (a, color) in AXES.into_iter().zip(AXIS_COLORS) {
@@ -1015,6 +1038,18 @@ mod tests {
         assert!((p.scale - 1.5).abs() < 1e-5);
         let p = drag_pose(&d, ray(Vec3::new(500.0, 0.0, 5.0), -Vec3::Z), &LIMITS);
         assert_eq!(p.scale, 100.0);
+    }
+
+    #[test]
+    fn saved_at_matches_known_dates() {
+        // The pairs `ftgsxr_io`'s own formatter is tested with.
+        assert_eq!(rfc3339(0, 0), "1970-01-01T00:00:00.000000000Z");
+        assert_eq!(rfc3339(951_782_400, 5), "2000-02-29T00:00:00.000000005Z");
+        assert_eq!(
+            rfc3339(1_793_275_200, 123_456_789),
+            "2026-10-29T12:00:00.123456789Z"
+        );
+        assert_eq!(rfc3339(4_107_542_399, 0), "2100-02-28T23:59:59.000000000Z");
     }
 
     #[test]

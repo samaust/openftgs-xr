@@ -86,6 +86,16 @@ fn hover_select_and_deselect() {
     let h = *t.app.world().get::<Hovered>(e).expect("hovered");
     assert_eq!(h.hand, Hand::Mouse);
     assert!(h.distance > 0.0 && h.distance < 3.0);
+    // The same ray again: the component is not written again.
+    send(&mut t, &[at_it(Hand::Mouse)]);
+    assert!(
+        !t.app
+            .world()
+            .entity(e)
+            .get_ref::<Hovered>()
+            .unwrap()
+            .is_changed()
+    );
     send(
         &mut t,
         &[Intent::Select {
