@@ -41,7 +41,7 @@ use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
 use crate::library::{EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel};
 use crate::manipulate::Selected;
 use crate::platform::PickKind;
-use crate::playback::Playback;
+use crate::playback::{Playback, PlaybackWarning};
 
 /// Where the UI is drawn (§1.8): on the window (the desktop), or on a world quad whose
 /// entity carries `WorldPanel` and the quad's pose, `size_px` its texture's size and
@@ -421,6 +421,7 @@ impl Plugin for UiPlugin {
             .add_message::<Intent>()
             .add_message::<LibraryCommand>()
             .add_message::<LibraryFailure>()
+            .add_message::<PlaybackWarning>()
             .init_resource::<UiSurface>()
             .init_resource::<UiState>()
             .init_resource::<HudData>()
@@ -428,7 +429,10 @@ impl Plugin for UiPlugin {
             .init_resource::<ToastLimiter>()
             .init_resource::<SeenFailures>()
             .init_resource::<UploadBytes>()
-            .add_systems(Update, (ui_commands, library_toasts).in_set(UiSet))
+            .add_systems(
+                Update,
+                (ui_commands, library_toasts, clock_toasts).in_set(UiSet),
+            )
             .add_systems(PostUpdate, (raise_toasts, fill_hud).chain())
             .add_observer(splat_toasts);
         if app.is_plugin_added::<EguiPlugin>() {
@@ -514,6 +518,17 @@ fn library_toasts(
     }
     for f in failures.read() {
         out.write(ToastRequest::error(f.text.clone()));
+    }
+}
+
+/// The clock's warnings (§1.13), as Warning toasts (Q-T286.6).
+// Q-T286.6
+fn clock_toasts(
+    mut warnings: MessageReader<PlaybackWarning>,
+    mut out: MessageWriter<ToastRequest>,
+) {
+    for PlaybackWarning(text) in warnings.read() {
+        out.write(ToastRequest::warning(text.clone()));
     }
 }
 

@@ -122,3 +122,19 @@ fn gpu_i13_over_budget_is_an_e_mem_budget_toast_with_n() {
         budget[0].text
     );
 }
+
+// Q-T286.6
+#[test]
+fn a_refused_clock_command_is_a_warning_toast() {
+    use ftgsxr_app::{Intent, PlaybackCommand};
+    let mut t = TestApp::new("i13t-clock");
+    record_toasts(&mut t.app);
+    t.app
+        .world_mut()
+        .write_message(Intent::Playback(PlaybackCommand::Speed(0.0)));
+    t.frames(3);
+    let all = toasts(&t.app);
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(all[0].level, ToastLevel::Warning);
+    assert!(all[0].text.starts_with("Speed 0 refused"), "{all:?}");
+}
