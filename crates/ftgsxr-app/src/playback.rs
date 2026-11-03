@@ -37,7 +37,8 @@ impl Default for Playback {
 pub(crate) struct StepTarget(pub(crate) Option<Entity>);
 
 /// The loop mode last set on the clock, which `Clock` does not report: `CycleLoop` steps
-/// from it, so the loop mode is set through `PlaybackCommand::Loop` (Q-176).
+/// from it, so whoever sets the loop mode (`PlaybackCommand::Loop`, `CycleLoop`, persist)
+/// sets this together with `Clock::set_loop` (Q-176).
 // Q-176
 #[derive(Resource, Clone, Copy, Debug)]
 pub(crate) struct LoopSetting(pub(crate) LoopMode);

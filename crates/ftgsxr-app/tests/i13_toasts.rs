@@ -156,6 +156,32 @@ fn a_triggered_toast_is_raised_once_through_the_rate_limit() {
     assert_eq!(toasts(&t.app), vec![toast]);
 }
 
+// Q-208, Q-209 (#347): §1.13's "one per second per site" holds for the overflow warning:
+// `SplatEvent::Overflow` comes each frame that drops records, its visible count clamped to
+// C (§1.4 stage 3), its text the same each frame, and for 2 s it gives two toasts.
+#[test]
+fn a_per_frame_overflow_is_one_toast_a_second() {
+    use ftgsxr_app::SplatEvent;
+    let mut t = TestApp::new("i13t-overflow");
+    record_toasts(&mut t.app);
+    // 120 frames of `FRAME` span 1.98 s: a toast at the first and one 1 s later.
+    for _ in 0..120 {
+        t.app.world_mut().trigger(SplatEvent::Overflow {
+            visible: 900,
+            capacity: 900,
+        });
+        t.frames(1);
+    }
+    let shown = toasts(&t.app);
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(
+        shown
+            .iter()
+            .all(|t| t.level == ToastLevel::Warning && t.text.starts_with("Too many primitives")),
+        "{shown:?}"
+    );
+}
+
 /// Fixer item 19 (#275; §1.15 E-SETTINGS, §1.11, Q-170): `play` reads the settings
 /// itself before the log and inserts `SettingsRes`; the set-aside file's E-SETTINGS still
 /// reaches a toast through `SettingsWarnings` (Q-224).
@@ -207,4 +233,28 @@ fn i13_a_failed_settings_save_raises_e_io() {
         toasted(app, "E-IO")
     });
     assert!(ok, "{:?}", toasts(&t.app));
+}
+
+// Q-209, Q-208 (#348; §1.4 Several models, D-34): an overflow is a Warning toast naming
+// C, the one number it can give, since under the flag the visible count is clamped to C;
+// a repeat in the same second shows once.
+#[test]
+fn an_overflow_is_a_warning_toast_naming_c() {
+    use ftgsxr_app::SplatEvent;
+    let mut t = TestApp::new("i13t-overflow-text");
+    record_toasts(&mut t.app);
+    let overflow = SplatEvent::Overflow {
+        visible: 1000,
+        capacity: 1000,
+    };
+    t.app.world_mut().trigger(overflow.clone());
+    t.app.world_mut().trigger(overflow);
+    t.frames(3);
+    let all = toasts(&t.app);
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(all[0].level, ToastLevel::Warning);
+    assert_eq!(
+        all[0].text,
+        "Too many primitives: capacity 1000 reached; some were dropped"
+    );
 }

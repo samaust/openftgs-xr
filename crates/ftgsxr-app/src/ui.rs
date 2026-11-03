@@ -214,19 +214,27 @@ pub enum ToastLevel {
 }
 
 /// A toast asked for by any module; ui's rate limit turns it into a `Toast` (§1.13).
+/// Its site, the rate limit's key, is the toast's text.
+// Q-208
 #[derive(Message, Clone, Debug, PartialEq)]
-pub(crate) struct ToastRequest(pub(crate) Toast);
+pub(crate) struct ToastRequest {
+    pub(crate) toast: Toast,
+}
 
 impl ToastRequest {
+    pub(crate) fn new(toast: Toast) -> ToastRequest {
+        ToastRequest { toast }
+    }
+
     pub(crate) fn error(text: impl Into<String>) -> ToastRequest {
-        ToastRequest(Toast {
+        ToastRequest::new(Toast {
             text: text.into(),
             level: ToastLevel::Error,
         })
     }
 
     pub(crate) fn warning(text: impl Into<String>) -> ToastRequest {
-        ToastRequest(Toast {
+        ToastRequest::new(Toast {
             text: text.into(),
             level: ToastLevel::Warning,
         })
@@ -550,8 +558,8 @@ fn splat_toasts(
 ) {
     {
         match &*event {
-            SplatEvent::Overflow { visible, capacity } => {
-                out.write(ToastRequest::warning(overflow_text(*visible, *capacity)));
+            SplatEvent::Overflow { capacity, .. } => {
+                out.write(ToastRequest::warning(overflow_text(*capacity)));
             }
             SplatEvent::Uploaded { entity, bytes: b } => {
                 bytes.0.insert(*entity, *b);
@@ -563,15 +571,18 @@ fn splat_toasts(
 
 /// The overflow toast's text.
 // Q-209
-pub(crate) fn overflow_text(visible: u32, capacity: u32) -> String {
-    format!("Too many primitives: {visible} visible, capacity {capacity}; some were dropped")
+pub(crate) fn overflow_text(capacity: u32) -> String {
+    // C only: under the overflow flag the visible count is clamped to C (§1.4 stage 3,
+    // Q-78), so it would repeat C. The text carries no per-frame number because the rate
+    // limit keys on it (Q-208): a per-frame overflow shows once a second.
+    format!("Too many primitives: capacity {capacity} reached; some were dropped")
 }
 
 /// A `Toast` triggered from outside the crate (`ftgsxr_xr::display`'s E-XR-UNSUPPORTED,
 /// Q-161) asks for a toast like any module's `ToastRequest`, through the rate limit.
 // Q-221
 fn triggered_toasts(toast: On<Toast>, mut out: MessageWriter<ToastRequest>) {
-    out.write(ToastRequest(toast.event().clone()));
+    out.write(ToastRequest::new(toast.event().clone()));
 }
 
 /// The rate limit (§1.13: one per second per site, the site being the text): the
@@ -588,7 +599,8 @@ fn raise_toasts(
     let now = time.elapsed_secs_f64();
     limiter.0.retain(|_, t| now - *t < TOAST_PERIOD_S);
     state.line.retain(|(_, until)| *until > now);
-    for ToastRequest(t) in requests.read() {
+    for r in requests.read() {
+        let t = &r.toast;
         if limiter.0.contains_key(&t.text) {
             continue;
         }

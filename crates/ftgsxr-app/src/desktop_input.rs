@@ -285,7 +285,7 @@ const STRICT: Mods = Mods {
     alt: false,
 };
 
-/// The next render mode of M's cycle: splats, centers, both; hidden returns to splats.
+/// The next render mode of M's cycle: splats, centers, both; hidden goes to centers.
 // Q-198
 fn next_mode(m: RenderMode, pixel_radius: f32, colormap: Colormap) -> RenderMode {
     match m {

@@ -21,8 +21,10 @@
 //! Where an extension is absent, `available_rates` is empty, a request logs
 //! E-XR-UNSUPPORTED (a warning) and the setting is kept for a later runtime (Q-124). A
 //! refresh rate or a foveation asked for explicitly (a settings value, a change while the
-//! session runs) also triggers a `Toast`, which ui puts on the line; the tier's default
-//! never does (Q-161).
+//! session runs) also triggers a `Toast`, which ui puts on the line, at most once per
+//! session per extension; the tier's default never does (Q-161).
+
+use std::collections::HashSet;
 
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageWriter;
@@ -199,6 +201,8 @@ struct Applied {
     /// Whether the settings' foveation was asked for explicitly (an absent extension is
     /// only reported for a request, Q-124).
     foveation_requested: bool,
+    /// The absent extensions toasted in this session (Q-161).
+    toasted: HashSet<&'static str>,
 }
 
 impl Applied {
@@ -210,7 +214,15 @@ impl Applied {
             scale,
             failed_scale: None,
             foveation_requested,
+            toasted: HashSet::new(),
         }
+    }
+
+    /// Whether the absent extension `what` is to be toasted now: the first time in this
+    /// session (Q-161).
+    // Q-161
+    fn toast_once(&mut self, what: &'static str) -> bool {
+        self.toasted.insert(what)
     }
 
     /// Takes the render-scale change to `scale` if one is to be attempted now: it differs
@@ -233,9 +245,10 @@ impl Applied {
     }
 
     /// Forgets a failed scale at a new session, whose view configuration may answer, so
-    /// the setting is attempted once on it (Q-147).
+    /// the setting is attempted once on it (Q-147), and the extensions toasted (Q-161).
     fn session_created(&mut self) {
         self.failed_scale = None;
+        self.toasted.clear();
     }
 }
 
@@ -318,12 +331,18 @@ fn unsupported(e: &XrError) {
     warn!("{}: {}", e.code(), e.user_text());
 }
 
-/// An E-XR-UNSUPPORTED for a feature asked for explicitly: the warning and a `Toast`
-/// triggered for ui (Q-161; every caller's request is explicit, the tier's default
-/// foveation and an unset refresh rate never reach it).
+/// An E-XR-UNSUPPORTED for a feature asked for explicitly: the warning each time and a
+/// `Toast` triggered for ui the first time in the session for its extension (Q-161; every
+/// caller's request is explicit, the tier's default foveation and an unset refresh rate
+/// never reach it).
 // Q-161
-fn unsupported_requested(e: &XrError, commands: &mut Commands) {
+fn unsupported_requested(e: &XrError, applied: &mut Applied, commands: &mut Commands) {
     unsupported(e);
+    if let XrError::Unsupported(what) = e
+        && !applied.toast_once(what)
+    {
+        return;
+    }
     commands.trigger(Toast {
         text: format!("{}: {}", e.code(), e.user_text()),
         level: ToastLevel::Warning,
@@ -353,7 +372,7 @@ fn on_session_created(
     let caps = Caps::of(instance.as_deref());
     let f = settings.foveation;
     if caps.foveation || (f != Foveation::Off && applied.foveation_requested) {
-        foveation(caps, &session, f, &mut request, &mut commands);
+        foveation(caps, &session, f, &mut request, &mut applied, &mut commands);
     }
     applied.foveation = Some(f);
 }
@@ -372,6 +391,7 @@ fn on_session_begun(
         Caps::of(instance.as_deref()),
         &session,
         &mut settings,
+        &mut applied,
         &mut commands,
     );
     applied.refresh_rate = settings.refresh_rate;
@@ -389,6 +409,7 @@ fn apply_rate(
     caps: Caps,
     session: &OxrSession,
     settings: &mut DisplaySettings,
+    applied: &mut Applied,
     commands: &mut Commands,
 ) {
     let enumerated = if caps.refresh_rate {
@@ -403,7 +424,7 @@ fn apply_rate(
         Vec::new()
     };
     match refresh_rate(caps, settings, enumerated) {
-        Err(e) => unsupported_requested(&e, commands),
+        Err(e) => unsupported_requested(&e, applied, commands),
         Ok(RateAction::None) => {}
         Ok(RateAction::NotListed(r)) => warn!(
             "refresh rate {r} Hz is not among the runtime's {:?}: kept, not requested",
@@ -423,10 +444,11 @@ fn foveation(
     session: &OxrSession,
     f: Foveation,
     request: &mut FoveationRequest,
+    applied: &mut Applied,
     commands: &mut Commands,
 ) {
     if !caps.foveation {
-        unsupported_requested(&XrError::Unsupported("XR_FB_foveation"), commands);
+        unsupported_requested(&XrError::Unsupported("XR_FB_foveation"), applied, commands);
         return;
     }
     let (level, dynamic) = level(f);
@@ -469,7 +491,7 @@ fn apply_changes(
     if settings.refresh_rate != applied.refresh_rate {
         applied.refresh_rate = settings.refresh_rate;
         let s = settings.bypass_change_detection();
-        apply_rate(caps, &session, s, &mut commands);
+        apply_rate(caps, &session, s, &mut applied, &mut commands);
     }
     if Some(settings.foveation) != applied.foveation {
         applied.foveation = Some(settings.foveation);
@@ -479,6 +501,7 @@ fn apply_changes(
             &session,
             settings.foveation,
             &mut request,
+            &mut applied,
             &mut commands,
         );
     }
@@ -667,6 +690,22 @@ mod tests {
         assert!(applied.take_scale_change(1.5, false));
         applied.scale_failed(1.5);
         assert!(!applied.take_scale_change(1.5, false));
+    }
+
+    /// An absent extension asked for explicitly is toasted at most once per session, each
+    /// extension apart; a new session may toast it once more (Q-161, owner #306).
+    #[test]
+    fn toast_once_is_once_per_session_per_extension() {
+        let mut applied = Applied::new(1.0, true);
+        assert!(applied.toast_once("XR_FB_foveation"));
+        assert!(!applied.toast_once("XR_FB_foveation"));
+        assert!(applied.toast_once("XR_FB_display_refresh_rate"));
+        assert!(!applied.toast_once("XR_FB_display_refresh_rate"));
+        assert!(!applied.toast_once("XR_FB_foveation"));
+        applied.session_created();
+        assert!(applied.toast_once("XR_FB_foveation"));
+        assert!(!applied.toast_once("XR_FB_foveation"));
+        assert!(applied.toast_once("XR_FB_display_refresh_rate"));
     }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {

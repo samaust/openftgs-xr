@@ -1309,6 +1309,15 @@ mod tests {
         assert_eq!(name.len(), "scene-20261102-120000".len(), "{name}");
     }
 
+    // Q-200 (#340): an absolute path without the suffix stays where it is and gains it.
+    #[test]
+    fn an_absolute_scene_path_without_the_suffix_gains_it() {
+        assert_eq!(
+            scene_path(Path::new("/c/scenes"), Path::new("/x/y")),
+            Path::new("/x/y.ftgsxr-scene.json")
+        );
+    }
+
     #[test]
     fn recent_scenes_are_the_newest_eight() {
         let dir = std::env::temp_dir().join(format!("ftgsxr-recent-{}", std::process::id()));

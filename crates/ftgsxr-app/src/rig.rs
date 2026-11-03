@@ -386,6 +386,7 @@ fn spawn_grid(
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         return;
     };
+    // Q-228: the headset's VR-mode grid, which has no window, waits for §1.9's mode.
     if windows.is_empty() {
         return;
     }
