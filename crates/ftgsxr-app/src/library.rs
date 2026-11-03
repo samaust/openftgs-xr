@@ -958,6 +958,7 @@ fn poll_picks(
             Poll::Ready(Ok(refs)) => {
                 for r in refs {
                     match (kind, r) {
+                        // Q-T275.5: a picked file loads once; only folders join as sources.
                         (PickKind::Files, r) => commands.write(LibraryCommand::LoadRef(r)),
                         (PickKind::Folder, r) => {
                             let (kind, location) = match &r {
