@@ -146,11 +146,11 @@ pub struct SplatTierState {
     pub foveation: Foveation,
 }
 
-/// An extra SH degree cap on drawing, besides the governor's (Q-232): while a render
+/// An extra SH degree cap on drawing, besides the governor's (Q-235): while a render
 /// request is replayed, its `sh_degree` (§1.7, openftgs §2.2). Every instance is drawn at
 /// the smallest of its loaded degree, `SplatTierState::sh_cap` and this; `None` adds no
 /// cap. Loads never read it, so clearing it draws the loaded degree again.
-// Q-232
+// Q-235
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SplatShLimit(pub Option<u8>);
 

@@ -198,8 +198,8 @@ pub(crate) fn finish(render_app: &mut SubApp) {
 }
 
 /// The degree an instance is drawn at: the smallest of its loaded degree, the governor's
-/// cap (E16) and a replayed request's limit (Q-232), `None` adding no cap.
-// Q-230
+/// cap (E16) and a replayed request's limit (Q-235), `None` adding no cap.
+// Q-233
 fn drawn_degree(loaded: u8, governor_cap: u8, limit: Option<u8>) -> u8 {
     loaded.min(governor_cap).min(limit.unwrap_or(u8::MAX))
 }
@@ -701,7 +701,7 @@ fn poll_stats(views: Res<Views>, extracted: Res<Extracted>, inbox: Res<StatsInbo
 mod tests {
     use super::*;
 
-    // Q-230, Q-232: an instance is drawn at the smallest of its loaded degree L, the
+    // Q-233, Q-235: an instance is drawn at the smallest of its loaded degree L, the
     // governor's cap and a replayed request's limit; no limit imposes none, and a limit
     // above L keeps L.
     #[test]

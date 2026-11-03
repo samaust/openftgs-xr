@@ -7,6 +7,7 @@
 //! the entries' states carry the texts, and a failure with no entry to carry it is a
 //! `LibraryFailure` message that `ui` turns into a toast (PRD #275, Q-173).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,7 +25,7 @@ use bevy::window::FileDragAndDrop;
 use ftgsxr_core::{ModelInfo, ModelKind, ModelTime, memory_estimate};
 use ftgsxr_io::{
     DocumentProvider, Entry, EntryKind, HttpClient, IoError, ModelBytes, ModelRef, ModelSource,
-    Progress, SourceSpec, TlsRoots, Url, open_ref, open_source,
+    Progress, Revalidation, SourceSpec, TlsRoots, Url, open_ref, open_source,
 };
 use ftgsxr_render::{SplatAsset, SplatEvent, SplatGpu, SplatLoad, SplatModel, SplatTierState};
 
@@ -295,7 +296,10 @@ struct LoadCtx {
 type ListTask = Task<Result<Vec<Entry>, IoError>>;
 /// A subdirectory's listing: its source's id, the directory entry's location, the task.
 type SubTask = (u64, String, ListTask);
-type InfoTask = Task<Result<ModelInfo, IoError>>;
+/// A header read, with the ETag a `HEAD` gave just before it (Q-230).
+type InfoTask = Task<(Result<ModelInfo, IoError>, Option<String>)>;
+/// A refresh's ETag check of an entry (Q-230).
+type RevalidationTask = Task<Result<Revalidation, IoError>>;
 /// The model's reference and bytes, its soundtrack and its index `scene` manifest's cached
 /// file.
 type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>, Option<PathBuf>), IoError>;
@@ -319,6 +323,11 @@ struct Pending {
     /// Subdirectories listed on demand (D-31, Q-192).
     sublistings: Vec<SubTask>,
     infos: Vec<(u64, String, InfoTask)>,
+    /// The ETag of each HTTP entry's information, by source id and location (Q-230):
+    /// beside the library, since `Entry` and `LibraryEntry` (§2) carry none.
+    etags: HashMap<(u64, String), String>,
+    /// The ETag checks a refresh started (Q-230).
+    revalidations: Vec<(u64, String, RevalidationTask)>,
     fetches: Vec<Fetch>,
     picks: Vec<(PickKind, PickHandle)>,
     /// A fetch completed since the last prune (Q-4, Q-45).
@@ -523,6 +532,8 @@ fn run_commands(
                 let id = pending.ids.remove(i);
                 pending.listings.retain(|(s, _)| *s != id);
                 pending.infos.retain(|(s, _, _)| *s != id);
+                pending.revalidations.retain(|(s, _, _)| *s != id);
+                pending.etags.retain(|(s, _), _| *s != id);
                 pending.sublistings.retain(|(s, _, _)| *s != id);
                 library.entries.retain(|e| e.source != i);
                 for e in &mut library.entries {
@@ -535,6 +546,8 @@ fn run_commands(
                 if let Some((_, source)) = library.sources.get(i) {
                     let source = source.clone();
                     let id = pending.ids[i];
+                    // Q-230: a new refresh checks again; earlier checks are dropped.
+                    pending.revalidations.retain(|(s, _, _)| *s != id);
                     list(&mut pending, id, source);
                 }
             }
@@ -706,12 +719,15 @@ fn entry_of<'a>(
 /// A listing's entries as library entries of `source`: `old`'s state kept for a location
 /// listed again, and its information, identity and thumbnail when the file did not change
 /// (§1.5 Refresh); a header read started for every `Exchange` entry without information.
-/// Directories stay, to list on demand (D-31, Q-192).
+/// An HTTP source's entry kept with an ETag is checked against it in the background
+/// (`http`, the client when the source is HTTP; Q-230). Directories stay, to list on
+/// demand (D-31, Q-192).
 fn fresh_entries(
     pending: &mut Pending,
     id: u64,
     source: usize,
     model: &Arc<dyn ModelSource>,
+    http: Option<&Arc<HttpClient>>,
     entries: Vec<Entry>,
     old: &[LibraryEntry],
 ) -> Vec<LibraryEntry> {
@@ -721,6 +737,7 @@ fn fresh_entries(
             continue;
         }
         let kept = old.iter().find(|o| o.entry.location == entry.location);
+        // Q-231: the listing's mtime too, where it gives one.
         let same = kept.is_some_and(|o| {
             o.entry.size == entry.size
                 && o.entry.mtime == entry.mtime
@@ -731,10 +748,23 @@ fn fresh_entries(
             _ => (None, None, None),
         };
         let state = kept.map_or(EntryState::Listed, |o| o.state.clone());
+        let key = (id, entry.location.clone());
+        if info.is_none() {
+            pending.etags.remove(&key);
+        }
+        // Q-230: the information is kept while the check runs.
+        if let (Some(client), Some(etag)) = (http, pending.etags.get(&key))
+            && info.is_some()
+            && let Ok(url) = Url::parse(&entry.location)
+        {
+            let (client, etag) = (client.clone(), etag.clone());
+            let task = IoTaskPool::get().spawn(async move { client.revalidate(&url, Some(&etag)) });
+            pending
+                .revalidations
+                .push((id, entry.location.clone(), task));
+        }
         if info.is_none() && entry.kind == EntryKind::Exchange {
-            let (m, e) = (model.clone(), entry.clone());
-            let task = IoTaskPool::get().spawn(async move { m.info(&e) });
-            pending.infos.push((id, entry.location.clone(), task));
+            read_info(pending, id, model, http, &entry);
         }
         fresh.push(LibraryEntry {
             source,
@@ -756,6 +786,36 @@ fn fresh_entries(
     fresh
 }
 
+/// Starts the header read of `entry`; for an HTTP source (`http`), a `HEAD` first gives
+/// the ETag kept with the information (Q-230). The `HEAD` goes before the range reads, so a
+/// file changing between them pairs an older ETag with newer information, never the
+/// reverse; a failed `HEAD` leaves the entry without an ETag.
+// Q-230
+fn read_info(
+    pending: &mut Pending,
+    id: u64,
+    model: &Arc<dyn ModelSource>,
+    http: Option<&Arc<HttpClient>>,
+    entry: &Entry,
+) {
+    let (m, e, client) = (model.clone(), entry.clone(), http.cloned());
+    let task = IoTaskPool::get().spawn(async move {
+        let etag = client
+            .zip(Url::parse(&e.location).ok())
+            .and_then(|(c, url)| match c.revalidate(&url, None) {
+                Ok(Revalidation::Current(etag)) => etag,
+                _ => None,
+            });
+        (m.info(&e), etag)
+    });
+    pending.infos.push((id, entry.location.clone(), task));
+}
+
+/// The client, when `spec` is an HTTP source (Q-230).
+fn http_client<'a>(spec: &SourceSpec, client: &'a Client) -> Option<&'a Arc<HttpClient>> {
+    (spec.kind == "http").then_some(client.0.as_ref()).flatten()
+}
+
 /// Whether a listing failed only because `AppPaths.models`, the default `dir` source,
 /// does not exist yet (Q-216); any other source's missing directory stays E-IO.
 // Q-216
@@ -772,6 +832,7 @@ fn poll_tasks(
     mut pending: ResMut<Pending>,
     mut failures: MessageWriter<LibraryFailure>,
     platform: Res<PlatformRes>,
+    client: Res<Client>,
     mut commands: Commands,
 ) {
     pending.sync(library.sources.len());
@@ -824,7 +885,8 @@ fn poll_tasks(
             .position(|e| e.source > source)
             .unwrap_or(library.entries.len());
         let model = library.sources[source].1.clone();
-        let fresh = fresh_entries(pending, id, source, &model, entries, &old);
+        let http = http_client(&library.sources[source].0, &client);
+        let fresh = fresh_entries(pending, id, source, &model, http, entries, &old);
         library.entries.splice(at..at, fresh);
     }
     // Subdirectories: their entries follow the directory's, replacing any listed before
@@ -871,7 +933,8 @@ fn poll_tasks(
             .collect();
         library.entries.retain(|e| !inside(e));
         let model = library.sources[source].1.clone();
-        let fresh = fresh_entries(pending, id, source, &model, entries, &old);
+        let http = http_client(&library.sources[source].0, &client);
+        let fresh = fresh_entries(pending, id, source, &model, http, entries, &old);
         library.entries.splice(dir + 1..dir + 1, fresh);
     }
     // Header-only information, filled as it arrives.
@@ -896,10 +959,69 @@ fn poll_tasks(
         else {
             continue;
         };
-        match result {
-            Ok(info) => e.info = Some(info),
+        let (result, etag) = result;
+        let key = (id, location.clone());
+        match (result, etag) {
+            (Ok(info), etag) => {
+                e.info = Some(info);
+                match etag {
+                    Some(etag) => pending.etags.insert(key, etag),
+                    None => pending.etags.remove(&key),
+                };
+            }
             // The load reports the error with its code (Q-38): the entry stays listed.
-            Err(err) => warn!("{location}: {}", error_text(&err)),
+            (Err(err), _) => {
+                pending.etags.remove(&key);
+                warn!("{location}: {}", error_text(&err));
+            }
+        }
+    }
+    // Q-230, Q-232: a refresh's ETag checks. Another ETag drops the information, identity
+    // and thumbnail and reads the header again; a 304 or a failed check keeps them.
+    let mut checked = Vec::new();
+    pending
+        .revalidations
+        .retain_mut(|(id, location, task)| match check_ready(task) {
+            Some(result) => {
+                checked.push((*id, location.clone(), result));
+                false
+            }
+            None => true,
+        });
+    for (id, location, result) in checked {
+        let Some(source) = pending.index(id) else {
+            continue;
+        };
+        match result {
+            Ok(Revalidation::Unchanged) => continue,
+            // A server that ignores `If-None-Match` but sends the same ETag.
+            Ok(Revalidation::Current(Some(etag)))
+                if pending.etags.get(&(id, location.clone())) == Some(&etag) =>
+            {
+                continue;
+            }
+            Ok(Revalidation::Current(_)) => {}
+            Err(err) => {
+                warn!("{location}: {}", error_text(&err));
+                continue;
+            }
+        }
+        let Some(e) = library
+            .entries
+            .iter_mut()
+            .find(|e| e.source == source && e.entry.location == location)
+        else {
+            continue;
+        };
+        e.info = None;
+        e.identity = None;
+        e.thumbnail = None;
+        pending.etags.remove(&(id, location));
+        if e.entry.kind == EntryKind::Exchange {
+            let entry = e.entry.clone();
+            let model = library.sources[source].1.clone();
+            let http = http_client(&library.sources[source].0, &client);
+            read_info(pending, id, &model, http, &entry);
         }
     }
     // Fetches: an instance per model, hidden until its upload (Q-148).

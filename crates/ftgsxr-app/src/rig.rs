@@ -697,8 +697,8 @@ fn run_locomotion(
 }
 
 /// A background drawn instead of `DesktopView`'s while it is set: a replayed render
-/// request's (§1.7, Q-231). It is never written to the settings.
-// Q-231
+/// request's (§1.7, Q-234). It is never written to the settings.
+// Q-234
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct BackgroundOverride(pub(crate) Option<[f32; 3]>);
 
@@ -706,7 +706,7 @@ pub(crate) struct BackgroundOverride(pub(crate) Option<[f32; 3]>);
 /// its background (or the override's) on every splat camera that draws one: the desktop
 /// camera and the XR eyes in VR mode; a camera that draws none (passthrough) is left
 /// alone (§1.4 Backgrounds).
-// Q-231
+// Q-234
 fn follow_view(
     view: Res<DesktopView>,
     over: Res<BackgroundOverride>,
@@ -780,7 +780,7 @@ mod tests {
         assert!(frame_distance(1.0, fov, 0.5) > 2.0);
     }
 
-    // Q-231: every splat camera that draws a background (the desktop camera, the XR eyes
+    // Q-234: every splat camera that draws a background (the desktop camera, the XR eyes
     // in VR mode) draws `[environment] background` through `DesktopView`, or the
     // override while one is set; a camera that draws none (passthrough) is left alone.
     #[test]

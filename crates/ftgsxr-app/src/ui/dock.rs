@@ -793,7 +793,7 @@ fn request_replay(
                 close = true;
             }
         });
-        // Q-230, Q-231: what the open request changes in the view.
+        // Q-233, Q-234: what the open request changes in the view.
         let [red, green, blue] = r.request.background;
         ui.label(format!(
             "background: request ({red:.3}, {green:.3}, {blue:.3})"

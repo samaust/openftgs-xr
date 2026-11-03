@@ -173,7 +173,7 @@ fn find_requests(
 /// While a request is open, its background is the view's (`BackgroundOverride`) and its
 /// `sh_degree` the extra drawing cap (`SplatShLimit`); without one, neither is set. The
 /// governor's `SplatTierState` and the settings are never written.
-// Q-230, Q-231, Q-232
+// Q-233, Q-234, Q-235
 fn follow_replay(
     view: Res<TrainingView>,
     mut background: ResMut<BackgroundOverride>,
@@ -461,7 +461,7 @@ mod tests {
         );
     }
 
-    // Q-230, Q-231: from Open to Close (or its replacement), the request's background is
+    // Q-233, Q-234: from Open to Close (or its replacement), the request's background is
     // the override and its degree the extra cap; stepping keeps them, the governor's
     // `SplatTierState` and the settings' background are untouched, and Close clears both.
     #[test]
