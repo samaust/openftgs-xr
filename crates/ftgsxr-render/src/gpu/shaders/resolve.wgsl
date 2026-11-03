@@ -11,6 +11,11 @@
 // C_final = C + (1 − A)·c_bg is formed in the file's space first and decoded, opaque:
 // (lin(C_final), 1) (Q-94). The layer is sampled at the target pixel's center through a
 // linear sampler, so a layer at another render scale is resampled (Q-95).
+//
+// With a depth attachment the triangle is drawn twice, depth-gated (Q-101): `fs_resolve`
+// where the view's depth holds its clear value (no opaque geometry), `fs_resolve_mesh`
+// where opaque geometry wrote depth, which always takes the passthrough form, so the
+// mesh stays where no splat covers it and a splat in front of it shows over it.
 
 struct Resolve {
     background: vec3<f32>,
@@ -45,15 +50,27 @@ fn srgb_to_linear(c_raw: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045));
 }
 
-@fragment
-fn fs_resolve(in: VertexOut) -> @location(0) vec4<f32> {
-    let texel = textureSample(layer, layer_sampler, in.uv);
+// The passthrough form (lin(C/A)·A, A), 0 where A = 0.
+fn passthrough(texel: vec4<f32>) -> vec4<f32> {
     let a = texel.a;
-    if resolve.has_background != 0u {
-        return vec4<f32>(srgb_to_linear(texel.rgb + (1.0 - a) * resolve.background), 1.0);
-    }
     if !(a > 0.0) {
         return vec4<f32>(0.0);
     }
     return vec4<f32>(srgb_to_linear(texel.rgb / a) * a, a);
+}
+
+@fragment
+fn fs_resolve(in: VertexOut) -> @location(0) vec4<f32> {
+    let texel = textureSample(layer, layer_sampler, in.uv);
+    if resolve.has_background != 0u {
+        let a = texel.a;
+        return vec4<f32>(srgb_to_linear(texel.rgb + (1.0 - a) * resolve.background), 1.0);
+    }
+    return passthrough(texel);
+}
+
+// Q-101: over opaque geometry, the passthrough form whatever the background.
+@fragment
+fn fs_resolve_mesh(in: VertexOut) -> @location(0) vec4<f32> {
+    return passthrough(textureSample(layer, layer_sampler, in.uv));
 }
