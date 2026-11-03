@@ -4,17 +4,20 @@
 //! §1.5 Poses, I-4, D-11, Q-18): save, reset to the saved pose, forget then reset to the
 //! identity, the fit (the box's bottom at 0, its center 1.5 m along the head's yaw,
 //! 10⁻⁴), snap to floor, a saved pose applied when the instance appears, and the fit's
-//! hints (Q-181). I-4 itself, with `poses.json`, is `persist`'s (#285).
+//! hints (Q-181). `poses.json` through `PersistCommand` and `Intent::Instance`, and a
+//! reload applying the file's pose, are `persist`'s (#285).
 
 mod support;
 
 use bevy::prelude::*;
-use ftgsxr_app::{InstanceAction, Intent, LibraryCommand, LoadedModel, ModelRef, Poses};
+use ftgsxr_app::{
+    InstanceAction, Intent, LibraryCommand, LoadedModel, ModelRef, PersistCommand, Poses,
+};
 use ftgsxr_core::{Aabb, Pose, Preset};
 use ftgsxr_io::{PoseStore, SavedPose};
 use ftgsxr_render::{SplatAsset, SplatModel};
 use ftgsxr_testkit::fixtures_dir;
-use support::{Setup, TestApp};
+use support::{Setup, StubPlatform, TestApp};
 
 fn load(t: &mut TestApp, path: std::path::PathBuf) -> Entity {
     t.command(LibraryCommand::LoadRef(ModelRef::File(path)));
@@ -234,4 +237,58 @@ fn i04_the_fit_hints_from_a_manifest_and_a_checkpoint() {
     let p = pose(&t, e);
     assert!((p.scale * b.size().max_element() - saved.fit_size_m).abs() < 1e-4);
     assert!((p.rotation * Vec3::Z - Vec3::Y).length() < 1e-4);
+}
+
+fn poses_json(t: &TestApp) -> PoseStore {
+    PoseStore::load(&t.dir.join("config/poses.json")).expect("poses.json reads")
+}
+
+#[test]
+fn i04_save_writes_poses_json_and_a_reload_applies_it() {
+    let path = fixtures_dir().join("probes/P1.safetensors");
+    let mut t = TestApp::new("i04_json");
+    let e = load(&mut t, path.clone());
+    let id = identity(&t, e);
+    let moved = Pose {
+        translation: Vec3::new(-0.4, 0.1, -1.2),
+        rotation: Quat::from_rotation_y(-0.7),
+        scale: 0.8,
+    };
+    set(&mut t, e, moved);
+    // Save through the command: `poses.json` holds the pose.
+    t.app.world_mut().write_message(PersistCommand::SavePose(e));
+    t.frames(3);
+    let file = poses_json(&t);
+    assert!(near(file.get(&id).expect("saved in the file").pose, moved));
+    // Reset returns to the saved pose.
+    set(&mut t, e, Pose::IDENTITY);
+    act(&mut t, e, InstanceAction::ResetPose);
+    assert!(near(pose(&t, e), moved));
+    // Forget (the intent) leaves the file without it; reset gives the identity.
+    act(&mut t, e, InstanceAction::ForgetPose);
+    t.frames(2);
+    assert!(poses_json(&t).get(&id).is_none());
+    act(&mut t, e, InstanceAction::ResetPose);
+    assert!(near(pose(&t, e), Pose::IDENTITY));
+    // Save again (the intent), then a new player on the same directories applies it.
+    set(&mut t, e, moved);
+    act(&mut t, e, InstanceAction::SavePose);
+    t.frames(2);
+    assert!(near(poses_json(&t).get(&id).unwrap().pose, moved));
+    let dir = t.dir.clone();
+    drop(t);
+    let mut again = TestApp::on("i04_json_reload", StubPlatform::new(&dir));
+    let e = load(&mut again, path);
+    assert!(near(pose(&again, e), moved));
+    // The fit: the box's bottom at 0, its center 1.5 m along the yaw (10⁻⁴).
+    let b = bounds(&again, e);
+    act(&mut again, e, InstanceAction::Fit);
+    let p = pose(&again, e);
+    let bottom = posed_corners(&b, &p)
+        .iter()
+        .map(|c| c.y)
+        .fold(f32::INFINITY, f32::min);
+    assert!(bottom.abs() < 1e-4, "{bottom}");
+    let c = p.transform_point(b.center());
+    assert!(c.x.abs() < 1e-4 && (c.z + 1.5).abs() < 1e-4, "{c}");
 }

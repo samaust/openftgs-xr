@@ -28,7 +28,6 @@ use ftgsxr_io::{
 };
 use ftgsxr_render::{SplatAsset, SplatEvent, SplatGpu, SplatLoad, SplatModel, SplatTierState};
 
-use crate::persist::SettingsRes;
 use crate::platform::{PickHandle, PickKind, PlatformRes};
 
 /// A library entry's state (§1.5).
@@ -160,6 +159,8 @@ pub struct LoadedModel {
 /// The library's systems and observers, added by `AppPlugin` with its `initial` models.
 pub(crate) struct LibraryPlugin {
     pub(crate) initial: Vec<ModelRef>,
+    /// The HTTP cache's size limit, `Settings.cache.max_bytes` (`AppPlugin` maps it).
+    pub(crate) cache_max_bytes: u64,
 }
 
 impl Plugin for LibraryPlugin {
@@ -176,10 +177,7 @@ impl Plugin for LibraryPlugin {
             )
             .add_systems(PostUpdate, follow_in_use);
         let paths = app.world().resource::<PlatformRes>().0.paths().clone();
-        let max_bytes = app
-            .world()
-            .get_resource::<SettingsRes>()
-            .map_or(20 << 30, |s| s.0.cache.max_bytes);
+        let max_bytes = self.cache_max_bytes;
         // The client of HTTP sources and references, and of `set_in_use` (Q-4).
         let client = match HttpClient::new(paths.cache.clone(), TlsRoots::WebPki, max_bytes) {
             Ok(c) => Some(Arc::new(c)),
@@ -218,6 +216,13 @@ impl Plugin for LibraryPlugin {
         }
     }
 }
+
+/// Whether an instance not yet uploaded shows when its upload completes (Q-148): true
+/// from the library, false for a scene's hidden instance (`persist`); removed at the
+/// upload.
+// Q-T285.3
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShowOnUpload(pub(crate) bool);
 
 /// The HTTP client the sources and references share (Q-4, Q-47).
 #[derive(Resource)]
@@ -625,6 +630,14 @@ fn fresh_entries(
             state,
         });
     }
+    // Q-T285.4: a scene's missing model stays listed until it is located.
+    for o in old {
+        if o.state == EntryState::Missing
+            && !fresh.iter().any(|f| f.entry.location == o.entry.location)
+        {
+            fresh.push(o.clone());
+        }
+    }
     fresh
 }
 
@@ -782,6 +795,7 @@ fn poll_tasks(
                     },
                     Transform::IDENTITY,
                     Visibility::Hidden,
+                    ShowOnUpload(true),
                     ctx.clone(),
                 ));
                 if let Some(e) = entry_of(&mut library, pending, &ctx) {
@@ -891,7 +905,7 @@ fn on_model(
 // Q-148, Q-117
 fn on_splat_event(
     event: On<SplatEvent>,
-    loads: Query<(&LoadCtx, Option<&SplatModel>)>,
+    loads: Query<(&LoadCtx, Option<&SplatModel>, Option<&ShowOnUpload>)>,
     assets: Res<Assets<SplatAsset>>,
     mut library: ResMut<Library>,
     pending: Res<Pending>,
@@ -900,16 +914,22 @@ fn on_splat_event(
 ) {
     match event.event() {
         SplatEvent::Uploaded { entity, .. } => {
-            let Ok((ctx, _)) = loads.get(*entity) else {
+            let Ok((ctx, _, shown)) = loads.get(*entity) else {
                 return;
             };
-            commands.entity(*entity).insert(Visibility::Visible);
+            // Q-T285.3: a scene's hidden instance stays hidden.
+            let show = shown.is_none_or(|s| s.0);
+            let mut e = commands.entity(*entity);
+            e.remove::<ShowOnUpload>();
+            if show {
+                e.insert(Visibility::Visible);
+            }
             if let Some(e) = entry_of(&mut library, &pending, ctx) {
                 e.state = EntryState::Loaded(*entity);
             }
         }
         SplatEvent::Failed { entity, error } => {
-            let Ok((ctx, model)) = loads.get(*entity) else {
+            let Ok((ctx, model, _)) = loads.get(*entity) else {
                 return;
             };
             let asset = model.and_then(|m| assets.get(&m.0));
