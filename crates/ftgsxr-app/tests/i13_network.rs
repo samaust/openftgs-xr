@@ -155,11 +155,11 @@ fn i13_a_dropped_non_model_reports_its_validation_failure() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_i13_an_entry_less_load_over_budget_reports_e_mem_budget_with_n() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     use ftgsxr_app::QualityTier;
     use ftgsxr_core::memory_estimate;
-    use ftgsxr_testkit::{fixtures_dir, layer_messages, probe};
+    use ftgsxr_testkit::{fixtures_dir, probe};
     use support::Setup;
-    let _layer = layer_messages(); // R-16, Q-105
     let (model, _) = probe("P1");
     let n = model.len() as u64;
     let mut tier = QualityTier::by_name("desktop").unwrap();
