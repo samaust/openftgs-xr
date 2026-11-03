@@ -339,7 +339,6 @@ impl Default for UiState {
 
 impl UiState {
     /// Hides the UI for the next drawn frame (capture's screenshot, #287).
-    #[allow(dead_code, reason = "capture's (#287)")]
     pub(crate) fn hide_for_one_frame(&mut self) {
         self.hidden_frames = self.hidden_frames.max(1);
     }
