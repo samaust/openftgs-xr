@@ -644,6 +644,10 @@ _Avoid_: dynamic resolution, adaptive quality, auto tier
 The desktop camera's control scheme, fly (keys move, the mouse looks) or orbit (the camera circles the selected instance's box center). §1.7
 _Avoid_: free camera, turntable, navigation mode
 
+**Request replay**:
+A render request opened in the player and shown item by item, each item a jump to its camera and timestamp, for visual comparison with openftgs's renders of it; the numeric comparison is the headless `render`'s. §1.7 Training cameras and requests, openftgs §2.2
+_Avoid_: request playback, playback (reserved for the clock's controls), render (reserved for the headless command)
+
 **Bookmark**:
 One saved desktop camera, its pose, field of view and mode, kept in the scene file, nine at most. §1.7, §1.11
 _Avoid_: viewpoint, saved view, camera preset
