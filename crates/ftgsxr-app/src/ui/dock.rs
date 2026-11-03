@@ -845,8 +845,8 @@ fn replay_target(world: &mut World) -> Option<Entity> {
 /// its background, whether a passthrough camera leaves it out, and, when the request
 /// names a degree above the governor's cap, the degree the replayed instance is drawn
 /// at, min(its loaded degree, the cap, the request's degree). `loaded` is that
-/// instance's `LoadedModel.info.sh_degree` (Q-239), `None` with no instance loaded.
-// Q-233, Q-234, Q-239
+/// instance's `LoadedModel.info.sh_degree` (Q-241), `None` with no instance loaded.
+// Q-233, Q-234, Q-241
 fn replay_lines(
     request: &ftgsxr_core::RenderRequest,
     governor_cap: Option<u8>,
