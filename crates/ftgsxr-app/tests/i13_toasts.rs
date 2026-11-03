@@ -156,18 +156,18 @@ fn a_triggered_toast_is_raised_once_through_the_rate_limit() {
     assert_eq!(toasts(&t.app), vec![toast]);
 }
 
-// Q-208, Q-209 (#347): §1.13's "one per second per site" holds for the overflow warning
-// whatever its counts: `SplatEvent::Overflow` comes each frame that drops records, with a
-// visible count that moves, and for 2 s it gives two toasts.
+// Q-208, Q-209 (#347): §1.13's "one per second per site" holds for the overflow warning:
+// `SplatEvent::Overflow` comes each frame that drops records, its visible count clamped to
+// C (§1.4 stage 3), its text the same each frame, and for 2 s it gives two toasts.
 #[test]
-fn a_per_frame_overflow_with_a_moving_count_is_one_toast_a_second() {
+fn a_per_frame_overflow_is_one_toast_a_second() {
     use ftgsxr_app::SplatEvent;
     let mut t = TestApp::new("i13t-overflow");
     record_toasts(&mut t.app);
     // 120 frames of `FRAME` span 1.98 s: a toast at the first and one 1 s later.
-    for k in 0..120u32 {
+    for _ in 0..120 {
         t.app.world_mut().trigger(SplatEvent::Overflow {
-            visible: 1_000 + k,
+            visible: 900,
             capacity: 900,
         });
         t.frames(1);
