@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The exit-time wait for in-flight pipeline compiles (#376, §1.7 Command line, §2.4
-//! Threads, Q-233). With bevy's `multi_threaded`, `PipelineCache` compiles pipelines on the
+//! Threads, Q-236). With bevy's `multi_threaded`, `PipelineCache` compiles pipelines on the
 //! async compute pool; a process that exits while one compiles leaves the worker inside
 //! the GPU driver, whose exit-time teardown can crash it. On an `AppExit` the app holds the
 //! exit until a render frame that ran after it reports no pipeline queued or compiling, at
@@ -28,8 +28,8 @@ use bevy::render::render_resource::{CachedPipelineState, PipelineCache, Pipeline
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::window::{ExitSystems, exit_on_all_closed, exit_on_primary_closed};
 
-/// Q-233: the longest an exit waits for in-flight compiles.
-// Q-233
+/// Q-236: the longest an exit waits for in-flight compiles.
+// Q-236
 const CAP: Duration = Duration::from_secs(2);
 
 /// The render world's latest report.

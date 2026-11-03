@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! `ftgsxr play`'s exit in its first frames (#376, §1.7 Command line, §2.4 Threads, Q-233,
+//! `ftgsxr play`'s exit in its first frames (#376, §1.7 Command line, §2.4 Threads, Q-236,
 //! `gpu` lane). With bevy's `multi_threaded`, render pipelines compile on the async compute
 //! pool; a process that exited while one was compiling left the worker inside the NVIDIA
 //! Vulkan driver, whose exit-time teardown crashed it (SIGSEGV or SIGABRT). `AppPlugin`
-//! now holds the `AppExit` until no pipeline compiles, at most Q-233's cap.
+//! now holds the `AppExit` until no pipeline compiles, at most Q-236's cap.
 //!
 //! Each run sends one SIGINT, which bevy's Ctrl-C handler turns into an `AppExit` with
 //! code 130, early after the window appears, when pipelines are still compiling, and
@@ -114,7 +114,7 @@ fn run_once(home: &Path, model: &Path, delay: Duration) -> (Option<ExitStatus>, 
     (status, log)
 }
 
-/// #376 (§1.7 Command line, Q-233, Q-234): `play` asked to exit in its first frames, while
+/// #376 (§1.7 Command line, Q-236, Q-237): `play` asked to exit in its first frames, while
 /// its render pipelines compile, exits by its own code (130 for Ctrl-C), never by a signal.
 #[test]
 #[ignore = "gpu"]
@@ -129,7 +129,7 @@ fn gpu_play_interrupted_in_its_first_frames_exits_by_its_code() {
     for (i, ms) in delays_ms.iter().enumerate() {
         let home = scratch(&format!("interrupted-{i}"));
         let (status, log) = run_once(&home, &model, Duration::from_millis(*ms));
-        // Q-234
+        // Q-237
         let ok = status.is_some_and(|s| s.signal().is_none() && s.code() == Some(130));
         if !ok {
             let tail: Vec<&str> = log.lines().rev().take(8).collect();
