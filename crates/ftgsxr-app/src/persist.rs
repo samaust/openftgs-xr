@@ -37,7 +37,7 @@ use crate::library::{
 use crate::manipulate::{Poses, now_rfc3339};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
-use crate::rig::{CameraController, DesktopCamera, Locomotion, PlayerRig};
+use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest};
 
 mod panels;
@@ -169,6 +169,14 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
         };
         world.insert_resource(SettingsRes(settings));
     }
+    // Q-195, Q-196: rig's resources from the settings, before its plugin builds, so the
+    // desktop camera and the grid start as the settings say.
+    let (view, loco) = {
+        let s = &world.resource::<SettingsRes>().0;
+        (desktop_view(s), locomotion_of(s))
+    };
+    world.insert_resource(view);
+    world.insert_resource(loco);
     let config = default.parent().map(Path::to_path_buf).unwrap_or_default();
     let poses = config.join("poses.json");
     if !world.contains_resource::<Poses>() {
@@ -850,6 +858,36 @@ fn audio_state(s: &AudioSettings) -> AudioState {
     }
 }
 
+fn desktop_view(s: &Settings) -> DesktopView {
+    DesktopView {
+        fly_speed_mps: s.desktop.fly_speed_mps,
+        fov_deg: s.desktop.fov_deg,
+        grid: s.display.grid,
+        background: s.environment.background,
+    }
+}
+
+/// D-17: stick locomotion off in passthrough mode (Q-195).
+fn locomotion_of(s: &Settings) -> Locomotion {
+    Locomotion::from_settings(&s.locomotion, s.environment.mode != "passthrough")
+}
+
+/// The fields of `view` that differ from `base`'s view, written into `s`.
+fn view_into(view: &DesktopView, base: &DesktopView, s: &mut Settings) {
+    if view.fly_speed_mps != base.fly_speed_mps {
+        s.desktop.fly_speed_mps = view.fly_speed_mps;
+    }
+    if view.fov_deg != base.fov_deg {
+        s.desktop.fov_deg = view.fov_deg;
+    }
+    if view.grid != base.grid {
+        s.display.grid = view.grid;
+    }
+    if view.background != base.background {
+        s.environment.background = view.background;
+    }
+}
+
 fn locomotion_settings(l: &Locomotion, base: &LocomotionSettings) -> LocomotionSettings {
     LocomotionSettings {
         speed_mps: l.speed_mps,
@@ -890,6 +928,7 @@ fn sync_settings(
     mut intents: MessageReader<Intent>,
     mut audio: ResMut<AudioState>,
     mut loco: ResMut<Locomotion>,
+    mut view: ResMut<DesktopView>,
     mut playback: ResMut<Playback>,
     mut looping: ResMut<LoopSetting>,
     library: Res<Library>,
@@ -917,6 +956,17 @@ fn sync_settings(
                 settings.0.locomotion = t.clone();
             }
             snap.locomotion = t;
+        }
+        if view.is_changed() {
+            let base = desktop_view(snap);
+            if *view != base {
+                let mut t = settings.0.clone();
+                view_into(&view, &base, &mut t);
+                view_into(&view, &base, snap);
+                if settings.0 != t {
+                    settings.0 = t;
+                }
+            }
         }
         for intent in intents.read() {
             if let Intent::Playback(PlaybackCommand::Speed(s)) = *intent
@@ -964,9 +1014,15 @@ fn sync_settings(
         }
     }
     if first || s.locomotion != snap.locomotion || s.environment.mode != snap.environment.mode {
-        let l = Locomotion::from_settings(&s.locomotion, s.environment.mode != "passthrough");
+        let l = locomotion_of(s);
         if *loco != l {
             *loco = l;
+        }
+    }
+    {
+        let v = desktop_view(s);
+        if (first || v != desktop_view(snap)) && *view != v {
+            *view = v;
         }
     }
     if first || s.playback != snap.playback {

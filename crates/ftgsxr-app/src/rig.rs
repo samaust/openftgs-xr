@@ -22,12 +22,13 @@ use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use ftgsxr_core::{Aabb, Pose};
-use ftgsxr_io::{CameraState, LocomotionSettings};
+use ftgsxr_io::{
+    CameraState, DesktopSettings, DisplaySettings, EnvironmentSettings, LocomotionSettings,
+};
 use ftgsxr_render::{OutputSpace, SortMode, SplatAsset, SplatCamera, SplatLoad, SplatModel};
 
 use crate::intent::{CameraCommand, Intent};
 use crate::manipulate::Selected;
-use crate::persist::SettingsRes;
 
 /// The user's origin: the desktop camera's parent, the XR tracking space (§2.1).
 #[derive(Component)]
@@ -205,7 +206,7 @@ pub(crate) struct DesktopCamera;
 
 /// The desktop camera controller's state (§1.7 Cameras): the mode, the orbit's target
 /// and distance, and the nine bookmarks the scene file keeps (`persist`, #285). The base
-/// speed and the field of view are `SettingsRes.desktop`'s.
+/// speed and the field of view are `DesktopView`'s.
 #[derive(Resource, Clone, Debug)]
 pub(crate) struct CameraController {
     pub(crate) orbit: bool,
@@ -222,6 +223,36 @@ impl Default for CameraController {
             target: Vec3::ZERO,
             distance: reset.translation.length(),
             bookmarks: Default::default(),
+        }
+    }
+}
+
+/// What the desktop camera and the grid follow (§1.7 Cameras, §1.4 Backgrounds): the
+/// fly camera's base speed and the vertical field of view (`[desktop]`), the floor grid
+/// (`[display] grid`) and the background (`[environment] background`). `persist` maps
+/// the settings into it and the controller's changes back (PRD #275, "Settings as the
+/// source of truth"); its default is the settings' defaults.
+// Q-196
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub(crate) struct DesktopView {
+    pub(crate) fly_speed_mps: f32,
+    pub(crate) fov_deg: f32,
+    pub(crate) grid: bool,
+    pub(crate) background: [f32; 3],
+}
+
+impl Default for DesktopView {
+    fn default() -> Self {
+        let (d, g, e) = (
+            DesktopSettings::default(),
+            DisplaySettings::default(),
+            EnvironmentSettings::default(),
+        );
+        DesktopView {
+            fly_speed_mps: d.fly_speed_mps,
+            fov_deg: d.fov_deg,
+            grid: g.grid,
+            background: e.background,
         }
     }
 }
@@ -256,26 +287,17 @@ impl Plugin for RigPlugin {
             .world_mut()
             .spawn((ContentGroup, Transform::IDENTITY, Visibility::Visible))
             .id();
-        // Q-195: `persist` may have inserted it first.
-        if !app.world().contains_resource::<Locomotion>() {
-            let s = app
-                .world()
-                .get_resource::<SettingsRes>()
-                .map(|s| s.0.clone());
-            let s = s.unwrap_or_default();
-            let enabled = s.environment.mode != "passthrough";
-            app.insert_resource(Locomotion::from_settings(&s.locomotion, enabled));
-        }
+        // Q-195, Q-196: `persist` inserts them from the settings first; the defaults
+        // otherwise.
         app.insert_resource(RigEntities { rig, group })
+            .init_resource::<Locomotion>()
+            .init_resource::<DesktopView>()
             .init_resource::<CameraController>()
             .add_message::<Intent>()
             .add_message::<CameraJump>()
             .add_observer(parent_instance)
             .add_systems(Startup, (spawn_desktop_camera, spawn_grid))
-            .add_systems(
-                Update,
-                (run_camera, run_locomotion, follow_settings).chain(),
-            )
+            .add_systems(Update, (run_camera, run_locomotion, follow_view).chain())
             .add_systems(
                 Update,
                 capture_cursor.run_if(resource_exists::<ButtonInput<MouseButton>>),
@@ -304,22 +326,21 @@ fn camera_projection(fov_deg: f32) -> Projection {
 fn spawn_desktop_camera(
     windows: Query<(), With<PrimaryWindow>>,
     rig: Res<RigEntities>,
-    settings: Option<Res<SettingsRes>>,
+    view: Res<DesktopView>,
     mut commands: Commands,
 ) {
     if windows.is_empty() {
         return;
     }
-    let s = settings.map(|s| s.0.clone()).unwrap_or_default();
     let reset = reset_pose();
     commands.spawn((
         DesktopCamera,
         Camera3d::default(),
-        camera_projection(s.desktop.fov_deg),
+        camera_projection(view.fov_deg),
         SplatCamera {
             sort: SortMode::PerView,
             output: OutputSpace::LinearOver {
-                background: Some(s.environment.background),
+                background: Some(view.background),
             },
         },
         Transform {
@@ -353,13 +374,13 @@ pub(crate) fn grid_mesh() -> Mesh {
 }
 
 /// The floor grid with the desktop camera, where the mesh and material stores exist
-/// (Q-194); its visibility follows `display.grid`.
+/// (Q-194); its visibility follows `DesktopView.grid`.
 // Q-194
 fn spawn_grid(
     windows: Query<(), With<PrimaryWindow>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
-    settings: Option<Res<SettingsRes>>,
+    view: Res<DesktopView>,
     mut commands: Commands,
 ) {
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
@@ -368,7 +389,7 @@ fn spawn_grid(
     if windows.is_empty() {
         return;
     }
-    let shown = settings.map(|s| s.0.display.grid).unwrap_or(true);
+    let shown = view.grid;
     commands.spawn((
         FloorGrid,
         Mesh3d(meshes.add(grid_mesh())),
@@ -478,7 +499,7 @@ fn run_camera(
     mut intents: MessageReader<Intent>,
     mut jumps: MessageReader<CameraJump>,
     mut ctl: ResMut<CameraController>,
-    mut settings: Option<ResMut<SettingsRes>>,
+    mut view: ResMut<DesktopView>,
     mut cameras: Query<
         (&mut Transform, &mut Projection),
         (With<DesktopCamera>, Without<PlayerRig>),
@@ -508,7 +529,7 @@ fn run_camera(
         };
         match *cmd {
             CameraCommand::Move(v) if !ctl.orbit => {
-                let speed = settings.as_ref().map_or(2.0, |s| s.0.desktop.fly_speed_mps);
+                let speed = view.fly_speed_mps;
                 let (yaw, _) = yaw_pitch(pose.rotation);
                 let d = Quat::from_rotation_y(yaw) * Vec3::new(v.x, 0.0, v.z) + Vec3::Y * v.y;
                 pose.translation += d * speed * dt;
@@ -519,9 +540,10 @@ fn run_camera(
                     from_yaw_pitch(yaw - d.x * LOOK_RAD_PER_PX, pitch - d.y * LOOK_RAD_PER_PX);
             }
             CameraCommand::Speed(steps) => {
-                if let Some(s) = settings.as_mut() {
-                    let v = s.0.desktop.fly_speed_mps * SPEED_STEP.powf(steps);
-                    s.0.desktop.fly_speed_mps = v.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
+                let v = (view.fly_speed_mps * SPEED_STEP.powf(steps))
+                    .clamp(SPEED_RANGE.0, SPEED_RANGE.1);
+                if view.fly_speed_mps != v {
+                    view.fly_speed_mps = v;
                 }
             }
             CameraCommand::ToggleOrbit => {
@@ -598,9 +620,8 @@ fn run_camera(
                 if ctl.orbit {
                     ctl.target = pose.translation + pose.rotation * Vec3::NEG_Z * ctl.distance;
                 }
-                if let Some(s) = settings.as_mut() {
-                    s.0.desktop.fov_deg = b.fov_deg;
-                }
+                // Q-196: as a jump (Q-219), the saved field of view lasts until the next
+                // change of the settings' one, which it leaves as it is.
                 *projection = camera_projection(b.fov_deg);
                 if let Projection::Perspective(p) = &mut *projection {
                     p.aspect_ratio = aspect;
@@ -677,17 +698,17 @@ fn run_locomotion(
     }
 }
 
-/// The settings' field of view and background on the desktop camera.
-fn follow_settings(
-    settings: Option<Res<SettingsRes>>,
+/// `DesktopView`'s field of view and background on the desktop camera, its grid on the
+/// floor grid.
+fn follow_view(
+    view: Res<DesktopView>,
     mut cameras: Query<(&mut Projection, &mut SplatCamera), With<DesktopCamera>>,
     mut grids: Query<&mut Visibility, With<FloorGrid>>,
 ) {
-    let Some(s) = settings else { return };
-    if !s.is_changed() {
+    if !view.is_changed() {
         return;
     }
-    let shown = if s.0.display.grid {
+    let shown = if view.grid {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -699,13 +720,13 @@ fn follow_settings(
     }
     for (mut projection, mut camera) in &mut cameras {
         if let Projection::Perspective(p) = &mut *projection {
-            let fov = s.0.desktop.fov_deg.to_radians();
+            let fov = view.fov_deg.to_radians();
             if p.fov != fov {
                 p.fov = fov;
             }
         }
         let output = OutputSpace::LinearOver {
-            background: Some(s.0.environment.background),
+            background: Some(view.background),
         };
         if camera.output != output {
             camera.output = output;
