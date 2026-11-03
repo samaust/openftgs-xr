@@ -11,21 +11,23 @@ use bevy::ecs::prelude::*;
 use bevy::math::{EulerRot, Quat};
 use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
-use ftgsxr_core::{EndRule, LoopMode, PlayState};
-use ftgsxr_io::EntryKind;
-use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTransform};
+use ftgsxr_core::{EndRule, LoopMode, PlayState, Preset};
+use ftgsxr_io::{EntryKind, SourceSpec, Url};
+use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTime, SplatTransform};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
 use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
-use crate::library::{EntryState, Library, LibraryCommand, LoadedModel};
+use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
+use crate::manipulate::{FIT_RANGE_M, PoseExtras, SetPoseExtras};
 use crate::platform::{PickKind, PlatformRes};
-use crate::playback::Playback;
+use crate::playback::{Playback, RangeSetting};
 
 /// What the user did this frame.
 enum Out {
     Intent(Intent),
     Library(LibraryCommand),
+    Locate(usize),
     Answer(bool),
     Cue(UiCue),
     Jump(JumpToCamera),
@@ -86,6 +88,9 @@ pub(super) fn draw(
             }
             Out::Library(c) => {
                 world.write_message(c);
+            }
+            Out::Locate(i) => {
+                world.write_message(LocateEntry(i));
             }
             Out::Cue(c) => {
                 world.write_message(c);
@@ -244,7 +249,9 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
                     Tab::Scene => scene_tab(world, ui, out, hv),
                     Tab::Playback => playback_tab(world, ui, out, hv),
                     Tab::Display => display_tab(world, ui, out, hv),
-                    Tab::Environment => environment_tab(ui),
+                    // Q-161, §1.1: no passthrough control on the desktop (absent, not
+                    // disabled); `persist` adds the background and the grid.
+                    Tab::Environment => {}
                     Tab::Settings => {
                         ui.label("Settings (§1.11)");
                     }
@@ -266,6 +273,36 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
             });
         });
     world.resource_mut::<UiState>().dock_width = r.response.rect.width();
+}
+
+/// The source a Library tab entry names: an `http(s)` URL is an HTTP index, an absolute
+/// path a local folder; anything else none. Its label is the URL's host or the folder's
+/// name.
+pub(crate) fn source_from_input(text: &str) -> Option<SourceSpec> {
+    let text = text.trim();
+    if let Ok(url) = Url::parse(text)
+        && matches!(url.scheme(), "http" | "https")
+    {
+        return Some(SourceSpec {
+            kind: "http".into(),
+            name: url.host_str().unwrap_or(text).to_owned(),
+            location: text.to_owned(),
+            flavor: None,
+        });
+    }
+    let path = std::path::Path::new(text);
+    if path.is_absolute() {
+        let name = path
+            .file_name()
+            .map_or_else(|| text.to_owned(), |n| n.to_string_lossy().into_owned());
+        return Some(SourceSpec {
+            kind: "dir".into(),
+            name,
+            location: text.to_owned(),
+            flavor: None,
+        });
+    }
+    None
 }
 
 fn kind_index(k: EntryKind) -> Option<usize> {
@@ -300,8 +337,30 @@ fn library_tab(
             if button(ui, "Refresh", out, hv) {
                 out.push(Out::Library(LibraryCommand::Refresh(i)));
             }
+            // The platform's models directory (the first, Q-49) stays.
+            if i > 0 && button(ui, "Remove", out, hv) {
+                out.push(Out::Library(LibraryCommand::RemoveSource(i)));
+            }
         });
     }
+    // §1.5 Sources, §1.7 Panels: an HTTP index URL or a local folder (Q-160).
+    ui.horizontal(|ui| {
+        let mut state = world.resource_mut::<UiState>();
+        ui.add(
+            egui::TextEdit::singleline(&mut state.new_source)
+                .hint_text("https://… index or /path/to/folder"),
+        );
+        let spec = source_from_input(&state.new_source);
+        if ui
+            .add_enabled(spec.is_some(), egui::Button::new("Add source"))
+            .clicked()
+            && let Some(spec) = spec
+        {
+            state.new_source.clear();
+            out.push(Out::Cue(UiCue::Click));
+            out.push(Out::Library(LibraryCommand::AddSource(spec)));
+        }
+    });
     ui.horizontal(|ui| {
         if button(ui, "Open files…", out, hv) {
             out.push(Out::Library(LibraryCommand::Pick(PickKind::Files)));
@@ -365,8 +424,9 @@ fn library_tab(
                 }
                 EntryState::Missing => {
                     ui.label("missing");
+                    // Q-225: only a file of the entry's identity is accepted.
                     if button(ui, "Locate…", out, hv) {
-                        out.push(Out::Library(LibraryCommand::Pick(PickKind::Files)));
+                        out.push(Out::Locate(i));
                     }
                 }
             }
@@ -387,20 +447,31 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
     });
     let mut q = world.query::<(
         Entity,
-        &LoadedModel,
+        &mut LoadedModel,
         &mut Transform,
         Option<&Visibility>,
         Option<&SplatMode>,
         Option<&SplatTransform>,
+        Option<&PoseExtras>,
+        Option<&SplatTime>,
     )>();
     let mut ask = None;
     let mut gains = Vec::new();
-    for (e, m, mut tf, vis, mode, color) in q.iter_mut(world) {
+    let mut extras_out = Vec::new();
+    for (e, mut m, mut tf, vis, mode, color, extras, time) in q.iter_mut(world) {
         ui.separator();
-        ui.strong(if m.reduced {
-            format!("{} (reduced)", m.name)
-        } else {
-            m.name.clone()
+        // §1.5: the instance's name is editable; §1.6: an "extrapolating" badge.
+        ui.horizontal(|ui| {
+            let mut name = m.name.clone();
+            if ui.text_edit_singleline(&mut name).changed() && name != m.name {
+                m.name = name;
+            }
+            if m.reduced {
+                ui.label("(reduced)");
+            }
+            if time.is_some_and(|t| t.extrapolating) {
+                ui.colored_label(ui.visuals().warn_fg_color, "extrapolating");
+            }
         });
         let mut visible = vis != Some(&Visibility::Hidden);
         if ui.checkbox(&mut visible, "Visible").changed() {
@@ -476,31 +547,35 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
             tf.scale = bevy::math::Vec3::splat(s);
         }
         let mut offset = m.time.offset_s;
-        ui.horizontal(|ui| {
-            ui.label("offset");
-            if ui
-                .add(egui::DragValue::new(&mut offset).speed(0.01).suffix(" s"))
-                .changed()
-            {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::Offset {
-                    instance: e,
-                    offset_s: offset,
-                })));
-            }
-            let hold = m.time.end_rule == EndRule::Hold;
-            if ui.selectable_label(hold, "hold").clicked() {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
-                    instance: e,
-                    rule: EndRule::Hold,
-                })));
-            }
-            if ui.selectable_label(!hold, "extrapolate").clicked() {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
-                    instance: e,
-                    rule: EndRule::Extrapolate,
-                })));
-            }
-        });
+        // §1.6: a single-timestamp instance has no time controls.
+        let timed = !m.time.span.is_single();
+        if timed {
+            ui.horizontal(|ui| {
+                ui.label("offset");
+                if ui
+                    .add(egui::DragValue::new(&mut offset).speed(0.01).suffix(" s"))
+                    .changed()
+                {
+                    out.push(Out::Intent(Intent::Playback(PlaybackCommand::Offset {
+                        instance: e,
+                        offset_s: offset,
+                    })));
+                }
+                let hold = m.time.end_rule == EndRule::Hold;
+                if ui.selectable_label(hold, "hold").clicked() {
+                    out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
+                        instance: e,
+                        rule: EndRule::Hold,
+                    })));
+                }
+                if ui.selectable_label(!hold, "extrapolate").clicked() {
+                    out.push(Out::Intent(Intent::Playback(PlaybackCommand::EndRule {
+                        instance: e,
+                        rule: EndRule::Extrapolate,
+                    })));
+                }
+            });
+        }
         // E14's color transform, per channel (Q-218).
         let gain = color.map_or(ColorTransform::IDENTITY.gain, |c| c.0.gain);
         let mut g = gain.to_array();
@@ -517,12 +592,52 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         if g != gain {
             gains.push((e, g));
         }
+        // §1.5 Poses: the orientation preset and L_fit the fit uses.
+        let x = extras.copied().unwrap_or(PoseExtras {
+            preset: Preset::YUp,
+            fit_size_m: 1.0,
+        });
+        let mut next = x;
         ui.horizontal(|ui| {
+            ui.label("up");
+            for (label, p) in [
+                ("Y-up", Preset::YUp),
+                ("Z-up", Preset::ZUp),
+                ("−Y-up", Preset::NegYUp),
+                ("custom", Preset::Custom(tf.rotation)),
+            ] {
+                let on = std::mem::discriminant(&x.preset) == std::mem::discriminant(&p);
+                // "custom" takes the instance's current rotation.
+                if ui.selectable_label(on, label).clicked() {
+                    next.preset = p;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("fit size");
+            ui.add(
+                egui::DragValue::new(&mut next.fit_size_m)
+                    .range(FIT_RANGE_M.0..=FIT_RANGE_M.1)
+                    .speed(0.01)
+                    .suffix(" m"),
+            );
+        });
+        if next != x {
+            extras_out.push(SetPoseExtras {
+                instance: e,
+                preset: next.preset,
+                fit_size_m: next.fit_size_m,
+            });
+        }
+        ui.horizontal_wrapped(|ui| {
             for (label, action) in [
                 ("Select", InstanceAction::Select),
                 ("Fit", InstanceAction::Fit),
+                ("Snap to floor", InstanceAction::SnapToFloor),
                 ("Save pose", InstanceAction::SavePose),
                 ("Reset pose", InstanceAction::ResetPose),
+                // §1.5: "the panel's second button" forgets the saved pose.
+                ("Forget pose", InstanceAction::ForgetPose),
             ] {
                 if button(ui, label, out, hv) {
                     out.push(Out::Intent(Intent::Instance {
@@ -536,6 +651,9 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 ask = Some(e);
             }
         });
+    }
+    for x in extras_out {
+        world.write_message(x);
     }
     training_cameras(world, ui, out, hv);
     for (e, gain) in gains {
@@ -742,10 +860,21 @@ fn playback_tab(
             }
         }
     });
+    // §1.6: [T_a, T_b] settable at both ends from the scrub position.
+    let (a, b) = world
+        .get_resource::<RangeSetting>()
+        .and_then(|r| r.0)
+        .unwrap_or((0.0, len));
     ui.horizontal(|ui| {
-        if button(ui, "Range from here", out, hv) {
+        ui.label(format!("range [{a:.3}, {b:.3}] s"));
+        if button(ui, "T_a here", out, hv) {
             out.push(Out::Intent(Intent::Playback(PlaybackCommand::Range(Some(
-                (t, len),
+                (t, b.max(t)),
+            )))));
+        }
+        if button(ui, "T_b here", out, hv) {
+            out.push(Out::Intent(Intent::Playback(PlaybackCommand::Range(Some(
+                (a.min(t), t),
             )))));
         }
         if button(ui, "Clear range", out, hv) {
@@ -808,13 +937,6 @@ fn display_tab(
             }
         }
     });
-}
-
-/// Environment on the desktop: passthrough is unavailable; `persist` adds the
-/// background and the grid (they are settings).
-fn environment_tab(ui: &mut egui::Ui) {
-    // Q-161: no passthrough on the desktop; the control is not offered.
-    ui.label("Passthrough: not available on the desktop");
 }
 
 /// The open question as a dialog.
@@ -887,4 +1009,23 @@ fn scene_files(world: &World) -> Vec<PathBuf> {
         .collect();
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
     files.into_iter().map(|(_, p)| p).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_from_input;
+
+    #[test]
+    fn a_url_is_an_http_source_and_an_absolute_path_a_folder() {
+        let s = source_from_input(" https://example.org/models/ ").unwrap();
+        assert_eq!(
+            (s.kind.as_str(), s.name.as_str(), s.location.as_str()),
+            ("http", "example.org", "https://example.org/models/")
+        );
+        let s = source_from_input("/data/scans").unwrap();
+        assert_eq!((s.kind.as_str(), s.name.as_str()), ("dir", "scans"));
+        assert!(source_from_input("relative/dir").is_none());
+        assert!(source_from_input("ftp://x/").is_none());
+        assert!(source_from_input("").is_none());
+    }
 }

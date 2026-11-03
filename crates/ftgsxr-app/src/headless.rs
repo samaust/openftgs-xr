@@ -6,7 +6,6 @@
 
 use std::fmt;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use ftgsxr_core::{
@@ -375,32 +374,10 @@ fn convert(input: &Path, out: &Path) -> Result<(), HeadlessError> {
 }
 
 /// `core_input` for an I/O error on `path` (E-IO).
+pub(crate) use crate::capture::write_atomic;
+
 fn input_error(path: &Path, e: std::io::Error) -> HeadlessError {
     core_input(path, &CoreError::Io(e))
-}
-
-/// Writes `bytes` at `path` through a temporary sibling `.<name>.tmp-<pid>` renamed over
-/// it, as `write_exchange` writes (openftgs Q-126): a failed write leaves the old file, or
-/// none, and no temporary.
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("{} names no file", path.display()),
-        )
-    })?;
-    let temporary = path.with_file_name(format!(
-        ".{}.tmp-{}",
-        name.to_string_lossy(),
-        std::process::id()
-    ));
-    let written = fs::File::create(&temporary)
-        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
-        .and_then(|()| fs::rename(&temporary, path));
-    if written.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    written
 }
 
 #[cfg(test)]

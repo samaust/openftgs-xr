@@ -9,7 +9,8 @@ mod support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{
-    Intent, LibraryCommand, LoadedModel, ModelRef, Playback, PlaybackCommand, SplatTime, UiCommand,
+    InstanceAction, Intent, LibraryCommand, LoadedModel, ModelRef, Playback, PlaybackCommand,
+    SplatTime, UiCommand,
 };
 use ftgsxr_core::{EndRule, LoopMode, PlayState};
 use ftgsxr_testkit::fixtures_dir;
@@ -264,4 +265,41 @@ fn i05_an_exchange_model_steps_by_its_median_spacing() {
     intent(&mut t, PlaybackCommand::StepFrames(3));
     t.frames(1);
     assert!((clock_t(&t) - 1.3).abs() < TOL, "{}", clock_t(&t));
+}
+
+// Q-175
+#[test]
+fn i05_a_frame_step_uses_the_selected_instances_step() {
+    // §1.6: "one frame step of the selected instance". Two instances with different
+    // steps: selecting the coarser one makes `StepFrames` move by its step, not the
+    // smaller one's fallback.
+    let (mut t, es) = loaded("i05-step-selected", &["P1", "P2"]);
+    for (e, step) in [(es[0], 0.1), (es[1], 0.25)] {
+        t.app
+            .world_mut()
+            .get_mut::<LoadedModel>(e)
+            .unwrap()
+            .frame_step_s = step;
+    }
+    t.frames(1);
+    seek(&mut t, 0.5);
+    intent(&mut t, PlaybackCommand::StepFrames(1));
+    t.frames(1);
+    assert!(
+        (clock_t(&t) - 0.6).abs() < TOL,
+        "the fallback: {}",
+        clock_t(&t)
+    );
+    t.app.world_mut().write_message(Intent::Instance {
+        instance: es[1],
+        action: InstanceAction::Select,
+    });
+    t.frames(2);
+    intent(&mut t, PlaybackCommand::StepFrames(2));
+    t.frames(1);
+    assert!(
+        (clock_t(&t) - 1.1).abs() < TOL,
+        "P2's step: {}",
+        clock_t(&t)
+    );
 }

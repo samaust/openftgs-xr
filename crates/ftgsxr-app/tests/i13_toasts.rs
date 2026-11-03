@@ -155,3 +155,56 @@ fn a_triggered_toast_is_raised_once_through_the_rate_limit() {
     t.frames(3);
     assert_eq!(toasts(&t.app), vec![toast]);
 }
+
+/// Fixer item 19 (#275; §1.15 E-SETTINGS, §1.11, Q-170): `play` reads the settings
+/// itself before the log and inserts `SettingsRes`; the set-aside file's E-SETTINGS still
+/// reaches a toast through `SettingsWarnings` (Q-224).
+#[test]
+fn i13_a_set_aside_settings_file_read_by_the_caller_raises_e_settings() {
+    use ftgsxr_app::{SettingsPath, SettingsRes, SettingsWarnings, load_settings};
+    let dir = support::scratch("i13-settings-caller-files");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.toml");
+    fs::write(&path, "this is = = not toml [").unwrap();
+    let (settings, warnings) = load_settings(&path).expect("a corrupt file loads the defaults");
+    assert!(
+        warnings.iter().any(|w| w.starts_with("E-SETTINGS")),
+        "{warnings:?}"
+    );
+    let mut t = TestApp::with("i13-settings-caller", Setup::default(), |app| {
+        app.insert_resource(SettingsPath(path.clone()))
+            .insert_resource(SettingsRes(settings))
+            .insert_resource(SettingsWarnings(warnings));
+    });
+    record_toasts(&mut t.app);
+    t.frames(3);
+    assert!(toasted(&t.app, "E-SETTINGS"), "{:?}", toasts(&t.app));
+}
+
+/// Fixer item 27 (#275; §1.13, §1.11): a settings file that can't be written raises an
+/// E-IO toast, not only a log line.
+#[test]
+fn i13_a_failed_settings_save_raises_e_io() {
+    use ftgsxr_app::{SettingsPath, SettingsRes};
+    let dir = support::scratch("i13-save-fails-files");
+    // A directory where the file should be: the write fails.
+    let path = dir.join("settings.toml");
+    fs::create_dir_all(&path).unwrap();
+    let mut t = TestApp::with("i13-save-fails", Setup::default(), |app| {
+        app.insert_resource(SettingsPath(path.clone()))
+            .insert_resource(SettingsRes(ftgsxr_app::Settings::default()));
+    });
+    record_toasts(&mut t.app);
+    t.frames(2);
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .desktop
+        .fov_deg = 70.0;
+    // §1.11: written within a second of the change.
+    let ok = t.until_for(std::time::Duration::from_secs(3), |app| {
+        toasted(app, "E-IO")
+    });
+    assert!(ok, "{:?}", toasts(&t.app));
+}

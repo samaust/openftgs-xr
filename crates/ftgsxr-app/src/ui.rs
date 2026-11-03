@@ -318,6 +318,9 @@ pub(crate) struct UiState {
     pub(crate) filter_kinds: [bool; 4],
     /// Load the next model reduced to the budget (D-13).
     pub(crate) reduce: bool,
+    /// The Library tab's new source: an HTTP index URL or a local folder path (§1.5
+    /// Sources; the path field is Q-160's fallback for the picker).
+    pub(crate) new_source: String,
 }
 
 impl Default for UiState {
@@ -334,6 +337,7 @@ impl Default for UiState {
             filter_name: String::new(),
             filter_kinds: [true; 4],
             reduce: false,
+            new_source: String::new(),
         }
     }
 }
@@ -807,10 +811,11 @@ mod tests {
         assert!(pointer_events(None, None, &[true]).is_empty());
     }
 
-    /// I-11 (§1.8, `cpu`): a ray at known quad coordinates becomes pointer events at the
-    /// expected pixel (1 px) in a second egui context, and a click toggles a test button.
+    /// `pointer_events` from a ray's hit drive a second egui context: the pointer at the
+    /// hit's pixel (1 px) and a select press and release clicking a button there. I-11's
+    /// row is pinned at the public interface in `tests/i11_panel_pointer.rs`.
     #[test]
-    fn i11_a_ray_on_the_quad_points_and_clicks_in_a_second_context() {
+    fn pointer_events_from_a_quad_hit_click_in_a_second_context() {
         let size_px = UVec2::new(1024, 768);
         let size_m = Vec2::new(0.56, 0.42);
         let panel = Pose {

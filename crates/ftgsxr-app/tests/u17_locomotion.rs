@@ -92,7 +92,11 @@ fn u17_smooth_and_snap_turns_keep_the_heads_position() {
             h.translation
         );
         let want = Quat::from_rotation_y(-deg.to_radians()) * rig.rotation;
-        assert!(out.rotation.angle_between(want) <= 1e-5);
+        // Componentwise (q and −q one rotation): acos near 1 has no 10⁻⁶ resolution.
+        let d = (out.rotation - want)
+            .length()
+            .min((out.rotation + want).length());
+        assert!(d <= TOL, "{d}");
     };
     let dt = 0.5;
     let out = apply_locomotion(

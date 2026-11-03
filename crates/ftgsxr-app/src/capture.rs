@@ -9,7 +9,7 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use bevy::app::{App, Plugin, PostUpdate, Update};
@@ -230,6 +230,9 @@ fn write_screenshot(
 ) -> Result<PathBuf, (PathBuf, String)> {
     let png = encode(image, text).map_err(|e| (dir.to_path_buf(), e))?;
     let path = free_name(dir, &now_rfc3339());
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| (path.clone(), e.to_string()))?;
+    }
     write_atomic(&path, &png).map_err(|e| (path.clone(), e.to_string()))?;
     Ok(path)
 }
@@ -268,18 +271,28 @@ pub(crate) fn free_name(dir: &Path, now: &str) -> PathBuf {
     path
 }
 
-/// Writes to a temporary sibling and renames it over `path` (§1.11), creating the
-/// directory (Q-14).
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(dir)?;
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temporary = dir.join(format!(".{name}.tmp"));
-    fs::write(&temporary, bytes)
-        .and_then(|()| fs::rename(&temporary, path))
-        .inspect_err(|_| {
-            let _ = fs::remove_file(&temporary);
-        })
+/// Writes `bytes` at `path` through a temporary sibling `.<name>.tmp-<pid>`, synced and
+/// renamed over it, as `write_exchange` writes (openftgs Q-126): a failed write leaves
+/// the old file, or none, and no temporary. Shared by `capture` and `headless` (#275).
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} names no file", path.display()),
+        )
+    })?;
+    let temporary = path.with_file_name(format!(
+        ".{}.tmp-{}",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let written = fs::File::create(&temporary)
+        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
+        .and_then(|()| fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// A pose in §1.11's JSON shape, rotation (x, y, z, w) (§1.14).

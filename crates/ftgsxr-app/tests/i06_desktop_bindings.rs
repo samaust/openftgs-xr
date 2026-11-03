@@ -272,3 +272,31 @@ fn i06_a_rebinding_in_the_settings_takes_effect() {
     assert!(has(&chord(&mut t, &[], KeyCode::KeyP), toggle));
     assert!(!has(&chord(&mut t, &[], KeyCode::Space), toggle));
 }
+
+// Q-197
+#[test]
+fn ctrl_shift_s_saves_the_scene_without_moving_back() {
+    // Appendix D.1: Ctrl+Shift+S is "save scene"; S alone (with Shift or Ctrl for speed)
+    // moves back. The chord's frame moves nothing.
+    let mut t = support::desktop::windowed("i06_chord_no_move");
+    t.frames(1);
+    let seen = support::desktop::chord(
+        &mut t,
+        &[KeyCode::ControlLeft, KeyCode::ShiftLeft],
+        KeyCode::KeyS,
+    );
+    assert!(seen.contains(&Intent::Ui(UiCommand::SaveScene)), "{seen:?}");
+    assert!(
+        !seen
+            .iter()
+            .any(|i| matches!(i, Intent::Camera(CameraCommand::Move(_)))),
+        "{seen:?}"
+    );
+    // Shift+S still moves back, fast.
+    let seen = support::desktop::chord(&mut t, &[KeyCode::ShiftLeft], KeyCode::KeyS);
+    assert!(
+        seen.iter()
+            .any(|i| matches!(i, Intent::Camera(CameraCommand::Move(v)) if v.z > 0.0)),
+        "{seen:?}"
+    );
+}

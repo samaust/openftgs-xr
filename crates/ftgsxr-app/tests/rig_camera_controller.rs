@@ -3,7 +3,7 @@
 //! The desktop camera controller under `Intent::Camera` (`cpu`, #283; source of truth
 //! §1.7 Cameras): `ResetView` gives 1.6 m above the origin, 2 m back, looking at the
 //! origin; `Frame` sees the selected instance's posed box whole from the current
-//! direction; a bookmark recalls the saved view. The camera exists only with a primary
+//! direction; a bookmark recalls its pose. The camera exists only with a primary
 //! window (Q-194).
 
 mod support;
@@ -180,4 +180,136 @@ fn frame_sees_the_selected_box_whole_from_the_current_direction() {
             "corner {i} inside: {x} {y}"
         );
     }
+}
+
+/// PRD #275 ("Settings as the source of truth"), owner 2026-11-03: `persist` maps the
+/// settings' field of view, grid and background into the camera and the grid, and the
+/// wheel's speed back into `[desktop] fly_speed_mps`; a recalled bookmark leaves the
+/// settings' field of view as it is (Q-196, as Q-219's jump).
+#[test]
+fn the_settings_reach_the_camera_and_the_speed_returns_to_them() {
+    use ftgsxr_app::{SettingsRes, SplatCamera};
+    use ftgsxr_render::OutputSpace;
+    let mut t = windowed("rig_settings_map");
+    t.frames(1);
+    {
+        let mut s = t.app.world_mut().resource_mut::<SettingsRes>();
+        s.0.desktop.fov_deg = 75.0;
+        s.0.environment.background = [0.2, 0.3, 0.4];
+    }
+    t.frames(2);
+    let (_, _, p) = camera(&mut t);
+    let Projection::Perspective(p) = p else {
+        panic!("a perspective camera")
+    };
+    assert!((p.fov - 75f32.to_radians()).abs() < 1e-6, "{}", p.fov);
+    let w = t.app.world_mut();
+    let out = w
+        .query_filtered::<&SplatCamera, With<Camera3d>>()
+        .single(w)
+        .unwrap()
+        .output;
+    assert_eq!(
+        out,
+        OutputSpace::LinearOver {
+            background: Some([0.2, 0.3, 0.4])
+        }
+    );
+    let before = t
+        .app
+        .world()
+        .resource::<SettingsRes>()
+        .0
+        .desktop
+        .fly_speed_mps;
+    send(&mut t, &[cam(CameraCommand::Speed(1.0))]);
+    let after = t
+        .app
+        .world()
+        .resource::<SettingsRes>()
+        .0
+        .desktop
+        .fly_speed_mps;
+    assert!((after - before * 1.25).abs() < 1e-5, "{before} → {after}");
+    send(&mut t, &[cam(CameraCommand::SaveBookmark(1))]);
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .desktop
+        .fov_deg = 90.0;
+    t.frames(2);
+    send(&mut t, &[cam(CameraCommand::RecallBookmark(1))]);
+    let (_, _, p) = camera(&mut t);
+    let Projection::Perspective(p) = p else {
+        panic!("a perspective camera")
+    };
+    assert!(
+        (p.fov - 75f32.to_radians()).abs() < 1e-5,
+        "the bookmark's fov"
+    );
+    let fov = t.app.world().resource::<SettingsRes>().0.desktop.fov_deg;
+    assert_eq!(fov, 90.0, "the settings' fov is left as it is");
+}
+
+/// §1.7 Orbit: while orbiting, selecting an instance moves the orbit's target to its
+/// box centre, the distance kept.
+#[test]
+fn the_orbit_follows_a_new_selection() {
+    use ftgsxr_app::InstanceAction;
+    let mut t = windowed("rig_orbit_follow");
+    t.command(LibraryCommand::LoadRef(ModelRef::File(
+        fixtures_dir().join("probes/P1.safetensors"),
+    )));
+    assert!(
+        t.until(600, |app| app
+            .world_mut()
+            .query::<&LoadedModel>()
+            .iter(app.world())
+            .count()
+            == 1),
+        "P1 loads"
+    );
+    t.frames(1);
+    let e = {
+        let mut q = t
+            .app
+            .world_mut()
+            .query_filtered::<Entity, With<LoadedModel>>();
+        q.single(t.app.world()).unwrap()
+    };
+    t.app
+        .world_mut()
+        .get_mut::<Transform>(e)
+        .unwrap()
+        .translation = Vec3::new(3.0, 0.0, 0.0);
+    send(&mut t, &[cam(CameraCommand::ToggleOrbit)]);
+    let before = camera(&mut t).1.translation();
+    let d0 = before.length();
+    send(
+        &mut t,
+        &[Intent::Instance {
+            instance: e,
+            action: InstanceAction::Select,
+        }],
+    );
+    t.frames(1);
+    let center = {
+        let w = t.app.world();
+        let m = w.get::<SplatModel>(e).unwrap();
+        let b = w.resource::<Assets<SplatAsset>>().get(&m.0).unwrap().bounds;
+        let g = w.get::<GlobalTransform>(e).unwrap();
+        g.transform_point((b.min + b.max) / 2.0)
+    };
+    let g = camera(&mut t).1;
+    assert!(
+        (g.translation().distance(center) - d0).abs() < 1e-3,
+        "the distance kept: {} vs {d0}",
+        g.translation().distance(center)
+    );
+    let to = (center - g.translation()).normalize();
+    assert!(
+        g.forward().as_vec3().distance(to) < 1e-4,
+        "looks at the box centre"
+    );
 }

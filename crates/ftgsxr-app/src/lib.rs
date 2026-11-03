@@ -37,7 +37,7 @@ pub use intent::{
     CameraCommand, Feature, GizmoMode, Hand, InstanceAction, Intent, OverlayToggle,
     PlaybackCommand, UiCommand, VolumeChannel,
 };
-// §2.1 `ftgsxr_app::library`.
+// §2.1 `ftgsxr_app::library`; Q-173: `LibraryFailure`.
 pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel};
 // §2.1 `ftgsxr_app::playback`.
 pub use playback::Playback;
@@ -59,7 +59,10 @@ pub use ui::{
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
-pub use persist::{PersistCommand, SettingsPath, SettingsRes, apply_scene, scene_from_world};
+// Q-224: `SettingsWarnings`.
+pub use persist::{
+    PersistCommand, SettingsPath, SettingsRes, SettingsWarnings, apply_scene, scene_from_world,
+};
 // §2.1 `ftgsxr_app::platform`.
 pub use platform::{
     CameraFrames, CameraThumb, Permission, PermissionHandle, PickHandle, PickKind, Platform,

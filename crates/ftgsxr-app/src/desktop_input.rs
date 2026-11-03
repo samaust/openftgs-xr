@@ -345,7 +345,17 @@ fn keyboard(
             shift: true,
             alt: false,
         };
-        matches!(c.key, Key::Code(k) if keys.pressed(k)) && mods_match(c.mods, held, loose)
+        // Q-197: a held key whose chord is another action's binding (Ctrl+Shift+S saves
+        // the scene) does not also move.
+        let taken = map.chords.iter().any(|(b, x)| {
+            *b != action
+                && x.key == c.key
+                && x.mods != Mods::default()
+                && mods_match(x.mods, held, Mods::default())
+        });
+        !taken
+            && matches!(c.key, Key::Code(k) if keys.pressed(k))
+            && mods_match(c.mods, held, loose)
     };
 
     // Fly: held keys, Shift × 4, Ctrl × 0.25 (both: × 1).

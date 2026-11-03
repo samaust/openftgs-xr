@@ -12,6 +12,8 @@ use ftgsxr_core::LoopMode;
 use ftgsxr_io::Settings;
 
 use super::SettingsRes;
+use crate::library::LoadedModel;
+use crate::manipulate::Selected;
 
 /// The values `ftgsxr-io` accepts for the string keys (§1.11).
 const TIERS: &[&str] = &[
@@ -74,10 +76,37 @@ fn rgb(ui: &mut egui::Ui, label: &str, c: &mut [f32; 3]) {
     });
 }
 
-/// The Display tab: the centers' radius and colormap (on every instance drawn with
-/// centers), new instances' mode, the overlays and the background.
+/// The background the selected instance (else the first) was trained against
+/// (`render_conventions.background`, §1.4 Backgrounds), when one is loaded.
+fn training_background(world: &mut World) -> Option<[f32; 3]> {
+    let mut q = world.query::<(&LoadedModel, Option<&Selected>)>();
+    let all: Vec<_> = q
+        .iter(world)
+        .map(|(m, s)| (m.info.conventions.background, s.is_some()))
+        .collect();
+    all.iter()
+        .find(|(_, s)| *s)
+        .or(all.first())
+        .map(|(b, _)| *b)
+}
+
+/// The background's color and its training preset (§1.4 Backgrounds).
+fn background(ui: &mut egui::Ui, c: &mut [f32; 3], training: Option<[f32; 3]>) {
+    rgb(ui, "background", c);
+    if let Some(t) = training
+        && ui.button("training background").clicked()
+    {
+        *c = t;
+    }
+}
+
+/// The Display tab: the quality tier (for the next start, Q-179), the centers' radius
+/// and colormap (on every instance drawn with centers), new instances' mode, the
+/// overlays and the background.
 pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
+    let training = training_background(world);
     edit(world, ui, |s, ui| {
+        choice(ui, "quality tier (next start)", &mut s.general.tier, TIERS);
         let d = &mut s.display;
         choice(ui, "mode of new instances", &mut d.mode, RENDER_MODES);
         num(
@@ -89,14 +118,15 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
             0.1,
         );
         choice(ui, "colormap", &mut d.colormap, COLORMAPS);
-        rgb(ui, "background", &mut s.environment.background);
+        background(ui, &mut s.environment.background, training);
     });
 }
 
 /// The Environment tab on the desktop: background and grid (§1.7 Panels).
 pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
+    let training = training_background(world);
     edit(world, ui, |s, ui| {
-        rgb(ui, "background", &mut s.environment.background);
+        background(ui, &mut s.environment.background, training);
         ui.checkbox(&mut s.display.grid, "floor grid");
     });
 }

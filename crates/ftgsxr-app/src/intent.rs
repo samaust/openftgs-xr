@@ -298,6 +298,4 @@ pub enum VolumeChannel {
 /// nothing (PRD #275).
 // Q-199
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct UnloadRequest(
-    #[allow(dead_code, reason = "read by ui's confirmation dialog (#286)")] pub(crate) Entity,
-);
+pub(crate) struct UnloadRequest(pub(crate) Entity);

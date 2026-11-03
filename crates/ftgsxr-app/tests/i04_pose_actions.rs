@@ -149,7 +149,11 @@ fn i04_fit_and_snap_to_floor() {
     let c = p.transform_point(b.center());
     assert!((c.x).abs() < 1e-4 && (c.z + 1.5).abs() < 1e-4, "{c}");
     assert!((p.scale * b.size().max_element() - 1.0).abs() < 1e-4);
-    assert!(p.rotation.angle_between(Quat::IDENTITY) < 1e-3);
+    let q = p.rotation;
+    let d = (q - Quat::IDENTITY)
+        .length()
+        .min((q + Quat::IDENTITY).length());
+    assert!(d < 1e-4, "{q:?}");
     // Snap to floor after a lift: the bottom back on y = 0, the rest kept.
     let lifted = Pose {
         translation: p.translation + Vec3::new(0.0, 0.7, 0.0),
@@ -291,4 +295,36 @@ fn i04_save_writes_poses_json_and_a_reload_applies_it() {
     assert!(bottom.abs() < 1e-4, "{bottom}");
     let c = p.transform_point(b.center());
     assert!(c.x.abs() < 1e-4 && (c.z + 1.5).abs() < 1e-4, "{c}");
+}
+
+#[test]
+fn i04_the_fit_follows_the_heads_yaw() {
+    // §1.5: the box's centre 1.5 m ahead of the head along its yaw, its bottom on the
+    // floor, the instance turned by the yaw (Q-18, Q-180): a camera at yaw 40°.
+    let mut t = TestApp::new("i04_fit_yaw");
+    let yaw = 40f32.to_radians();
+    let head = Vec3::new(0.7, 1.6, -0.4);
+    t.app.world_mut().spawn((
+        Camera3d::default(),
+        Transform::from_translation(head).with_rotation(Quat::from_rotation_y(yaw)),
+    ));
+    let e = load(&mut t, fixtures_dir().join("probes/P1.safetensors"));
+    let b = bounds(&t, e);
+    act(&mut t, e, InstanceAction::Fit);
+    let p = pose(&t, e);
+    let forward = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+    let want = head + 1.5 * forward;
+    let c = p.transform_point(b.center());
+    assert!(
+        (c.x - want.x).abs() < 1e-4 && (c.z - want.z).abs() < 1e-4,
+        "{c} vs {want}"
+    );
+    let bottom = posed_corners(&b, &p)
+        .iter()
+        .map(|c| c.y)
+        .fold(f32::INFINITY, f32::min);
+    assert!(bottom.abs() < 1e-4, "{bottom}");
+    let q = Quat::from_rotation_y(yaw);
+    let d = (p.rotation - q).length().min((p.rotation + q).length());
+    assert!(d < 1e-4, "{:?}", p.rotation);
 }

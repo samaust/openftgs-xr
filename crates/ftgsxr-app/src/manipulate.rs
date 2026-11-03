@@ -31,6 +31,7 @@ use ftgsxr_render::{SplatAsset, SplatMode, SplatModel};
 
 use crate::intent::{GizmoMode, Hand, InstanceAction, Intent};
 use crate::library::{LibraryCommand, LoadedModel};
+use crate::playback::StepTarget;
 
 /// What the grabs and rays obey (§1.5, §1.8, E10, E11).
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -129,7 +130,11 @@ impl Plugin for ManipulatePlugin {
             .init_resource::<HandStates>()
             .init_resource::<GizmoState>()
             .add_observer(on_loaded)
-            .add_systems(Update, run_intents)
+            .add_message::<SetPoseExtras>()
+            .add_systems(
+                Update,
+                (set_pose_extras, run_intents, step_target_follows_selection).chain(),
+            )
             .add_systems(
                 Update,
                 draw.after(run_intents)
@@ -138,13 +143,55 @@ impl Plugin for ManipulatePlugin {
     }
 }
 
+/// playback's `StepTarget` follows the selection (Q-175): the selected instance, else
+/// none (playback's fallback).
+// Q-175
+fn step_target_follows_selection(
+    selected: Query<Entity, With<Selected>>,
+    added: Query<(), Added<Selected>>,
+    mut removed: RemovedComponents<Selected>,
+    mut target: ResMut<StepTarget>,
+) {
+    if added.is_empty() && removed.read().count() == 0 {
+        return;
+    }
+    let next = selected.iter().next();
+    if target.0 != next {
+        target.0 = next;
+    }
+}
+
 /// What the fit and the saved pose carry beside the pose (§1.5): the orientation preset
 /// and L_fit, from the hints when the instance appears, else from its saved pose.
 // Q-181
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
-struct PoseExtras {
-    preset: Preset,
-    fit_size_m: f32,
+pub(crate) struct PoseExtras {
+    pub(crate) preset: Preset,
+    pub(crate) fit_size_m: f32,
+}
+
+/// The Scene tab's orientation preset and L_fit for an instance (§1.5 Poses); L_fit is
+/// clamped to 0.25–4 m. The next fit and saved pose use them.
+// Q-181
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SetPoseExtras {
+    pub(crate) instance: Entity,
+    pub(crate) preset: Preset,
+    pub(crate) fit_size_m: f32,
+}
+
+/// §1.5's L_fit range in metres.
+pub(crate) const FIT_RANGE_M: (f32, f32) = (0.25, 4.0);
+
+fn set_pose_extras(mut reader: MessageReader<SetPoseExtras>, mut commands: Commands) {
+    for m in reader.read() {
+        if let Ok(mut e) = commands.get_entity(m.instance) {
+            e.try_insert(PoseExtras {
+                preset: m.preset,
+                fit_size_m: m.fit_size_m.clamp(FIT_RANGE_M.0, FIT_RANGE_M.1),
+            });
+        }
+    }
 }
 
 /// Each hand's last ray and pose, and what it holds.
@@ -200,7 +247,9 @@ enum Handle {
 
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 
-fn pose_of(t: &Transform) -> Pose {
+/// An instance's or the rig's local transform as a pose (scale from x), shared by
+/// `rig` and `persist`.
+pub(crate) fn pose_of(t: &Transform) -> Pose {
     Pose {
         translation: t.translation,
         rotation: t.rotation,
@@ -208,7 +257,8 @@ fn pose_of(t: &Transform) -> Pose {
     }
 }
 
-fn transform_of(p: Pose) -> Transform {
+/// A pose as a transform with uniform scale.
+pub(crate) fn transform_of(p: Pose) -> Transform {
     Transform {
         translation: p.translation,
         rotation: p.rotation,
@@ -316,7 +366,8 @@ pub(crate) fn now_rfc3339() -> String {
 
 fn rfc3339(secs: u64, nanos: u32) -> String {
     let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
-    // Days since 1970-01-01 to the civil date (the proleptic Gregorian calendar).
+    // Days since 1970-01-01 to the civil date (the proleptic Gregorian calendar): Howard
+    // Hinnant's `civil_from_days`, from general knowledge (source-log rows 48, 195).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -589,7 +640,9 @@ fn run_intents(
                 let mut p = pose_of(&t);
                 p.translation += step * dir;
                 *t = transform_of(p);
-                hs.hands.get_mut(&hand).unwrap().held = Some((e, (dist + step).max(0.0)));
+                if let Some(h) = hs.hands.get_mut(&hand) {
+                    h.held = Some((e, (dist + step).max(0.0)));
+                }
                 rebase(&mut hs, e, p);
             }
             Intent::Gizmo(mode) => {
@@ -1065,5 +1118,28 @@ mod tests {
         let s = now_rfc3339();
         assert_eq!(s.len(), 30, "{s}");
         assert!(s.ends_with('Z') && s.as_bytes()[10] == b'T' && s.as_bytes()[19] == b'.');
+    }
+}
+
+#[cfg(test)]
+mod extras_tests {
+    use super::*;
+
+    #[test]
+    fn set_pose_extras_clamps_l_fit_and_sets_the_preset() {
+        let mut app = App::new();
+        app.add_message::<SetPoseExtras>()
+            .add_systems(Update, set_pose_extras);
+        let e = app.world_mut().spawn_empty().id();
+        for (asked, kept) in [(10.0, 4.0), (0.1, 0.25), (2.0, 2.0)] {
+            app.world_mut().write_message(SetPoseExtras {
+                instance: e,
+                preset: Preset::ZUp,
+                fit_size_m: asked,
+            });
+            app.update();
+            let x = *app.world().get::<PoseExtras>(e).unwrap();
+            assert_eq!((x.preset, x.fit_size_m), (Preset::ZUp, kept));
+        }
     }
 }

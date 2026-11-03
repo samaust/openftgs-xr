@@ -92,4 +92,5 @@ jobs:
       - name: cargo ndk
         run: |
           command -v cargo-ndk || cargo install --locked cargo-ndk --version ^4.1
-          cargo ndk -t arm64-v8a build --release -p ftgsxr-quest
+          # `-P 32`: the NDK platform at minSdk 32 (D-18), owner 2026-11-02 (#275).
+          cargo ndk -t arm64-v8a -P 32 build --release -p ftgsxr-quest

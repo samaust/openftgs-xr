@@ -18,10 +18,8 @@ use bevy::ecs::message::MessageCursor;
 use bevy::ecs::prelude::*;
 use bevy::ecs::world::CommandQueue;
 use bevy::log::warn;
-use bevy::math::Vec3;
 use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
-use ftgsxr_core::Pose;
 use ftgsxr_io::{
     AudioSettings, CameraState, ClockState, Entry, IoError, LocomotionSettings, ModelRef,
     PoseStore, SceneFile, SceneModel, Settings, SourceSpec, Url, classify_name, load_settings,
@@ -30,15 +28,15 @@ use ftgsxr_io::{
 use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 
 use crate::audio::AudioState;
-use crate::intent::{InstanceAction, Intent, PlaybackCommand, UiCommand};
+use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{
     EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel, ShowOnUpload,
 };
-use crate::manipulate::{Poses, now_rfc3339};
+use crate::manipulate::{Poses, now_rfc3339, pose_of, transform_of};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
-use crate::rig::{CameraController, DesktopCamera, Locomotion, PlayerRig};
-use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest};
+use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
+use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest, UiState};
 
 mod panels;
 
@@ -52,6 +50,13 @@ pub struct SettingsRes(pub Settings);
 // Q-163
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct SettingsPath(pub PathBuf);
+
+/// The warnings of a settings load the caller made itself before inserting `SettingsRes`
+/// (`play` reads the file for the log level and the tier first, Q-170): `AppPlugin`
+/// raises each E-SETTINGS one as a toast, as for its own load (§1.15).
+// Q-224
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsWarnings(pub Vec<String>);
 
 /// What the UI and the input adapters ask of `persist` (§2.1). Like `LibraryCommand`, it
 /// derives `Message` and `Event` (Q-166). A relative scene path names a file under the
@@ -78,7 +83,6 @@ pub enum PersistCommand {
 // Q-201
 #[derive(Message, Clone, Debug, PartialEq)]
 pub(crate) struct PersistFailure {
-    #[allow(dead_code, reason = "read by ui's toasts (PRD #275 step 9)")]
     pub(crate) code: String,
     pub(crate) text: String,
 }
@@ -109,6 +113,19 @@ struct Files {
 #[derive(Resource)]
 struct PosesSaved(PoseStore);
 
+/// Whether no settings file existed at startup: Help opens once (§1.7, Q-226).
+#[derive(Resource, Default)]
+struct FirstRun(bool);
+
+/// §1.7 Help: "opened once on the first run".
+// Q-226
+fn open_help_on_first_run(first: Res<FirstRun>, mut ui: ResMut<UiState>) {
+    if first.0 {
+        ui.dock_open = true;
+        ui.tab = Tab::Help;
+    }
+}
+
 /// What the load at build time reported, raised in the first frame.
 #[derive(Resource, Default)]
 struct StartupFailures(Vec<PersistFailure>);
@@ -128,6 +145,9 @@ struct ScenePending {
     /// Set once every instance appeared: the clock waits a frame for `playback` to
     /// follow their T_len.
     settled: bool,
+    /// The missing models' attributes, for an instance of their identity that appears
+    /// once located (Q-225); the clock does not wait for them.
+    located: Vec<SceneModel>,
 }
 
 /// Q-163: when `SettingsRes` is absent, reads the settings from `SettingsPath`, else
@@ -145,18 +165,37 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
             default.clone()
         }
     };
-    if !world.contains_resource::<SettingsRes>() {
+    // §1.15: E-SETTINGS is the set-aside file; other warnings are logged.
+    let set_aside = |w: &str, failures: &mut Vec<PersistFailure>| {
+        if w.starts_with("E-SETTINGS") {
+            failures.push(PersistFailure {
+                code: "E-SETTINGS".into(),
+                text: w.to_owned(),
+            });
+        }
+    };
+    // Q-226: the first run is the one without a settings file.
+    world.insert_resource(FirstRun(!path.exists()));
+    if world.contains_resource::<SettingsRes>() {
+        // Q-224: the caller's own load.
+        if let Some(w) = world.remove_resource::<SettingsWarnings>() {
+            for w in &w.0 {
+                if let Some(text) = w.strip_prefix("E-IO") {
+                    failures.push(PersistFailure {
+                        code: "E-IO".into(),
+                        text: format!("E-IO{text}"),
+                    });
+                } else {
+                    set_aside(w, &mut failures);
+                }
+            }
+        }
+    } else {
         let settings = match load_settings(&path) {
             Ok((settings, warnings)) => {
                 for w in warnings {
                     bevy::log::warn!("{}: {w}", path.display());
-                    // §1.15: E-SETTINGS is the set-aside file; other warnings are logged.
-                    if w.starts_with("E-SETTINGS") {
-                        failures.push(PersistFailure {
-                            code: "E-SETTINGS".into(),
-                            text: w,
-                        });
-                    }
+                    set_aside(&w, &mut failures);
                 }
                 settings
             }
@@ -169,6 +208,14 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
         };
         world.insert_resource(SettingsRes(settings));
     }
+    // Q-195, Q-196: rig's resources from the settings, before its plugin builds, so the
+    // desktop camera and the grid start as the settings say.
+    let (view, loco) = {
+        let s = &world.resource::<SettingsRes>().0;
+        (desktop_view(s), locomotion_of(s))
+    };
+    world.insert_resource(view);
+    world.insert_resource(loco);
     let config = default.parent().map(Path::to_path_buf).unwrap_or_default();
     let poses = config.join("poses.json");
     if !world.contains_resource::<Poses>() {
@@ -224,6 +271,7 @@ impl Plugin for PersistPlugin {
             .init_resource::<Saver>()
             .init_resource::<ScenePending>()
             .init_resource::<StartupFailures>()
+            .init_resource::<FirstRun>()
             .add_systems(
                 Update,
                 (
@@ -243,6 +291,11 @@ impl Plugin for PersistPlugin {
                     // not removed as absent from the settings. Unordered, the
                     // multi-threaded executor could run the library first (§2.4 Threads).
                     .before(crate::library::LibraryCommands),
+            )
+            .add_systems(Update, ui_scale_follows_settings)
+            .add_systems(
+                bevy::app::Startup,
+                open_help_on_first_run.run_if(resource_exists::<UiState>),
             )
             .add_systems(
                 PostUpdate,
@@ -287,13 +340,30 @@ fn raise_startup(mut startup: ResMut<StartupFailures>, mut out: MessageWriter<Pe
 }
 
 /// `Intent::Ui(SaveScene)` saves a scene named by the time (Q-200); `LoadScene` is the
-/// UI's, which confirms and sends `PersistCommand::LoadScene`.
-fn run_intents(mut reader: MessageReader<Intent>, mut out: MessageWriter<PersistCommand>) {
+/// UI's, which confirms and sends `PersistCommand::LoadScene`. The overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
+/// is a `[display.overlays]` setting, flipped here and mapped onto every instance by
+/// `sync_settings` (Q-207).
+fn run_intents(
+    mut reader: MessageReader<Intent>,
+    mut out: MessageWriter<PersistCommand>,
+    mut settings: ResMut<SettingsRes>,
+) {
     for intent in reader.read() {
-        if let Intent::Ui(UiCommand::SaveScene) = intent {
-            out.write(PersistCommand::SaveScene(PathBuf::from(
-                default_scene_name(),
-            )));
+        match intent {
+            Intent::Ui(UiCommand::SaveScene) => {
+                out.write(PersistCommand::SaveScene(PathBuf::from(
+                    default_scene_name(),
+                )));
+            }
+            Intent::Overlay(o) => {
+                let ov = &mut settings.0.display.overlays;
+                match o {
+                    OverlayToggle::Boxes => ov.boxes = !ov.boxes,
+                    OverlayToggle::Velocities => ov.velocities = !ov.velocities,
+                    OverlayToggle::TimeTint => ov.time_tint = !ov.time_tint,
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -523,22 +593,6 @@ fn overlays_of(o: &ftgsxr_io::OverlaySettings) -> Overlays {
     }
 }
 
-fn pose_of(t: &Transform) -> Pose {
-    Pose {
-        translation: t.translation,
-        rotation: t.rotation,
-        scale: t.scale.x,
-    }
-}
-
-fn transform_of(p: &Pose) -> Transform {
-    Transform {
-        translation: p.translation,
-        rotation: p.rotation,
-        scale: Vec3::splat(p.scale),
-    }
-}
-
 /// The scene as the world holds it (§1.5 Scene files, §1.11): every instance in entity
 /// order with its local pose (under `ContentGroup`), the clock, `SettingsRes.environment`,
 /// the rig's pose, the desktop camera's local pose under the rig with its field of view
@@ -644,6 +698,7 @@ pub fn apply_scene(
     library: &mut Library,
 ) -> Vec<String> {
     let mut missing = Vec::new();
+    let mut located = Vec::new();
     let mut pending = Vec::new();
     for m in &scene.models {
         let Some(r) = model_ref(&m.source) else {
@@ -654,6 +709,7 @@ pub fn apply_scene(
             && !p.exists()
         {
             missing.push(m.name.clone());
+            located.push(m.clone());
             let source = library
                 .sources
                 .iter()
@@ -720,7 +776,7 @@ pub fn apply_scene(
             && let Some(mut q) = world.try_query_filtered::<&mut Transform, With<PlayerRig>>()
         {
             for mut t in q.iter_mut(world) {
-                *t = transform_of(&rig);
+                *t = transform_of(rig);
             }
         }
         if let Some(cam) = &camera
@@ -728,7 +784,7 @@ pub fn apply_scene(
                 world.try_query_filtered::<(&mut Transform, &mut Projection), With<DesktopCamera>>()
         {
             for (mut t, mut p) in q.iter_mut(world) {
-                *t = transform_of(&cam.pose);
+                *t = transform_of(cam.pose);
                 if let Projection::Perspective(PerspectiveProjection { fov, .. }) = &mut *p {
                     *fov = cam.fov_deg.to_radians();
                 }
@@ -745,6 +801,7 @@ pub fn apply_scene(
         }
         let mut sp = world.get_resource_or_init::<ScenePending>();
         sp.models = pending;
+        sp.located = located;
         sp.clock = Some(clock);
         sp.settled = false;
     });
@@ -774,7 +831,16 @@ fn apply_pending_instances(
     let display = &settings.0.display;
     for (e, mut m, mut t) in &mut fresh {
         let at = pending.models.iter().position(|p| p.identity == m.identity);
-        let Some(at) = at else {
+        // Q-225: a located model takes its scene attributes too.
+        let p = match at {
+            Some(at) => Some(pending.models.remove(at)),
+            None => pending
+                .located
+                .iter()
+                .position(|p| p.identity == m.identity)
+                .map(|at| pending.located.remove(at)),
+        };
+        let Some(p) = p else {
             let mode = mode_of(&display.mode, display);
             if mode != RenderMode::Splats {
                 commands.entity(e).try_insert(SplatMode(mode));
@@ -784,8 +850,7 @@ fn apply_pending_instances(
                 .try_insert(SplatOverlays(overlays_of(&display.overlays)));
             continue;
         };
-        let p = pending.models.remove(at);
-        *t = transform_of(&p.pose);
+        *t = transform_of(p.pose);
         m.name = p.name.clone();
         m.time.offset_s = p.time_offset_s;
         m.time.end_rule = p.end_rule;
@@ -850,6 +915,36 @@ fn audio_state(s: &AudioSettings) -> AudioState {
     }
 }
 
+fn desktop_view(s: &Settings) -> DesktopView {
+    DesktopView {
+        fly_speed_mps: s.desktop.fly_speed_mps,
+        fov_deg: s.desktop.fov_deg,
+        grid: s.display.grid,
+        background: s.environment.background,
+    }
+}
+
+/// D-17: stick locomotion off in passthrough mode (Q-195).
+fn locomotion_of(s: &Settings) -> Locomotion {
+    Locomotion::from_settings(&s.locomotion, s.environment.mode != "passthrough")
+}
+
+/// The fields of `view` that differ from `base`'s view, written into `s`.
+fn view_into(view: &DesktopView, base: &DesktopView, s: &mut Settings) {
+    if view.fly_speed_mps != base.fly_speed_mps {
+        s.desktop.fly_speed_mps = view.fly_speed_mps;
+    }
+    if view.fov_deg != base.fov_deg {
+        s.desktop.fov_deg = view.fov_deg;
+    }
+    if view.grid != base.grid {
+        s.display.grid = view.grid;
+    }
+    if view.background != base.background {
+        s.environment.background = view.background;
+    }
+}
+
 fn locomotion_settings(l: &Locomotion, base: &LocomotionSettings) -> LocomotionSettings {
     LocomotionSettings {
         speed_mps: l.speed_mps,
@@ -890,6 +985,7 @@ fn sync_settings(
     mut intents: MessageReader<Intent>,
     mut audio: ResMut<AudioState>,
     mut loco: ResMut<Locomotion>,
+    mut view: ResMut<DesktopView>,
     mut playback: ResMut<Playback>,
     mut looping: ResMut<LoopSetting>,
     library: Res<Library>,
@@ -917,6 +1013,17 @@ fn sync_settings(
                 settings.0.locomotion = t.clone();
             }
             snap.locomotion = t;
+        }
+        if view.is_changed() {
+            let base = desktop_view(snap);
+            if *view != base {
+                let mut t = settings.0.clone();
+                view_into(&view, &base, &mut t);
+                view_into(&view, &base, snap);
+                if settings.0 != t {
+                    settings.0 = t;
+                }
+            }
         }
         for intent in intents.read() {
             if let Intent::Playback(PlaybackCommand::Speed(s)) = *intent
@@ -964,9 +1071,15 @@ fn sync_settings(
         }
     }
     if first || s.locomotion != snap.locomotion || s.environment.mode != snap.environment.mode {
-        let l = Locomotion::from_settings(&s.locomotion, s.environment.mode != "passthrough");
+        let l = locomotion_of(s);
         if *loco != l {
             *loco = l;
+        }
+    }
+    {
+        let v = desktop_view(s);
+        if (first || v != desktop_view(snap)) && *view != v {
+            *view = v;
         }
     }
     if first || s.playback != snap.playback {
@@ -1030,6 +1143,24 @@ fn sync_settings(
     *snap = settings.0.clone();
 }
 
+/// `[general] ui_scale` on the screen's egui context (§1.7 DPI-aware UI, §1.11): egui's
+/// zoom factor, over the window's own scale factor.
+fn ui_scale_follows_settings(
+    settings: Res<SettingsRes>,
+    mut contexts: Query<&mut bevy_egui::EguiContext, With<bevy_egui::PrimaryEguiContext>>,
+) {
+    let scale = settings.0.general.ui_scale;
+    if !(scale.is_finite() && scale > 0.0) {
+        return;
+    }
+    for mut c in &mut contexts {
+        let ctx = c.get_mut();
+        if ctx.zoom_factor() != scale {
+            ctx.set_zoom_factor(scale);
+        }
+    }
+}
+
 /// An instance switched to centers (the Scene tab, a key) takes `[display]`'s radius and
 /// colormap, as `sync_settings` gives them on a change of the settings (Q-218).
 // Q-218
@@ -1057,7 +1188,8 @@ fn centers_follow_settings(
     }
 }
 
-fn save_to(world: &World) {
+/// §1.13: a failed save is logged and raised as an E-IO (or its own code's) toast.
+fn save_to(world: &mut World) {
     let (Some(path), Some(s)) = (
         world.get_resource::<SettingsPath>(),
         world.get_resource::<SettingsRes>(),
@@ -1066,6 +1198,7 @@ fn save_to(world: &World) {
     };
     if let Err(e) = save_settings(&path.0, &s.0) {
         warn!("{}: {}: {e}", path.0.display(), e.code());
+        world.write_message(PersistFailure::of(&e));
     }
 }
 
@@ -1084,6 +1217,7 @@ fn save_settings_debounced(
     path: Res<SettingsPath>,
     time: Res<Time<Real>>,
     mut saver: ResMut<Saver>,
+    mut failures: MessageWriter<PersistFailure>,
 ) {
     if settings.is_changed() && !settings.is_added() {
         saver.dirty = true;
@@ -1095,6 +1229,7 @@ fn save_settings_debounced(
     if saver.dirty && due {
         if let Err(e) = save_settings(&path.0, &settings.0) {
             warn!("{}: {}: {e}", path.0.display(), e.code());
+            failures.write(PersistFailure::of(&e));
         }
         saver.dirty = false;
         saver.last = Some(now);
