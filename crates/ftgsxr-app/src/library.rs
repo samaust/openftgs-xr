@@ -867,8 +867,18 @@ fn poll_tasks(
     gpu: Option<Res<SplatGpu>>,
     tier: Res<SplatTierState>,
     models: Query<&LoadedModel>,
+    mut device_tier: Local<Option<ftgsxr_render::QualityTier>>,
     mut commands: Commands,
 ) {
+    // Q-238: the tier the render plugin's device was last made for, so a reduced reload
+    // counts against the new tier's device, which `SplatGpu` holds only from the frame
+    // after a switch.
+    if let Some(g) = &gpu
+        && g.is_changed()
+    {
+        *device_tier = Some(tier.tier.clone());
+    }
+    let device_ready = gpu.is_none() || device_tier.as_ref() == Some(&tier.tier);
     pending.sync(library.sources.len());
     let pending = &mut *pending;
     let default_models = platform.0.paths().models.clone();
@@ -1061,6 +1071,10 @@ fn poll_tasks(
     // Fetches: an instance per model, hidden until its upload (Q-148).
     let fetches = std::mem::take(&mut pending.fetches);
     for mut f in fetches {
+        if f.target.is_some() && f.ctx.reduce && !device_ready {
+            pending.fetches.push(f);
+            continue;
+        }
         let Some(result) = check_ready(&mut f.task) else {
             if let Some(p) = *f.progress.lock().unwrap_or_else(|e| e.into_inner())
                 && let Some(e) = entry_of(&mut library, pending, &f.ctx)
@@ -1088,6 +1102,8 @@ fn poll_tasks(
                     ctx.reduce_to = info
                         .as_ref()
                         .and_then(|info| reduce_count(info, gpu.as_deref(), &tier));
+                    // #205: the reduced label compares with the file's rows.
+                    ctx.file_n = info.map(|i| i.n).or(ctx.file_n);
                 }
                 if let Ok(mut e) = commands.get_entity(target) {
                     e.insert((

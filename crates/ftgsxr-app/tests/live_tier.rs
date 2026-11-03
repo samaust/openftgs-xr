@@ -312,6 +312,18 @@ fn desktop_with_budget(name: &str, bytes: u64) -> QualityTier {
     tier
 }
 
+/// Q-158's reduce-to-budget count for P1 alone on a device of `budget` bytes: the budget
+/// over the static bytes of one primitive under `desktop`'s layout at its SH cap, floored.
+fn p1_count(budget: u64) -> u64 {
+    let (model, _) = ftgsxr_testkit::probe("P1");
+    let tier = QualityTier::desktop();
+    let opts = ftgsxr_core::GpuLayoutOptions {
+        sh_cap: Some(SplatTierState::of(&tier).sh_cap),
+        ..tier.layout
+    };
+    budget / ftgsxr_core::memory_estimate(1, model.sh_degree, &opts, false).static_bytes
+}
+
 /// P1's rows and the static bytes all of them take under `desktop`'s layout at its SH cap,
 /// as Q-158's count reckons them.
 fn p1_full_bytes() -> (u64, u64) {
@@ -411,6 +423,7 @@ fn gpu_live_tier_switch_grows_a_reduced_instance_under_a_larger_budget() {
     let e = load_p1_reduced(&mut t);
     let (k, reduced) = rows_of(&t.app, e);
     assert!(reduced && k < n, "loaded reduced: {k} of {n}");
+    assert_eq!(k, p1_count(full / 2));
     switch_and_reload(&mut t, &events, e, &desktop_with_budget("big", full * 4));
     assert_eq!(rows_of(&t.app, e), (n, false));
     assert!(t.settle_pipelines());
@@ -434,6 +447,8 @@ fn gpu_live_tier_switch_reduces_instead_of_refusing() {
     switch_and_reload(&mut t, &events, e, &desktop_with_budget("small", full / 2));
     let (k, reduced) = rows_of(&t.app, e);
     assert!(reduced && k < n, "reloaded reduced: {k} of {n}");
+    // Q-158 under the new tier, its device holding no other model.
+    assert_eq!(k, p1_count(full / 2));
     assert!(t.settle_pipelines());
 }
 
