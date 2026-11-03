@@ -50,10 +50,6 @@ impl Default for LoopSetting {
 }
 
 /// §1.6's speed presets, in both directions, ascending.
-#[allow(
-    dead_code,
-    reason = "read by desktop_input's speed keys (PRD #275 step 7)"
-)]
 const PRESETS: [f64; 12] = [
     -4.0, -2.0, -1.0, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0,
 ];
@@ -61,10 +57,6 @@ const PRESETS: [f64; 12] = [
 /// The next of §1.6's speed presets above (`up`) or below `speed`, through zero from
 /// ±0.1 to ∓0.1; `speed` itself at either end (Q-176).
 // Q-176
-#[allow(
-    dead_code,
-    reason = "read by desktop_input's speed keys (PRD #275 step 7)"
-)]
 pub(crate) fn speed_preset(speed: f64, up: bool) -> f64 {
     let next = if up {
         PRESETS.iter().copied().find(|&p| p > speed + 1e-9)

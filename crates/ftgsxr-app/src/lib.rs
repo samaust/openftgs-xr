@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod audio;
+pub mod desktop_input;
 mod desktop_log;
 pub mod governor;
 pub mod headless;
@@ -25,6 +26,8 @@ pub use headless::{
     BenchReport, HeadlessError, cmd_bench, cmd_export, cmd_import, cmd_info, cmd_render,
     cmd_validate, exit_code,
 };
+// §2.1 `ftgsxr_app::desktop_input`; Q-T284.1: `KeyMap`'s methods.
+pub use desktop_input::{DesktopInputPlugin, KeyMap};
 // §2.1 `ftgsxr_app::governor`; Q-153, Q-178: the knobs, the ladders and the pure step.
 pub use governor::{DESKTOP_LADDER, Governor, GovernorCounters, HEADSET_LADDER, Knob, govern};
 // §2.1 `ftgsxr_app::intent`.
