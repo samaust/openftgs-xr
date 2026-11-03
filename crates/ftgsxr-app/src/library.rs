@@ -546,6 +546,8 @@ fn run_commands(
                 if let Some((_, source)) = library.sources.get(i) {
                     let source = source.clone();
                     let id = pending.ids[i];
+                    // Q-230: a new refresh checks again; earlier checks are dropped.
+                    pending.revalidations.retain(|(s, _, _)| *s != id);
                     list(&mut pending, id, source);
                 }
             }
@@ -735,6 +737,7 @@ fn fresh_entries(
             continue;
         }
         let kept = old.iter().find(|o| o.entry.location == entry.location);
+        // Q-231: the listing's mtime too, where it gives one.
         let same = kept.is_some_and(|o| {
             o.entry.size == entry.size
                 && o.entry.mtime == entry.mtime

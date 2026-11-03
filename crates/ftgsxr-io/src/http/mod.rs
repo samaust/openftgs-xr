@@ -206,6 +206,7 @@ impl HttpClient {
 }
 
 /// What `HttpClient::revalidate` learned of a file's ETag (§1.5 Library, Q-230).
+// Q-230
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Revalidation {
     /// The server answered 304: the file still has the ETag sent.
