@@ -794,26 +794,18 @@ fn request_replay(
             }
         });
         // Q-233, Q-234: what the open request changes in the view.
-        let [red, green, blue] = r.request.background;
-        ui.label(format!(
-            "background: request ({red:.3}, {green:.3}, {blue:.3})"
-        ));
         let mut cams = world.query::<&ftgsxr_render::SplatCamera>();
-        if cams
+        let passthrough = cams
             .iter(world)
-            .any(|c| c.output == ftgsxr_render::OutputSpace::LinearOver { background: None })
-        {
-            ui.label("background not applied in passthrough");
-        }
+            .any(|c| c.output == ftgsxr_render::OutputSpace::LinearOver { background: None });
         let governor = world
             .get_resource::<ftgsxr_render::SplatTierState>()
             .map(|t| t.sh_cap);
-        if let (Some(d), Some(g)) = (r.request.sh_degree, governor)
-            && g < d
-        {
-            ui.label(format!(
-                "SH degree {g}: the governor's cap, below the request's {d}"
-            ));
+        let loaded = replay_target(world)
+            .and_then(|e| world.get::<LoadedModel>(e))
+            .map(|m| m.info.sh_degree);
+        for line in replay_lines(&r.request, governor, loaded, passthrough) {
+            ui.label(line);
         }
     }
     if close {
@@ -822,16 +814,7 @@ fn request_replay(
     }
     if let (Some(r), Some(i)) = (&mut replay, step) {
         r.item = i;
-        let target = {
-            let mut sel = world
-                .query_filtered::<Entity, (With<LoadedModel>, With<crate::manipulate::Selected>)>();
-            let s = sel.iter(world).next();
-            s.or_else(|| {
-                let mut all = world.query_filtered::<Entity, With<LoadedModel>>();
-                all.iter(world).next()
-            })
-        };
-        if let Some(instance) = target {
+        if let Some(instance) = replay_target(world) {
             let item = &r.request.items[i];
             out.push(Out::Jump(JumpToCamera {
                 instance,
@@ -845,6 +828,47 @@ fn request_replay(
     if key(&view.replay) != key(&replay) {
         world.resource_mut::<TrainingView>().replay = replay;
     }
+}
+
+/// The instance a replay steps on: the selected one, else the first loaded (Q-219).
+fn replay_target(world: &mut World) -> Option<Entity> {
+    let mut sel =
+        world.query_filtered::<Entity, (With<LoadedModel>, With<crate::manipulate::Selected>)>();
+    let s = sel.iter(world).next();
+    s.or_else(|| {
+        let mut all = world.query_filtered::<Entity, With<LoadedModel>>();
+        all.iter(world).next()
+    })
+}
+
+/// The replay row's lines on what the open request changes in the view (Q-233, Q-234):
+/// its background, whether a passthrough camera leaves it out, and, when the request
+/// names a degree above the governor's cap, the degree the replayed instance is drawn
+/// at, min(its loaded degree, the cap, the request's degree). `loaded` is that
+/// instance's `LoadedModel.info.sh_degree` (Q-239), `None` with no instance loaded.
+// Q-233, Q-234, Q-239
+fn replay_lines(
+    request: &ftgsxr_core::RenderRequest,
+    governor_cap: Option<u8>,
+    loaded: Option<u8>,
+    passthrough: bool,
+) -> Vec<String> {
+    let [red, green, blue] = request.background;
+    let mut lines = vec![format!(
+        "background: request ({red:.3}, {green:.3}, {blue:.3})"
+    )];
+    if passthrough {
+        lines.push("background not applied in passthrough".into());
+    }
+    if let (Some(d), Some(g), Some(l)) = (request.sh_degree, governor_cap, loaded)
+        && g < d
+    {
+        let drawn = l.min(g).min(d);
+        lines.push(format!(
+            "SH degree {drawn} drawn (request {d}, governor cap {g})"
+        ));
+    }
+    lines
 }
 
 /// Playback: §1.6's controls.
@@ -1035,7 +1059,72 @@ fn scene_files(world: &World) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::source_from_input;
+    use super::{replay_lines, source_from_input};
+    use ftgsxr_core::RenderRequest;
+
+    fn request(sh_degree: Option<u8>) -> RenderRequest {
+        RenderRequest {
+            time_unit: "seconds".into(),
+            background: [0.25, 0.5, 1.0],
+            sh_degree,
+            items: Vec::new(),
+            sha256: [0; 32],
+        }
+    }
+
+    fn sh_line(lines: &[String]) -> Option<&String> {
+        lines.iter().find(|l| l.starts_with("SH degree"))
+    }
+
+    // Q-233 (#388): the SH line names the degree the replayed instance is drawn at,
+    // min(its loaded degree, the governor's cap, the request's degree), and shows only
+    // when the request names a degree above the governor's cap.
+    #[test]
+    fn the_sh_line_names_the_degree_drawn_when_the_governor_caps_the_request() {
+        let lines = replay_lines(&request(Some(3)), Some(2), Some(1), false);
+        assert_eq!(
+            sh_line(&lines).map(String::as_str),
+            Some("SH degree 1 drawn (request 3, governor cap 2)")
+        );
+        let lines = replay_lines(&request(Some(3)), Some(2), Some(3), false);
+        assert_eq!(
+            sh_line(&lines).map(String::as_str),
+            Some("SH degree 2 drawn (request 3, governor cap 2)")
+        );
+        assert_eq!(
+            sh_line(&replay_lines(&request(Some(2)), Some(3), Some(3), false)),
+            None
+        );
+        assert_eq!(
+            sh_line(&replay_lines(&request(Some(2)), Some(2), Some(3), false)),
+            None
+        );
+        assert_eq!(
+            sh_line(&replay_lines(&request(None), Some(1), Some(3), false)),
+            None
+        );
+        // No instance loaded: no SH line.
+        assert_eq!(
+            sh_line(&replay_lines(&request(Some(3)), Some(2), None, false)),
+            None
+        );
+    }
+
+    // Q-234 (#388): the row names the request's background, and says it is not applied
+    // only while a passthrough camera exists.
+    #[test]
+    fn the_background_lines_name_the_request_and_passthrough() {
+        let lines = replay_lines(&request(None), Some(3), Some(3), false);
+        assert_eq!(lines, ["background: request (0.250, 0.500, 1.000)"]);
+        let lines = replay_lines(&request(None), Some(3), Some(3), true);
+        assert_eq!(
+            lines,
+            [
+                "background: request (0.250, 0.500, 1.000)",
+                "background not applied in passthrough"
+            ]
+        );
+    }
 
     #[test]
     fn a_url_is_an_http_source_and_an_absolute_path_a_folder() {
