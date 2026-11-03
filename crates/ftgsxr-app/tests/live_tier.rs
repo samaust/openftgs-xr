@@ -195,3 +195,73 @@ fn gpu_live_tier_switch_reloads_with_the_new_layout() {
     assert_eq!(gpu.memory_budget().bytes, 1_610_612_736);
     assert!(t.settle_pipelines());
 }
+
+// Q-229, Q-230: the new tier's budget applies to the reloads; a refused instance is
+// unloaded with §1.15's text, the others stay.
+#[test]
+#[ignore = "gpu"]
+fn gpu_live_tier_switch_unloads_a_model_the_new_budget_refuses() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+    let mut t = TestApp::gpu("live_budget");
+    let events = record_events(&mut t.app);
+    for p in ["P1", "P2"] {
+        let path = ftgsxr_testkit::fixtures_dir().join(format!("probes/{p}.safetensors"));
+        t.command(ftgsxr_app::LibraryCommand::LoadRef(
+            ftgsxr_app::ModelRef::File(path),
+        ));
+    }
+    let instances = |app: &mut App| {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<Entity, With<ftgsxr_app::LoadedModel>>();
+        q.iter(app.world()).collect::<Vec<_>>()
+    };
+    assert!(
+        t.until_for(std::time::Duration::from_secs(30), |app| {
+            let all = instances(app);
+            all.len() == 2 && all.iter().all(|e| uploads(&events, *e).len() == 1)
+        }),
+        "two uploads"
+    );
+    let all = instances(&mut t.app);
+    let larger = all.iter().map(|e| uploads(&events, *e)[0]).max().unwrap();
+    // The same layout as `desktop`, with a budget that holds the larger model alone: the
+    // reloads arrive in either order, and whichever comes second is refused.
+    let mut tiny = QualityTier::desktop();
+    tiny.name = "tiny".into();
+    tiny.memory_budget_bytes = larger;
+    *t.app.world_mut().resource_mut::<SplatTierState>() = SplatTierState::of(&tiny);
+    let failed = |events: &std::sync::Mutex<Vec<ftgsxr_app::SplatEvent>>| {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ftgsxr_app::SplatEvent::Failed { entity, error } => Some((*entity, error.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        t.until_for(std::time::Duration::from_secs(30), |app| {
+            instances(app).len() == 1 && !failed(&events).is_empty()
+        }),
+        "one reload refused"
+    );
+    let refused = failed(&events);
+    assert_eq!(refused.len(), 1);
+    assert!(refused[0].1.starts_with("E-MEM-BUDGET"), "{}", refused[0].1);
+    let kept = instances(&mut t.app)[0];
+    assert_ne!(kept, refused[0].0);
+    assert!(
+        t.until_for(std::time::Duration::from_secs(10), |_| uploads(
+            &events, kept
+        )
+        .len()
+            == 2),
+        "the kept instance's reload"
+    );
+    let gpu = t.app.world().resource::<ftgsxr_render::SplatGpu>().device();
+    assert_eq!(gpu.memory_budget().bytes, larger);
+    assert!(t.settle_pipelines());
+}
