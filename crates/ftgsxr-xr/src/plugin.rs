@@ -22,7 +22,7 @@ use ftgsxr_render::SortMode;
 use openxr::EnvironmentBlendMode;
 
 use crate::display::DisplayPlugin;
-use crate::error::log_runtime;
+use crate::error::{XrError, log_runtime};
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
 use crate::tracking::TrackingPlugin;
@@ -116,8 +116,9 @@ impl Plugin for XrPlugin {
                 ..OxrInitPlugin::default()
             });
         if app.world().get_resource::<XrState>() == Some(&XrState::Unavailable) {
-            // E-XR-RUNTIME: the desktop continues without XR, the Quest exits 2 (§1.15).
-            log_runtime("the OpenXR instance could not be created");
+            // E-XR-RUNTIME: the desktop continues without XR, the Quest exits 2 (§1.15);
+            // `play --xr` exits 2 through `runtime_unavailable` (Q-162).
+            log_runtime(NO_INSTANCE);
         }
         let passthrough_available = app
             .world()
@@ -129,6 +130,19 @@ impl Plugin for XrPlugin {
             style: PassthroughStyle::default(),
         });
     }
+}
+
+/// What E-XR-RUNTIME says when the loader finds no runtime.
+const NO_INSTANCE: &str = "the OpenXR instance could not be created";
+
+/// E-XR-RUNTIME when `app`, built with [`add_xr`], has no OpenXR instance: the loader
+/// found no runtime, or the runtime refused the instance (Q-162: `play --xr` then exits
+/// 2). `None` once an instance exists, whatever happens to its session later (§1.15's
+/// recovery), and in an app without `XrPlugin`.
+// Q-162, Q-T289.1
+pub fn runtime_unavailable(app: &App) -> Option<XrError> {
+    (app.world().get_resource::<XrState>() == Some(&XrState::Unavailable))
+        .then(|| XrError::Runtime(NO_INSTANCE.to_owned()))
 }
 
 /// The plugins that follow Bevy's group (after `PipelinedRenderingPlugin`, which
