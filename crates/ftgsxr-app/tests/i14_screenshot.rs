@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::{Camera, Camera3d, PerspectiveProjection, Projection, RenderTarget};
+use bevy::input::ButtonState;
+use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use ftgsxr_app::{
@@ -137,7 +139,18 @@ fn gpu_i14_f12_writes_a_png_with_the_metadata_chunk() {
     t.frames(3);
 
     let dir = t.dir.join("pictures");
-    t.app.world_mut().write_message(Intent::Screenshot);
+    // F12 as winit writes it (no window here: the camera renders to an image).
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        t.app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::F12,
+            logical_key: Key::Unidentified(NativeKey::Unidentified),
+            state,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        t.frames(1);
+    }
     let png_in = |dir: &std::path::Path| {
         std::fs::read_dir(dir).ok().and_then(|d| {
             d.flatten()
