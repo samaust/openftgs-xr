@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
-use bevy::app::{App, Plugin, PostUpdate, Update};
+use bevy::app::{App, Plugin, PostUpdate, PreUpdate, Update};
 use bevy::asset::{Assets, Handle};
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::prelude::*;
@@ -162,6 +162,11 @@ pub struct LoadedModel {
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct LibraryCommands;
 
+/// The live tier switch's reload, in `PreUpdate`, for `governor`'s switch to run before
+/// it (Q-238).
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TierReload;
+
 /// The library's systems and observers, added by `AppPlugin` with its `initial` models.
 pub(crate) struct LibraryPlugin {
     pub(crate) initial: Vec<ModelRef>,
@@ -189,6 +194,8 @@ impl Plugin for LibraryPlugin {
                 )
                     .chain(),
             )
+            // Q-238: before `Update`, so no load lands between a switch and its reload.
+            .add_systems(PreUpdate, reload_on_tier_switch.in_set(TierReload))
             .add_systems(PostUpdate, follow_in_use);
         let paths = app.world().resource::<PlatformRes>().0.paths().clone();
         let max_bytes = self.cache_max_bytes;
@@ -291,6 +298,8 @@ struct LoadCtx {
     audio: Option<ModelRef>,
     /// The identity a "Locate…" pick must have (Q-225).
     locate: Option<String>,
+    /// The kind the first load was read as, for a reload (Q-238).
+    kind_hint: Option<ModelKind>,
 }
 
 type ListTask = Task<Result<Vec<Entry>, IoError>>;
@@ -307,7 +316,8 @@ type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>, Option<PathBuf>),
 /// A fetch on the I/O task pool.
 struct Fetch {
     ctx: LoadCtx,
-    kind_hint: Option<ModelKind>,
+    /// The instance a reload re-reads the model of (Q-238); `None` for a new instance.
+    target: Option<Entity>,
     cancel: Arc<AtomicBool>,
     progress: Arc<Mutex<Option<Progress>>>,
     task: Task<Fetched>,
@@ -613,6 +623,7 @@ fn run_commands(
                     total: e.entry.size,
                 });
                 pending.fetches.push(Fetch {
+                    target: None,
                     ctx: LoadCtx {
                         source: ModelRef::File(PathBuf::new()),
                         name: stem(Path::new(&e.entry.name)),
@@ -621,8 +632,8 @@ fn run_commands(
                         reduce_to,
                         audio: None,
                         locate: None,
+                        kind_hint: kind_hint(e.entry.kind),
                     },
-                    kind_hint: kind_hint(e.entry.kind),
                     cancel,
                     progress,
                     task,
@@ -635,15 +646,9 @@ fn run_commands(
                     .iter()
                     .position(|(x, _)| *x == r)
                     .map(|i| pending.locating.remove(i).1);
-                let (client, provider) = (client.0.clone(), provider.clone());
-                let at = r.clone();
-                let task = IoTaskPool::get().spawn(async move {
-                    let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
-                    let audio = sidecar(&at);
-                    // Q-229: a reference names no index entry, so no index `scene`.
-                    Ok((at, bytes, audio, None))
-                });
+                let task = fetch_ref(r.clone(), client.0.clone(), provider.clone(), true);
                 pending.fetches.push(Fetch {
+                    target: None,
                     ctx: LoadCtx {
                         name: ref_name(&r),
                         source: r,
@@ -652,8 +657,8 @@ fn run_commands(
                         reduce_to: None,
                         audio: None,
                         locate,
+                        kind_hint: None,
                     },
-                    kind_hint: None,
                     cancel: Arc::new(AtomicBool::new(false)),
                     progress: Arc::new(Mutex::new(None)),
                     task,
@@ -686,6 +691,22 @@ fn run_commands(
             }
         }
     }
+}
+
+/// Reads the model a reference names on the I/O pool, with its sidecar soundtrack when
+/// `with_sidecar` (§1.10).
+fn fetch_ref(
+    at: ModelRef,
+    client: Option<Arc<HttpClient>>,
+    provider: Option<Arc<dyn DocumentProvider>>,
+    with_sidecar: bool,
+) -> Task<Fetched> {
+    IoTaskPool::get().spawn(async move {
+        let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
+        let audio = if with_sidecar { sidecar(&at) } else { None };
+        // Q-229: a reference names no index entry, so no index `scene`.
+        Ok((at, bytes, audio, None))
+    })
 }
 
 /// Despawns an instance; its entry, if any, returns to `Listed` (§1.5).
@@ -1036,6 +1057,20 @@ fn poll_tasks(
             pending.fetches.push(f);
             continue;
         };
+        // Q-238: a reload goes on its own instance, whose state stays.
+        let result = match (f.target, result) {
+            (Some(target), Ok((_, bytes, _, _))) => {
+                if let Ok(mut e) = commands.get_entity(target) {
+                    e.insert(SplatLoad {
+                        bytes,
+                        kind_hint: f.ctx.kind_hint,
+                        reduce_to: f.ctx.reduce_to,
+                    });
+                }
+                continue;
+            }
+            (_, result) => result,
+        };
         match result {
             Ok((source, bytes, audio, scene)) => {
                 let mut ctx = f.ctx;
@@ -1044,7 +1079,7 @@ fn poll_tasks(
                 let mut instance = commands.spawn((
                     SplatLoad {
                         bytes,
-                        kind_hint: f.kind_hint,
+                        kind_hint: ctx.kind_hint,
                         reduce_to: ctx.reduce_to,
                     },
                     Transform::IDENTITY,
@@ -1068,6 +1103,12 @@ fn poll_tasks(
             }
             Err(err) => {
                 let text = error_text(&err);
+                // Q-238: a reload that cannot re-read its file unloads the instance.
+                if let Some(target) = f.target
+                    && let Ok(mut e) = commands.get_entity(target)
+                {
+                    e.despawn();
+                }
                 match entry_of(&mut library, pending, &f.ctx) {
                     Some(e) => e.state = EntryState::Failed(text),
                     // Q-173: a load without an entry sends its own failure.
@@ -1133,24 +1174,84 @@ fn poll_picks(
     }
 }
 
+/// The live tier switch's reload (§1.12: storage and capacity "need a reload"; Q-238):
+/// when the running tier changes, every instance with a model is re-read from its
+/// source on the I/O pool and loaded again on its own entity with the new tier's
+/// options; its entry is `Loading` meanwhile, and the upload shows it only if it was
+/// shown. Instances still loading pick the new options up in the render plugin (Q-239).
+// Q-238
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a Bevy system: one parameter per resource it reads"
+)]
+fn reload_on_tier_switch(
+    tier: Res<SplatTierState>,
+    mut seen: Local<Option<ftgsxr_render::QualityTier>>,
+    mut library: ResMut<Library>,
+    mut pending: ResMut<Pending>,
+    client: Res<Client>,
+    platform: Res<PlatformRes>,
+    instances: Query<(Entity, &LoadCtx, &Visibility, Option<&ShowOnUpload>), With<SplatModel>>,
+    mut commands: Commands,
+) {
+    if seen.as_ref() == Some(&tier.tier) {
+        return;
+    }
+    let first = seen.is_none();
+    *seen = Some(tier.tier.clone());
+    if first {
+        return;
+    }
+    let provider: Option<Arc<dyn DocumentProvider>> = platform.0.document_provider();
+    for (entity, ctx, visibility, show) in &instances {
+        let shown = show.map_or(*visibility != Visibility::Hidden, |s| s.0);
+        commands
+            .entity(entity)
+            .remove::<SplatModel>()
+            .insert(ShowOnUpload(shown));
+        if let Some(e) = entry_of(&mut library, &pending, ctx) {
+            e.state = EntryState::Loading;
+        }
+        // The soundtrack stays the instance's own (`LoadCtx.audio`).
+        let task = fetch_ref(
+            ctx.source.clone(),
+            client.0.clone(),
+            provider.clone(),
+            false,
+        );
+        pending.fetches.push(Fetch {
+            ctx: ctx.clone(),
+            target: Some(entity),
+            cancel: Arc::new(AtomicBool::new(false)),
+            progress: Arc::new(Mutex::new(None)),
+            task,
+        });
+    }
+}
+
 /// `LoadedModel` as soon as the model is read (Q-148).
 // Q-148
 fn on_model(
     add: On<Add, SplatModel>,
-    loads: Query<(&LoadCtx, &SplatModel)>,
+    loads: Query<(&LoadCtx, &SplatModel, Option<&LoadedModel>)>,
     assets: Res<Assets<SplatAsset>>,
     mut library: ResMut<Library>,
     pending: Res<Pending>,
     mut failures: MessageWriter<LibraryFailure>,
     mut commands: Commands,
 ) {
-    let Ok((ctx, model)) = loads.get(add.entity) else {
+    let Ok((ctx, model, loaded)) = loads.get(add.entity) else {
         return;
     };
     let Some(asset) = assets.get(&model.0) else {
         return;
     };
     let identity: String = asset.identity.iter().map(|b| format!("{b:02x}")).collect();
+    // Q-238: a reload of the same file keeps its `LoadedModel`, so nothing that follows
+    // it (the scene's poses, the soundtrack) starts again.
+    if loaded.is_some_and(|m| m.identity == identity) {
+        return;
+    }
     // Q-225: a located file of another identity is refused; a load of a missing
     // entry's identity, located or not, clears the entry.
     if let Some(want) = &ctx.locate
