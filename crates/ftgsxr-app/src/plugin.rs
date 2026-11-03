@@ -19,6 +19,7 @@ use crate::manipulate::ManipulatePlugin;
 use crate::persist;
 use crate::platform::{Platform, PlatformRes};
 use crate::playback::PlaybackPlugin;
+use crate::rig::RigPlugin;
 
 pub use crate::desktop_log::init_desktop_log;
 
@@ -58,6 +59,7 @@ impl Plugin for AppPlugin {
         });
         app.add_plugins(PlaybackPlugin);
         app.add_plugins(ManipulatePlugin);
+        app.add_plugins(RigPlugin);
         // Q-149: the kira adapter unless `AudioOutputRes` exists already.
         app.add_plugins(AudioPlugin);
         // E16 (#288).
