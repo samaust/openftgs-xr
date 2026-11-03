@@ -12,7 +12,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
-use url::Url;
+/// The URL type of `ModelRef::Http`, for callers that build one (Q-168).
+// Q-168
+pub use url::Url;
 
 use crate::http::status_error;
 use crate::http::{MANIFEST, PARAMS};
