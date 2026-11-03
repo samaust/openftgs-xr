@@ -616,6 +616,50 @@ _Avoid_: framebuffer, eye buffer (the runtime's recommended size, not the images
 The one OpenXR action set of the player, holding every action of Appendix D.2 with suggested bindings for the Touch Plus, Touch and simple-controller profiles, attached once per session. §1.8, Appendix D.2
 _Avoid_: input map, control scheme, binding set
 
+**Intent**:
+The one event both input adapters produce and every feature consumes: a pointer, a selection, a grab, a camera or playback command, an instance action or a toggle. §1.7, §1.8, §2.1
+_Avoid_: action (reserved for OpenXR actions), command (the library and persist commands), input event
+
+**Library entry**:
+One model a model source offers, with its header information, thumbnail and state: listed, fetching, loading, loaded, failed or missing. §1.5
+_Avoid_: file, item, row
+
+**Player rig**:
+The entity that is the user's origin, the desktop camera's parent and the XR tracking space, which locomotion moves. §1.8, E12, §2.1
+_Avoid_: player, camera rig, tracking root (the XR crate's entity before the rig binds to it)
+
+**Platform port**:
+The one trait the application reaches the platform through, for paths, pickers, permissions, documents and camera frames, with a Linux and a Quest adapter. §2.1, §2.5
+_Avoid_: platform layer (§2.5's section), backend, OS abstraction
+
+**Toast**:
+A short message line the interface shows for a recoverable condition or a confirmation, at the bottom of the panel or the window. §1.8, §1.13, §1.15
+_Avoid_: notification, alert, dialog (a modal with a choice)
+
+**Quality governor**:
+The system that steps a copy of the active quality tier's render scale, foveation, SH cap and sort mode from the GPU frame time, off while a tier is chosen by hand. E16, §1.12, D-47
+_Avoid_: dynamic resolution, adaptive quality, auto tier
+
+**Camera mode**:
+The desktop camera's control scheme, fly (keys move, the mouse looks) or orbit (the camera circles the selected instance's box center). §1.7
+_Avoid_: free camera, turntable, navigation mode
+
+**Bookmark**:
+One saved desktop camera, its pose, field of view and mode, kept in the scene file, nine at most. §1.7, §1.11
+_Avoid_: viewpoint, saved view, camera preset
+
+**Gizmo**:
+The selected instance's manipulator on the desktop, translate arrows, rotation rings and a uniform-scale cube. §1.7
+_Avoid_: handles (unqualified), manipulator, Bevy gizmos (the engine's line-drawing API)
+
+**Soundtrack**:
+An instance's audio file, found beside the model, named by the index entry or by the scene file, played at speed 1 forward only with soundtrack time 0 at τ₀,m. §1.6, §1.10, D-22
+_Avoid_: audio track, music, sidecar (unqualified)
+
+**UI sound**:
+One of the short synthesized clips the player plays on hover, select, grab, snap turn, click, error and confirmation, each switchable. §1.10
+_Avoid_: sound effect, SFX, cue
+
 ### Files
 
 **File format**:
