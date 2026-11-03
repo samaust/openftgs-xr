@@ -807,10 +807,11 @@ mod tests {
         assert!(pointer_events(None, None, &[true]).is_empty());
     }
 
-    /// I-11 (§1.8, `cpu`): a ray at known quad coordinates becomes pointer events at the
-    /// expected pixel (1 px) in a second egui context, and a click toggles a test button.
+    /// `pointer_events` from a ray's hit drive a second egui context: the pointer at the
+    /// hit's pixel (1 px) and a select press and release clicking a button there. I-11's
+    /// row is pinned at the public interface in `tests/i11_panel_pointer.rs`.
     #[test]
-    fn i11_a_ray_on_the_quad_points_and_clicks_in_a_second_context() {
+    fn pointer_events_from_a_quad_hit_click_in_a_second_context() {
         let size_px = UVec2::new(1024, 768);
         let size_m = Vec2::new(0.56, 0.42);
         let panel = Pose {
