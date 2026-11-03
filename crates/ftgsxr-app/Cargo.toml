@@ -30,7 +30,9 @@ tracing-subscriber.workspace = true # Q-151
 [dev-dependencies]
 # #277: the test support's `gpu_` variant adds the camera and pipeline plugins, as
 # `ftgsxr-render`'s adapter tests do.
-bevy = { workspace = true, features = ["bevy_core_pipeline"] }
+# #291 (§2.4 Threads, I-3): the tests run on multi-threaded task pools, as `play` does, so
+# a fetch's progress and its cancel are seen between frames.
+bevy = { workspace = true, features = ["bevy_core_pipeline", "multi_threaded"] }
 ftgsxr-testkit.workspace = true
 # An independent reader of the benchmark files `bench` writes (#122, Q-103), as
 # `ftgsxr-render` reads its fixture pose files.
