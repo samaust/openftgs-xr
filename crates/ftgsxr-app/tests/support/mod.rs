@@ -65,8 +65,13 @@ pub struct StubPlatform {
 impl StubPlatform {
     /// A stub whose directories are under `root`.
     pub fn new(root: &Path) -> Arc<StubPlatform> {
+        Self::with_paths(paths_under(root))
+    }
+
+    /// A stub with the given directories (I-19).
+    pub fn with_paths(paths: AppPaths) -> Arc<StubPlatform> {
         Arc::new(StubPlatform {
-            paths: paths_under(root),
+            paths,
             next: AtomicU32::new(0),
             queued: Mutex::new(Vec::new()),
             picks: Mutex::new(HashMap::new()),
@@ -175,9 +180,30 @@ impl TestApp {
         Self::build(name, Setup::default(), |_| {}, true)
     }
 
+    /// The `gpu_` variant with a `Setup` (a tier with a small budget, say).
+    pub fn gpu_with(name: &str, setup: Setup) -> TestApp {
+        Self::build(name, setup, |_| {}, true)
+    }
+
+    /// The CPU app on a given platform (I-19).
+    pub fn on(name: &str, platform: Arc<StubPlatform>) -> TestApp {
+        Self::build_on(name, platform, Setup::default(), |_| {}, false)
+    }
+
     fn build(name: &str, setup: Setup, before: impl FnOnce(&mut App), gpu: bool) -> TestApp {
         let dir = scratch(name);
         let platform = StubPlatform::new(&dir);
+        Self::build_on(name, platform, setup, before, gpu)
+    }
+
+    fn build_on(
+        name: &str,
+        platform: Arc<StubPlatform>,
+        setup: Setup,
+        before: impl FnOnce(&mut App),
+        gpu: bool,
+    ) -> TestApp {
+        let dir = scratch(name);
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -207,6 +233,24 @@ impl TestApp {
             dir,
             server: serve_fixtures(),
         }
+    }
+
+    /// Runs frames (sleeping a millisecond between them, for the task pools) until
+    /// `done` holds, at most `max`; whether it held.
+    pub fn until(&mut self, max: usize, mut done: impl FnMut(&mut App) -> bool) -> bool {
+        for _ in 0..max {
+            self.app.update();
+            if done(&mut self.app) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// Writes a library command.
+    pub fn command(&mut self, c: ftgsxr_app::LibraryCommand) {
+        self.app.world_mut().write_message(c);
     }
 
     /// Runs `n` frames of `FRAME` each.

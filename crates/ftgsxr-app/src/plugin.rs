@@ -12,6 +12,7 @@ use bevy_egui::EguiPlugin;
 use ftgsxr_io::ModelRef;
 use ftgsxr_render::{QualityTier, SplatPlugin};
 
+use crate::library::LibraryPlugin;
 use crate::persist;
 use crate::platform::{Platform, PlatformRes};
 
@@ -47,6 +48,9 @@ impl Plugin for AppPlugin {
         if app.get_sub_app(RenderApp).is_some() && !app.is_plugin_added::<EguiPlugin>() {
             app.add_plugins(EguiPlugin::default());
         }
-        // `initial` and `scene` are loaded by `library` (#278) and `persist` (#285).
+        // `initial` loads through the library; `scene` is `persist`'s (#285).
+        app.add_plugins(LibraryPlugin {
+            initial: self.initial.clone(),
+        });
     }
 }
