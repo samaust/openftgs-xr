@@ -4,6 +4,8 @@
 //! order after 10 frames over and up after 120 under, over E16's full ladder (Q-153); a
 //! manual tier disables the governor.
 
+mod support;
+
 use ftgsxr_app::{Governor, GovernorCounters, HEADSET_LADDER, Knob, QualityTier, govern};
 use ftgsxr_render::{Foveation, SortMode, SplatTierState};
 
@@ -149,4 +151,25 @@ fn u22_a_knob_is_released_only_to_the_tiers_own_value() {
         ]
     );
     assert_eq!(knobs(&s), (8, Foveation::High, 1, SortMode::SharedCenter));
+}
+
+// Q-179
+#[test]
+fn u22_choosing_a_tier_by_hand_disables_the_governor() {
+    // §1.12: "a tier chosen by hand turns the governor off": the app on the build's
+    // default tier governs; on another tier (`--tier`, the settings) it does not.
+    let enabled = |name: &str, tier: &str| {
+        let mut t = support::TestApp::with(
+            name,
+            support::Setup {
+                tier: QualityTier::by_name(tier).unwrap(),
+                ..support::Setup::default()
+            },
+            |_| {},
+        );
+        t.frames(2);
+        t.app.world().resource::<Governor>().enabled
+    };
+    assert!(enabled("u22-default-tier", "desktop"));
+    assert!(!enabled("u22-manual-tier", "quest-low"));
 }

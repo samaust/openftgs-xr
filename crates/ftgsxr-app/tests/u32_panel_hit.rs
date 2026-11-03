@@ -33,7 +33,8 @@ fn panels() -> Vec<Pose> {
 }
 
 fn close(a: Vec2, b: Vec2) -> bool {
-    (a - b).abs().max_element() < 1e-2
+    // §3: exact; f32 rounding of the ray's own construction aside.
+    (a - b).abs().max_element() <= 1e-4
 }
 
 #[test]
