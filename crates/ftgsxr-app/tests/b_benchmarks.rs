@@ -12,8 +12,9 @@ use serde_json::Value;
 
 #[test]
 fn bench_refuses_a_benchmark_the_desktop_does_not_run() {
-    // §3.5: B-2, B-4, B-7, B-8 and B-9 are the Quest's or reported elsewhere (Q-103).
-    for name in ["B-2", "B-4", "B-7", "B-9", "B-10", "b-1", ""] {
+    // §3.5: B-2, B-4, B-7 and B-8 are the Quest's or reported elsewhere (Q-103); B-9's
+    // desktop half runs here (Q-155, #289).
+    for name in ["B-2", "B-4", "B-7", "B-8", "B-10", "b-1", ""] {
         let e = cmd_bench(name, None, None).expect_err(name);
         assert!(matches!(e, HeadlessError::Input(_)), "{name}: {e:?}");
         assert_eq!(exit_code(&e), 2);

@@ -19,14 +19,17 @@
 //!   runtime gives a valid one, else the view configuration's (Q-132).
 //!
 //! Where an extension is absent, `available_rates` is empty, a request logs
-//! E-XR-UNSUPPORTED (a warning) and the setting is kept for a later runtime (Q-124).
+//! E-XR-UNSUPPORTED (a warning) and the setting is kept for a later runtime (Q-124). A
+//! refresh rate or a foveation asked for explicitly (a settings value, a change while the
+//! session runs) also triggers a `Toast`, which ui puts on the line; the tier's default
+//! never does (Q-161).
 
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageWriter;
 use bevy::log::{info, warn};
 use bevy::math::UVec2;
 use bevy::prelude::DetectChangesMut;
-use bevy::prelude::{IntoScheduleConfigs, Res, ResMut, Resource, resource_exists};
+use bevy::prelude::{Commands, IntoScheduleConfigs, Res, ResMut, Resource, resource_exists};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp};
 use bevy_mod_openxr::graphics::GraphicsWrap;
@@ -41,7 +44,7 @@ use bevy_mod_xr::session::{
     XrSessionCreated, XrState,
 };
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
-use ftgsxr_app::SettingsRes;
+use ftgsxr_app::{SettingsRes, Toast, ToastLevel};
 use ftgsxr_io::Settings;
 use ftgsxr_render::{Foveation, QualityTier};
 use openxr::sys;
@@ -315,6 +318,18 @@ fn unsupported(e: &XrError) {
     warn!("{}: {}", e.code(), e.user_text());
 }
 
+/// An E-XR-UNSUPPORTED for a feature asked for explicitly: the warning and a `Toast`
+/// triggered for ui (Q-161; every caller's request is explicit, the tier's default
+/// foveation and an unset refresh rate never reach it).
+// Q-161
+fn unsupported_requested(e: &XrError, commands: &mut Commands) {
+    unsupported(e);
+    commands.trigger(Toast {
+        text: format!("{}: {}", e.code(), e.user_text()),
+        level: ToastLevel::Warning,
+    });
+}
+
 /// At each session: the rates, the wanted rate, the foveation again (the swapchain is
 /// new) and the swapchain's size; a failed render scale is forgotten (Q-147).
 fn on_session_created(
@@ -324,6 +339,7 @@ fn on_session_created(
     settings: Res<DisplaySettings>,
     mut applied: ResMut<Applied>,
     mut request: ResMut<FoveationRequest>,
+    mut commands: Commands,
 ) {
     let Some(session) = session else { return };
     // Q-147
@@ -337,7 +353,7 @@ fn on_session_created(
     let caps = Caps::of(instance.as_deref());
     let f = settings.foveation;
     if caps.foveation || (f != Foveation::Off && applied.foveation_requested) {
-        foveation(caps, &session, f, &mut request);
+        foveation(caps, &session, f, &mut request, &mut commands);
     }
     applied.foveation = Some(f);
 }
@@ -349,9 +365,15 @@ fn on_session_begun(
     instance: Option<Res<OxrInstance>>,
     mut settings: ResMut<DisplaySettings>,
     mut applied: ResMut<Applied>,
+    mut commands: Commands,
 ) {
     let Some(session) = session else { return };
-    apply_rate(Caps::of(instance.as_deref()), &session, &mut settings);
+    apply_rate(
+        Caps::of(instance.as_deref()),
+        &session,
+        &mut settings,
+        &mut commands,
+    );
     applied.refresh_rate = settings.refresh_rate;
 }
 
@@ -363,7 +385,12 @@ fn drop_profile(request: Option<ResMut<FoveationRequest>>) {
 }
 
 /// Enumerates the rates and requests the wanted one.
-fn apply_rate(caps: Caps, session: &OxrSession, settings: &mut DisplaySettings) {
+fn apply_rate(
+    caps: Caps,
+    session: &OxrSession,
+    settings: &mut DisplaySettings,
+    commands: &mut Commands,
+) {
     let enumerated = if caps.refresh_rate {
         // The wrapper panics without the extension; `caps` checked it is loaded.
         session
@@ -376,7 +403,7 @@ fn apply_rate(caps: Caps, session: &OxrSession, settings: &mut DisplaySettings) 
         Vec::new()
     };
     match refresh_rate(caps, settings, enumerated) {
-        Err(e) => unsupported(&e),
+        Err(e) => unsupported_requested(&e, commands),
         Ok(RateAction::None) => {}
         Ok(RateAction::NotListed(r)) => warn!(
             "refresh rate {r} Hz is not among the runtime's {:?}: kept, not requested",
@@ -391,9 +418,15 @@ fn apply_rate(caps: Caps, session: &OxrSession, settings: &mut DisplaySettings) 
 
 /// Creates the profile for `f` and hands it to the render world, or reports the
 /// extension absent.
-fn foveation(caps: Caps, session: &OxrSession, f: Foveation, request: &mut FoveationRequest) {
+fn foveation(
+    caps: Caps,
+    session: &OxrSession,
+    f: Foveation,
+    request: &mut FoveationRequest,
+    commands: &mut Commands,
+) {
     if !caps.foveation {
-        unsupported(&XrError::Unsupported("XR_FB_foveation"));
+        unsupported_requested(&XrError::Unsupported("XR_FB_foveation"), commands);
         return;
     }
     let (level, dynamic) = level(f);
@@ -426,6 +459,7 @@ fn apply_changes(
     mut config: ResMut<OxrSessionConfig>,
     mut recreate: ResMut<Recreate>,
     mut exit: MessageWriter<XrRequestExitMessage>,
+    mut commands: Commands,
 ) {
     if state.as_deref() != Some(&XrState::Running) {
         return;
@@ -435,12 +469,18 @@ fn apply_changes(
     if settings.refresh_rate != applied.refresh_rate {
         applied.refresh_rate = settings.refresh_rate;
         let s = settings.bypass_change_detection();
-        apply_rate(caps, &session, s);
+        apply_rate(caps, &session, s, &mut commands);
     }
     if Some(settings.foveation) != applied.foveation {
         applied.foveation = Some(settings.foveation);
         applied.foveation_requested = true;
-        foveation(caps, &session, settings.foveation, &mut request);
+        foveation(
+            caps,
+            &session,
+            settings.foveation,
+            &mut request,
+            &mut commands,
+        );
     }
     let scale = settings.render_scale;
     if applied.take_scale_change(scale, recreate.0) {

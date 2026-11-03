@@ -138,3 +138,20 @@ fn a_refused_clock_command_is_a_warning_toast() {
     assert_eq!(all[0].level, ToastLevel::Warning);
     assert!(all[0].text.starts_with("Speed 0 refused"), "{all:?}");
 }
+
+// Q-161, Q-221: a `Toast` triggered from outside the app crate (the XR crate's
+// E-XR-UNSUPPORTED) reaches the line through the rate limit, once for a repeat.
+#[test]
+fn a_triggered_toast_is_raised_once_through_the_rate_limit() {
+    use ftgsxr_app::Toast;
+    let mut t = TestApp::new("i13t-triggered");
+    record_toasts(&mut t.app);
+    let toast = Toast {
+        text: "E-XR-UNSUPPORTED: Not available on this runtime (XR_FB_foveation)".to_owned(),
+        level: ToastLevel::Warning,
+    };
+    t.app.world_mut().trigger(toast.clone());
+    t.app.world_mut().trigger(toast.clone());
+    t.frames(3);
+    assert_eq!(toasts(&t.app), vec![toast]);
+}

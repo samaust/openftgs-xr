@@ -32,7 +32,8 @@ bevy = { workspace = true, features = [
     "bevy_winit",
     "x11",
     "wayland",
-] } # Q-154
+    "bevy_gizmos_render",
+] } # Q-154; #289: `bevy_gizmos_render` draws manipulate's gizmo, the boxes and the frustums
 clap.workspace = true
 ftgsxr-app.workspace = true
 ftgsxr-xr = { workspace = true, optional = true }

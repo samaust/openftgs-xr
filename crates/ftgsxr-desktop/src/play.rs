@@ -11,7 +11,7 @@ use std::sync::Arc;
 use bevy::app::{App, AppExit};
 use bevy::log::LogPlugin;
 use bevy::prelude::{DefaultPlugins, PluginGroup};
-use bevy::window::{Window, WindowPlugin};
+use bevy::window::{PresentMode, Window, WindowPlugin};
 #[cfg(feature = "xr")]
 use clap::ArgAction;
 use clap::{Arg, ArgMatches, Command, value_parser};
@@ -188,6 +188,8 @@ pub(crate) fn run(m: &ArgMatches) -> ExitCode {
         .set(WindowPlugin {
             primary_window: Some(Window {
                 title: "openftgs-xr".into(),
+                // §1.7 Window: vertical sync on by default.
+                present_mode: PresentMode::AutoVsync,
                 ..Window::default()
             }),
             ..WindowPlugin::default()
@@ -196,7 +198,9 @@ pub(crate) fn run(m: &ArgMatches) -> ExitCode {
     // Q-163: the binary's settings, so `--tier` and `--log-level` stay unsaved.
     app.insert_resource(SettingsPath(path))
         .insert_resource(SettingsRes(settings));
-    add_plugins(&mut app, group, m);
+    if let Err(code) = add_plugins(&mut app, group, m) {
+        return code;
+    }
     app.add_plugins(AppPlugin {
         platform,
         tier,
@@ -206,9 +210,15 @@ pub(crate) fn run(m: &ArgMatches) -> ExitCode {
     exit_code(app.run())
 }
 
-/// `DefaultPlugins`, through `add_xr` with `--xr` (Q-120, Q-121).
+/// `DefaultPlugins`, through `add_xr` with `--xr` (Q-120, Q-121); `Err` with exit 2 when
+/// `--xr` finds no OpenXR runtime (§1.7, Q-162), E-XR-RUNTIME on standard error.
+// Q-162
 #[cfg(feature = "xr")]
-fn add_plugins(app: &mut App, group: bevy::app::PluginGroupBuilder, m: &ArgMatches) {
+fn add_plugins(
+    app: &mut App,
+    group: bevy::app::PluginGroupBuilder,
+    m: &ArgMatches,
+) -> Result<(), ExitCode> {
     if m.get_flag("xr") {
         let xr = ftgsxr_xr::XrPlugin {
             passthrough: false,
@@ -216,15 +226,25 @@ fn add_plugins(app: &mut App, group: bevy::app::PluginGroupBuilder, m: &ArgMatch
             sort: ftgsxr_app::SortMode::PerView,
         };
         app.add_plugins(ftgsxr_xr::add_xr(group, xr));
+        if let Some(e) = ftgsxr_xr::runtime_unavailable(app) {
+            eprintln!("ftgsxr: {}: {}", e.code(), e.user_text());
+            return Err(ExitCode::from(2));
+        }
     } else {
         app.add_plugins(group);
     }
+    Ok(())
 }
 
 /// `DefaultPlugins` (no `--xr` without the feature).
 #[cfg(not(feature = "xr"))]
-fn add_plugins(app: &mut App, group: bevy::app::PluginGroupBuilder, _: &ArgMatches) {
+fn add_plugins(
+    app: &mut App,
+    group: bevy::app::PluginGroupBuilder,
+    _: &ArgMatches,
+) -> Result<(), ExitCode> {
     app.add_plugins(group);
+    Ok(())
 }
 
 /// The process's code for the app's exit.

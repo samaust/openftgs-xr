@@ -85,3 +85,30 @@ fn a_missing_model_exits_2_before_any_window() {
     // Before the log too: no log file was made.
     assert!(!home.join("cache/openftgs-xr/logs").exists());
 }
+
+/// `xr` lane (§1.7, Q-162): `play --xr` on a desktop whose loader finds no runtime
+/// (`XR_RUNTIME_JSON` naming a missing file) exits 2 with E-XR-RUNTIME on standard error.
+/// The window's event loop opens before the XR instance is known (Q-220), so the test
+/// keeps the session's `DISPLAY` or `WAYLAND_DISPLAY`.
+#[cfg(feature = "xr")]
+#[test]
+#[ignore = "xr"]
+fn xr_play_without_a_runtime_exits_2_with_e_xr_runtime() {
+    let home = scratch("xr-no-runtime");
+    let o = Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
+        .args(["play", "--xr"])
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("XR_RUNTIME_JSON", home.join("no-such-runtime.json"))
+        .output()
+        .expect("the binary runs");
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(
+        err.lines()
+            .any(|l| l.starts_with("ftgsxr: E-XR-RUNTIME: No OpenXR runtime")),
+        "{err}"
+    );
+}
