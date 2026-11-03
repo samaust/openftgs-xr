@@ -13,6 +13,7 @@ use ftgsxr_io::ModelRef;
 use ftgsxr_render::{QualityTier, SplatPlugin};
 
 use crate::audio::AudioPlugin;
+use crate::desktop_input::DesktopInputPlugin;
 use crate::governor::GovernorPlugin;
 use crate::library::LibraryPlugin;
 use crate::manipulate::ManipulatePlugin;
@@ -62,6 +63,8 @@ impl Plugin for AppPlugin {
         app.add_plugins(RigPlugin);
         // Q-149: the kira adapter unless `AudioOutputRes` exists already.
         app.add_plugins(AudioPlugin);
+        // Appendix D.1 (#284); `persist`'s plugin (#285) goes before it.
+        app.add_plugins(DesktopInputPlugin);
         // E16 (#288).
         app.add_plugins(GovernorPlugin);
     }
