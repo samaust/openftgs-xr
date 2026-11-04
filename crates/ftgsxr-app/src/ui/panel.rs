@@ -626,4 +626,31 @@ mod tests {
         assert_eq!(world.resource::<UiState>().page, None);
         assert_eq!(world.resource::<UiState>().tab, Tab::Scene);
     }
+
+    /// The main panel's Environment tab has §1.8's Recenter (Q-T452.2): a click writes
+    /// `Intent::Recenter` with the click's sound.
+    #[test]
+    fn panel_environment_tab_recenters() {
+        let mut world = panel_world(Tab::Environment);
+        let ctx = egui::Context::default();
+        panel_frame(&ctx, &mut world, Vec::new());
+        let (texts, _) = panel_frame(&ctx, &mut world, Vec::new());
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == "Recenter")
+            .map(|(_, p)| *p + egui::vec2(4.0, 4.0))
+            .unwrap_or_else(|| panic!("Recenter is drawn: {texts:?}"));
+        let mut out = Vec::new();
+        for select in [vec![], vec![true], vec![false]] {
+            let at = Vec2::new(at.x, at.y);
+            let events = pointer_events(Some(at), Some(at), &select, 0.0);
+            out.extend(panel_frame(&ctx, &mut world, events).1);
+        }
+        assert!(
+            out.iter()
+                .any(|o| matches!(o, Out::Intent(Intent::Recenter))),
+            "a recenter"
+        );
+        assert!(out.iter().any(|o| matches!(o, Out::Cue(UiCue::Click))));
+    }
 }
