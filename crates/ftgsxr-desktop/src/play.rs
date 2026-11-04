@@ -224,7 +224,7 @@ fn add_plugins(
     if m.get_flag("xr") {
         let xr = ftgsxr_xr::XrPlugin {
             passthrough: false,
-            hands: false,
+            hands: true,
             sort: ftgsxr_app::SortMode::PerView,
         };
         app.add_plugins(ftgsxr_xr::add_xr(group, xr));
