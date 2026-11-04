@@ -250,8 +250,9 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
                     Tab::Scene => scene_tab(world, ui, out, hv),
                     Tab::Playback => playback_tab(world, ui, out, hv),
                     Tab::Display => display_tab(world, ui, out, hv),
-                    // Q-161, §1.1: no passthrough control on the desktop (absent, not
-                    // disabled); `persist` adds the background and the grid.
+                    // §1.1, §1.7 Panels, §1.15 E-XR-UNSUPPORTED: no passthrough control on
+                    // the desktop (absent, not disabled); `persist` adds the background
+                    // and the grid.
                     Tab::Environment => {}
                     Tab::Settings => {
                         ui.label("Settings (§1.11)");
