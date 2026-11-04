@@ -19,24 +19,31 @@ use winit::platform::wayland::EventLoopBuilderExtWayland;
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::window::{Window, WindowId};
 
+/// A window asked for: its title and physical size, and the channel that gets it.
+struct WindowRequest {
+    title: String,
+    size: (u32, u32),
+    reply: Sender<Arc<Window>>,
+}
+
 /// A request to the event loop's thread, answered on its channel.
 enum Request {
-    /// A window of this title and physical size.
-    Window(String, (u32, u32), Sender<Arc<Window>>),
+    /// A window.
+    Window(WindowRequest),
     /// The loop's events pumped once, waiting at most this long for one.
     Pump(Duration, Sender<()>),
 }
 
 /// The window asked for, made in the next callback that has the active event loop.
 #[derive(Default)]
-struct Pending(Option<(String, (u32, u32), Sender<Arc<Window>>)>);
+struct Pending(Option<WindowRequest>);
 
 impl Pending {
     fn open(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some((title, (width, height), reply)) = self.0.take() {
+        if let Some(WindowRequest { title, size, reply }) = self.0.take() {
             let attributes = Window::default_attributes()
                 .with_title(title)
-                .with_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                .with_inner_size(winit::dpi::PhysicalSize::new(size.0, size.1));
             let window = event_loop.create_window(attributes).expect("a window");
             let _ = reply.send(Arc::new(window));
         }
@@ -64,8 +71,8 @@ fn serve(requests: Receiver<Request>) {
     let mut pending = Pending::default();
     for request in requests {
         match request {
-            Request::Window(title, size, reply) => {
-                pending.0 = Some((title, size, reply));
+            Request::Window(window) => {
+                pending.0 = Some(window);
                 for _ in 0..100 {
                     let _ =
                         event_loop.pump_app_events(Some(Duration::from_millis(10)), &mut pending);
@@ -101,7 +108,11 @@ fn requests() -> &'static Sender<Request> {
 pub(crate) fn window(title: &str, size: (u32, u32)) -> Arc<Window> {
     let (reply, answer) = channel();
     requests()
-        .send(Request::Window(title.to_owned(), size, reply))
+        .send(Request::Window(WindowRequest {
+            title: title.to_owned(),
+            size,
+            reply,
+        }))
         .expect("the event loop's thread runs");
     answer.recv().expect("winit made the window")
 }
