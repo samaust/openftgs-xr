@@ -321,7 +321,10 @@ pub(crate) fn run(
     match test.phase.clone() {
         Phase::Done => {}
         Phase::Trackers => {
-            if let Some(t) = trackers.as_deref() {
+            // The window opens at the first frame with a locate: the trackers can exist
+            // some frames before the session runs and `locate_hands` with it.
+            let locating = located.as_deref().is_some_and(|l| l.attempts > 0);
+            if let Some(t) = trackers.as_deref().filter(|_| locating) {
                 let missing: Vec<&str> = ["left", "right"]
                     .into_iter()
                     .zip(&t.trackers)
@@ -344,8 +347,13 @@ pub(crate) fn run(
             } else if test.started.elapsed() > TRACKERS_TIMEOUT {
                 let flow = permission.map(|p| p.flow);
                 let detail = format!(
-                    "joints: no hand trackers after {} s (hands wanted {}, \
-                     XR_EXT_hand_tracking {}, permission {})",
+                    "joints: {} after {} s (hands wanted {}, XR_EXT_hand_tracking {}, \
+                     permission {})",
+                    if trackers.is_some() {
+                        "no locate yet"
+                    } else {
+                        "no hand trackers"
+                    },
                     TRACKERS_TIMEOUT.as_secs(),
                     wanted.is_some_and(|w| w.0),
                     exts.is_some_and(|e| e.ext_hand_tracking),
