@@ -17,7 +17,7 @@ How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's po
 A relative scene path names a file under `AppPaths.scenes`; `Intent::Ui(SaveScene)` saves under a UTC date-and-time name, and `Intent::Ui(LoadScene)` is `ui`'s to confirm first (Q-200). Model locations are relative to `AppPaths.models` by Q-3's rule.
 
 - **`scene_from_world`** writes the instances, their poses, visibility (`ShowOnUpload` before the upload, Q-202), modes and time mappings, the clock with its range (Q-204), the rig's pose, the desktop camera and its bookmarks; lighting and the anchor are written null until M-5 and M-9 hold them (Q-206).
-- **`LoadScene`** resolves the locations, unloads every instance and calls `apply_scene`. A local model whose file is missing becomes a library entry in its missing state with an E-SCENE-MISSING toast (Q-203). A hidden instance stays hidden through its upload (Q-202). The clock's T and range are applied one frame after every instance appeared (Q-204).
+- **`LoadScene`** resolves the locations, unloads every instance and calls `apply_scene`. A local model whose file is missing becomes a library entry in its missing state with an E-SCENE-MISSING toast (Q-203). A model whose source now holds a file of another identity is refused once read and becomes a missing entry too, with E-SCENE-MISSING, and the clock does not wait for it (Q-245). A hidden instance stays hidden through its upload (Q-202). The clock's T and range are applied one frame after every instance appeared (Q-204).
 
 ## Failures
 
@@ -25,4 +25,4 @@ A crate-private `PersistFailure { code, text }` carries the settings' and the po
 
 ## Q-n rows relied on
 
-Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.
+Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-245; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.

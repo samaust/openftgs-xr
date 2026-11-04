@@ -25,7 +25,7 @@ use bevy::window::FileDragAndDrop;
 use ftgsxr_core::{ModelInfo, ModelKind, ModelTime, memory_estimate};
 use ftgsxr_io::{
     DocumentProvider, Entry, EntryKind, HttpClient, IoError, ModelBytes, ModelRef, ModelSource,
-    Progress, Revalidation, SourceSpec, TlsRoots, Url, open_ref, open_source,
+    Progress, Revalidation, SourceSpec, TlsRoots, Url, classify_name, open_ref, open_source,
 };
 use ftgsxr_render::{SplatAsset, SplatEvent, SplatGpu, SplatLoad, SplatModel, SplatTierState};
 
@@ -180,6 +180,7 @@ impl Plugin for LibraryPlugin {
             .add_message::<LibraryFailure>()
             .add_message::<FileDragAndDrop>()
             .add_message::<LocateEntry>()
+            .add_message::<SceneLoad>()
             .init_resource::<Pending>()
             .add_observer(on_model)
             .add_observer(on_splat_event)
@@ -188,6 +189,7 @@ impl Plugin for LibraryPlugin {
                 (
                     read_drops,
                     run_locates,
+                    run_scene_loads,
                     run_commands.in_set(LibraryCommands),
                     poll_tasks,
                     poll_picks,
@@ -267,6 +269,110 @@ fn run_locates(
     }
 }
 
+/// A scene model's load (§1.5 Scene files): its reference, the identity the scene names
+/// and the missing entry the model takes when the file read is of another identity.
+/// `persist` writes it (Q-245).
+// Q-245
+#[derive(Message, Clone, Debug)]
+pub(crate) struct SceneLoad {
+    pub(crate) reference: ModelRef,
+    pub(crate) identity: String,
+    pub(crate) model: MissingModel,
+}
+
+/// A scene's model that no source offers, as its missing entry shows it (Q-203): its
+/// source's kind and location as the scene writes them, its name and soundtrack.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MissingModel {
+    pub(crate) kind: String,
+    pub(crate) location: String,
+    pub(crate) name: String,
+    pub(crate) audio: Option<String>,
+}
+
+/// The identity a load must have (Q-225): a "Locate…" pick's, or a scene model's with
+/// the entry it is listed as when the file is of another identity (Q-245).
+#[derive(Clone, Debug)]
+struct Expected {
+    identity: String,
+    scene: Option<MissingModel>,
+}
+
+/// Each scene model's `LoadRef`, with the identity it must have (Q-245).
+fn run_scene_loads(
+    mut reader: MessageReader<SceneLoad>,
+    mut pending: ResMut<Pending>,
+    mut commands: MessageWriter<LibraryCommand>,
+) {
+    for l in reader.read() {
+        pending.locating.push((
+            l.reference.clone(),
+            Expected {
+                identity: l.identity.clone(),
+                scene: Some(l.model.clone()),
+            },
+        ));
+        commands.write(LibraryCommand::LoadRef(l.reference.clone()));
+    }
+}
+
+/// The source a missing model is listed under (Q-203): the first of its kind whose
+/// location is a prefix of the model's, else source 0; `None` without sources.
+fn missing_source(library: &Library, m: &MissingModel) -> Option<usize> {
+    if library.sources.is_empty() {
+        return None;
+    }
+    let under = |s: &SourceSpec| match m.kind.as_str() {
+        "dir" => Path::new(&m.location).starts_with(&s.location),
+        _ => m.location.starts_with(&s.location),
+    };
+    Some(
+        library
+            .sources
+            .iter()
+            .position(|(s, _)| s.kind == m.kind && under(s))
+            .unwrap_or(0),
+    )
+}
+
+/// Lists the scene's model `m` of `identity` as missing (§1.5 Scene files, Q-203): the
+/// entry already at its location, when `m`'s file is gone, else an entry of its own.
+pub(crate) fn list_missing(library: &mut Library, m: &MissingModel, identity: &str, gone: bool) {
+    let Some(source) = missing_source(library, m) else {
+        return;
+    };
+    let mut found = false;
+    if gone {
+        for e in &mut library.entries {
+            if e.source == source && e.entry.location == m.location {
+                e.state = EntryState::Missing;
+                found = true;
+            }
+        }
+    }
+    if found {
+        return;
+    }
+    library.entries.push(LibraryEntry {
+        source,
+        entry: Entry {
+            name: m.name.clone(),
+            kind: classify_name(&m.location),
+            location: m.location.clone(),
+            size: None,
+            mtime: None,
+            sha256: None,
+            thumbnail: None,
+            audio: m.audio.clone(),
+            scene: None,
+        },
+        info: None,
+        identity: Some(identity.to_owned()),
+        thumbnail: None,
+        state: EntryState::Missing,
+    });
+}
+
 /// Whether an instance not yet uploaded shows when its upload completes (Q-148): true
 /// from the library, false for a scene's hidden instance (`persist`); removed at the
 /// upload.
@@ -300,8 +406,8 @@ struct LoadCtx {
     /// The rows the load keeps, when fewer than the file's are asked for.
     reduce_to: Option<usize>,
     audio: Option<ModelRef>,
-    /// The identity a "Locate…" pick must have (Q-225).
-    locate: Option<String>,
+    /// The identity a "Locate…" pick or a scene's model must have (Q-225, Q-245).
+    locate: Option<Expected>,
     /// The kind the first load was read as, for a reload (Q-238).
     kind_hint: Option<ModelKind>,
     /// The ETag the `HEAD` before the load's download gave, kept with the information the
@@ -367,8 +473,9 @@ struct Pending {
     deferred: Vec<LibraryCommand>,
     /// The open "Locate…" pickers, each with the identity it looks for (Q-225).
     locates: Vec<(String, PickHandle)>,
-    /// Picked files answering a "Locate…", until their `LoadRef` is read.
-    locating: Vec<(ModelRef, String)>,
+    /// Picked files answering a "Locate…" and scene models (Q-245), until their
+    /// `LoadRef` is read.
+    locating: Vec<(ModelRef, Expected)>,
 }
 
 impl Pending {
@@ -799,7 +906,13 @@ fn fresh_entries(
         if entry.kind == EntryKind::Other {
             continue;
         }
-        let kept = old.iter().find(|o| o.entry.location == entry.location);
+        // Q-245: a missing scene model's entry beside the present file's is not that file's.
+        let at = |o: &&LibraryEntry| o.entry.location == entry.location;
+        let kept = old
+            .iter()
+            .filter(at)
+            .find(|o| o.state != EntryState::Missing)
+            .or_else(|| old.iter().find(at));
         // Q-231: the listing's mtime too, where it gives one.
         let same = kept.is_some_and(|o| {
             o.entry.size == entry.size
@@ -838,10 +951,13 @@ fn fresh_entries(
             state,
         });
     }
-    // Q-203: a scene's missing model stays listed until it is located.
+    // Q-203: a scene's missing model stays listed until it is located; Q-245: also
+    // beside the entry of another model at its location.
     for o in old {
         if o.state == EntryState::Missing
-            && !fresh.iter().any(|f| f.entry.location == o.entry.location)
+            && !fresh
+                .iter()
+                .any(|f| f.entry.location == o.entry.location && f.state == EntryState::Missing)
         {
             fresh.push(o.clone());
         }
@@ -1251,7 +1367,13 @@ fn poll_picks(
             Poll::Ready(Err(e)) => warn!("the picker failed: {e}"),
             Poll::Ready(Ok(refs)) => {
                 if let Some(r) = refs.into_iter().next() {
-                    pending.locating.push((r.clone(), id));
+                    pending.locating.push((
+                        r.clone(),
+                        Expected {
+                            identity: id,
+                            scene: None,
+                        },
+                    ));
                     commands.write(LibraryCommand::LoadRef(r));
                 }
             }
@@ -1384,15 +1506,24 @@ fn on_model(
         return;
     }
     // Q-225: a located file of another identity is refused; a load of a missing
-    // entry's identity, located or not, clears the entry.
+    // entry's identity, located or not, clears the entry. Q-245: so is a scene model's,
+    // which is listed as missing.
     if let Some(want) = &ctx.locate
-        && *want != identity
+        && want.identity != identity
     {
-        let missing = library
+        let listed = library
             .entries
             .iter()
-            .find(|e| e.state == EntryState::Missing && e.identity.as_ref() == Some(want))
-            .map_or_else(|| ctx.name.clone(), |e| stem(Path::new(&e.entry.name)));
+            .find(|e| e.state == EntryState::Missing && e.identity.as_ref() == Some(&want.identity))
+            .map(|e| stem(Path::new(&e.entry.name)));
+        let missing = match (listed, &want.scene) {
+            (Some(name), _) => name,
+            (None, Some(m)) => {
+                list_missing(&mut library, m, &want.identity, false);
+                m.name.clone()
+            }
+            (None, None) => ctx.name.clone(),
+        };
         failures.write(LibraryFailure::new(
             ctx.name.clone(),
             Some(ctx.source.clone()),
