@@ -25,7 +25,7 @@ use crate::display::DisplayPlugin;
 use crate::error::{XrError, log_runtime, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
-use crate::tracking::TrackingPlugin;
+use crate::tracking::{FREQUENCY_HINT_EXT, TrackingPlugin};
 
 /// The XR build's plugin (§2.1, §1.8): bevy\_mod\_openxr's session, init, events,
 /// render, camera and action plugins with the player's app info, Appendix E.1's
@@ -62,18 +62,30 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.meta_recommended_layer_resolution = true;
     // The Touch Plus profile (Appendix D.2) through `tracking`'s bindings.
     raw.meta_touch_controller_plus = true;
-    // §1.8 Hands (PRD #452, #454); the frequency hint is `tracking`'s (Q-275).
+    // §1.8 Hands (PRD #452, #454); the frequency hint by name, since no pinned openxr
+    // release carries it (Q-275).
     raw.ext_hand_tracking = hands;
     raw.fb_hand_tracking_aim = hands;
     raw.meta_simultaneous_hands_and_controllers = hands;
+    if hands {
+        raw.other.push(FREQUENCY_HINT_EXT.to_vec());
+    }
     exts
 }
 
-/// The hand extensions of §1.8 absent from `enabled`, in Appendix E.1's order.
+/// The hand extensions of §1.8 absent from `enabled`, in Appendix E.1's order (the
+/// frequency hint by name, Q-275).
 fn missing_hand_extensions(enabled: &openxr::ExtensionSet) -> Vec<&'static str> {
     [
         ("XR_EXT_hand_tracking", enabled.ext_hand_tracking),
         ("XR_FB_hand_tracking_aim", enabled.fb_hand_tracking_aim),
+        (
+            "XR_META_hand_tracking_frequency_hint",
+            enabled
+                .other
+                .iter()
+                .any(|n| n.as_slice() == FREQUENCY_HINT_EXT),
+        ),
         (
             "XR_META_simultaneous_hands_and_controllers",
             enabled.meta_simultaneous_hands_and_controllers,
@@ -180,6 +192,7 @@ pub fn runtime_unavailable(app: &App) -> Option<XrError> {
 /// (`tracking` locates the hands itself, PRD #452; the overlay is not the player's).
 struct XrTail {
     sort: SortMode,
+    hands: bool,
 }
 
 impl Plugin for XrTail {
@@ -198,7 +211,7 @@ impl Plugin for XrTail {
             OxrSpacePatchingPlugin,
         ))
         // After the binding plugin, whose schedule `tracking` adds to.
-        .add_plugins(TrackingPlugin)
+        .add_plugins(TrackingPlugin { hands: self.hands })
         // After the events plugin and `session`, whose re-creation it uses (Q-124).
         .add_plugins(DisplayPlugin);
     }
@@ -212,7 +225,10 @@ pub fn add_xr(plugins: impl PluginGroup, xr: XrPlugin) -> PluginGroupBuilder {
         .build()
         .disable::<RenderPlugin>()
         .add_before::<RenderPlugin>(xr)
-        .add(XrTail { sort: xr.sort })
+        .add(XrTail {
+            sort: xr.sort,
+            hands: xr.hands,
+        })
 }
 
 #[cfg(test)]
@@ -228,11 +244,17 @@ mod tests {
         assert!(with.ext_hand_tracking);
         assert!(with.fb_hand_tracking_aim);
         assert!(with.meta_simultaneous_hands_and_controllers);
+        // Q-275: the frequency hint by name.
+        assert_eq!(
+            with.other,
+            vec![b"XR_META_hand_tracking_frequency_hint\0".to_vec()]
+        );
         let without = extensions(false);
         let without = without.raw();
         assert!(!without.ext_hand_tracking);
         assert!(!without.fb_hand_tracking_aim);
         assert!(!without.meta_simultaneous_hands_and_controllers);
+        assert!(without.other.is_empty());
         // The rest of the set is the same either way.
         assert!(with.fb_passthrough && without.fb_passthrough);
     }
@@ -246,9 +268,14 @@ mod tests {
             vec![
                 "XR_EXT_hand_tracking",
                 "XR_FB_hand_tracking_aim",
+                "XR_META_hand_tracking_frequency_hint",
                 "XR_META_simultaneous_hands_and_controllers",
             ]
         );
+        enabled
+            .raw_mut()
+            .other
+            .push(b"XR_META_hand_tracking_frequency_hint\0".to_vec());
         enabled.raw_mut().ext_hand_tracking = true;
         enabled.raw_mut().meta_simultaneous_hands_and_controllers = true;
         assert_eq!(
