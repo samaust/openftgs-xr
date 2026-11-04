@@ -164,7 +164,10 @@ fn u33_validate_takes_a_checkpoints_manifest_path() {
     // gives the directory's information, the size being `params.safetensors`' (Q-76).
     let dir = fixture("checkpoint/tiny");
     let by_manifest = cmd_validate(&[dir.join("manifest.json")]).expect("the manifest path");
-    assert_eq!(by_manifest, cmd_validate(&[dir.clone()]).unwrap());
+    assert_eq!(
+        by_manifest,
+        cmd_validate(std::slice::from_ref(&dir)).unwrap()
+    );
     assert_eq!(
         by_manifest[0].file_bytes,
         fs::metadata(dir.join("params.safetensors")).unwrap().len()
