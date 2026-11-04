@@ -66,7 +66,7 @@ pub(super) fn add(app: &mut App) {
 
 fn on_event(event: On<SplatEvent>, mut test: ResMut<Dv2>) {
     match event.event() {
-        SplatEvent::Uploaded { entity, bytes } if *entity == test.model => {
+        SplatEvent::Uploaded { entity, bytes, .. } if *entity == test.model => {
             info!("dv2: probe uploaded, {bytes} bytes");
             test.uploaded = true;
         }

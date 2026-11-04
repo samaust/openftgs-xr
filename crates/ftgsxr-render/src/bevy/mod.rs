@@ -158,12 +158,16 @@ pub struct SplatShLimit(pub Option<u8>);
 /// What the plugin reports (§1.5, §1.13), triggered for observers.
 #[derive(Event, Clone, Debug, PartialEq)]
 pub enum SplatEvent {
-    /// The instance's model finished uploading; `bytes` are its static GPU bytes (Q-23).
+    /// The instance's model finished uploading; `bytes` are its static GPU bytes (Q-23),
+    /// `sh_degree` the degree it was uploaded at (Q-241).
     Uploaded {
         /// The `SplatModel` (or `SplatLoad`) entity.
         entity: Entity,
         /// The model's static GPU bytes.
         bytes: u64,
+        /// L′, the SH degree the model was uploaded at (§1.2 load option 1): min(its
+        /// file's degree, `SplatTierState::sh_cap` at its load) (Q-241).
+        sh_degree: u8,
     },
     /// The instance's load or upload failed; `error` is `<code>: <user text>` (§1.15).
     Failed {
