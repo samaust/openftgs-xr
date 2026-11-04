@@ -56,9 +56,10 @@ jobs:
           command -v cargo-deny || cargo install --locked cargo-deny
           cargo deny check
 
-      # One run of the lane. The tests use bevy's multi-threaded task pools only, as
-      # the desktop and Quest builds do (§2.4 Threads; ftgsxr-app's dev-dependency,
-      # #291). There is no single-threaded run, by the owner's decision (2026-11-03,
+      # One run of the lane, on bevy's `multi_threaded` task pools only, as the desktop
+      # and Quest builds use them (§2.4 Threads): the workspace build unifies the
+      # feature into every crate's tests, and ftgsxr-app's dev-dependency sets it too
+      # (#291). There is no single-threaded run, by the owner's decision (2026-11-03,
       # #412): it saves CI time and disk.
       - name: cpu lane
         run: cargo test --workspace
