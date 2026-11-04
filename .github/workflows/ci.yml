@@ -25,6 +25,16 @@ jobs:
           rustup component add rustfmt clippy
           rustc --version
 
+      # The Linux build's system libraries, before any step compiles dependencies: on
+      # Linux, ftgsxr-app's audio (kira → cpal → alsa → alsa-sys; Q-187) links ALSA,
+      # which alsa-sys's build script finds with pkg-config (#410). No other build
+      # script links a system library beyond libc's libdl; the window system and
+      # Vulkan libraries are loaded at run time.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev
+
       - uses: actions/cache@v4
         with:
           path: |
