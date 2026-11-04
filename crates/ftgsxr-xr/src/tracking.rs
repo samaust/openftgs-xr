@@ -5,11 +5,19 @@
 //! paths of both hands (a set cannot grow after attach); the three profiles' suggested
 //! bindings, once per instance; the set attached at each session and synced each frame;
 //! the aim and grip poses as action spaces, located each frame by the crate's spatial
-//! plugin. Thresholds, haptic pulses and intents are `xr_input`'s, hands are M-5's.
+//! plugin. Thresholds, haptic pulses and intents are `xr_input`'s. Hands (M-5, #459):
+//! the permission, one tracker per side, one raw locate per hand per frame with the aim
+//! state chained (`hands`), the per-side ownership rule, the frequency hint, and the hand
+//! capsules and controller meshes in VR mode (`meshes`).
+
+mod hands;
+mod meshes;
+
+pub(crate) use hands::FREQUENCY_HINT_EXT;
 
 use std::borrow::Cow;
 
-use bevy::app::{App, Plugin, PostUpdate, PreUpdate};
+use bevy::app::{App, Plugin, PostUpdate, PreUpdate, Update};
 use bevy::ecs::message::MessageWriter;
 use bevy::math::{Isometry3d, Vec2};
 use bevy::prelude::{
@@ -26,7 +34,7 @@ use bevy_mod_openxr::resources::{OxrInstance, OxrViews};
 use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrTrackingRoot};
 use bevy_mod_xr::spaces::XrSpaceLocationFlags;
-use ftgsxr_app::SettingsRes;
+use ftgsxr_app::{HudData, SettingsRes};
 use ftgsxr_core::{Pose, Quat, Vec3};
 use openxr::{Action, ActionSet, Haptic, Path, Posef};
 
@@ -122,17 +130,25 @@ const HANDS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
 
 /// Which hand and which pose an action space entity locates.
 #[derive(Component, Clone, Copy)]
-struct HandSpace {
+pub(crate) struct HandSpace {
     hand: usize,
     aim: bool,
 }
 
-/// `tracking`'s systems; `plugin` adds it after the crate's action plugins.
-pub(crate) struct TrackingPlugin;
+/// `tracking`'s systems; `plugin` adds it after the crate's action plugins. `hands` is
+/// `XrPlugin.hands`.
+pub(crate) struct TrackingPlugin {
+    pub(crate) hands: bool,
+}
 
 impl Plugin for TrackingPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<XrHands>();
+        app.init_resource::<XrHands>()
+            .insert_resource(hands::HandsWanted(self.hands))
+            .init_resource::<hands::HandsPermission>()
+            .init_resource::<hands::LocatedHands>()
+            .init_resource::<hands::Ownership>()
+            .add_message::<hands::AskHandsAgain>();
         let Some(instance) = app.world().get_resource::<OxrInstance>() else {
             return;
         };
@@ -145,8 +161,15 @@ impl Plugin for TrackingPlugin {
         };
         app.insert_resource(actions)
             .add_systems(OxrSendActionBindings, suggest_bindings)
-            .add_systems(XrSessionCreated, (attach, spawn_spaces))
-            .add_systems(XrPreDestroySession, despawn_spaces)
+            .add_systems(
+                XrSessionCreated,
+                (attach, spawn_spaces, hands::on_session_created),
+            )
+            .add_systems(
+                XrPreDestroySession,
+                (despawn_spaces, hands::destroy_trackers, clear_hud),
+            )
+            .add_systems(Update, hands::poll_permission)
             .add_systems(
                 PreUpdate,
                 sync.before(OxrActionSetSyncSet)
@@ -154,8 +177,15 @@ impl Plugin for TrackingPlugin {
             )
             .add_systems(
                 PostUpdate,
-                // The spaces are located in PreUpdate's `XrSpaceSyncSet`; the views here.
-                write_hands
+                // The spaces are located in PreUpdate's `XrSpaceSyncSet`; the views and the
+                // hands here.
+                (
+                    hands::locate_hands,
+                    write_hands,
+                    hands::send_hint,
+                    meshes::draw_hands_and_controllers,
+                )
+                    .chain()
                     .after(locate_views)
                     .run_if(openxr_session_running),
             );
@@ -312,7 +342,32 @@ fn to_pose(root: &Transform, t: &Transform) -> Pose {
     }
 }
 
-/// Writes `XrHands` from the synced actions, the located spaces and the views.
+/// A located hand's poses taken into the tracking root's frame, as the controllers'.
+fn rooted(root: &Transform, mut hand: TrackedHand) -> TrackedHand {
+    let t = |p: &Pose| Transform {
+        translation: bevy::math::Vec3::new(p.translation.x, p.translation.y, p.translation.z),
+        rotation: bevy::math::Quat::from_xyzw(
+            p.rotation.x,
+            p.rotation.y,
+            p.rotation.z,
+            p.rotation.w,
+        ),
+        scale: bevy::math::Vec3::ONE,
+    };
+    hand.aim = to_pose(root, &t(&hand.aim));
+    hand.grip = to_pose(root, &t(&hand.grip));
+    hand
+}
+
+/// `HudData`'s head field is false without a session (Q-274).
+fn clear_hud(hud: Option<ResMut<HudData>>) {
+    if let Some(mut hud) = hud {
+        hud.head_tracked = false;
+    }
+}
+
+/// Writes `XrHands` from the synced actions, the located spaces, the located hands and
+/// the views: per side, the device that owns it (Q-262); and `HudData`'s head field.
 #[allow(clippy::too_many_arguments)]
 fn write_hands(
     session: Res<OxrSession>,
@@ -321,6 +376,9 @@ fn write_hands(
     root: Query<&Transform, With<XrTrackingRoot>>,
     views: Option<Res<OxrViews>>,
     settings: Option<Res<SettingsRes>>,
+    located: Res<hands::LocatedHands>,
+    mut ownership: ResMut<hands::Ownership>,
+    hud: Option<ResMut<HudData>>,
     mut hands: ResMut<XrHands>,
 ) {
     let root = root.iter().next().copied().unwrap_or_default();
@@ -375,10 +433,21 @@ fn write_hands(
             tracked,
         });
     }
+    // Q-262: per side, the controller or the hand that owns it.
+    let ownership = &mut *ownership;
+    for (h, slot) in out.iter_mut().enumerate() {
+        let hand = located.raw[h].map(|raw| rooted(&root, hands::hand_state(&raw)));
+        let owner = ownership.sides[h].update(*slot, hand);
+        ownership.owners[h] = owner;
+        if owner == Some(HandSource::Hand) {
+            *slot = hand;
+        }
+    }
     let [left, right] = out;
     hands.left = left;
     hands.right = right;
     // The head: the views' midpoint and mean orientation.
+    let views_located = views.as_ref().is_some_and(|v| v.len() >= 2);
     if let Some(views) = views.filter(|v| v.len() >= 2) {
         let p = |v: &openxr::View| {
             let o = v.pose.orientation;
@@ -399,6 +468,11 @@ fn write_hands(
             scale: bevy::math::Vec3::ONE,
         };
         hands.head = to_pose(&root, &mid);
+    }
+    // Q-274, Q-289: the head counts as tracked once the views are located (the crate keeps the
+    // last views and drops the view-state flags, source-log 273).
+    if let Some(mut hud) = hud {
+        hud.head_tracked = views_located;
     }
     hands.left_handed = settings.is_some_and(|s| s.0.locomotion.left_handed);
 }

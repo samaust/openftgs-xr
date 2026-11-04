@@ -321,6 +321,7 @@ impl Plugin for PersistPlugin {
             hooks.add(Tab::Display, panels::display_section);
             hooks.add(Tab::Environment, panels::environment_section);
             hooks.add(Tab::Settings, panels::settings_tables);
+            hooks.add(Tab::Comfort, panels::comfort_section);
         }
         app.add_message::<PersistCommand>()
             .add_message::<TierPick>()
@@ -1194,19 +1195,33 @@ fn sync_settings(
 }
 
 /// `[general] ui_scale` on the screen's egui context (§1.7 DPI-aware UI, §1.11): egui's
-/// zoom factor, over the window's own scale factor.
+/// zoom factor, over the window's own scale factor; on the panels' contexts (§1.8 User
+/// interface) the panel zoom times the scale (Q-267).
+// Q-267
+#[allow(clippy::type_complexity)]
 fn ui_scale_follows_settings(
     settings: Res<SettingsRes>,
-    mut contexts: Query<&mut bevy_egui::EguiContext, With<bevy_egui::PrimaryEguiContext>>,
+    mut contexts: Query<
+        (&mut bevy_egui::EguiContext, Has<crate::ui::PanelCamera>),
+        Or<(
+            With<bevy_egui::PrimaryEguiContext>,
+            With<crate::ui::PanelCamera>,
+        )>,
+    >,
 ) {
     let scale = settings.0.general.ui_scale;
     if !(scale.is_finite() && scale > 0.0) {
         return;
     }
-    for mut c in &mut contexts {
+    for (mut c, panel) in &mut contexts {
+        let zoom = if panel {
+            crate::ui::panel_zoom(scale)
+        } else {
+            scale
+        };
         let ctx = c.get_mut();
-        if ctx.zoom_factor() != scale {
-            ctx.set_zoom_factor(scale);
+        if ctx.zoom_factor() != zoom {
+            ctx.set_zoom_factor(zoom);
         }
     }
 }
