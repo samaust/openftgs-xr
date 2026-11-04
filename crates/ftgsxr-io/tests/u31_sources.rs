@@ -25,7 +25,7 @@ use ftgsxr_testkit::{
 };
 use url::Url;
 
-/// This test binary's per-process folder under Cargo's temporary directory (#94, Q-62).
+/// This test file's per-process folder under Cargo's temporary directory (#94, #413, Q-62).
 fn binary_dir() -> PathBuf {
     process_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem())
 }

@@ -11,7 +11,7 @@ use ftgsxr_core::{CoreError, RenderImage, read_renders, read_request, write_rend
 use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 use serde_json::Value;
 
-/// A scratch directory of this test binary's own, emptied first.
+/// A scratch directory of this test file's own, emptied first.
 /// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test file and process (#94, #413, Q-62).
 fn scratch(name: &str) -> PathBuf {
     scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)

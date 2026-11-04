@@ -11,7 +11,7 @@ use ftgsxr_core::formats::{encode_exchange, write_exchange};
 use ftgsxr_core::{Model, ModelKind, RenderConventions, TimeSpan, read_exchange, sha256};
 use ftgsxr_testkit::{random_model, scratch_dir};
 
-/// A scratch directory of this test binary's own, emptied first (Q-62).
+/// A scratch directory of this test file's own, emptied first (Q-62).
 fn scratch(name: &str) -> PathBuf {
     scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
