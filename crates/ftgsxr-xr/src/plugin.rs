@@ -26,6 +26,7 @@ use crate::error::{XrError, log_runtime, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
 use crate::tracking::{FREQUENCY_HINT_EXT, TrackingPlugin};
+use crate::xr_input::XrInputPlugin;
 
 /// The XR build's plugin (§2.1, §1.8): bevy\_mod\_openxr's session, init, events,
 /// render, camera and action plugins with the player's app info, Appendix E.1's
@@ -212,6 +213,8 @@ impl Plugin for XrTail {
         ))
         // After the binding plugin, whose schedule `tracking` adds to.
         .add_plugins(TrackingPlugin { hands: self.hands })
+        // Appendix D.2 and D.3 to intents (#460), after `tracking`'s `XrHands`.
+        .add_plugins(XrInputPlugin)
         // After the events plugin and `session`, whose re-creation it uses (Q-124).
         .add_plugins(DisplayPlugin);
     }

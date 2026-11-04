@@ -105,7 +105,7 @@ impl Default for XrHands {
 
 /// The set `player` and its actions (Appendix D.2), once per instance.
 #[derive(Resource)]
-struct Actions {
+pub(crate) struct Actions {
     set: ActionSet,
     select: Action<f32>,
     grab: Action<f32>,
@@ -119,8 +119,7 @@ struct Actions {
     mode: Action<bool>,
     aim: Action<Posef>,
     grip: Action<Posef>,
-    // Created now since the set cannot grow after attach; pulses are M-5's.
-    #[allow(dead_code)]
+    /// `xr_input`'s pulses (D-44) go through it.
     haptic: Action<Haptic>,
     hands: [Path; 2],
     suggested: bool,
@@ -189,6 +188,27 @@ impl Plugin for TrackingPlugin {
                     .after(locate_views)
                     .run_if(openxr_session_running),
             );
+    }
+}
+
+impl Actions {
+    /// One amplitude pulse on a hand's `haptic` output (§1.8 Controllers, D-44), side 0
+    /// the left hand, at the runtime's frequency.
+    pub(crate) fn pulse(
+        &self,
+        session: &OxrSession,
+        side: usize,
+        duration_ms: u32,
+        amplitude: f32,
+    ) -> openxr::Result<()> {
+        let event = openxr::HapticVibration::new()
+            .duration(openxr::Duration::from_nanos(
+                i64::from(duration_ms) * 1_000_000,
+            ))
+            .frequency(openxr::FREQUENCY_UNSPECIFIED)
+            .amplitude(amplitude);
+        self.haptic
+            .apply_feedback(session, self.hands[side], &event)
     }
 }
 
