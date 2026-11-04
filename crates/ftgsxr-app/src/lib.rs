@@ -78,6 +78,10 @@ pub use plugin::{AppPlugin, init_desktop_log};
 // Q-168: what `ftgsxr-desktop` names for `AppPlugin.initial` and `LinuxPlatform`, for
 // callers that depend on the app alone (§2.1's `ftgsxr-desktop`), as Q-129.
 pub use ftgsxr_io::{DocumentProvider, ModelRef, Url};
+// Q-296: what `ftgsxr_quest::QuestPlatform`'s `DocumentProvider` returns and classifies
+// with, and the source Dv-10's runner adds (§2.1's `ftgsxr-quest` depends on the app
+// alone), as Q-168.
+pub use ftgsxr_io::{Entry, EntryKind, SourceSpec, classify_name};
 // Q-89: the tier `cmd_render` (and M-4's `AppPlugin`) takes, for callers that depend on
 // the app alone (§2.1's `ftgsxr-desktop`).
 pub use ftgsxr_render::QualityTier;

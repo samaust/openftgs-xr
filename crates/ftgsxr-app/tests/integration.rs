@@ -61,6 +61,7 @@ mod manipulate_content_group;
 mod manipulate_headset_fit;
 mod manipulate_intents;
 mod overlay_toggles;
+mod panel_mode;
 mod r15_render;
 mod r17_governor;
 mod rig_camera_controller;

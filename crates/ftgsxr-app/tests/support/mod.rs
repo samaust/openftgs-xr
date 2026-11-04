@@ -196,6 +196,13 @@ impl TestApp {
         Self::build(name, setup, |_| {}, true)
     }
 
+    /// The `gpu_` variant with `before` run on the `App` before `AppPlugin` is added (to
+    /// insert the `Headset` marker, say).
+    #[track_caller]
+    pub fn gpu_before(name: &str, before: impl FnOnce(&mut App)) -> TestApp {
+        Self::build(name, Setup::default(), before, true)
+    }
+
     /// The CPU app on a given platform (I-19).
     #[track_caller]
     pub fn on(name: &str, platform: Arc<StubPlatform>) -> TestApp {
