@@ -171,6 +171,10 @@ pub trait AudioOutput: Send + Sync {
     fn position(&self, sink: SinkId) -> Option<f64>;
     /// Sets a sink's gain.
     fn set_gain(&self, sink: SinkId, gain: f32);
+    /// Sets a sink's stereo pan: −1 the left speaker only, 0 centered, 1 the right
+    /// speaker only (§1.10's spatial soundtracks on the headset).
+    // Q-268
+    fn set_panning(&self, sink: SinkId, pan: f32);
 }
 
 /// The audio output in use. `AppPlugin` inserts the kira adapter unless the resource
@@ -187,6 +191,8 @@ pub struct StubSink {
     pub playing: bool,
     /// Its gain.
     pub gain: f32,
+    /// Its pan in \[−1, 1\], as last set; 0 until then (Q-268).
+    pub pan: f32,
     /// The size of the file it was made from.
     pub bytes: usize,
 }
@@ -303,6 +309,7 @@ impl AudioOutput for StubAudioOutput {
                 position: 0.0,
                 playing: false,
                 gain: 0.0,
+                pan: 0.0,
                 bytes: bytes.len(),
             },
         );
@@ -338,6 +345,12 @@ impl AudioOutput for StubAudioOutput {
     fn set_gain(&self, sink: SinkId, gain: f32) {
         if let Some(s) = self.lock().sinks.get_mut(&sink) {
             s.gain = gain;
+        }
+    }
+
+    fn set_panning(&self, sink: SinkId, pan: f32) {
+        if let Some(s) = self.lock().sinks.get_mut(&sink) {
+            s.pan = pan;
         }
     }
 }
@@ -942,6 +955,16 @@ mod kira_output {
         fn set_gain(&self, sink: SinkId, gain: f32) {
             self.with_sink(sink, |h| h.set_volume(decibels(gain), NOW));
         }
+
+        // Q-268: kira's `Panning` runs from −1 (left) to 1 (right), as the port's pan.
+        fn set_panning(&self, sink: SinkId, pan: f32) {
+            let pan = if pan.is_finite() {
+                pan.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            self.with_sink(sink, |h| h.set_panning(pan, NOW));
+        }
     }
 }
 
@@ -965,6 +988,20 @@ mod tests {
         draw_once(&mut world, scene_section);
         draw_once(&mut world, settings_section);
         assert!(!world.resource_ref::<AudioState>().is_changed());
+    }
+
+    /// The stub records each sink's pan, centered until set (Q-268).
+    // Q-268
+    #[test]
+    fn stub_audio_output_records_the_pan() {
+        let out = StubAudioOutput::new();
+        let (sink, _) = out.add_soundtrack(b"x").unwrap();
+        assert_eq!(out.sinks()[&sink].pan, 0.0);
+        out.set_panning(sink, -0.25);
+        assert_eq!(out.sinks()[&sink].pan, -0.25);
+        // An unknown sink is ignored.
+        out.set_panning(SinkId(sink.0 + 1), 1.0);
+        assert_eq!(out.sinks().len(), 1);
     }
 
     #[test]
