@@ -281,19 +281,48 @@ pub(crate) fn denied_text(p: Permission, feature: &str) -> String {
     )
 }
 
+/// What became of the simultaneous hands-and-controllers resume at the trackers'
+/// creation (spike check 5, which Dv-8's runner reports, #463).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+pub(crate) enum Resume {
+    /// XR\_META\_simultaneous\_hands\_and\_controllers is not enabled.
+    Absent,
+    /// The call succeeded.
+    Resumed,
+    /// The call failed with this result.
+    Failed(sys::Result),
+}
+
 /// The session's hand trackers, the hint's loaded function and the last hint sent.
 #[derive(Resource)]
 pub(crate) struct HandTrackers {
     pub(crate) trackers: [Option<openxr::HandTracker>; 2],
-    aim: bool,
+    /// Whether the aim state is chained (XR\_FB\_hand\_tracking\_aim enabled).
+    pub(crate) aim: bool,
     set_hint: Option<SetHintFn>,
-    sent: Option<FrequencyHint>,
+    pub(crate) sent: Option<FrequencyHint>,
+    #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+    pub(crate) resume: Resume,
+}
+
+impl HandTrackers {
+    /// Whether the frequency hint's function is loaded (Q-275).
+    #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+    pub(crate) fn has_hint(&self) -> bool {
+        self.set_hint.is_some()
+    }
 }
 
 /// This frame's locates, in the primary reference space (`None`: inactive or no tracker).
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub(crate) struct LocatedHands {
     pub(crate) raw: [Option<RawHand>; 2],
+    /// This frame's locate calls and the failed ones among them (Dv-8's runner, #463).
+    #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+    pub(crate) attempts: u32,
+    #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+    pub(crate) failures: u32,
     warned: bool,
 }
 
@@ -402,6 +431,7 @@ fn create_trackers(session: &OxrSession, exts: &OxrEnabledExtensions) -> HandTra
     }
     info!("hand trackers created");
     let instance = session.instance();
+    let mut resume_result = Resume::Absent;
     if let Some(fp) = instance
         .exts()
         .meta_simultaneous_hands_and_controllers
@@ -419,8 +449,10 @@ fn create_trackers(session: &OxrSession, exts: &OxrEnabledExtensions) -> HandTra
         };
         if r.into_raw() < 0 {
             warn!("simultaneous hands and controllers could not be resumed: {r}");
+            resume_result = Resume::Failed(r);
         } else {
             info!("simultaneous hands and controllers resumed");
+            resume_result = Resume::Resumed;
         }
     }
     let set_hint = if exts
@@ -439,6 +471,7 @@ fn create_trackers(session: &OxrSession, exts: &OxrEnabledExtensions) -> HandTra
         aim: exts.fb_hand_tracking_aim,
         set_hint,
         sent: None,
+        resume: resume_result,
     }
 }
 
@@ -542,6 +575,8 @@ pub(crate) fn locate_hands(
     mut located: ResMut<LocatedHands>,
 ) {
     located.raw = [None, None];
+    located.attempts = 0;
+    located.failures = 0;
     let (Some(trackers), Some(space), Some(frame)) = (trackers, space, frame) else {
         return;
     };
@@ -555,16 +590,19 @@ pub(crate) fn locate_hands(
     let base = space.0.0.as_raw_openxr_space();
     for (h, tracker) in trackers.trackers.iter().enumerate() {
         let Some(tracker) = tracker else { continue };
+        located.attempts += 1;
         match locate_raw(session.instance(), tracker, base, time, trackers.aim) {
             Ok(raw) => {
                 located.raw[h] = raw;
                 located.warned = false;
             }
-            Err(e) if !located.warned => {
-                located.warned = true;
-                warn!("the hand joints could not be located: {e}");
+            Err(e) => {
+                located.failures += 1;
+                if !located.warned {
+                    located.warned = true;
+                    warn!("the hand joints could not be located: {e}");
+                }
             }
-            Err(_) => {}
         }
     }
 }

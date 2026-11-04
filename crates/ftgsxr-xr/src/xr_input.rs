@@ -11,6 +11,9 @@ mod system;
 #[allow(unused_imports)] // `panel` (a later ticket) inserts it on both quads (Q-265).
 pub(crate) use system::PanelQuad;
 pub(crate) use system::XrInputPlugin;
+// Dv-8's pulse clause (#463).
+#[cfg(any(test, target_os = "android"))]
+pub(crate) use system::GRAB;
 
 use bevy::ecs::entity::Entity;
 use bevy::math::{Vec2, Vec3};
