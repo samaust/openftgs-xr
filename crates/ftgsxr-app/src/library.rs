@@ -301,7 +301,7 @@ struct LoadCtx {
     /// The kind the first load was read as, for a reload (Q-238).
     kind_hint: Option<ModelKind>,
     /// The ETag the `HEAD` before the load's download gave, kept with the information the
-    /// load fills (Q-242); `None` for a reload.
+    /// load, or a reload of it (Q-238), fills (Q-242).
     etag: Option<String>,
 }
 
@@ -313,9 +313,10 @@ type InfoTask = Task<(Result<ModelInfo, IoError>, Option<String>)>;
 /// A refresh's ETag check of an entry (Q-230).
 type RevalidationTask = Task<Result<Revalidation, IoError>>;
 /// What a fetch brings back (`Fetched`).
-struct Got {
+struct FetchedModel {
     /// The model's reference.
     reference: ModelRef,
+    /// Its bytes.
     bytes: ModelBytes,
     /// Its soundtrack (§1.10).
     audio: Option<ModelRef>,
@@ -325,7 +326,7 @@ struct Got {
     etag: Option<String>,
 }
 
-type Fetched = Result<Got, IoError>;
+type Fetched = Result<FetchedModel, IoError>;
 
 /// A fetch on the I/O task pool.
 struct Fetch {
@@ -637,7 +638,7 @@ fn run_commands(
                     };
                     let scene = scene_url
                         .and_then(|url| download_with(http, &url, "the scene manifest", &c));
-                    Ok(Got {
+                    Ok(FetchedModel {
                         reference: r,
                         bytes,
                         audio,
@@ -734,7 +735,7 @@ fn fetch_ref(
         let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
         let audio = if with_sidecar { sidecar(&at) } else { None };
         // Q-229: a reference names no index entry, so no index `scene`.
-        Ok(Got {
+        Ok(FetchedModel {
             reference: at,
             bytes,
             audio,
@@ -1116,7 +1117,7 @@ fn poll_tasks(
         };
         // Q-238: a reload goes on its own instance, whose state stays.
         let result = match (f.target, result) {
-            (Some(target), Ok(Got { bytes, .. })) => {
+            (Some(target), Ok(FetchedModel { bytes, .. })) => {
                 if let Ok(mut e) = commands.get_entity(target) {
                     e.insert(SplatLoad {
                         bytes,
@@ -1129,7 +1130,7 @@ fn poll_tasks(
             (_, result) => result,
         };
         match result {
-            Ok(Got {
+            Ok(FetchedModel {
                 reference,
                 bytes,
                 audio,
@@ -1269,16 +1270,13 @@ fn reload_on_tier_switch(
     let provider: Option<Arc<dyn DocumentProvider>> = platform.0.document_provider();
     for (entity, ctx, visibility, show) in &instances {
         let shown = show.map_or(*visibility != Visibility::Hidden, |s| s.0);
-        // Q-242: a reload re-reads the file it fetched and sends no `HEAD`, so it carries no
-        // ETag for information it might fill.
-        let ctx = &LoadCtx {
-            etag: None,
-            ..ctx.clone()
-        };
+        // Q-242: the instance keeps its load's ETag, older than any file the reload re-reads,
+        // so information the reload fills pairs it with the same or newer contents, which
+        // the next refresh catches.
         commands
             .entity(entity)
             .remove::<SplatModel>()
-            .insert((ShowOnUpload(shown), ctx.clone()));
+            .insert(ShowOnUpload(shown));
         if let Some(e) = entry_of(&mut library, &pending, ctx) {
             e.state = EntryState::Loading;
         }

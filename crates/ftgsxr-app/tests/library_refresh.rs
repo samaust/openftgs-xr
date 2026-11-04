@@ -14,7 +14,7 @@ mod support;
 
 use bevy::asset::Handle;
 use ftgsxr_app::{Library, LibraryCommand, LibraryEntry, LoadedModel};
-use ftgsxr_io::{EntryKind, ListingFlavor, SourceSpec};
+use ftgsxr_io::{EntryKind, ListingFlavor, ModelRef, SourceSpec, Url};
 use ftgsxr_testkit::{RequestRecord, ServedListing, fixtures_dir};
 use std::sync::{Arc, Mutex};
 use support::TestApp;
@@ -56,11 +56,7 @@ fn probe_has_info(lib: &Library) -> bool {
 
 /// The requests for the probe from record `from` on.
 fn probe_requests(t: &TestApp, from: usize) -> Vec<RequestRecord> {
-    t.server.requests()[from..]
-        .iter()
-        .filter(|r| r.path == PROBE)
-        .cloned()
-        .collect()
+    requests_for(t, PROBE, from)
 }
 
 /// Advances frames until `done` holds of the app and its server, at most `max` frames.
@@ -291,8 +287,8 @@ fn a_load_whose_head_fails_still_loads_and_keeps_no_etag() {
     // The PLY's download is cached first by a reference load (no library `HEAD`), so that a
     // load from the index, whose digest matches the cached record, sends no `GET` (Q-43)
     // and succeeds while every request for the file answers 500.
-    let url = ftgsxr_io::Url::parse(&t.server.url_of("listing/models/snapshot.ply")).unwrap();
-    t.command(LibraryCommand::LoadRef(ftgsxr_io::ModelRef::Http(url)));
+    let url = Url::parse(&t.server.url_of("listing/models/snapshot.ply")).unwrap();
+    t.command(LibraryCommand::LoadRef(ModelRef::Http(url)));
     assert!(
         t.until(3000, |app| app
             .world_mut()
