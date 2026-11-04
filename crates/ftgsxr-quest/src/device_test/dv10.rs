@@ -45,6 +45,8 @@ enum Phase {
 struct Dv10 {
     started: Instant,
     tree: Option<String>,
+    /// Whether the runner added the tree as a source (and so removes it).
+    added: bool,
     listed: String,
     phase: Phase,
 }
@@ -55,6 +57,7 @@ pub(super) fn add(app: &mut App) {
     app.insert_resource(Dv10 {
         started: Instant::now(),
         tree,
+        added: false,
         listed: String::new(),
         phase: Phase::Listing,
     })
@@ -84,10 +87,17 @@ fn run(
     match std::mem::replace(&mut test.phase, Phase::Done) {
         Phase::Done => {}
         Phase::Listing => {
+            // The models directory's source, wherever the settings put it (#285).
+            let models = platform.0.paths().models.to_string_lossy().into_owned();
             let names: Vec<&str> = library
                 .entries
                 .iter()
-                .filter(|e| e.source == 0)
+                .filter(|e| {
+                    library
+                        .sources
+                        .get(e.source)
+                        .is_some_and(|(spec, _)| spec.kind == "dir" && spec.location == models)
+                })
                 .map(|e| e.entry.name.as_str())
                 .collect();
             if !names.contains(&PROBE) {
@@ -106,12 +116,21 @@ fn run(
             };
             match tree_clause(&platform, &tree) {
                 Ok(location) => {
-                    commands.write(LibraryCommand::AddSource(SourceSpec {
-                        kind: "documents".into(),
-                        location: tree,
-                        name: "dv10".into(),
-                        flavor: None,
-                    }));
+                    // The owner's grant may have persisted the tree as a source already
+                    // (Q-273); only a missing one is added, and removed at the end.
+                    test.added = !library
+                        .sources
+                        .iter()
+                        .any(|(spec, _)| spec.location == tree);
+                    if test.added {
+                        commands.write(LibraryCommand::AddSource(SourceSpec {
+                            kind: "documents".into(),
+                            location: tree.clone(),
+                            name: "dv10".into(),
+                            flavor: None,
+                        }));
+                    }
+                    test.tree = Some(tree);
                     test.started = Instant::now();
                     test.phase = Phase::Added { location };
                 }
@@ -144,13 +163,25 @@ fn run(
                 Some(EntryState::Loaded(_)) => {
                     let detail = format!("{}; tree's model {location} loaded", test.listed);
                     verdict(NAME, true, &detail);
+                    remove_added(&test, &library, &mut commands);
                 }
                 Some(EntryState::Failed(e)) => {
                     verdict(NAME, false, &format!("{}; {location}: {e}", test.listed));
+                    remove_added(&test, &library, &mut commands);
                 }
                 _ => test.phase = Phase::Loading { location },
             }
         }
+    }
+}
+
+/// Removes the tree's source when the runner added it, so the settings keep none of it.
+fn remove_added(test: &Dv10, library: &Library, commands: &mut MessageWriter<LibraryCommand>) {
+    let Some(tree) = test.tree.as_deref().filter(|_| test.added) else {
+        return;
+    };
+    if let Some(i) = library.sources.iter().position(|(s, _)| s.location == tree) {
+        commands.write(LibraryCommand::RemoveSource(i));
     }
 }
 
