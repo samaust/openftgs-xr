@@ -9,13 +9,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Tests that check the layer another way, as `<crate>/tests/<file>:<function>`: the
-/// binary's runs, R-15's and `bench`'s, read the layer's own log file (Q-105).
+/// binary's runs, R-15's, `bench`'s and `play`'s, read the layer's own log file (Q-105).
 // Q-113
 const EXEMPT: &[&str] = &[
     "ftgsxr-desktop/tests/cli.rs:gpu_r15_render_writes_the_renders_file",
     "ftgsxr-desktop/tests/cli.rs:gpu_bench_reports_a_regression_against_a_baseline_20_percent_better",
     "ftgsxr-desktop/tests/cli.rs:gpu_bench_compares_neither_b6_nor_another_profile",
     "ftgsxr-desktop/tests/cli.rs:gpu_b9_bench_writes_the_desktops_startup_figures",
+    "ftgsxr-desktop/tests/play_exit.rs:gpu_play_interrupted_in_its_first_frames_exits_by_its_code",
 ];
 
 /// This file, whose sample text declares unguarded tests.
