@@ -15,6 +15,21 @@ jobs:
   cpu:
     name: cpu lane
     runs-on: ubuntu-latest
+    # The build settings of every cargo command here that builds the workspace (clippy,
+    # the `cpu lane` and the skeleton test), sized for the standard runner's 14 GB disk:
+    # no debug info and no incremental data (the first two variables below), and
+    # packages that aren't workspace members (bevy, wgpu, naga and the rest) at
+    # opt-level 1, through `--config "$CARGO_DEPS_OPT_LEVEL"` (cargo's `"*"` package
+    # override) on each of those commands. The workspace's own crates keep the dev
+    # profile's opt-level. The `target` directory is not cached: every push builds from
+    # scratch, with no stale build on the disk and no multi-gigabyte restore. Owner's
+    # decisions of 2026-11-03 (#411); they live here, not in `Cargo.toml` or
+    # `.cargo/config.toml`, so local builds and `[profile.dv]` (Q-140) are unchanged.
+    # Don't revert them without asking.
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_DEPS_OPT_LEVEL: 'profile.dev.package."*".opt-level=1'
     steps:
       - uses: actions/checkout@v4
 
@@ -41,15 +56,19 @@ jobs:
             ~/.cargo/bin/cargo-deny
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: cargo-deps-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-deps-${{ runner.os }}-
+
+      # The disk budget as a number in every run's log, before the first cargo command
+      # and after the `cpu lane` step (#411).
+      - name: free disk before the build
+        run: df -h "$GITHUB_WORKSPACE"
 
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo --config "$CARGO_DEPS_OPT_LEVEL" clippy --workspace --all-targets -- -D warnings
 
       - name: cargo deny check
         run: |
@@ -62,10 +81,17 @@ jobs:
       # (#291). There is no single-threaded run, by the owner's decision (2026-11-03,
       # #412): it saves CI time and disk.
       - name: cpu lane
-        run: cargo test --workspace
+        id: cpu-lane
+        run: cargo --config "$CARGO_DEPS_OPT_LEVEL" test --workspace
+
+      - name: free disk after the cpu lane
+        if: ${{ !cancelled() && steps.cpu-lane.outcome != 'skipped' }}
+        run: |
+          df -h "$GITHUB_WORKSPACE"
+          du -sh target || true
 
       - name: skeleton test
-        run: cargo test -p ftgsxr-core skeleton
+        run: cargo --config "$CARGO_DEPS_OPT_LEVEL" test -p ftgsxr-core skeleton
 
   # The Quest build (§2.7): `cargo ndk` with the Android NDK, without Gradle, to catch
   # compile breaks of `ftgsxr-quest` (#224). NDK 25.1.8937393 (§2.5), installed with the
