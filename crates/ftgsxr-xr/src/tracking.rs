@@ -13,8 +13,8 @@ use bevy::app::{App, Plugin, PostUpdate, PreUpdate};
 use bevy::ecs::message::MessageWriter;
 use bevy::math::{Isometry3d, Vec2};
 use bevy::prelude::{
-    Commands, Component, Entity, IntoScheduleConfigs, Query, Res, ResMut, Resource, Transform,
-    With, Without,
+    Commands, Component, Entity, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut,
+    Resource, Transform, TransformSystems, With, Without,
 };
 use bevy_mod_openxr::action_binding::{OxrSendActionBindings, OxrSuggestActionBinding};
 use bevy_mod_openxr::action_set_attaching::OxrAttachActionSet;
@@ -154,9 +154,11 @@ impl Plugin for TrackingPlugin {
             )
             .add_systems(
                 PostUpdate,
-                // The spaces are located in PreUpdate's `XrSpaceSyncSet`; the views here.
+                // The spaces are located in PreUpdate's `XrSpaceSyncSet`; the views here;
+                // the root's global transform (the rig binding, #461) after propagation.
                 write_hands
                     .after(locate_views)
+                    .after(TransformSystems::Propagate)
                     .run_if(openxr_session_running),
             );
     }
@@ -301,13 +303,14 @@ fn despawn_spaces(spaces: Query<Entity, With<HandSpace>>, mut commands: Commands
     }
 }
 
-/// A located transform in the tracking root's frame (the eyes' frame: stage space, the
-/// LOCAL fallback's lift included; Q-128).
-fn to_pose(root: &Transform, t: &Transform) -> Pose {
-    let m = root.mul_transform(*t);
+/// A located transform through the tracking root's global transform (the eyes' frame:
+/// stage space, the rig the root is bound to and the LOCAL fallback's lift included;
+/// Q-128, #461).
+fn to_pose(root: &GlobalTransform, t: &Transform) -> Pose {
+    let (_, r, p) = root.mul_transform(*t).to_scale_rotation_translation();
     Pose {
-        translation: Vec3::new(m.translation.x, m.translation.y, m.translation.z),
-        rotation: Quat::from_xyzw(m.rotation.x, m.rotation.y, m.rotation.z, m.rotation.w),
+        translation: Vec3::new(p.x, p.y, p.z),
+        rotation: Quat::from_xyzw(r.x, r.y, r.z, r.w),
         scale: 1.0,
     }
 }
@@ -318,7 +321,7 @@ fn write_hands(
     session: Res<OxrSession>,
     actions: Res<Actions>,
     spaces: Query<(&HandSpace, &Transform, &XrSpaceLocationFlags), Without<XrTrackingRoot>>,
-    root: Query<&Transform, With<XrTrackingRoot>>,
+    root: Query<&GlobalTransform, With<XrTrackingRoot>>,
     views: Option<Res<OxrViews>>,
     settings: Option<Res<SettingsRes>>,
     mut hands: ResMut<XrHands>,

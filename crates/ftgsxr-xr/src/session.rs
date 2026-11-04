@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The session, reference spaces and eye cameras (§1.8 Session and spaces, D-24, §1.15
-//! E-XR-RUNTIME and E-XR-LOST, §2.4 Frame loop hooks). The rig binding is M-4's
-//! (`PlayerRig`, `ContentGroup`).
+//! The session, reference spaces, eye cameras and the rig binding (§1.8 Session and
+//! spaces, Locomotion, D-24, §1.14 Frames, §1.15 E-XR-RUNTIME and E-XR-LOST, §2.4 Frame
+//! loop hooks).
 //!
 //! bevy\_mod\_openxr runs the session itself (its init, session and render plugins,
 //! composed by `plugin`); this module replaces the crate's reference-space plugin with
-//! D-24's chain, makes each eye camera the crate spawns a `SplatCamera`, and restarts the
-//! session after a loss.
+//! D-24's chain, makes each eye camera the crate spawns a `SplatCamera`, restarts the
+//! session after a loss, makes the tracking root a child of `PlayerRig` (so E12's rig
+//! motion carries the eyes and the hands), and re-places the content group on a
+//! reference-space change. `comfort` adds the vignette, the teleport fade and the height
+//! offset.
 
 use bevy::app::{App, Last, Plugin, PreUpdate, Update};
 use bevy::camera::{Camera, Projection};
@@ -16,8 +19,8 @@ use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::log::{info, warn};
 use bevy::math::{Isometry3d, Mat4};
 use bevy::prelude::{
-    Added, Commands, Entity, IntoScheduleConfigs, Query, Res, ResMut, Resource, Transform, With,
-    Without,
+    Added, ChildOf, Commands, Entity, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut,
+    Resource, Transform, With, Without,
 };
 use bevy::render::RenderApp;
 use bevy::render::extract_resource::ExtractResourcePlugin;
@@ -30,13 +33,16 @@ use bevy_mod_xr::session::{
     XrState, XrStateChanged, XrTrackingRoot,
 };
 use bevy_mod_xr::spaces::{XrPrimaryReferenceSpace, XrReferenceSpace};
-use ftgsxr_app::SettingsRes;
+use ftgsxr_app::{ContentGroup, PlayerRig, SettingsRes};
+use ftgsxr_core::{Pose, Quat, Vec3};
 use ftgsxr_io::Settings;
 use ftgsxr_render::{OutputSpace, SortMode, SplatCamera};
 use openxr::ReferenceSpaceType;
 
 use crate::XrError;
 use crate::error::{log_error, log_runtime, log_warning};
+
+mod comfort;
 
 /// The height D-24's LOCAL fallback assumes the floor below the session's origin, metres.
 const LOCAL_FLOOR_DROP_M: f32 = 1.5;
@@ -67,15 +73,16 @@ impl Plugin for SessionPlugin {
             // Q-121
             warn!("XR sort mode SharedCenter: accepted, but draws nothing until M-8 (R-9)");
         }
-        app.insert_resource(self.config)
+        app.add_plugins(comfort::ComfortPlugin)
+            .insert_resource(self.config)
             .init_resource::<Recreate>()
             .add_plugins(ExtractResourcePlugin::<XrPrimaryReferenceSpace>::default())
-            .add_systems(XrSessionCreated, set_primary_reference_space)
+            .add_systems(XrSessionCreated, (set_primary_reference_space, bind_rig))
             .add_systems(XrPreDestroySession, cleanup)
             .add_systems(PreUpdate, set_eye_near)
             .add_systems(Last, make_splat_eyes)
             .add_systems(Update, (watch_states, recreate_after_destroy).chain())
-            .add_oxr_event_handler(log_reference_space_change);
+            .add_oxr_event_handler(replace_on_reference_space_change);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(XrPreDestroySession, cleanup);
         }
@@ -150,14 +157,41 @@ fn set_primary_reference_space(
         t.translation.y = lift;
     }
     match session.create_reference_space(ty, Isometry3d::IDENTITY) {
-        Ok(space) => commands.insert_resource(XrPrimaryReferenceSpace(space)),
+        Ok(space) => {
+            commands.insert_resource(XrPrimaryReferenceSpace(space));
+            commands.insert_resource(PrimarySpaceType(ty));
+        }
         Err(e) => log_error(&XrError::Runtime(format!("reference space {ty:?}: {e}"))),
+    }
+}
+
+/// The rig binding (§1.8 Locomotion, E12, §2.1 `PlayerRig`): at each session creation the
+/// tracking root becomes a child of `PlayerRig`, so moving the rig moves the eyes, whose
+/// views the crate composes with the root's global transform, and the hands. The crate
+/// spawns the root once and keeps it across sessions, so the binding holds through a
+/// re-creation (spike check 4, Q-124); it is checked again at each session. Without a
+/// rig (an app without `AppPlugin`) the root stays where it is.
+fn bind_rig(
+    roots: Query<(Entity, Option<&ChildOf>), With<XrTrackingRoot>>,
+    rigs: Query<Entity, With<PlayerRig>>,
+    mut commands: Commands,
+) {
+    let Some(rig) = rigs.iter().next() else {
+        info!("no PlayerRig: the tracking root stays unparented");
+        return;
+    };
+    for (root, parent) in &roots {
+        if parent.is_none_or(|p| p.parent() != rig) {
+            info!("the tracking root is bound to the PlayerRig");
+            commands.entity(root).insert(ChildOf(rig));
+        }
     }
 }
 
 /// Removes the primary reference space before the session is destroyed, in both worlds.
 fn cleanup(query: Query<Entity, With<XrReferenceSpace>>, mut commands: Commands) {
     commands.remove_resource::<XrPrimaryReferenceSpace>();
+    commands.remove_resource::<PrimarySpaceType>();
     for e in &query {
         commands.entity(e).remove::<XrReferenceSpace>();
     }
@@ -260,14 +294,103 @@ fn recreate_after_destroy(
     }
 }
 
-/// Logs a reference-space change (the user recentered); the content group's re-placement
-/// is M-4's.
-fn log_reference_space_change(event: OxrEventIn) {
-    if let openxr::Event::ReferenceSpaceChangePending(e) = *event {
-        info!(
-            "reference space {:?} changed (re-placing the content group is M-4's)",
-            e.reference_space_type()
-        );
+/// The reference space `set_primary_reference_space` created, for the change events.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrimarySpaceType(pub(crate) ReferenceSpaceType);
+
+/// A reference-space change of the primary space (the user recentered, §1.8 Session and
+/// spaces) re-places the content group with the event's pose when it is valid
+/// (`replaced_group`); the rig is untouched. A change of another space type is only
+/// logged; the change is applied when the event arrives, not at its `changeTime`.
+// Q-264, Q-T461.1
+fn replace_on_reference_space_change(
+    event: OxrEventIn,
+    primary: Option<Res<PrimarySpaceType>>,
+    root: Query<&GlobalTransform, With<XrTrackingRoot>>,
+    mut groups: Query<&mut Transform, (With<ContentGroup>, Without<XrTrackingRoot>)>,
+) {
+    let openxr::Event::ReferenceSpaceChangePending(e) = *event else {
+        return;
+    };
+    let ty = e.reference_space_type();
+    if primary.is_none_or(|p| p.0 != ty) {
+        info!("reference space {ty:?} changed: not the primary space");
+        return;
+    }
+    let change = e.pose_valid().then(|| {
+        let p = e.pose_in_previous_space();
+        Pose {
+            translation: Vec3::new(p.position.x, p.position.y, p.position.z),
+            rotation: Quat::from_xyzw(
+                p.orientation.x,
+                p.orientation.y,
+                p.orientation.z,
+                p.orientation.w,
+            ),
+            scale: 1.0,
+        }
+    });
+    info!(
+        "reference space {ty:?} changed (pose valid {}): re-placing the content group",
+        change.is_some()
+    );
+    let root = root.iter().next().map_or(Pose::IDENTITY, |g| {
+        let (_, r, t) = g.to_scale_rotation_translation();
+        Pose {
+            translation: t,
+            rotation: r,
+            scale: 1.0,
+        }
+    });
+    for mut t in &mut groups {
+        let group = Pose {
+            translation: t.translation,
+            rotation: t.rotation,
+            scale: t.scale.x,
+        };
+        let new = replaced_group(group, root, change);
+        if new != group {
+            t.translation = new.translation;
+            t.rotation = new.rotation;
+        }
+    }
+}
+
+/// The twist about stage +y of `q` (swing-twist decomposition): the yaw-only rotation
+/// Q-254 projects onto; the identity for a 180° swing, which has no twist. `anchors`
+/// (M-6) projects a located anchor the same way.
+// Q-254
+pub(crate) fn twist_about_y(q: Quat) -> Quat {
+    let twist = Quat::from_xyzw(0.0, q.y, 0.0, q.w);
+    if twist.length() < 1e-6 {
+        Quat::IDENTITY
+    } else {
+        twist.normalize()
+    }
+}
+
+/// The content group's new pose after a reference-space change (§1.8 Session and
+/// spaces): with `change` the event's valid pose T of the new space's origin in the
+/// previous space (T461.4), projected on its yaw (Q-254), and `root` the tracking root's
+/// world pose M (the rig and the LOCAL lift), the group becomes M T⁻¹ M⁻¹ composed with
+/// its old pose, so every instance keeps its place in the room; Q-264's T⁻¹ ∘ G when the
+/// root is the identity. `None` (an invalid pose) changes nothing.
+// Q-264, Q-T461.1
+pub(crate) fn replaced_group(group: Pose, root: Pose, change: Option<Pose>) -> Pose {
+    let Some(t) = change else {
+        return group;
+    };
+    let t = Pose {
+        translation: t.translation,
+        rotation: twist_about_y(t.rotation),
+        scale: 1.0,
+    };
+    let root = Pose { scale: 1.0, ..root };
+    let moved = group.then(&root.inverse()).then(&t.inverse()).then(&root);
+    Pose {
+        rotation: moved.rotation.normalize(),
+        scale: 1.0,
+        ..moved
     }
 }
 
@@ -277,6 +400,90 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// A rotation of `deg` degrees about stage +y.
+    fn yaw(deg: f32) -> ftgsxr_core::Quat {
+        ftgsxr_core::Quat::from_rotation_y(deg.to_radians())
+    }
+
+    fn pose(t: [f32; 3], q: ftgsxr_core::Quat) -> Pose {
+        Pose {
+            translation: ftgsxr_core::Vec3::from_array(t),
+            rotation: q,
+            scale: 1.0,
+        }
+    }
+
+    fn close(a: ftgsxr_core::Vec3, b: ftgsxr_core::Vec3) -> bool {
+        (a - b).length() <= 1e-5
+    }
+
+    // §1.8 Session and spaces, Q-264, Q-T461.1: with a valid pose T of the new space's
+    // origin in the previous space (T461.4), a point of an instance has, in the
+    // previous space, T applied to its coordinates in the new space: the instance keeps
+    // its place in the room. The tracking root (the rig and the LOCAL lift) maps the
+    // spaces into the engine's world.
+    #[test]
+    fn replaced_group_keeps_every_instance_at_its_room_position() {
+        let group = pose([0.5, 0.0, -1.0], yaw(20.0));
+        let instance = Pose {
+            translation: ftgsxr_core::Vec3::new(0.2, 0.8, -0.3),
+            rotation: ftgsxr_core::Quat::from_rotation_x(0.4) * yaw(-35.0),
+            scale: 0.7,
+        };
+        let root = pose([0.0, 1.5, 0.0], ftgsxr_core::Quat::IDENTITY)
+            .then(&pose([1.0, 0.0, 2.0], yaw(30.0)));
+        let change = pose([0.3, 0.05, -0.7], yaw(40.0));
+        let new_group = replaced_group(group, root, Some(change));
+        for x in [
+            ftgsxr_core::Vec3::ZERO,
+            ftgsxr_core::Vec3::new(1.0, -2.0, 0.5),
+            ftgsxr_core::Vec3::new(-0.3, 0.4, 3.0),
+        ] {
+            let before = root
+                .inverse()
+                .transform_point(group.transform_point(instance.transform_point(x)));
+            let after = root
+                .inverse()
+                .transform_point(new_group.transform_point(instance.transform_point(x)));
+            assert!(
+                close(change.transform_point(after), before),
+                "{x}: {after} in the new space, {before} in the previous one"
+            );
+        }
+        assert!((new_group.scale - 1.0).abs() <= 1e-6);
+    }
+
+    // Q-254, Q-264: the change's rotation is projected on its twist about +y, so the
+    // group stays yaw-only; a tilt changes nothing.
+    #[test]
+    fn replaced_group_takes_only_the_changes_yaw() {
+        let group = pose([0.5, 0.0, -1.0], yaw(20.0));
+        let root = pose([1.0, 0.0, 2.0], yaw(30.0));
+        let level = pose([0.3, 0.05, -0.7], yaw(40.0));
+        let tilted = pose(
+            [0.3, 0.05, -0.7],
+            yaw(40.0) * ftgsxr_core::Quat::from_rotation_x(3f32.to_radians()),
+        );
+        let a = replaced_group(group, root, Some(level));
+        let b = replaced_group(group, root, Some(tilted));
+        assert!(close(a.translation, b.translation));
+        for axis in [ftgsxr_core::Vec3::X, ftgsxr_core::Vec3::Z] {
+            assert!(close(a.rotation * axis, b.rotation * axis));
+        }
+        assert!(close(
+            b.rotation * ftgsxr_core::Vec3::Y,
+            ftgsxr_core::Vec3::Y
+        ));
+    }
+
+    // §1.8 Session and spaces, Q-264: an invalid pose changes nothing.
+    #[test]
+    fn replaced_group_without_a_valid_pose_is_unchanged() {
+        let group = pose([0.5, 0.0, -1.0], yaw(20.0));
+        let root = pose([1.0, 0.0, 2.0], yaw(30.0));
+        assert_eq!(replaced_group(group, root, None), group);
     }
 
     #[test]
