@@ -6,7 +6,7 @@ How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's po
 
 `SettingsRes` is the source of truth (PRD #275). When it is absent at `AppPlugin`'s build, the plugin reads it from `SettingsPath`, else the platform's config directory; a caller that inserts it first (the `play` binary, the Quest's harness) keeps its own (Q-163, Q-170). A private `PersistPlugin`, after `AudioPlugin`, maps its tables into the resources the features read whenever it changes (the audio gains, locomotion, the clock's speed and loop, the display settings of each new instance), and back when the user changes one; a change marks it dirty, and a dirty file is saved at most once a second, and always on `SaveSettings` and at exit (Q-207). The load's warnings and errors are E-SETTINGS failures; a file that cannot be read is set aside.
 
-`persist/panels.rs` draws the Display, Environment and Settings tabs' sections through `ui`'s `DockHooks`, each editing `SettingsRes` (Q-218); `[audio]` is `audio`'s section and the tier and governor `governor`'s.
+`persist/panels.rs` draws the Display, Environment and Settings tabs' sections through `ui`'s `DockHooks`, each editing `SettingsRes` (Q-218); `[audio]` is `audio`'s section and the governor `governor`'s. The tier pickers (the Display tab's showing the running tier, the Settings tab's the saved one) write `[general] tier` and a crate-private `TierPick` that `governor` switches to (Q-240).
 
 ## Poses
 

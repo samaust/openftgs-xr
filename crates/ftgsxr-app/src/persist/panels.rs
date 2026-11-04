@@ -10,8 +10,9 @@ use bevy::ecs::prelude::*;
 use bevy_egui::egui;
 use ftgsxr_core::LoopMode;
 use ftgsxr_io::Settings;
+use ftgsxr_render::SplatTierState;
 
-use super::SettingsRes;
+use super::{SettingsRes, pick_tier};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
 
@@ -100,14 +101,26 @@ fn background(ui: &mut egui::Ui, c: &mut [f32; 3], training: Option<[f32; 3]>) {
     }
 }
 
-/// The Display tab: the quality tier (switched live and saved, Q-240), the centers' radius
-/// and colormap (on every instance drawn with centers), new instances' mode, the
-/// overlays and the background.
+/// The Display tab: the quality tier, the centers' radius and colormap (on every instance
+/// drawn with centers), new instances' mode, the overlays and the background. The tier
+/// picker shows the running tier (`SplatTierState`), which a `--tier` override may make
+/// differ from the saved one; a pick switches to it and saves it (Q-240).
 // Q-240
 pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
     let training = training_background(world);
+    if let Some(running) = world
+        .get_resource::<SplatTierState>()
+        .map(|t| t.tier.name.clone())
+    {
+        let mut picked = running.clone();
+        choice(ui, "quality tier", &mut picked, TIERS);
+        // egui reports no change for the option already selected: picking the running
+        // tier changes nothing.
+        if picked != running {
+            pick_tier(world, picked);
+        }
+    }
     edit(world, ui, |s, ui| {
-        choice(ui, "quality tier", &mut s.general.tier, TIERS);
         let d = &mut s.display;
         choice(ui, "mode of new instances", &mut d.mode, RENDER_MODES);
         num(
@@ -141,14 +154,19 @@ fn loop_name(m: LoopMode) -> &'static str {
 }
 
 /// The Settings tab: §1.11's tables but `[audio]` (audio's section). `[general] tier`
-/// switches the running tier as well (Q-240); `log_level` takes effect at the next start
-/// (Q-218).
+/// shows the saved tier, and choosing another is a pick, which switches the running tier
+/// as well (Q-240); `log_level` takes effect at the next start (Q-218).
 // Q-218, Q-240
 pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
+    let mut picked = None;
     edit(world, ui, |s, ui| {
         egui::CollapsingHeader::new("[general]").show(ui, |ui| {
             let g = &mut s.general;
+            let saved = g.tier.clone();
             choice(ui, "tier", &mut g.tier, TIERS);
+            if g.tier != saved {
+                picked = Some(g.tier.clone());
+            }
             ui.checkbox(&mut g.governor, "governor");
             num(ui, "ui_scale", &mut g.ui_scale, 0.8, 1.5, 0.01);
             choice(ui, "log_level (next start)", &mut g.log_level, LOG_LEVELS);
@@ -313,6 +331,9 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
             });
         });
     });
+    if let Some(tier) = picked {
+        pick_tier(world, tier);
+    }
 }
 
 #[cfg(test)]
@@ -336,5 +357,137 @@ mod tests {
         }
         assert!(!world.resource_ref::<SettingsRes>().is_changed());
         assert_eq!(world.resource::<SettingsRes>().0, Settings::default());
+    }
+
+    /// Each text `shapes` draw, with its position.
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Pos2)> {
+        fn walk(s: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match s {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.pos)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        out
+    }
+
+    /// The Display tab under `--tier quest-high` with `desktop` saved (Q-240).
+    fn overridden() -> World {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.insert_resource(SplatTierState::of(&ftgsxr_render::QualityTier::quest_high()));
+        world.init_resource::<Messages<super::super::TierPick>>();
+        world.clear_trackers();
+        world
+    }
+
+    /// One frame of the Display tab with `events`; the texts drawn.
+    fn frame(
+        ctx: &egui::Context,
+        world: &mut World,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Pos2)> {
+        frame_of(ctx, world, events, display_section)
+    }
+
+    /// One frame of `hook` with `events`; the texts drawn.
+    fn frame_of(
+        ctx: &egui::Context,
+        world: &mut World,
+        events: Vec<egui::Event>,
+        hook: fn(&mut World, &mut egui::Ui),
+    ) -> Vec<(String, egui::Pos2)> {
+        let input = egui::RawInput {
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| hook(world, ui));
+        out.textures_delta.clear();
+        texts(&out.shapes)
+    }
+
+    /// A click a little inside a text drawn at `at`.
+    fn click(at: egui::Pos2) -> Vec<Vec<egui::Event>> {
+        let p = at + egui::vec2(4.0, 4.0);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        vec![
+            vec![egui::Event::PointerMoved(p)],
+            vec![button(true)],
+            vec![button(false)],
+        ]
+    }
+
+    fn at(texts: &[(String, egui::Pos2)], label: &str) -> egui::Pos2 {
+        texts
+            .iter()
+            .filter(|(t, _)| t == label)
+            .map(|(_, p)| *p)
+            .next_back()
+            .unwrap_or_else(|| panic!("{label} is drawn: {texts:?}"))
+    }
+
+    // Q-240 (#402): the picker's selected text is the running tier, not the saved one.
+    #[test]
+    fn the_tier_picker_shows_the_running_tier() {
+        let mut world = overridden();
+        let ctx = egui::Context::default();
+        let drawn = frame(&ctx, &mut world, Vec::new());
+        assert!(drawn.iter().any(|(t, _)| t == "quest-high"), "{drawn:?}");
+        assert!(!drawn.iter().any(|(t, _)| t == "desktop"), "{drawn:?}");
+        assert!(!world.resource_ref::<SettingsRes>().is_changed());
+    }
+
+    // Q-240 (#402): choosing the saved tier in the picker under an override is a pick; it
+    // leaves the saved tier as it is (already `desktop`).
+    #[test]
+    fn choosing_the_saved_tier_under_an_override_picks_it() {
+        let mut world = overridden();
+        let ctx = egui::Context::default();
+        let closed = frame(&ctx, &mut world, Vec::new());
+        for events in click(at(&closed, "quest-high")) {
+            frame(&ctx, &mut world, events);
+        }
+        // The open popup lists the tiers.
+        let open = frame(&ctx, &mut world, Vec::new());
+        for events in click(at(&open, "desktop")) {
+            frame(&ctx, &mut world, events);
+        }
+        let picks: Vec<_> = world
+            .resource_mut::<Messages<super::super::TierPick>>()
+            .drain()
+            .collect();
+        assert_eq!(picks, vec![super::super::TierPick("desktop".into())]);
+        assert_eq!(world.resource::<SettingsRes>().0.general.tier, "desktop");
+    }
+
+    // Q-218, Q-240: the Settings tab's `[general] tier` shows the saved tier, and choosing
+    // another is a pick, saved and switched to.
+    #[test]
+    fn choosing_a_tier_in_the_settings_tab_picks_it() {
+        let mut world = overridden();
+        let ctx = egui::Context::default();
+        let step = |at: egui::Pos2, world: &mut World| {
+            for events in click(at) {
+                frame_of(&ctx, world, events, settings_tables);
+            }
+            frame_of(&ctx, world, Vec::new(), settings_tables)
+        };
+        let closed = frame_of(&ctx, &mut world, Vec::new(), settings_tables);
+        let general = step(at(&closed, "[general]"), &mut world);
+        let open = step(at(&general, "desktop"), &mut world);
+        step(at(&open, "quest-low"), &mut world);
+        let picks: Vec<_> = world
+            .resource_mut::<Messages<super::super::TierPick>>()
+            .drain()
+            .collect();
+        assert_eq!(picks, vec![super::super::TierPick("quest-low".into())]);
+        assert_eq!(world.resource::<SettingsRes>().0.general.tier, "quest-low");
     }
 }

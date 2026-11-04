@@ -40,6 +40,27 @@ use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest, UiState};
 
 mod panels;
 
+/// A quality tier the user picked in the dock (§1.7 Panels): `governor` switches the
+/// running tier to it, even when it equals the saved `[general] tier`, so the saved tier
+/// can be picked back after a `--tier` override (Q-240). Only a pick switches the tier.
+// Q-240
+#[derive(Message, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TierPick(pub(crate) String);
+
+/// A pick of `tier` (Q-240): writes `[general] tier` to `SettingsRes` when it differs, so
+/// the debounce saves it (Q-207), and a `TierPick` for `governor`.
+// Q-240, Q-207
+pub(crate) fn pick_tier(world: &mut World, tier: String) {
+    if let Some(mut s) = world.get_resource_mut::<SettingsRes>()
+        && s.0.general.tier != tier
+    {
+        s.0.general.tier = tier.clone();
+    }
+    if let Some(mut picks) = world.get_resource_mut::<Messages<TierPick>>() {
+        picks.write(TierPick(tier));
+    }
+}
+
 /// The player's settings in the world (§1.11, §2.1).
 #[derive(Resource, Clone, Debug, Default)]
 pub struct SettingsRes(pub Settings);
@@ -263,6 +284,7 @@ impl Plugin for PersistPlugin {
             hooks.add(Tab::Settings, panels::settings_tables);
         }
         app.add_message::<PersistCommand>()
+            .add_message::<TierPick>()
             .add_message::<PersistFailure>()
             .add_message::<SceneLoadConfirmed>()
             .add_message::<ToastRequest>()
