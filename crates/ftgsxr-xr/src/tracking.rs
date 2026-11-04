@@ -10,6 +10,9 @@
 //! state chained (`hands`), the per-side ownership rule, the frequency hint, and the hand
 //! capsules and controller meshes in VR mode (`meshes`).
 
+// Dv-8's device side (#463, Q-308), built for the device and the host tests.
+#[cfg(any(test, target_os = "android"))]
+mod dv8;
 mod hands;
 mod meshes;
 
@@ -190,6 +193,9 @@ impl Plugin for TrackingPlugin {
                     .after(TransformSystems::Propagate)
                     .run_if(openxr_session_running),
             );
+        // Dv-8 (#463): inert until the quest runner's entity names it (Q-308).
+        #[cfg(target_os = "android")]
+        dv8::add(app);
     }
 }
 

@@ -15,6 +15,7 @@ mod dv13;
 mod dv2;
 mod dv3;
 mod dv4;
+mod dv8;
 
 /// The intent extra naming the test (§3.4).
 pub(crate) const EXTRA: &str = "ftgsxr-test";
@@ -58,6 +59,7 @@ pub(crate) fn add(app: &mut App, name: &str) {
         dv2::NAME => dv2::add(app),
         dv12::NAME => dv12::add(app),
         dv13::NAME => dv13::add(app),
+        dv8::NAME => dv8::add(app),
         _ => verdict(name, false, "unknown test"),
     }
 }
