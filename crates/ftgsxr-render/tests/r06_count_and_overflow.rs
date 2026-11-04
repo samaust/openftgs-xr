@@ -201,6 +201,23 @@ fn verdict(elapsed: Duration, switches: Option<(u64, u64)>) -> Verdict {
     }
 }
 
+/// Q-111: a call within 1 ms passes; a call over it fails unless the thread made no
+/// voluntary context switch and at least one involuntary one (it was preempted, not
+/// waiting); counts that couldn't be read excuse nothing.
+// Q-111
+#[test]
+fn verdict_excuses_only_a_preempted_call() {
+    let over = WATCHDOG + Duration::from_micros(2_500);
+    let within = WATCHDOG - Duration::from_micros(1);
+    assert_eq!(verdict(within, Some((3, 2))), Verdict::Within);
+    assert_eq!(verdict(WATCHDOG, None), Verdict::Within);
+    assert_eq!(verdict(over, Some((0, 1))), Verdict::Preempted);
+    assert_eq!(verdict(over, Some((1, 4))), Verdict::Over);
+    assert_eq!(verdict(over, Some((2, 0))), Verdict::Over);
+    assert_eq!(verdict(over, Some((0, 0))), Verdict::Over);
+    assert_eq!(verdict(over, None), Verdict::Over);
+}
+
 /// The calling thread's voluntary and involuntary context switches so far, from
 /// `/proc/thread-self/status`; `None` where they can't be read (Q-111).
 fn context_switches() -> Option<(u64, u64)> {
@@ -418,7 +435,7 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
         frames - 2
     );
     // Q-111: the bounds apply in a run holding the machine alone, which sets this.
-    let bounded = std::env::var("FTGSXR_WATCHDOG").as_deref() == Ok("1");
+    let bounds_checked = std::env::var("FTGSXR_WATCHDOG").as_deref() == Ok("1");
     for call in &watchdog.calls {
         let (slowest, k) = call.slowest;
         eprintln!(
@@ -428,7 +445,7 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
             call.preempted
         );
     }
-    if !bounded {
+    if !bounds_checked {
         eprintln!("R-6: FTGSXR_WATCHDOG is not 1, so the 1 ms bound was reported, not checked");
     }
     let over: Vec<String> = watchdog
@@ -452,7 +469,7 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
         "the four frame-loop calls are timed"
     );
     assert!(
-        !bounded || over.is_empty(),
+        !bounds_checked || over.is_empty(),
         "a frame-loop call waited longer than {WATCHDOG:?}: {over:?}"
     );
     assert!(dev.take_validation_messages().is_empty());
