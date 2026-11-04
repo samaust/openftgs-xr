@@ -13,6 +13,7 @@ mod dv1_install_launch;
 mod dv2_stereo;
 mod dv3_sort;
 mod dv4_conformance;
+mod dv8_hands;
 mod i13_xr_unsupported_toast;
 mod i15_xr_session;
 mod i16_xr_input;
