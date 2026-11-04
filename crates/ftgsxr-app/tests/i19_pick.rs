@@ -66,3 +66,28 @@ fn i19_a_picked_folder_joins_as_a_source() {
         "P1"
     );
 }
+
+// Q-260
+#[test]
+fn i19_a_picked_checkpoint_manifest_loads_the_checkpoint() {
+    // Q-257, Q-260: a checkpoint picked as its `manifest.json` loads as the checkpoint
+    // directory holding it: named after the directory, its source the directory, as a
+    // checkpoint listed by a local directory source is (D-51).
+    let mut t = TestApp::new("i19-manifest");
+    let dir = fixtures_dir().join("checkpoint/tiny");
+    t.platform
+        .queue_pick(Ok(vec![ModelRef::File(dir.join("manifest.json"))]));
+    t.command(LibraryCommand::Pick(PickKind::Files));
+    let ok = t.until(600, |app| {
+        app.world_mut()
+            .query::<&LoadedModel>()
+            .iter(app.world())
+            .count()
+            == 1
+    });
+    assert!(ok, "the checkpoint loads");
+    let mut q = t.app.world_mut().query::<&LoadedModel>();
+    let m = q.single(t.app.world()).unwrap();
+    assert_eq!(m.name, "tiny");
+    assert_eq!(m.source, ModelRef::File(dir));
+}
