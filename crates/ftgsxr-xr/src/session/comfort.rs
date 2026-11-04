@@ -2,8 +2,9 @@
 
 //! Locomotion's comfort options on the headset (§1.8 Locomotion, Comfort and
 //! accessibility; Q-269): the vignette during smooth movement or turning, the 150 ms fade
-//! on `Intent::Teleport`, both skipped under `[locomotion] reduced_motion`, and the seated
-//! height offset added to the rig's y.
+//! on `Intent::Teleport`, the fade skipped and the vignette's ramps dropped (it shows and
+//! clears at once) under `[locomotion] reduced_motion`, and the seated height offset
+//! added to the rig's y.
 //!
 //! Each eye gets two child quads, the vignette (a generated radial alpha texture) and the
 //! fade (plain black), on a render layer only that eye sees, so the left eye's quads never
@@ -51,17 +52,19 @@ const FADE_DISTANCE_M: f32 = 0.04;
 const VIGNETTE_TEXELS: u32 = 128;
 
 /// The vignette's ramp: its level in [0, 1] moves toward 1 while smooth motion is on and
-/// toward 0 otherwise, over `VIGNETTE_RAMP_S`.
+/// toward 0 otherwise, over `VIGNETTE_RAMP_S`, or at once under reduced motion (§1.8:
+/// "removes the animated transitions").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct VignetteRamp {
     pub(crate) level: f32,
 }
 
 impl VignetteRamp {
-    /// One frame of `dt` seconds; the quad's alpha after it.
+    /// One frame of `dt` seconds, `instant` under reduced motion; the quad's alpha after
+    /// it.
     // Q-269
-    pub(crate) fn step(&mut self, moving: bool, dt: f32) -> f32 {
-        let d = dt / VIGNETTE_RAMP_S;
+    pub(crate) fn step(&mut self, moving: bool, dt: f32, instant: bool) -> f32 {
+        let d = if instant { 1.0 } else { dt / VIGNETTE_RAMP_S };
         self.level = if moving {
             (self.level + d).min(1.0)
         } else {
@@ -202,7 +205,8 @@ fn apply_height_offset(
 }
 
 /// Steps the vignette and the fade from the frame's intents and writes the shared
-/// materials' alphas; both stay at 0 under reduced motion, and the vignette while
+/// materials' alphas; under reduced motion the fade stays at 0 and the vignette shows
+/// and clears without its ramps (Q-269); the vignette stays at 0 while
 /// `Locomotion.vignette` is off.
 fn run_ramps(
     mut intents: MessageReader<Intent>,
@@ -216,11 +220,11 @@ fn run_ramps(
     let loco = loco.as_deref().unwrap_or(&default);
     let frame: Vec<Intent> = intents.read().copied().collect();
     let reduced = reduced_motion(settings.as_deref());
-    let moving = !reduced && loco.vignette && smooth_motion(&frame, loco);
+    let moving = loco.vignette && smooth_motion(&frame, loco);
     let teleported =
         !reduced && loco.enabled && frame.iter().any(|i| matches!(i, Intent::Teleport { .. }));
     let dt = time.delta_secs();
-    let vignette = comfort.vignette.step(moving, dt);
+    let vignette = comfort.vignette.step(moving, dt, reduced);
     let fade = comfort.fade.step(teleported, dt);
     let (Some(mut materials), Some(assets)) = (materials, comfort.assets.clone()) else {
         return;
@@ -394,12 +398,25 @@ mod tests {
     #[test]
     fn vignette_ramp_reaches_0_8_in_100_ms_and_clears_in_100_ms() {
         let mut v = VignetteRamp::default();
-        assert!((v.step(true, 0.05) - 0.4).abs() <= 1e-6);
-        assert!((v.step(true, 0.05) - 0.8).abs() <= 1e-6);
-        assert!((v.step(true, 0.05) - 0.8).abs() <= 1e-6, "held at 0.8");
-        assert!((v.step(false, 0.05) - 0.4).abs() <= 1e-6);
-        assert_eq!(v.step(false, 0.05), 0.0);
-        assert_eq!(v.step(false, 0.05), 0.0);
+        assert!((v.step(true, 0.05, false) - 0.4).abs() <= 1e-6);
+        assert!((v.step(true, 0.05, false) - 0.8).abs() <= 1e-6);
+        assert!(
+            (v.step(true, 0.05, false) - 0.8).abs() <= 1e-6,
+            "held at 0.8"
+        );
+        assert!((v.step(false, 0.05, false) - 0.4).abs() <= 1e-6);
+        assert_eq!(v.step(false, 0.05, false), 0.0);
+        assert_eq!(v.step(false, 0.05, false), 0.0);
+    }
+
+    // Q-269 (owner, 2026-11-04): under reduced motion the vignette stays, without its
+    // ramps: full at the first frame of smooth motion, clear at the first frame without.
+    #[test]
+    fn vignette_under_reduced_motion_shows_and_clears_at_once() {
+        let mut v = VignetteRamp::default();
+        assert_eq!(v.step(true, 0.011, true), 0.8);
+        assert_eq!(v.step(true, 0.011, true), 0.8);
+        assert_eq!(v.step(false, 0.011, true), 0.0);
     }
 
     // Q-269, Q-301: black at the teleport, clear 150 ms later, linear between.
