@@ -36,8 +36,16 @@ fn problems(manifest: &str, root: Option<&str>, stems: &[String]) -> Vec<String>
     {
         found.push("no `autotests = false`, so each tests/*.rs file is a target".into());
     }
+    // The `[[test]]` table's own lines, up to the next table.
+    let table: Vec<&str> = lines
+        .iter()
+        .skip_while(|l| **l != "[[test]]")
+        .skip(1)
+        .take_while(|l| !l.starts_with('['))
+        .copied()
+        .collect();
     let declared = |key: &str, value: &str| {
-        lines
+        table
             .iter()
             .any(|l| l.replace(' ', "") == format!("{key}=\"{value}\""))
     };
@@ -147,6 +155,13 @@ path = "tests/integration.rs"
     let bare = "[package]\nname = \"sample\"\n";
     let found = problems(bare, None, &stems(&["a_test"]));
     assert_eq!(found.len(), 3, "{found:#?}");
+    // The target's name and path count only inside its own table.
+    let elsewhere = "[package]\nname = \"integration\"\nautotests = false\n\n[[test]]\nname = \"other\"\n\n[[bin]]\npath = \"tests/integration.rs\"\n";
+    assert!(
+        problems(elsewhere, Some(root), &stems(&["a_test"]))
+            .iter()
+            .any(|p| p.contains("no `[[test]]` named"))
+    );
     // A crate without integration tests needs nothing.
     assert!(problems(bare, None, &[]).is_empty());
 }
