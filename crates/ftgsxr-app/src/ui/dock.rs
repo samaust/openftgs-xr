@@ -4,8 +4,6 @@
 //! its seven tabs, the toast line and the confirmation dialogs. Drawn by one exclusive
 //! system, which collects what the user did and sends it after the frame.
 
-use std::path::PathBuf;
-
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::prelude::*;
 use bevy::math::{EulerRot, Quat};
@@ -16,11 +14,13 @@ use ftgsxr_io::{EntryKind, SourceSpec, Url};
 use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTime, SplatTransform};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
-use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
+use super::{
+    Confirm, DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState,
+};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
 use crate::manipulate::{FIT_RANGE_M, PoseExtras, SetPoseExtras};
-use crate::platform::{PickKind, PlatformRes};
+use crate::platform::PickKind;
 use crate::playback::{Playback, RangeSetting};
 
 /// What the user did this frame.
@@ -999,7 +999,11 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
         return;
     };
     let scenes = match &q {
-        Confirm::LoadScene(_) => scene_files(world),
+        // §1.5 Scene files, Q-200 (#417): the eight most recent, as persist keeps them.
+        Confirm::LoadScene(_) => world
+            .get_resource::<RecentScenes>()
+            .map(|r| r.0.clone())
+            .unwrap_or_default(),
         Confirm::Unload(_) => Vec::new(),
     };
     egui::Window::new("Confirm")
@@ -1042,27 +1046,6 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
                 }
             });
         });
-}
-
-/// The scene files under the platform's scenes directory, newest first.
-fn scene_files(world: &World) -> Vec<PathBuf> {
-    let Some(p) = world.get_resource::<PlatformRes>() else {
-        return Vec::new();
-    };
-    let Ok(dir) = std::fs::read_dir(&p.0.paths().scenes) else {
-        return Vec::new();
-    };
-    let mut files: Vec<_> = dir
-        .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .ends_with(".ftgsxr-scene.json")
-        })
-        .map(|e| (e.metadata().and_then(|m| m.modified()).ok(), e.path()))
-        .collect();
-    files.sort_by_key(|f| std::cmp::Reverse(f.0));
-    files.into_iter().map(|(_, p)| p).collect()
 }
 
 #[cfg(test)]

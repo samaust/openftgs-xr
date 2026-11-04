@@ -256,6 +256,33 @@ pub(crate) enum UiCue {
 #[derive(Message, Clone, Debug, PartialEq)]
 pub(crate) struct SceneLoadConfirmed(pub(crate) PathBuf);
 
+/// The most recent eight scene files, newest first (§1.5 Scene files, Q-200): the scene
+/// load dialog's list. `persist` refreshes it at startup and after each save and load; it
+/// lives here because `ui` comes before `persist` in §2.1's order (#417).
+// Q-200
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecentScenes(pub(crate) Vec<PathBuf>);
+
+/// The most recent eight `*.ftgsxr-scene.json` under `dir` by modification time, newest
+/// first (Q-200); none when `dir` cannot be read.
+// Q-200
+pub(crate) fn recent_scenes(dir: &std::path::Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .ends_with(".ftgsxr-scene.json")
+        })
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    files.into_iter().take(8).map(|(_, p)| p).collect()
+}
+
 /// A section a later module draws into a dock tab (`persist`'s Settings tables, the
 /// governor's knobs, `audio`'s volumes), so ui names none of their types.
 pub(crate) type DockHook = fn(&mut World, &mut egui::Ui);
@@ -446,6 +473,7 @@ impl Plugin for UiPlugin {
             .add_message::<PlaybackWarning>()
             .init_resource::<UiSurface>()
             .init_resource::<UiState>()
+            .init_resource::<RecentScenes>()
             .init_resource::<HudData>()
             .init_resource::<DockHooks>()
             .init_resource::<ToastLimiter>()
@@ -789,6 +817,29 @@ pub(crate) fn load_system_font(ctx: &egui::Context) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Q-200 (moved from `persist`, #417): the newest eight scene files, newest first,
+    // other files left out.
+    #[test]
+    fn recent_scenes_are_the_newest_eight() {
+        let dir = std::env::temp_dir().join(format!("ftgsxr-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = std::time::SystemTime::now() - std::time::Duration::from_secs(100);
+        for k in 0..10u64 {
+            let p = dir.join(format!("s{k}.ftgsxr-scene.json"));
+            std::fs::write(&p, "{}").unwrap();
+            let f = std::fs::File::options().write(true).open(&p).unwrap();
+            f.set_modified(base + std::time::Duration::from_secs(k))
+                .unwrap();
+        }
+        std::fs::write(dir.join("other.json"), "{}").unwrap();
+        let recent = recent_scenes(&dir);
+        assert_eq!(recent.len(), 8);
+        assert_eq!(recent[0], dir.join("s9.ftgsxr-scene.json"));
+        assert_eq!(recent[7], dir.join("s2.ftgsxr-scene.json"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // Q-199: Delete's request asks; yes unloads, no leaves the instance.
     #[test]
