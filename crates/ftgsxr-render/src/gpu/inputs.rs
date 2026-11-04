@@ -4,6 +4,7 @@
 //! per instance with its pose, time, render mode, color transform and overlays.
 
 use ftgsxr_core::{Camera, Pose, UVec2, Vec3};
+use ftgsxr_io::ManualLighting;
 
 use super::model::GpuModel;
 
@@ -72,6 +73,23 @@ pub struct ColorTransform {
 impl ColorTransform {
     /// The identity, (1, 1, 1): the cull pass leaves the E4 color untouched (Q-80).
     pub const IDENTITY: ColorTransform = ColorTransform { gain: Vec3::ONE };
+
+    /// E14's manual form, computed here once for both builds: g = 2^EV and
+    /// w = (1 + 0.4 t, 1 − 0.4 u, 1 − 0.4 t) scaled to mean 1, the gain g w, with no clamp
+    /// (E14's clamp to \[0.25, 4\] is the estimate's); the identity at zero. The Scene tab
+    /// sets each instance's transform from it, and `ftgsxr_xr::light::manual_gains` (M-7)
+    /// returns it.
+    // Q-250
+    pub fn from_manual(manual: &ManualLighting) -> ColorTransform {
+        let g = manual.exposure_ev.exp2();
+        let w = Vec3::new(
+            1.0 + 0.4 * manual.temperature,
+            1.0 - 0.4 * manual.tint,
+            1.0 - 0.4 * manual.temperature,
+        );
+        let mean = (w.x + w.y + w.z) / 3.0;
+        ColorTransform { gain: g * w / mean }
+    }
 }
 
 /// The debug overlays of one instance (§1.4 Selection and debug views). Declared and
