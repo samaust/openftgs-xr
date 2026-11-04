@@ -68,10 +68,11 @@ pub use capture::ScreenshotRequest;
 pub use persist::{
     PersistCommand, SettingsPath, SettingsRes, SettingsWarnings, apply_scene, scene_from_world,
 };
-// §2.1 `ftgsxr_app::platform`; Q-266: `Headset`.
+// §2.1 `ftgsxr_app::platform`; Q-266: `Headset`; Q-T452.13: `AskPermissionAgain`,
+// `DeniedPermissions`.
 pub use platform::{
-    CameraFrames, CameraThumb, Headset, Permission, PermissionHandle, PickHandle, PickKind,
-    Platform, PlatformRes,
+    AskPermissionAgain, CameraFrames, CameraThumb, DeniedPermissions, Headset, Permission,
+    PermissionHandle, PickHandle, PickKind, Platform, PlatformRes,
 };
 // §2.1 `ftgsxr_app::plugin`; Q-151: `init_desktop_log` and the `IoError` it returns.
 pub use ftgsxr_io::IoError;

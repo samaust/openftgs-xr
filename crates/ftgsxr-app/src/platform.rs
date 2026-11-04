@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::task::Poll;
 
-use bevy::prelude::Resource;
+use bevy::prelude::{Message, Resource};
 use ftgsxr_core::Camera;
 use ftgsxr_io::{AppPaths, DocumentProvider, ModelRef};
 
@@ -32,6 +32,19 @@ pub enum Permission {
     /// Spatial anchors.
     Anchors,
 }
+
+/// Asks for a denied permission again (Q-276's "ask again", Q-T452.13): the main panel's
+/// Comfort tab writes it, and the code that asked for the permission (the XR crate's
+/// hands for `HandTracking`) asks once more.
+// Q-T452.13
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AskPermissionAgain(pub Permission);
+
+/// The permissions denied in this run and not asked again since, kept by the code that
+/// asks for them; the Comfort tab offers "ask again" for each it knows (Q-T452.13).
+// Q-T452.13
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeniedPermissions(pub Vec<Permission>);
 
 /// A pending pick, polled with `Platform::poll_pick`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

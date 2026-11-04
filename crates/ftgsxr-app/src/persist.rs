@@ -34,7 +34,7 @@ use crate::library::{
     ShowOnUpload, list_missing,
 };
 use crate::manipulate::{HighContrast, Poses, now_rfc3339, pose_of, transform_of};
-use crate::platform::PlatformRes;
+use crate::platform::{AskPermissionAgain, DeniedPermissions, PlatformRes};
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
@@ -328,6 +328,8 @@ impl Plugin for PersistPlugin {
             .add_message::<PersistFailure>()
             .add_message::<SceneLoadConfirmed>()
             .add_message::<ToastRequest>()
+            .add_message::<AskPermissionAgain>()
+            .init_resource::<DeniedPermissions>()
             .add_message::<Intent>()
             .add_message::<LibraryCommand>()
             .init_resource::<Saver>()

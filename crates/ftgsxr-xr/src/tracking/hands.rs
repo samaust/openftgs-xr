@@ -6,7 +6,7 @@
 use std::ptr;
 use std::task::Poll;
 
-use bevy::ecs::message::{Message, MessageReader};
+use bevy::ecs::message::MessageReader;
 use bevy::log::{info, warn};
 use bevy::math::Vec2;
 use bevy::prelude::{Commands, Res, ResMut, Resource, Transform};
@@ -15,7 +15,10 @@ use bevy_mod_openxr::resources::{OxrFrameState, Pipelined};
 use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_openxr::spaces::OxrSpaceExt;
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
-use ftgsxr_app::{Permission, PermissionHandle, PlatformRes, Toast, ToastLevel};
+use ftgsxr_app::{
+    AskPermissionAgain, DeniedPermissions, Permission, PermissionHandle, PlatformRes, Toast,
+    ToastLevel,
+};
 use ftgsxr_core::Pose;
 use openxr::sys;
 
@@ -249,15 +252,6 @@ pub(crate) struct HandsPermission {
     pub(crate) flow: Flow,
 }
 
-/// Asks for the hand-tracking permission again after a denial (Q-276's "ask again"). Read
-/// by `tracking`; the Comfort tab's button that would write it lives in `ftgsxr_app::ui`,
-/// which cannot name this crate: the public message it needs is an open question to the
-/// owner (#459's report), so nothing writes it outside the tests yet.
-// Q-276
-#[derive(Message, Clone, Copy, Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct AskHandsAgain;
-
 /// E-XR-PERMISSION's user text with the feature that asked (Q-261): "Permission p denied;
 /// feature Y unavailable".
 // Q-261
@@ -367,19 +361,39 @@ pub(crate) fn on_session_created(
 
 /// Polls a pending request each frame: a grant creates the trackers in the running
 /// session, a denial leaves hands off with the warning and the toast naming "hands"
-/// (Q-261, Q-221); an `AskHandsAgain` after a denial asks again.
+/// (Q-261, Q-221), and the permission listed in `DeniedPermissions` until it is asked
+/// again; an `AskPermissionAgain(HandTracking)` after a denial (the Comfort tab's "ask
+/// again") asks again (Q-276, Q-T452.13).
+// Q-276, Q-T452.13
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn poll_permission(
     exts: Option<Res<OxrEnabledExtensions>>,
     session: Option<Res<OxrSession>>,
     platform: Option<Res<PlatformRes>>,
     trackers: Option<Res<HandTrackers>>,
-    mut again: MessageReader<AskHandsAgain>,
+    mut again: MessageReader<AskPermissionAgain>,
     mut permission: ResMut<HandsPermission>,
+    mut denied: Option<ResMut<DeniedPermissions>>,
     mut commands: Commands,
 ) {
-    if again.read().count() > 0 && permission.flow == Flow::Denied {
+    let mut listed = |on: bool| {
+        if let Some(d) = denied.as_deref_mut() {
+            let has = d.0.contains(&Permission::HandTracking);
+            if on && !has {
+                d.0.push(Permission::HandTracking);
+            } else if !on && has {
+                d.0.retain(|p| *p != Permission::HandTracking);
+            }
+        }
+    };
+    let asked_again = again
+        .read()
+        .filter(|a| a.0 == Permission::HandTracking)
+        .count()
+        > 0;
+    if asked_again && permission.flow == Flow::Denied {
         permission.flow = ask(platform.as_deref());
+        listed(false);
     }
     if let Flow::Asking(h) = permission.flow {
         let Some(platform) = platform.as_deref() else {
@@ -390,6 +404,7 @@ pub(crate) fn poll_permission(
             Poll::Ready(true) => permission.flow = Flow::Granted,
             Poll::Ready(false) => {
                 permission.flow = Flow::Denied;
+                listed(true);
                 let text = denied_text(Permission::HandTracking, "hands");
                 warn!("{text}");
                 commands.trigger(Toast {
@@ -910,7 +925,8 @@ mod tests {
                 flow: Flow::Asking(PermissionHandle(1)),
             })
             .init_resource::<Toasts>()
-            .add_message::<AskHandsAgain>()
+            .init_resource::<DeniedPermissions>()
+            .add_message::<AskPermissionAgain>()
             .add_observer(|t: On<Toast>, mut toasts: ResMut<Toasts>| {
                 toasts.0.push(t.event().text.clone());
             })
@@ -936,7 +952,18 @@ mod tests {
             "one toast per denial"
         );
         assert!(platform.asked.lock().unwrap().is_empty());
-        app.world_mut().write_message(AskHandsAgain);
+        // Q-T452.13: the denial is listed for the Comfort tab's "ask again".
+        assert_eq!(
+            app.world().resource::<DeniedPermissions>().0,
+            [Permission::HandTracking]
+        );
+        // Another permission's "ask again" is not this one's.
+        app.world_mut()
+            .write_message(AskPermissionAgain(Permission::Camera));
+        app.update();
+        assert!(platform.asked.lock().unwrap().is_empty());
+        app.world_mut()
+            .write_message(AskPermissionAgain(Permission::HandTracking));
         app.update();
         assert_eq!(
             *platform.asked.lock().unwrap(),

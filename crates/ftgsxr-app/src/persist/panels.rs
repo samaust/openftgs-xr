@@ -15,6 +15,8 @@ use ftgsxr_render::SplatTierState;
 use super::{SettingsRes, pick_tier};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
+use crate::platform::{AskPermissionAgain, DeniedPermissions, Permission};
+use crate::ui::UiCue;
 
 /// The values `ftgsxr-io` accepts for the string keys (§1.11).
 const TIERS: &[&str] = &[
@@ -152,8 +154,9 @@ const SNAP_DEGS: [f32; 3] = [30.0, 45.0, 90.0];
 /// turn mode and snap angle, the speed, the vignette, teleport, the height offset,
 /// reduced motion, left-handed mode, the UI scale and high contrast, each editing
 /// `SettingsRes` (Q-207, Q-218, Q-278); sliders and buttons, which a ray can drag and
-/// press, rather than drag values.
-// Q-207, Q-218, Q-278, Q-294
+/// press, rather than drag values; and "Ask again" while the hand-tracking permission
+/// is denied (Q-276, Q-T452.13).
+// Q-207, Q-218, Q-278, Q-294, Q-T452.13
 pub(crate) fn comfort_section(world: &mut World, ui: &mut egui::Ui) {
     edit(world, ui, |s, ui| {
         let l = &mut s.locomotion;
@@ -177,6 +180,19 @@ pub(crate) fn comfort_section(world: &mut World, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut s.general.ui_scale, 0.8..=1.5).text("UI scale"));
         ui.checkbox(&mut s.display.high_contrast, "high contrast");
     });
+    // Q-276, Q-T452.13: a denied hand-tracking permission can be asked again.
+    let denied = world
+        .get_resource::<DeniedPermissions>()
+        .is_some_and(|d| d.0.contains(&Permission::HandTracking));
+    if denied {
+        ui.horizontal(|ui| {
+            ui.label("hand tracking: permission denied");
+            if ui.button("Ask again").clicked() {
+                world.write_message(AskPermissionAgain(Permission::HandTracking));
+                world.write_message(UiCue::Click);
+            }
+        });
+    }
 }
 
 fn loop_name(m: LoopMode) -> &'static str {
@@ -463,6 +479,31 @@ mod tests {
             .map(|(_, p)| *p)
             .next_back()
             .unwrap_or_else(|| panic!("{label} is drawn: {texts:?}"))
+    }
+
+    /// Q-276, Q-T452.13: with the hand-tracking permission denied the Comfort tab offers
+    /// "Ask again", whose click asks for it again; without a denial it is not drawn.
+    #[test]
+    fn comfort_asks_a_denied_hand_permission_again() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<AskPermissionAgain>>();
+        world.init_resource::<Messages<UiCue>>();
+        let ctx = egui::Context::default();
+        frame_of(&ctx, &mut world, Vec::new(), comfort_section);
+        let texts = frame_of(&ctx, &mut world, Vec::new(), comfort_section);
+        assert!(!texts.iter().any(|(t, _)| t == "Ask again"), "{texts:?}");
+        world.insert_resource(DeniedPermissions(vec![Permission::HandTracking]));
+        let texts = frame_of(&ctx, &mut world, Vec::new(), comfort_section);
+        let p = at(&texts, "Ask again");
+        for events in click(p) {
+            frame_of(&ctx, &mut world, events, comfort_section);
+        }
+        let asked: Vec<AskPermissionAgain> = world
+            .resource_mut::<Messages<AskPermissionAgain>>()
+            .drain()
+            .collect();
+        assert_eq!(asked, [AskPermissionAgain(Permission::HandTracking)]);
     }
 
     // Q-240 (#402): the picker's selected text is the running tier, not the saved one.

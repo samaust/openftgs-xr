@@ -159,7 +159,8 @@ impl Plugin for TrackingPlugin {
             .init_resource::<hands::HandsPermission>()
             .init_resource::<hands::LocatedHands>()
             .init_resource::<hands::Ownership>()
-            .add_message::<hands::AskHandsAgain>();
+            .init_resource::<ftgsxr_app::DeniedPermissions>()
+            .add_message::<ftgsxr_app::AskPermissionAgain>();
         let Some(instance) = app.world().get_resource::<OxrInstance>() else {
             return;
         };
