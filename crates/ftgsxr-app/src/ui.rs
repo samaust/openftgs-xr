@@ -852,7 +852,7 @@ mod tests {
 
     // Q-245: U-20's manual case (EV 1 → g = 2), the identity at zero, and E14's w.
     #[test]
-    fn the_manual_form_gives_e14s_gain() {
+    fn manual_gain_gives_e14s_manual_form() {
         let at = |exposure_ev, temperature, tint| {
             manual_gain(&ManualLighting {
                 exposure_ev,

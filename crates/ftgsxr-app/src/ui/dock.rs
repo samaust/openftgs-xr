@@ -457,9 +457,9 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         Option<&SplatTime>,
     )>();
     let mut ask = None;
-    let mut gains = Vec::new();
+    let mut lightings = Vec::new();
     let mut extras_out = Vec::new();
-    for (e, mut m, mut tf, vis, mode, color, extras, time) in q.iter_mut(world) {
+    for (e, mut m, mut tf, vis, mode, light, extras, time) in q.iter_mut(world) {
         ui.separator();
         // §1.5: the instance's name is editable; §1.6: an "extrapolating" badge.
         ui.horizontal(|ui| {
@@ -578,7 +578,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
             });
         }
         // E14's color transform as its manual form (Q-218, Q-245).
-        let now = color.map(|c| c.0.clone()).unwrap_or_default();
+        let now = light.map(|c| c.0.clone()).unwrap_or_default();
         let mut l = now.clone();
         ui.horizontal(|ui| {
             ui.label("exposure EV");
@@ -604,7 +604,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
             }
         });
         if l != now {
-            gains.push((e, l));
+            lightings.push((e, l));
         }
         // §1.5 Poses: the orientation preset and L_fit the fit uses.
         let x = extras.copied().unwrap_or(PoseExtras {
@@ -670,7 +670,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         world.write_message(x);
     }
     training_cameras(world, ui, out, hv);
-    for (e, l) in gains {
+    for (e, l) in lightings {
         if let Ok(mut ec) = world.get_entity_mut(e) {
             ec.insert(InstanceLighting::bundle(l));
         }

@@ -153,22 +153,27 @@ fn i09_save_then_load_restores_the_scene() {
     assert_eq!(p, before.models[0].pose);
 }
 
+/// A one-model scene file's JSON (§1.11): `location` and `lighting` as JSON values.
+fn scene_json(location: &str, id: &str, name: &str, x: f32, lighting: &str) -> String {
+    format!(
+        r#"{{"format": "ftgsxr-scene", "version": 1,
+        "models": [{{"source": {{"kind": "dir", "location": {location}}},
+            "identity": "{id}", "name": "{name}",
+            "pose": {{"translation": [{x}, 0, 0], "rotation": [0, 0, 0, 1], "scale": 1}},
+            "visible": true, "mode": "splats", "time_offset_s": 0, "end_rule": "hold",
+            "lighting": {lighting}, "audio": null}}],
+        "clock": {{"t": 0, "speed": 1, "loop": "loop", "range": null}},
+        "environment": {{}}, "anchor": null, "rig": null, "camera": null, "bookmarks": []}}"#
+    )
+}
+
 #[test]
 fn i09_a_missing_model_is_listed_as_missing() {
     let mut t = TestApp::new("i09_missing");
     let scenes = t.dir.join("config/scenes");
     std::fs::create_dir_all(&scenes).unwrap();
     let id = "ab".repeat(32);
-    let json = format!(
-        r#"{{"format": "ftgsxr-scene", "version": 1,
-        "models": [{{"source": {{"kind": "dir", "location": "gone.safetensors"}},
-            "identity": "{id}", "name": "gone",
-            "pose": {{"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": 1}},
-            "visible": true, "mode": "splats", "time_offset_s": 0, "end_rule": "hold",
-            "lighting": null, "audio": null}}],
-        "clock": {{"t": 0, "speed": 1, "loop": "loop", "range": null}},
-        "environment": {{}}, "anchor": null, "rig": null, "camera": null, "bookmarks": []}}"#
-    );
+    let json = scene_json(r#""gone.safetensors""#, &id, "gone", 0.0, "null");
     std::fs::write(scenes.join("lost.ftgsxr-scene.json"), json).unwrap();
     t.frames(2);
     t.app
@@ -216,16 +221,7 @@ fn p1_missing(t: &mut TestApp, name: &str) -> String {
     let id = ftgsxr_core::hex(&ftgsxr_core::sha256(&p1));
     let scenes = t.dir.join("config/scenes");
     std::fs::create_dir_all(&scenes).unwrap();
-    let json = format!(
-        r#"{{"format": "ftgsxr-scene", "version": 1,
-        "models": [{{"source": {{"kind": "dir", "location": "moved.safetensors"}},
-            "identity": "{id}", "name": "moved",
-            "pose": {{"translation": [0.5, 0, 0], "rotation": [0, 0, 0, 1], "scale": 1}},
-            "visible": true, "mode": "splats", "time_offset_s": 0, "end_rule": "hold",
-            "lighting": null, "audio": null}}],
-        "clock": {{"t": 0, "speed": 1, "loop": "loop", "range": null}},
-        "environment": {{}}, "anchor": null, "rig": null, "camera": null, "bookmarks": []}}"#
-    );
+    let json = scene_json(r#""moved.safetensors""#, &id, "moved", 0.5, "null");
     std::fs::write(scenes.join(format!("{name}.ftgsxr-scene.json")), json).unwrap();
     t.frames(2);
     t.app
@@ -268,17 +264,8 @@ fn p1_lit(t: &mut TestApp, name: &str, lighting: &str) -> Entity {
     let id = ftgsxr_core::hex(&ftgsxr_core::sha256(&std::fs::read(&path).unwrap()));
     let scenes = t.dir.join("config/scenes");
     std::fs::create_dir_all(&scenes).unwrap();
-    let json = format!(
-        r#"{{"format": "ftgsxr-scene", "version": 1,
-        "models": [{{"source": {{"kind": "dir", "location": {loc}}},
-            "identity": "{id}", "name": "P1",
-            "pose": {{"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": 1}},
-            "visible": true, "mode": "splats", "time_offset_s": 0, "end_rule": "hold",
-            "lighting": {lighting}, "audio": null}}],
-        "clock": {{"t": 0, "speed": 1, "loop": "loop", "range": null}},
-        "environment": {{}}, "anchor": null, "rig": null, "camera": null, "bookmarks": []}}"#,
-        loc = serde_json::to_string(&path.to_string_lossy()).unwrap(),
-    );
+    let location = serde_json::to_string(&path.to_string_lossy()).unwrap();
+    let json = scene_json(&location, &id, "P1", 0.0, lighting);
     std::fs::write(scenes.join(format!("{name}.ftgsxr-scene.json")), json).unwrap();
     t.frames(2);
     t.app
@@ -291,33 +278,51 @@ fn p1_lit(t: &mut TestApp, name: &str, lighting: &str) -> Entity {
 // Q-206, Q-218, Q-245
 #[test]
 fn i09_an_instances_lighting_is_restored_and_saved() {
-    // §1.5 Scene files: the scene records each instance's color transform (#423).
+    // §1.5 Scene files: the scene records each instance's color transform (#423). Its
+    // gain by hand from E14's manual form: g = 2^0.5, w = (1.1, 1.2, 0.9) / (3.2 / 3).
+    let lighting = ManualLighting {
+        exposure_ev: 0.5,
+        temperature: 0.25,
+        tint: -0.5,
+    };
+    let g = 2f32.sqrt() * 3.0 / 3.2;
+    let want = Vec3::new(1.1 * g, 1.2 * g, 0.9 * g);
+    let gain_of = |t: &mut TestApp| {
+        let e = entity_named(t, "P1");
+        t.app
+            .world()
+            .get::<SplatTransform>(e)
+            .expect("a transform")
+            .0
+            .gain
+    };
     let mut t = TestApp::new("i09_lighting");
-    let e = p1_lit(
+    p1_lit(
         &mut t,
         "lit",
-        r#"{"exposure_ev": 1, "temperature": 0, "tint": 0}"#,
+        r#"{"exposure_ev": 0.5, "temperature": 0.25, "tint": -0.5}"#,
     );
-    let gain = t
-        .app
-        .world()
-        .get::<SplatTransform>(e)
-        .expect("a transform")
-        .0
-        .gain;
-    assert!(
-        (gain - Vec3::splat(2.0)).abs().max_element() < 1e-6,
-        "{gain}"
-    );
+    let gain = gain_of(&mut t);
+    assert!((gain - want).abs().max_element() < 1e-6, "{gain}");
+    // Save, unload, load the saved scene back.
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::SaveScene("relit".into()));
+    t.frames(1);
+    let file = t.dir.join("config/scenes/relit.ftgsxr-scene.json");
+    let written = read_scene(&std::fs::read(&file).expect("the scene is written")).unwrap();
+    assert_eq!(written.models[0].lighting, Some(lighting.clone()));
+    t.command(LibraryCommand::UnloadAll);
+    t.frames(2);
+    assert_eq!(count(&mut t), 0);
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::LoadScene("relit".into()));
+    wait_for(&mut t, 1);
+    let gain = gain_of(&mut t);
+    assert!((gain - want).abs().max_element() < 1e-6, "{gain}");
     let saved = scene_from_world(t.app.world());
-    assert_eq!(
-        saved.models[0].lighting,
-        Some(ManualLighting {
-            exposure_ev: 1.0,
-            temperature: 0.0,
-            tint: 0.0,
-        })
-    );
+    assert_eq!(saved.models[0].lighting, Some(lighting));
 }
 
 // Q-206
