@@ -3,7 +3,8 @@
 //! PRD #452's added `xr` test, the rig binding (#461; source of truth §1.8 Locomotion and
 //! E12: the left stick moves the rig, and the tracked eyes are in the rig's space; §2.1
 //! `PlayerRig`, "the XR tracking space"): on Monado, with the player's `AppPlugin`, a
-//! `Locomote` intent moves the rig and the eye cameras with it. Spike check 4 (Q-124):
+//! `Locomote` intent moves the rig and the eye cameras with it, the vignette shown on
+//! each eye's own quad meanwhile (Q-T461.3). Spike check 4 (Q-124):
 //! the binding survives the session re-creation a render-scale change makes.
 //! Prerequisites: `xr_support`'s.
 
@@ -11,6 +12,7 @@ use crate::xr_support;
 
 use std::time::{Duration, Instant};
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy_mod_xr::camera::XrCamera;
 use bevy_mod_xr::session::{XrRootTransform, XrState, XrTrackingRoot};
@@ -105,6 +107,42 @@ fn assert_locomote_moves_the_eyes_with_the_rig(app: &mut App) {
             turn: 0.0,
         });
         app.update();
+    }
+    // The vignette (§1.8 Locomotion, Q-269, Q-T461.3) is up during the smooth move: each
+    // eye, on its own layer, has a shown quad among its two mesh children.
+    for (i, &eye) in eyes.iter().enumerate() {
+        let index = app.world().get::<XrCamera>(eye).unwrap().0 as usize;
+        let layers = app
+            .world()
+            .get::<RenderLayers>(eye)
+            .expect("the eye's layers");
+        assert!(
+            layers.intersects(&RenderLayers::layer(0))
+                && layers.intersects(&RenderLayers::layer(1 + index))
+        );
+        let quads: Vec<Entity> = app
+            .world()
+            .get::<Children>(eye)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default();
+        let quads: Vec<Entity> = quads
+            .into_iter()
+            .filter(|&q| app.world().get::<Mesh3d>(q).is_some())
+            .collect();
+        assert_eq!(quads.len(), 2, "eye {i}: the vignette and the fade quads");
+        assert!(
+            quads
+                .iter()
+                .any(|&q| app.world().get::<Visibility>(q) == Some(&Visibility::Inherited)),
+            "eye {i}: the vignette is shown during the move"
+        );
+        for &q in &quads {
+            assert_eq!(
+                app.world().get::<RenderLayers>(q),
+                Some(&RenderLayers::layer(1 + index)),
+                "eye {i}: its quads only on its own layer"
+            );
+        }
     }
     // One frame for the propagation.
     app.update();

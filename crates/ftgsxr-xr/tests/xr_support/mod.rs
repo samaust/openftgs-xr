@@ -202,17 +202,25 @@ pub fn xr_app(xr: XrPlugin, setup: impl FnOnce(&mut App)) -> App {
 
 /// The player on the headset's composition (#461): as [`xr_app`], with `AppPlugin` (which
 /// adds `SplatPlugin` itself) over a stub `Platform` whose directories are under `root`,
-/// the stub audio output and Bevy's input plugin, as the app's own tests build it.
+/// the stub audio output, and Bevy's input, light, PBR and gizmo plugins, so the meshes
+/// the headset draws (the comfort quads) exist as in the player.
 pub fn xr_player_app(xr: XrPlugin, root: &std::path::Path) -> App {
     let mut app = App::new();
     app.insert_resource(AudioOutputRes(std::sync::Arc::new(StubAudioOutput::new())));
-    app.add_plugins(add_xr(xr_group().add(InputPlugin), xr))
-        .add_plugins(AppPlugin {
-            platform: std::sync::Arc::new(StubPlatform(paths_under(root))),
-            tier: QualityTier::conformance(),
-            initial: Vec::new(),
-            scene: None,
-        });
+    app.add_plugins(add_xr(
+        xr_group()
+            .add(InputPlugin)
+            .add(bevy::light::LightPlugin)
+            .add(bevy::pbr::PbrPlugin::default())
+            .add(bevy::gizmos::GizmoPlugin),
+        xr,
+    ))
+    .add_plugins(AppPlugin {
+        platform: std::sync::Arc::new(StubPlatform(paths_under(root))),
+        tier: QualityTier::conformance(),
+        initial: Vec::new(),
+        scene: None,
+    });
     finish(app)
 }
 
