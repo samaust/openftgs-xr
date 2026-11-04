@@ -26,8 +26,10 @@ path = "tests/integration.rs"
 [dependencies]
 # #454: `bevy_pbr` for the hand capsules, the controller meshes, the rays and the panel's
 # quad (PRD #452), as Q-154's precedent allows a band row's features.
+# #460: `bevy_gizmos` and `bevy_color` for `xr_input`'s rays and teleport arc, as
+# `ftgsxr-app` has them (Q-154's precedent).
 # §2.1
-bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log", "bevy_pbr"] }
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log", "bevy_pbr", "bevy_gizmos", "bevy_color"] }
 bevy_mod_openxr.workspace = true
 bevy_mod_xr.workspace = true
 ftgsxr-app.workspace = true

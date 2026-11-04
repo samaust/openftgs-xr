@@ -13,6 +13,7 @@ mod passthrough;
 mod plugin;
 mod session;
 mod tracking;
+mod xr_input;
 
 // §2.1 (#228, Q-124).
 pub use display::DisplaySettings;
@@ -27,3 +28,5 @@ pub use passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 pub use plugin::{XrPlugin, add_xr, runtime_unavailable};
 // §2.1 (#227).
 pub use tracking::{HandSource, TrackedHand, XrHands};
+// §2.1 (#460); Q-302: `XrInputState::set_selected`.
+pub use xr_input::{XrInputConfig, XrInputState, hands_to_intents};
