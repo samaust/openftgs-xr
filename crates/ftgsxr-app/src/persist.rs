@@ -38,7 +38,8 @@ use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
-    DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState, recent_scenes,
+    DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState, UiSurface,
+    recent_scenes,
 };
 
 mod panels;
@@ -144,6 +145,43 @@ fn open_help_on_first_run(first: Res<FirstRun>, mut ui: ResMut<UiState>) {
     if first.0 {
         ui.dock_open = true;
         ui.tab = Tab::Help;
+    }
+}
+
+/// Whether the UI is on the window, where the dock is §1.7's: `[desktop]`'s dock keys
+/// are the desktop's, not a world panel's (§1.8).
+fn dock_on_screen(ui: Option<Res<UiState>>, surface: Option<Res<UiSurface>>) -> bool {
+    ui.is_some() && surface.is_none_or(|s| *s == UiSurface::Screen)
+}
+
+/// §1.7 Panels (spec revision 24): the dock opens at `[desktop]`'s width and collapsed
+/// state, before its first draw; Help's first run opens it after (Q-226).
+fn dock_from_settings(settings: Res<SettingsRes>, mut ui: ResMut<UiState>) {
+    let d = &settings.0.desktop;
+    if ui.dock_width != d.dock_width || ui.dock_open != d.dock_open {
+        ui.dock_width = d.dock_width;
+        ui.dock_open = d.dock_open;
+    }
+}
+
+/// §1.7 Panels, §1.11: the dock's width, in whole points, and whether it is open go into
+/// `[desktop]`; the width drawn within the window's range is the one saved (Q-251). A
+/// change under half a point is none, so a dock drawn at a fractional width does not
+/// mark the settings changed every frame (Q-207).
+// Q-251
+fn dock_into_settings(ui: Res<UiState>, mut settings: ResMut<SettingsRes>) {
+    if !ui.is_changed() {
+        return;
+    }
+    let d = &settings.0.desktop;
+    let width = ui.dock_width.round();
+    let resized = ui.dock_width.is_finite() && (ui.dock_width - d.dock_width).abs() >= 0.5;
+    if resized || ui.dock_open != d.dock_open {
+        let d = &mut settings.0.desktop;
+        if resized {
+            d.dock_width = width;
+        }
+        d.dock_open = ui.dock_open;
     }
 }
 
@@ -302,6 +340,7 @@ impl Plugin for PersistPlugin {
                     run_intents,
                     run_commands,
                     sync_settings,
+                    dock_into_settings.run_if(dock_on_screen),
                     centers_follow_settings,
                     save_settings_debounced,
                     save_poses,
@@ -317,7 +356,11 @@ impl Plugin for PersistPlugin {
             .add_systems(Update, ui_scale_follows_settings)
             .add_systems(
                 bevy::app::Startup,
-                open_help_on_first_run.run_if(resource_exists::<UiState>),
+                (
+                    dock_from_settings.run_if(dock_on_screen),
+                    open_help_on_first_run.run_if(resource_exists::<UiState>),
+                )
+                    .chain(),
             )
             .add_systems(
                 PostUpdate,
@@ -1339,6 +1382,85 @@ mod tests {
         let mut expected = vec!["new.ftgsxr-scene.json".to_owned()];
         expected.extend((3..10u64).rev().map(|k| format!("s{k}.ftgsxr-scene.json")));
         assert_eq!(names, expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // §1.7 Panels (spec revision 24, #428): the saved width and collapsed state are the
+    // dock's at startup, before its first draw.
+    #[test]
+    fn the_saved_dock_layout_is_the_docks_at_startup() {
+        let mut settings = Settings::default();
+        settings.desktop.dock_width = 412.5;
+        settings.desktop.dock_open = false;
+        let mut app = App::new();
+        app.insert_resource(SettingsRes(settings))
+            .init_resource::<UiState>()
+            .add_systems(bevy::app::Startup, dock_from_settings);
+        app.update();
+        let ui = app.world().resource::<UiState>();
+        assert_eq!((ui.dock_width, ui.dock_open), (412.5, false));
+    }
+
+    /// Counts the frames in which `SettingsRes` changed after it was added.
+    #[derive(Resource, Default)]
+    struct SettingsChanges(u32);
+
+    fn count_settings_changes(s: Res<SettingsRes>, mut n: ResMut<SettingsChanges>) {
+        if s.is_changed() && !s.is_added() {
+            n.0 += 1;
+        }
+    }
+
+    // §1.7 Panels, §1.11, I-10, Q-207, Q-251 (#428): a resize goes into `[desktop]` in
+    // whole points, a sub-point change is no change, a collapse is one, and a change is
+    // written at once (the first save of the debounce).
+    #[test]
+    fn the_dock_layout_goes_into_the_settings_in_whole_points() {
+        let dir = std::env::temp_dir().join(format!("ftgsxr-dock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.toml");
+        let mut app = App::new();
+        app.add_message::<PersistFailure>()
+            .insert_resource(SettingsRes(Settings::default()))
+            .insert_resource(SettingsPath(path.clone()))
+            .init_resource::<Time<Real>>()
+            .init_resource::<Saver>()
+            .init_resource::<UiState>()
+            .init_resource::<SettingsChanges>()
+            .add_systems(
+                Update,
+                (
+                    dock_into_settings,
+                    count_settings_changes,
+                    save_settings_debounced,
+                )
+                    .chain(),
+            );
+        app.update();
+        let changes = |app: &App| app.world().resource::<SettingsChanges>().0;
+        let desktop = |app: &App| app.world().resource::<SettingsRes>().0.desktop.clone();
+        // The drawn width a frame later, 0.3 points off: no change.
+        app.world_mut().resource_mut::<UiState>().dock_width = 320.3;
+        app.update();
+        assert_eq!(changes(&app), 0);
+        assert_eq!(desktop(&app).dock_width, 320.0);
+        assert!(!path.exists(), "nothing to save");
+        // A drag to 412.6 points: 413 in the settings, and on disk at once.
+        app.world_mut().resource_mut::<UiState>().dock_width = 412.6;
+        app.update();
+        assert_eq!(changes(&app), 1);
+        assert_eq!(desktop(&app).dock_width, 413.0);
+        let saved = load_settings(&path).expect("saved").0;
+        assert_eq!(saved.desktop.dock_width, 413.0);
+        // The same width, drawn again: no change.
+        app.update();
+        assert_eq!(changes(&app), 1);
+        // A collapse.
+        app.world_mut().resource_mut::<UiState>().dock_open = false;
+        app.update();
+        assert_eq!(changes(&app), 2);
+        assert!(!desktop(&app).dock_open);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
