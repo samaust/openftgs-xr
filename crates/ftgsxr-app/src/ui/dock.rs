@@ -939,12 +939,10 @@ fn playback_tab(
     if bar.changed() {
         out.push(Out::Intent(Intent::Playback(PlaybackCommand::Seek(t))));
     }
-    // Q-246: a scrub lasts while the bar is dragged and egui has decided the press is a
-    // drag, not the start of a click (moved past the click distance or held past the
-    // click duration); the slider senses drags only, so `dragged` alone holds from the
-    // press.
-    let decided = ui.input(|i| i.pointer.is_decidedly_dragging());
-    world.resource_mut::<Scrubbing>().0 = bar.dragged() && decided;
+    // Q-246: a scrub lasts from the press on the bar to the release, whether the
+    // pointer moves or not (a click included); the slider senses drags only, so
+    // `dragged` holds from the press.
+    world.resource_mut::<Scrubbing>().0 = bar.dragged();
     ui.horizontal(|ui| {
         for s in SPEEDS.iter().rev().map(|s| -s).chain(SPEEDS) {
             if ui.selectable_label(speed == s, format!("{s}")).clicked() {
@@ -1478,11 +1476,10 @@ mod tests {
         (intents, world.resource::<crate::playback::Scrubbing>().0)
     }
 
-    // Q-246 (#416): a drag of the scrub bar is a scrub, from egui's drag decision (moved
-    // past the click distance, or held past the click duration) to the release; a press
-    // released without a drag is a one-off seek.
+    // Q-246 (#416, #436): a press on the scrub bar is a scrub from the press to the
+    // release, whether the pointer then moves or not: a click is a scrub while pressed.
     #[test]
-    fn playback_tab_a_drag_of_the_scrub_bar_is_a_scrub_and_a_click_is_not() {
+    fn playback_tab_a_press_on_the_scrub_bar_is_a_scrub_until_the_release() {
         use crate::intent::{Intent, PlaybackCommand};
         use bevy_egui::egui::{Event, Modifiers, PointerButton, pos2};
         let press = |x: f32, pressed: bool| Event::PointerButton {
@@ -1503,27 +1500,27 @@ mod tests {
         world.init_resource::<crate::playback::Scrubbing>();
         world.init_resource::<crate::playback::RangeSetting>();
         let ctx = bevy_egui::egui::Context::default();
-        assert!(!playback_frame(&mut world, &ctx, 0.0, vec![moved(30.0)]).1);
+        let (_, held) = playback_frame(&mut world, &ctx, 0.0, vec![moved(30.0)]);
+        assert!(!held, "a hover is not a scrub");
         // A click: pressed and released in place.
         let (_, held) = playback_frame(&mut world, &ctx, 0.02, vec![press(30.0, true)]);
-        assert!(!held, "a press is not yet a scrub");
-        let (_, held) = playback_frame(&mut world, &ctx, 0.04, vec![press(30.0, false)]);
-        assert!(!held, "a click is a one-off seek");
+        assert!(held, "a press is a scrub, with no move");
+        let (_, held) = playback_frame(&mut world, &ctx, 0.04, vec![]);
+        assert!(held, "the scrub lasts while the press does");
+        let (_, held) = playback_frame(&mut world, &ctx, 0.06, vec![press(30.0, false)]);
+        assert!(!held, "the release of a click ends the scrub");
         // A drag: pressed, moved along the bar, released.
-        playback_frame(&mut world, &ctx, 0.06, vec![press(30.0, true)]);
-        let (i, held) = playback_frame(&mut world, &ctx, 0.08, vec![moved(80.0)]);
+        let (_, held) = playback_frame(&mut world, &ctx, 0.08, vec![press(30.0, true)]);
+        assert!(held, "a drag is a scrub from its press");
+        let (i, held) = playback_frame(&mut world, &ctx, 0.10, vec![moved(80.0)]);
         assert!(seek(&i), "the drag moves the scrub bar");
-        assert!(held, "a drag is a scrub");
-        let (_, held) = playback_frame(&mut world, &ctx, 0.10, vec![moved(90.0)]);
         assert!(held, "the scrub lasts while the drag does");
-        let (_, held) = playback_frame(&mut world, &ctx, 0.12, vec![press(90.0, false)]);
+        let (_, held) = playback_frame(&mut world, &ctx, 0.12, vec![moved(90.0)]);
+        assert!(held, "the scrub lasts while the drag does");
+        let (_, held) = playback_frame(&mut world, &ctx, 0.14, vec![press(90.0, false)]);
         assert!(!held, "the release ends the scrub");
-        // A press held in place past egui's click duration is a scrub too.
-        playback_frame(&mut world, &ctx, 0.20, vec![press(30.0, true)]);
-        let (_, held) = playback_frame(&mut world, &ctx, 1.20, vec![]);
-        assert!(held, "a long press is a scrub");
-        let (_, held) = playback_frame(&mut world, &ctx, 1.22, vec![press(30.0, false)]);
-        assert!(!held);
+        let (_, held) = playback_frame(&mut world, &ctx, 0.16, vec![]);
+        assert!(!held, "nothing pressed, no scrub");
     }
 
     // §1.5 Scene files, Q-200 (#417): the dialog offers exactly `RecentScenes`, in its
