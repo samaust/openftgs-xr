@@ -132,6 +132,7 @@ impl Plugin for ManipulatePlugin {
             .add_message::<LibraryCommand>()
             .init_resource::<HandStates>()
             .init_resource::<GizmoState>()
+            .init_resource::<HighContrast>()
             .add_observer(on_loaded)
             .add_message::<SetPoseExtras>()
             .add_systems(
@@ -1076,6 +1077,24 @@ fn box_lines(gizmos: &mut Gizmos, b: &Aabb, pose: &Pose, color: Color) {
 
 const HOVER: Color = Color::srgb(0.85, 0.85, 0.85);
 const ACCENT: Color = Color::srgb(1.0, 0.6, 0.1);
+
+/// `[display] high_contrast` (Q-278) as `manipulate` reads it: `persist` sets it from the
+/// settings, since `manipulate` comes before `persist` in §2.1's order.
+// Q-278, Q-T452.3
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HighContrast(pub(crate) bool);
+
+/// The hovered and the selected boxes' colors (§1.4, §1.8 Comfort and accessibility):
+/// light grey and the orange accent, or under high contrast the ray's yellow (Q-304) and
+/// cyan, both fully saturated.
+// Q-278, Q-T452.3
+pub(crate) fn highlight_colors(high_contrast: bool) -> (Color, Color) {
+    if high_contrast {
+        (Color::srgb(1.0, 1.0, 0.0), Color::srgb(0.0, 1.0, 1.0))
+    } else {
+        (HOVER, ACCENT)
+    }
+}
 const AXIS_COLORS: [Color; 3] = [
     Color::srgb(0.9, 0.2, 0.2),
     Color::srgb(0.2, 0.9, 0.2),
@@ -1099,7 +1118,9 @@ fn draw(
     assets: Res<Assets<SplatAsset>>,
     cameras: HeadCameras,
     gizmo: Res<GizmoState>,
+    contrast: Res<HighContrast>,
 ) {
+    let (hover, accent) = highlight_colors(contrast.0);
     let eye = head_pose(&cameras).unwrap_or(Pose::IDENTITY).translation;
     for (t, m, hovered, selected, parent) in &q {
         let Some(asset) = assets.get(&m.0) else {
@@ -1107,9 +1128,9 @@ fn draw(
         };
         let pose = staged(t, parent, &groups);
         if selected {
-            box_lines(&mut gizmos, &asset.bounds, &pose, ACCENT);
+            box_lines(&mut gizmos, &asset.bounds, &pose, accent);
         } else if hovered {
-            box_lines(&mut gizmos, &asset.bounds, &pose, HOVER);
+            box_lines(&mut gizmos, &asset.bounds, &pose, hover);
         }
         if !selected {
             continue;
@@ -1141,7 +1162,7 @@ fn draw(
                 min: c - Vec3::splat(h),
                 max: c + Vec3::splat(h),
             };
-            box_lines(&mut gizmos, &cube, &Pose::IDENTITY, ACCENT);
+            box_lines(&mut gizmos, &cube, &Pose::IDENTITY, accent);
         }
     }
 }
@@ -1149,6 +1170,19 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q-278, Q-T452.3 (§1.8 Comfort: "the ray and highlight colors have a high-contrast
+    /// alternative"): under high contrast the hovered and selected boxes are fully
+    /// saturated yellow and cyan, distinct from each other and from the defaults.
+    #[test]
+    fn highlight_colors_have_a_high_contrast_alternative() {
+        assert_eq!(highlight_colors(false), (HOVER, ACCENT));
+        let (hover, selected) = highlight_colors(true);
+        assert_eq!(hover, Color::srgb(1.0, 1.0, 0.0));
+        assert_eq!(selected, Color::srgb(0.0, 1.0, 1.0));
+        assert_ne!(hover, selected);
+        assert_ne!((hover, selected), highlight_colors(false));
+    }
 
     fn ray(o: Vec3, d: Vec3) -> (Vec3, Vec3) {
         (o, d.normalize())
