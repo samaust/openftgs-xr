@@ -694,7 +694,7 @@ pub fn scene_from_world(world: &World) -> SceneFile {
 
 /// Replaces the current scene with `scene` (§1.5 Scene files): each model whose source
 /// still offers it loads through the library (`LibraryCommand::LoadRef`), its pose,
-/// visibility, mode, offset, end rule and audio applied when the instance appears; a
+/// visibility, mode, offset, end rule, lighting and audio applied when the instance appears; a
 /// local file that no longer exists is listed in `library` as `EntryState::Missing` and
 /// its name returned (Q-54, E-SCENE-MISSING); a file read with another identity than the
 /// scene's is refused and its model listed as missing then (Q-245). The clock,
