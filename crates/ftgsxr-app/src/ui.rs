@@ -174,8 +174,9 @@ pub(crate) fn pointer_events(
 }
 
 /// The HUD's data (§1.13 HUD), filled every frame as far as the app can; the overlay
-/// that draws it is M-9's, the "active" count and the XR fields join in M-9 and M-5.
-// Q-159
+/// that draws it is M-9's, the "active" count joins in M-9. The XR fields are the XR
+/// crate's to write each frame, untracked without a session (Q-274).
+// Q-159, Q-274
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct HudData {
     /// Frames per second, from the frame time.
@@ -212,6 +213,9 @@ pub struct HudData {
     pub tier: String,
     /// The governor's current knobs: render scale, SH cap, sort mode, foveation.
     pub knobs: (f32, u8, Option<SortMode>, Option<Foveation>),
+    /// Whether the head is tracked this frame; false without an XR session.
+    // Q-274
+    pub head_tracked: bool,
 }
 
 /// One instance's line of the HUD (Q-159).

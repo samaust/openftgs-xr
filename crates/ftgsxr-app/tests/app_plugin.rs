@@ -11,7 +11,7 @@ use crate::support;
 use std::fs;
 
 use bevy::render::RenderApp;
-use ftgsxr_app::{Headset, PlatformRes, Settings, SettingsPath, SettingsRes};
+use ftgsxr_app::{Headset, HudData, PlatformRes, Settings, SettingsPath, SettingsRes};
 use ftgsxr_testkit::layer_messages;
 use support::{Setup, TestApp};
 
@@ -33,6 +33,19 @@ fn app_plugin_does_not_insert_the_headset_marker() {
     let mut t = TestApp::new("no-headset");
     t.frames(2);
     assert!(!t.app.world().contains_resource::<Headset>());
+}
+
+/// `HudData`'s XR field is the XR crate's to write (Q-274): false without it, and the
+/// app's own filling leaves a written value alone.
+// Q-274
+#[test]
+fn hud_data_s_head_tracking_is_left_to_the_xr_crate() {
+    let mut t = TestApp::new("hud-xr");
+    t.frames(2);
+    assert!(!t.app.world().resource::<HudData>().head_tracked);
+    t.app.world_mut().resource_mut::<HudData>().head_tracked = true;
+    t.frames(2);
+    assert!(t.app.world().resource::<HudData>().head_tracked);
 }
 
 #[test]
