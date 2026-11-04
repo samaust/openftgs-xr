@@ -30,7 +30,7 @@ use ftgsxr_render::{Colormap, RenderMode, SplatMode};
 use super::{XrInputConfig, XrInputState, aim_ray, hands_to_intents};
 use crate::XrError;
 use crate::error::log_warning;
-use crate::tracking::{Actions, HandSource, XrHands};
+use crate::tracking::{Actions, GRAB, HOVER, HandSource, Pulse, TICK, XrHands};
 
 /// A panel quad's size for the ray test (Q-265): declared here, inserted by `panel` on
 /// the main panel and the wrist menu, each with `WorldPanel` and a `GlobalTransform`
@@ -415,27 +415,6 @@ fn draw(
         gizmos.linestrip(frame.arc.iter().copied(), ray);
     }
 }
-
-/// One of D-44's pulses.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Pulse {
-    pub(crate) duration_ms: u32,
-    pub(crate) amplitude: f32,
-}
-
-/// §1.8 Controllers, D-44.
-pub(crate) const HOVER: Pulse = Pulse {
-    duration_ms: 10,
-    amplitude: 0.3,
-};
-pub(crate) const GRAB: Pulse = Pulse {
-    duration_ms: 20,
-    amplitude: 0.6,
-};
-pub(crate) const TICK: Pulse = Pulse {
-    duration_ms: 15,
-    amplitude: 0.5,
-};
 
 /// What the haptics compare frame to frame: each hovered instance with its hand, each
 /// grabbed instance with the hands holding it.
@@ -887,5 +866,28 @@ mod tests {
         aiming(&mut app, 1.0);
         app.update();
         assert!(app.world().get::<Selected>(instance).is_some(), "selected");
+    }
+
+    /// Dv-8's pinch clause through this module's own system (kept here, after `tracking`
+    /// in §2.1's order, #452): the synthetic 0.8 pinch writes `Select`, and the test
+    /// passes with no session (no pulse: no controller).
+    #[test]
+    fn run_pinch_writes_select_through_xr_input() {
+        use crate::tracking::dv8::{Dv8, Phase, run};
+        let mut app = App::new();
+        app.add_plugins(XrInputPlugin)
+            .insert_resource(Dv8::new(Phase::Pulse))
+            .add_systems(PostUpdate, run);
+        for _ in 0..10 {
+            app.update();
+        }
+        let test = app.world().resource::<Dv8>();
+        let (pass, detail) = test.verdict.clone().expect("a verdict");
+        assert!(pass, "{detail}");
+        assert!(detail.contains("pulse: no controller"), "{detail}");
+        assert!(
+            detail.contains("wrote Select on the right hand"),
+            "{detail}"
+        );
     }
 }

@@ -12,7 +12,7 @@
 
 // Dv-8's device side (#463, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
-mod dv8;
+pub(crate) mod dv8;
 mod hands;
 mod meshes;
 
@@ -219,6 +219,28 @@ impl Actions {
             .apply_feedback(session, self.hands[side], &event)
     }
 }
+
+/// One of D-44's pulses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Pulse {
+    pub(crate) duration_ms: u32,
+    pub(crate) amplitude: f32,
+}
+
+/// §1.8 Controllers, D-44: hover enter, a grab's start and end, a snap turn and a UI
+/// click. `xr_input`'s haptics apply them through `Actions::pulse`.
+pub(crate) const HOVER: Pulse = Pulse {
+    duration_ms: 10,
+    amplitude: 0.3,
+};
+pub(crate) const GRAB: Pulse = Pulse {
+    duration_ms: 20,
+    amplitude: 0.6,
+};
+pub(crate) const TICK: Pulse = Pulse {
+    duration_ms: 15,
+    amplitude: 0.5,
+};
 
 fn create_actions(instance: &OxrInstance) -> openxr::Result<Actions> {
     let hands = [

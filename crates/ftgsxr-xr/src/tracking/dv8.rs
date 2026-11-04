@@ -34,8 +34,7 @@ use super::hands::{
     Flow, FrequencyHint, HandTrackers, HandsPermission, HandsWanted, LocatedHands, RawHand, Resume,
     WRIST, located,
 };
-use super::{Actions, HandSource, TrackedHand, XrHands};
-use crate::xr_input::GRAB;
+use super::{Actions, GRAB, HandSource, TrackedHand, XrHands};
 
 /// The name of the entity the quest runner spawns to start the test (Q-308).
 // Q-308
@@ -496,26 +495,5 @@ mod tests {
         assert!(d.contains("flags not seen"), "{d}");
         assert!(JointsWindow::default().detail(false).contains("absent"));
         assert!(!JointsWindow::default().pass(), "no locate is no pass");
-    }
-
-    /// The pinch clause through `xr_input`'s own system: the synthetic 0.8 pinch writes
-    /// `Select`, and the test passes with no session (no pulse: no controller).
-    #[test]
-    fn run_pinch_writes_select_through_xr_input() {
-        let mut app = App::new();
-        app.add_plugins(crate::xr_input::XrInputPlugin)
-            .insert_resource(Dv8::new(Phase::Pulse))
-            .add_systems(PostUpdate, run);
-        for _ in 0..10 {
-            app.update();
-        }
-        let test = app.world().resource::<Dv8>();
-        let (pass, detail) = test.verdict.clone().expect("a verdict");
-        assert!(pass, "{detail}");
-        assert!(detail.contains("pulse: no controller"), "{detail}");
-        assert!(
-            detail.contains("wrote Select on the right hand"),
-            "{detail}"
-        );
     }
 }
