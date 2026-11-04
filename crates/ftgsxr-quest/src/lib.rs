@@ -15,3 +15,5 @@ mod device_test;
 mod dv2_rate;
 #[cfg(target_os = "android")]
 mod jni_calls;
+#[cfg(any(test, target_os = "android"))]
+mod tree;
