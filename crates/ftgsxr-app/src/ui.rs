@@ -268,24 +268,9 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 impl InstanceLighting {
     /// The component with the `SplatTransform` its values give.
     pub(crate) fn bundle(m: ManualLighting) -> (InstanceLighting, SplatTransform) {
-        let gain = manual_gain(&m);
-        (InstanceLighting(m), SplatTransform(ColorTransform { gain }))
+        let transform = ColorTransform::from_manual(&m);
+        (InstanceLighting(m), SplatTransform(transform))
     }
-}
-
-/// E14's manual form: g = 2^EV and w = (1 + 0.4 t, 1 − 0.4 u, 1 − 0.4 t) scaled to mean
-/// 1, unclamped; the gain is g w, the identity at zero. The app's copy of
-/// `ftgsxr_xr::light::manual_gains`, which `ftgsxr-app` may not call (§2.1's bands).
-// Q-250
-pub(crate) fn manual_gain(m: &ManualLighting) -> Vec3 {
-    let g = m.exposure_ev.exp2();
-    let w = Vec3::new(
-        1.0 + 0.4 * m.temperature,
-        1.0 - 0.4 * m.tint,
-        1.0 - 0.4 * m.temperature,
-    );
-    let mean = (w.x + w.y + w.z) / 3.0;
-    g * w / mean
 }
 
 /// The most recent eight scene files, newest first (§1.5 Scene files, Q-200): the scene
@@ -1111,37 +1096,6 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(app.world().resource::<UiState>().confirm, None);
-    }
-
-    // Q-250: U-20's manual case (EV 1 → g = 2), the identity at zero, and E14's w.
-    #[test]
-    fn manual_gain_gives_e14s_manual_form() {
-        let at = |exposure_ev, temperature, tint| {
-            manual_gain(&ManualLighting {
-                exposure_ev,
-                temperature,
-                tint,
-            })
-        };
-        assert_eq!(at(0.0, 0.0, 0.0), Vec3::ONE);
-        assert!((at(1.0, 0.0, 0.0) - Vec3::splat(2.0)).abs().max_element() < 1e-6);
-        // w = (1.4, 1, 0.6), already of mean 1: warmer.
-        assert!(
-            (at(0.0, 1.0, 0.0) - Vec3::new(1.4, 1.0, 0.6))
-                .abs()
-                .max_element()
-                < 1e-6
-        );
-        // w = (1, 0.6, 1) / (2.6 / 3): less green.
-        let k = 3.0 / 2.6;
-        assert!(
-            (at(0.0, 0.0, 1.0) - Vec3::new(k, 0.6 * k, k))
-                .abs()
-                .max_element()
-                < 1e-6
-        );
-        // Unclamped: EV 3 → g = 8.
-        assert!((at(3.0, 0.0, 0.0) - Vec3::splat(8.0)).abs().max_element() < 1e-5);
     }
 
     // Q-200 (moved from `persist`, #417): the newest eight scene files, newest first,
