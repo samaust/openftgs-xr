@@ -36,7 +36,9 @@ use crate::manipulate::{Poses, now_rfc3339, pose_of, transform_of};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
-use crate::ui::{DockHooks, SceneLoadConfirmed, Tab, ToastRequest, UiState};
+use crate::ui::{
+    DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState, recent_scenes,
+};
 
 mod panels;
 
@@ -118,11 +120,6 @@ impl PersistFailure {
         }
     }
 }
-
-/// The most recent eight scene files, newest first (§1.5 Scene files): the UI's one-tap
-/// list, refreshed at startup and after each save and load.
-#[derive(Resource, Clone, Debug, Default, PartialEq)]
-pub(crate) struct RecentScenes(pub(crate) Vec<PathBuf>);
 
 /// The files `persist` writes beside the settings.
 #[derive(Resource, Clone, Debug)]
@@ -415,24 +412,6 @@ fn scene_path(scenes: &Path, p: &Path) -> PathBuf {
         p.set_file_name(format!("{name}{SUFFIX}"));
     }
     p
-}
-
-/// The most recent eight `*.ftgsxr-scene.json` under `dir`, newest first.
-pub(crate) fn recent_scenes(dir: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd
-        .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .ends_with(".ftgsxr-scene.json")
-        })
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .collect();
-    files.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    files.into_iter().take(8).map(|(_, p)| p).collect()
 }
 
 /// The commands, in order, with the world at hand.
@@ -1342,23 +1321,44 @@ mod tests {
         );
     }
 
+    // §1.5 Scene files, Q-200 (#417): with ten older scene files, a save refreshes ui's
+    // recent list to the eight newest, the saved scene first.
     #[test]
-    fn recent_scenes_are_the_newest_eight() {
-        let dir = std::env::temp_dir().join(format!("ftgsxr-recent-{}", std::process::id()));
+    fn a_save_heads_the_recent_scenes_of_the_newest_eight() {
+        let dir = std::env::temp_dir().join(format!("ftgsxr-recent-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let scenes = dir.join("scenes");
+        std::fs::create_dir_all(&scenes).unwrap();
         let base = std::time::SystemTime::now() - Duration::from_secs(100);
         for k in 0..10u64 {
-            let p = dir.join(format!("s{k}.ftgsxr-scene.json"));
+            let p = scenes.join(format!("s{k}.ftgsxr-scene.json"));
             std::fs::write(&p, "{}").unwrap();
             let f = std::fs::File::options().write(true).open(&p).unwrap();
             f.set_modified(base + Duration::from_secs(k)).unwrap();
         }
-        std::fs::write(dir.join("other.json"), "{}").unwrap();
-        let recent = recent_scenes(&dir);
-        assert_eq!(recent.len(), 8);
-        assert_eq!(recent[0], dir.join("s9.ftgsxr-scene.json"));
-        assert_eq!(recent[7], dir.join("s2.ftgsxr-scene.json"));
+        let mut app = App::new();
+        app.add_message::<PersistCommand>()
+            .add_message::<PersistFailure>()
+            .add_message::<Intent>()
+            .add_message::<LibraryCommand>()
+            .insert_resource(Files {
+                poses: dir.join("poses.json"),
+                scenes: scenes.clone(),
+                models: dir.join("models"),
+            })
+            .init_resource::<RecentScenes>()
+            .add_systems(Update, run_commands);
+        app.world_mut()
+            .write_message(PersistCommand::SaveScene("new".into()));
+        app.update();
+        let recent = app.world().resource::<RecentScenes>().0.clone();
+        let names: Vec<String> = recent
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        let mut expected = vec!["new.ftgsxr-scene.json".to_owned()];
+        expected.extend((3..10u64).rev().map(|k| format!("s{k}.ftgsxr-scene.json")));
+        assert_eq!(names, expected);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
