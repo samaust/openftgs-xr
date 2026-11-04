@@ -19,7 +19,7 @@ The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startu
 A relative scene path names a file under `AppPaths.scenes`; `Intent::Ui(SaveScene)` saves under a UTC date-and-time name, and `Intent::Ui(LoadScene)` is `ui`'s to confirm first (Q-200). Model locations are relative to `AppPaths.models` by Q-3's rule.
 
 - **`scene_from_world`** writes the instances, their poses, visibility (`ShowOnUpload` before the upload, Q-202), modes and time mappings, the clock with its range (Q-204), the rig's pose, the desktop camera and its bookmarks; each instance's `lighting` is its Scene-tab manual values, null at the identity, and a loaded scene's `lighting` is applied as its instance appears; the anchor is written null until M-5 and M-9 hold it (Q-206, Q-250).
-- **`LoadScene`** resolves the locations, unloads every instance and calls `apply_scene`. A local model whose file is missing becomes a library entry in its missing state with an E-SCENE-MISSING toast (Q-203). A model whose source now holds a file of another identity is refused once read and becomes a missing entry too, with E-SCENE-MISSING, and the clock does not wait for it (Q-245). A hidden instance stays hidden through its upload (Q-202). The clock's T and range are applied one frame after every instance appeared (Q-204).
+- **`LoadScene`** resolves the locations, unloads every instance and calls `apply_scene`. A local model whose file is missing becomes a library entry in its missing state with an E-SCENE-MISSING toast (Q-203). A model whose source now holds a file of another identity is refused once read and becomes a missing entry too, with E-SCENE-MISSING, and the clock does not wait for it (Q-245). A missing model's attributes are kept for a later load of its identity (Q-225), or for the file a `ReplaceEntry` puts in its place, whatever its identity: that instance carries the replaced identity in a crate-private `Replaces`, and the next save writes its own source and identity (§1.5 Library, Q-255, Q-258). A hidden instance stays hidden through its upload (Q-202). The clock's T and range are applied one frame after every instance appeared (Q-204).
 
 ## Failures
 
@@ -27,4 +27,4 @@ A crate-private `PersistFailure { code, text }` carries the settings' and the po
 
 ## Q-n rows relied on
 
-Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-245, Q-252, Q-253; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.
+Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-225, Q-245, Q-252, Q-253, Q-255, Q-258; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.
