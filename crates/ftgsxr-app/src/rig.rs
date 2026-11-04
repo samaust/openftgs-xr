@@ -662,7 +662,7 @@ fn run_camera(
     }
 }
 
-/// `Locomote` and `SnapTurn` move the rig (E12); the head is the active camera of the
+/// `Locomote`, `SnapTurn` and `Teleport` move the rig (E12, §1.8 Locomotion); the head is the active camera of the
 /// lowest order, as manipulate's fit (Q-180), else the rig itself.
 fn run_locomotion(
     mut intents: MessageReader<Intent>,
@@ -693,7 +693,10 @@ fn run_locomotion(
             )
         });
     for intent in intents.read() {
-        if !matches!(intent, Intent::Locomote { .. } | Intent::SnapTurn { .. }) {
+        if !matches!(
+            intent,
+            Intent::Locomote { .. } | Intent::SnapTurn { .. } | Intent::Teleport { .. }
+        ) {
             continue;
         }
         // The head follows the rig within the frame: its rig-local pose is fixed.
@@ -701,11 +704,33 @@ fn run_locomotion(
             Some((inv0, h)) => h.then(&inv0).then(&rig),
             None => rig,
         };
-        rig = apply_locomotion(rig, head, intent, &loco, dt);
+        rig = match *intent {
+            Intent::Teleport { target } => teleport(rig, head, target, &loco),
+            _ => apply_locomotion(rig, head, intent, &loco, dt),
+        };
     }
     let t = transform_of(rig);
     if t != *rig_t {
         *rig_t = t;
+    }
+}
+
+/// §1.8 Locomotion's teleport: the rig translated so the head's floor point lands on
+/// the target's, its height unchanged (the target's y is not read); nothing in
+/// passthrough mode (D-17). `apply_locomotion` keeps Q-195's contract.
+// Q-269, Q-T455.1
+fn teleport(rig: Pose, head: Pose, target: Vec3, loco: &Locomotion) -> Pose {
+    if !loco.enabled {
+        return rig;
+    }
+    let d = Vec3::new(
+        target.x - head.translation.x,
+        0.0,
+        target.z - head.translation.z,
+    );
+    Pose {
+        translation: rig.translation + d,
+        ..rig
     }
 }
 
