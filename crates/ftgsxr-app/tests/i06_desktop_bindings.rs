@@ -167,6 +167,10 @@ fn i06_every_key_of_the_multi_key_rows_produces_its_intent() {
     t.frames(1);
     take(&mut t);
     let nudge = |delta| Intent::Nudge { instance: e, delta };
+    let turn = |yaw_deg| Intent::Turn {
+        instance: e,
+        yaw_deg,
+    };
     let mut rows: Vec<(&[KeyCode], KeyCode, Intent)> = Vec::new();
     let arrows = [
         (KeyCode::ArrowLeft, Vec3::NEG_X),
@@ -176,18 +180,13 @@ fn i06_every_key_of_the_multi_key_rows_produces_its_intent() {
     ];
     for (k, d) in arrows {
         rows.push((&[], k, nudge(d * 0.01)));
+        // Shift: × 10 the 1 cm step (Q-197).
+        rows.push((&[SHIFT], k, nudge(d * (10.0 * 0.01))));
     }
     rows.push((&[], KeyCode::PageUp, nudge(Vec3::Y * 0.01)));
     rows.push((&[], KeyCode::PageDown, nudge(Vec3::NEG_Y * 0.01)));
     for (k, yaw_deg) in [(KeyCode::BracketLeft, 5.0), (KeyCode::BracketRight, -5.0)] {
-        rows.push((
-            &[],
-            k,
-            Intent::Turn {
-                instance: e,
-                yaw_deg,
-            },
-        ));
+        rows.push((&[], k, turn(yaw_deg)));
     }
     let digits = [
         KeyCode::Digit1,
@@ -209,18 +208,6 @@ fn i06_every_key_of_the_multi_key_rows_produces_its_intent() {
         assert!(
             has(&got, want),
             "{mods:?} {k:?}: want {want:?}, got {got:?}"
-        );
-    }
-    // With Shift, 10 cm: 10 × 0.01 m in f32 is not exactly 0.1, so the step is held to
-    // I-8's 10⁻⁶.
-    for (k, d) in arrows {
-        let got = no_pointer(chord(&mut t, &[SHIFT], k));
-        assert!(
-            got.iter().any(|i| matches!(i,
-                Intent::Nudge { instance, delta }
-                    if *instance == e && (*delta - d * 0.1).length() < 1e-6)),
-            "Shift {k:?}: want a nudge of {}, got {got:?}",
-            d * 0.1
         );
     }
 }
