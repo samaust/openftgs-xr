@@ -260,15 +260,46 @@ const DOCK_MAX_SHARE: f32 = 0.6;
 /// `window` points wide; below 267 points the 160-point floor wins (§1.7 Panels, Q-251).
 // Q-251
 fn dock_panel(width: f32, window: f32) -> egui::Panel {
-    let max = (DOCK_MAX_SHARE * window).max(DOCK_MIN_WIDTH);
-    egui::Panel::left("ftgsxr-dock")
+    egui::Panel::left(DOCK_ID)
         .resizable(true)
         .default_size(width)
-        .size_range(DOCK_MIN_WIDTH..=max)
+        .size_range(dock_range(window))
 }
 
-/// The dock and its tabs; its width is kept in `UiState`, and `persist` saves it with
-/// whether it is open (§1.7 Panels, Q-252).
+/// The dock's panel id.
+const DOCK_ID: &str = "ftgsxr-dock";
+
+/// §1.7 Panels, Q-251: the dock's widths in a window `window` points wide.
+fn dock_range(window: f32) -> std::ops::RangeInclusive<f32> {
+    DOCK_MIN_WIDTH..=(DOCK_MAX_SHARE * window).max(DOCK_MIN_WIDTH)
+}
+
+/// Draws the dock's panel at its saved `width` clamped to the window's range, and
+/// returns the width the user dragged it to, if any (Q-252). egui's remembered size is
+/// dropped first, so a window narrowed and widened again draws the saved width once
+/// more; the drawn width differs from the clamped one (by half a point or more, beyond
+/// egui's 1/32-point rounding) only while the handle is dragged.
+// Q-252
+fn show_dock_panel<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> (f32, Option<f32>) {
+    let window = ui.ctx().viewport_rect().width();
+    ui.ctx()
+        .data_mut(|d| d.remove::<egui::containers::panel::PanelState>(egui::Id::new(DOCK_ID)));
+    let range = dock_range(window);
+    let shown = width.clamp(*range.start(), *range.end());
+    let drawn = dock_panel(width, window)
+        .show(ui, add_contents)
+        .response
+        .rect
+        .width();
+    (drawn, ((drawn - shown).abs() >= 0.5).then_some(drawn))
+}
+
+/// The dock and its tabs; its width is kept in `UiState`, changed only by a drag of its
+/// handle, and `persist` saves it with whether it is open (§1.7 Panels, Q-252).
 fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Option<egui::Id>) {
     let (open, width, tab) = {
         let s = world.resource::<UiState>();
@@ -277,8 +308,7 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
     if !open {
         return;
     }
-    let window = ctx.ctx().viewport_rect().width();
-    let r = dock_panel(width, window).show(ctx, |ui| {
+    let (_, dragged) = show_dock_panel(ctx, width, |ui| {
         ui.horizontal_wrapped(|ui| {
             for t in Tab::ALL {
                 let r = ui.selectable_label(t == tab, format!("{t:?}"));
@@ -325,7 +355,9 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
             }
         });
     });
-    world.resource_mut::<UiState>().dock_width = r.response.rect.width();
+    if let Some(w) = dragged {
+        world.resource_mut::<UiState>().dock_width = w;
+    }
 }
 
 /// The source a Library tab entry names: an `http(s)` URL is an HTTP index, an absolute
@@ -1089,8 +1121,8 @@ fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
 mod tests {
     use super::{
         Colormap, Entity, InstanceAction, Intent, LoadedModel, Out, RenderMode, SplatMode,
-        Transform, Visibility, World, display_tab, dock_panel, egui, load_choices, playback_tab,
-        replay_lines, replay_loaded_degree, scene_tab, source_from_input,
+        Transform, Visibility, World, display_tab, egui, load_choices, playback_tab, replay_lines,
+        replay_loaded_degree, scene_tab, show_dock_panel, source_from_input,
     };
     use crate::SplatEvent;
     use crate::manipulate::Selected;
@@ -1111,33 +1143,55 @@ mod tests {
         }
     }
 
-    /// The width a dock saved at `width` is drawn at in a window `window` points wide.
-    fn drawn_width(width: f32, window: f32) -> f32 {
-        let ctx = egui::Context::default();
-        let input = || egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(window, 600.0),
-            )),
-            ..Default::default()
-        };
-        let mut drawn = 0.0;
-        // Two frames: the second draws from the panel's remembered state.
-        for _ in 0..2 {
-            let mut out = ctx.run_ui(input(), |ui| {
-                let w = ui.ctx().viewport_rect().width();
-                drawn = dock_panel(width, w)
+    /// A dock in a test context: its saved width (`UiState.dock_width`), changed as
+    /// `dock` changes it, by the width a drag draws (Q-252).
+    struct Dock {
+        ctx: egui::Context,
+        saved: f32,
+    }
+
+    impl Dock {
+        fn new(saved: f32) -> Self {
+            Dock {
+                ctx: egui::Context::default(),
+                saved,
+            }
+        }
+
+        /// One frame in a window `window` points wide, with `events`; the drawn width.
+        fn frame(&mut self, window: f32, events: Vec<egui::Event>) -> f32 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(window, 600.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let (mut drawn, mut dragged) = (0.0, None);
+            let mut out = self.ctx.run_ui(input, |ui| {
+                (drawn, dragged) = show_dock_panel(ui, self.saved, |ui| {
                     // Content that fills the panel's width, as the dock's tabs do.
-                    .show(ui, |ui| {
-                        ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
-                    })
-                    .response
-                    .rect
-                    .width();
+                    ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
+                });
             });
             out.textures_delta.clear();
+            if let Some(w) = dragged {
+                self.saved = w;
+            }
+            drawn
         }
-        drawn
+
+        /// Two frames, the second drawn from the first's state; the drawn width.
+        fn settle(&mut self, window: f32) -> f32 {
+            self.frame(window, Vec::new());
+            self.frame(window, Vec::new())
+        }
+    }
+
+    /// The width a dock saved at `width` is drawn at in a window `window` points wide.
+    fn drawn_width(width: f32, window: f32) -> f32 {
+        Dock::new(width).settle(window)
     }
 
     // §1.7 Panels, Q-251 (#428): a saved width is drawn within [160, 60 % of the
@@ -1148,6 +1202,69 @@ mod tests {
         assert_eq!(drawn_width(900.0, 1000.0), 600.0);
         assert_eq!(drawn_width(320.0, 1000.0), 320.0);
         assert_eq!(drawn_width(320.0, 200.0), 160.0);
+    }
+
+    // §1.7 Panels, Q-252 (owner, #441): a window narrowed below the saved width
+    // clamps only the drawing; the saved width is kept, and drawn again once the
+    // window is wide enough.
+    #[test]
+    fn a_narrowed_window_keeps_the_saved_dock_width() {
+        let mut dock = Dock::new(600.0);
+        assert_eq!(dock.settle(1200.0), 600.0);
+        assert_eq!(dock.settle(800.0), 480.0);
+        assert_eq!(dock.saved, 600.0);
+        assert_eq!(dock.settle(1200.0), 600.0);
+        assert_eq!(dock.saved, 600.0);
+        // A window under 267 points, where the floor wins, keeps it too.
+        assert_eq!(dock.settle(200.0), 160.0);
+        assert_eq!(dock.settle(1200.0), 600.0);
+        assert_eq!(dock.saved, 600.0);
+    }
+
+    // §1.7 Panels, Q-252 (owner, #441): a larger UI scale narrows the window in points
+    // (`ui_scale_follows_settings` sets egui's zoom, and bevy_egui gives egui the
+    // window's pixels divided by the zoom), which clamps only the drawing.
+    #[test]
+    fn a_larger_ui_scale_keeps_the_saved_dock_width() {
+        let pixels = 1200.0;
+        let mut dock = Dock::new(600.0);
+        assert_eq!(dock.settle(pixels / 1.0), 600.0);
+        assert_eq!(dock.settle(pixels / 2.0), 360.0);
+        assert_eq!(dock.saved, 600.0);
+        assert_eq!(dock.settle(pixels / 1.0), 600.0);
+        assert_eq!(dock.saved, 600.0);
+    }
+
+    // §1.7 Panels, Q-252 (owner, #441): a drag of the dock's handle is the one change
+    // of its saved width, kept within the window's range.
+    #[test]
+    fn a_drag_of_the_handle_sets_the_saved_dock_width() {
+        let mut dock = Dock::new(320.0);
+        assert_eq!(dock.settle(1000.0), 320.0);
+        let at = |x: f32| egui::Pos2::new(x, 300.0);
+        let button = |x: f32, pressed: bool| egui::Event::PointerButton {
+            pos: at(x),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        dock.frame(1000.0, vec![egui::Event::PointerMoved(at(320.0))]);
+        dock.frame(1000.0, vec![button(320.0, true)]);
+        for x in [340.0, 380.0, 400.0] {
+            dock.frame(1000.0, vec![egui::Event::PointerMoved(at(x))]);
+        }
+        dock.frame(1000.0, vec![button(400.0, false)]);
+        assert_eq!(dock.saved, 400.0);
+        assert_eq!(dock.settle(1000.0), 400.0);
+        assert_eq!(dock.saved, 400.0);
+        // A drag past 60 % of the window saves the widest drawn.
+        dock.frame(1000.0, vec![egui::Event::PointerMoved(at(400.0))]);
+        dock.frame(1000.0, vec![button(400.0, true)]);
+        for x in [450.0, 700.0, 900.0] {
+            dock.frame(1000.0, vec![egui::Event::PointerMoved(at(x))]);
+        }
+        dock.frame(1000.0, vec![button(900.0, false)]);
+        assert_eq!(dock.saved, 600.0);
     }
 
     fn sh_line(lines: &[String]) -> Option<&String> {
