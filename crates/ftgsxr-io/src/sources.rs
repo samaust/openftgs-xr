@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, read_info};
+use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, checkpoint_dir, read_info};
 /// The URL type of `ModelRef::Http`, for callers that build one (Q-168).
 // Q-168
 pub use url::Url;
@@ -435,12 +435,13 @@ pub fn open_source(
 }
 
 /// The model `r` names (§1.5): a local file read into memory, a local directory as the
-/// checkpoint it holds, loaded by path (D-51), a download through `client`, or a document
-/// through `provider` (Q-47). An `Http` URL whose path ends in `/` is a checkpoint directory,
+/// checkpoint it holds, loaded by path (D-51), as is a checkpoint's `manifest.json`
+/// (`checkpoint_dir`, Q-260), a download through `client`, or a document through
+/// `provider` (Q-47). An `Http` URL whose path ends in `/` is a checkpoint directory,
 /// downloaded into its cache entry as `HttpIndex::fetch` downloads one (its params checked
 /// against the manifest's digest, Q-57), a missing manifest being E-NET-FETCH; any other
 /// names a file, downloaded with no expected digest (Q-60).
-// D-51, Q-47, Q-57, Q-60
+// D-51, Q-47, Q-57, Q-60, Q-260
 pub fn open_ref(
     r: &ModelRef,
     client: Option<&HttpClient>,
@@ -449,6 +450,9 @@ pub fn open_ref(
     let cancel = AtomicBool::new(false);
     match r {
         ModelRef::File(path) => {
+            if let Some(dir) = checkpoint_dir(path) {
+                return Ok(ModelBytes::Checkpoint(dir));
+            }
             if path.is_dir() {
                 return Ok(ModelBytes::Checkpoint(path.clone()));
             }
