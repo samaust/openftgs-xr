@@ -294,6 +294,10 @@ struct LoadCtx {
     entry: Option<(u64, String)>,
     /// The file's N, when known before the load.
     file_n: Option<u64>,
+    /// Whether the load asked to reduce to budget (§1.2 option 4), which a reload asks
+    /// again under the running tier (Q-238).
+    reduce: bool,
+    /// The rows the load keeps, when fewer than the file's are asked for.
     reduce_to: Option<usize>,
     audio: Option<ModelRef>,
     /// The identity a "Locate…" pick must have (Q-225).
@@ -657,6 +661,7 @@ fn run_commands(
                         name: stem(Path::new(&e.entry.name)),
                         entry: Some((id, e.entry.location.clone())),
                         file_n: e.info.as_ref().map(|i| i.n),
+                        reduce,
                         reduce_to,
                         audio: None,
                         locate: None,
@@ -683,6 +688,7 @@ fn run_commands(
                         source: r,
                         entry: None,
                         file_n: None,
+                        reduce: false,
                         reduce_to: None,
                         audio: None,
                         locate,
@@ -905,14 +911,31 @@ fn is_missing_default(spec: &SourceSpec, e: &IoError, default_models: &Path) -> 
 }
 
 /// Collects finished listings, header reads and fetches.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a Bevy system: one parameter per resource it reads"
+)]
 fn poll_tasks(
     mut library: ResMut<Library>,
     mut pending: ResMut<Pending>,
     mut failures: MessageWriter<LibraryFailure>,
     platform: Res<PlatformRes>,
     client: Res<Client>,
+    gpu: Option<Res<SplatGpu>>,
+    tier: Res<SplatTierState>,
+    models: Query<&LoadedModel>,
+    mut device_tier: Local<Option<ftgsxr_render::QualityTier>>,
     mut commands: Commands,
 ) {
+    // Q-238: the tier the render plugin's device was last made for, so a reduced reload
+    // counts against the new tier's device, which `SplatGpu` holds only from the frame
+    // after a switch.
+    if let Some(g) = &gpu
+        && g.is_changed()
+    {
+        *device_tier = Some(tier.tier.clone());
+    }
+    let device_ready = gpu.is_none() || device_tier.as_ref() == Some(&tier.tier);
     pending.sync(library.sources.len());
     let pending = &mut *pending;
     let default_models = platform.0.paths().models.clone();
@@ -1106,6 +1129,10 @@ fn poll_tasks(
     // Fetches: an instance per model, hidden until its upload (Q-148).
     let fetches = std::mem::take(&mut pending.fetches);
     for mut f in fetches {
+        if f.target.is_some() && f.ctx.reduce && !device_ready {
+            pending.fetches.push(f);
+            continue;
+        }
         let Some(result) = check_ready(&mut f.task) else {
             if let Some(p) = *f.progress.lock().unwrap_or_else(|e| e.into_inner())
                 && let Some(e) = entry_of(&mut library, pending, &f.ctx)
@@ -1115,15 +1142,36 @@ fn poll_tasks(
             pending.fetches.push(f);
             continue;
         };
-        // Q-238: a reload goes on its own instance, whose state stays.
+        // Q-238: a reload goes on its own instance, whose state stays. One whose load asked
+        // to reduce to budget asks again: Q-158's count under the running tier, against the
+        // models on the device now, as a fresh load requested at this moment.
         let result = match (f.target, result) {
             (Some(target), Ok(FetchedModel { bytes, .. })) => {
+                let mut ctx = f.ctx;
+                if ctx.reduce {
+                    let info = entry_of(&mut library, pending, &ctx)
+                        .and_then(|e| e.info.clone())
+                        .or_else(|| {
+                            models.get(target).ok().map(|m| ModelInfo {
+                                n: ctx.file_n.unwrap_or(m.info.n),
+                                ..m.info.clone()
+                            })
+                        });
+                    ctx.reduce_to = info
+                        .as_ref()
+                        .and_then(|info| reduce_count(info, gpu.as_deref(), &tier));
+                    // #205: the reduced label compares with the file's rows.
+                    ctx.file_n = info.map(|i| i.n).or(ctx.file_n);
+                }
                 if let Ok(mut e) = commands.get_entity(target) {
-                    e.insert(SplatLoad {
-                        bytes,
-                        kind_hint: f.ctx.kind_hint,
-                        reduce_to: f.ctx.reduce_to,
-                    });
+                    e.insert((
+                        SplatLoad {
+                            bytes,
+                            kind_hint: ctx.kind_hint,
+                            reduce_to: ctx.reduce_to,
+                        },
+                        ctx,
+                    ));
                 }
                 continue;
             }
@@ -1315,9 +1363,24 @@ fn on_model(
         return;
     };
     let identity: String = asset.identity.iter().map(|b| format!("{b:02x}")).collect();
+    // #205: reduced when the rows requested are fewer than the file's.
+    let file_n = ctx.file_n.unwrap_or(asset.info.n);
+    let reduced = ctx.reduce_to.is_some_and(|k| (k as u64) < file_n);
     // Q-238: a reload of the same file keeps its `LoadedModel`, so nothing that follows
-    // it (the scene's poses, the soundtrack) starts again.
-    if loaded.is_some_and(|m| m.identity == identity) {
+    // it (the scene's poses, the soundtrack) starts again; only its rows follow the
+    // reload's count.
+    if let Some(m) = loaded
+        && m.identity == identity
+    {
+        if m.reduced != reduced || m.info != asset.info {
+            let (info, entity) = (asset.info.clone(), add.entity);
+            commands.queue(move |world: &mut World| {
+                if let Some(mut m) = world.get_mut::<LoadedModel>(entity) {
+                    m.reduced = reduced;
+                    m.info = info;
+                }
+            });
+        }
         return;
     }
     // Q-225: a located file of another identity is refused; a load of a missing
@@ -1344,9 +1407,6 @@ fn on_model(
     library
         .entries
         .retain(|e| !(e.state == EntryState::Missing && e.identity.as_ref() == Some(&identity)));
-    // #205: reduced when the rows requested are fewer than the file's.
-    let file_n = ctx.file_n.unwrap_or(asset.info.n);
-    let reduced = ctx.reduce_to.is_some_and(|k| (k as u64) < file_n);
     let mut filled = false;
     if let Some(e) = entry_of(&mut library, &pending, ctx) {
         e.identity = Some(identity.clone());
