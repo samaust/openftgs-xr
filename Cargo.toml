@@ -53,7 +53,8 @@ naga = "29.0.3"
 # bevy_math 0.19.1 requires glam ^0.32.0 (source log 2); §2.3's "(0.33)" is
 # superseded by its own rule "Bevy's pin" (D-1, PRD #1).
 glam = "0.32"
-winit = "0.30"
+# Default features off: the crate that uses winit turns on its platforms (#401).
+winit = { version = "0.30", default-features = false }
 
 # XR.
 bevy_mod_openxr = "0.6.0"
@@ -114,7 +115,9 @@ tiny_http = "0.12"
 [patch.crates-io]
 bevy_mod_openxr = { path = "vendor/bevy_mod_openxr-0.6.0" }
 # D-30: wgpu-core 29.0.4 vendored with one change (src/instance.rs, an instance made
-# from a Vulkan HAL instance keeps its flags).
+# from a Vulkan HAL instance keeps its flags). Q-243: and a second (src/present.rs and
+# src/track/texture.rs, a surface texture presented with no submission having used it is
+# cleared and submitted first, #401), approved by the owner.
 wgpu-core = { path = "vendor/wgpu-core-29.0.4" }
 # D-30: wgpu-hal 29.0.4 vendored with one change (src/vulkan/instance.rs, a `flags()`
 # getter on the Vulkan instance).
