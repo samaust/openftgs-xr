@@ -79,7 +79,9 @@ impl Plugin for CapturePlugin {
 }
 
 /// `Intent::Screenshot` (F12) asks for the desktop camera, else the lowest-order active
-/// camera that renders to no image (Q-212, Q-180's head as Q-T452.1 narrows it).
+/// camera, one that renders to no image (a window, the headset's views) before one that
+/// does, so the headset's panel cameras are never taken over an eye while a camera
+/// rendering only to an image is still captured (Q-212, Q-T452.1).
 // Q-212, Q-T452.1
 fn screenshot_intents(
     mut intents: MessageReader<Intent>,
@@ -94,8 +96,8 @@ fn screenshot_intents(
         let camera = desktop.iter().next().or_else(|| {
             cameras
                 .iter()
-                .filter(|(_, c, t)| head_candidate(c, t))
-                .min_by_key(|(_, c, _)| c.order)
+                .filter(|(_, c, _)| c.is_active)
+                .min_by_key(|(_, c, t)| (!head_candidate(c, t), c.order))
                 .map(|(e, ..)| e)
         });
         if let Some(camera) = camera {

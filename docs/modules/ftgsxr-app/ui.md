@@ -38,7 +38,7 @@ On the headset, the `Headset` marker (Q-266), the interface draws on the quads' 
 
 ## Screenshots (`capture`)
 
-F12's `Intent::Screenshot` becomes a `ScreenshotRequest` for the desktop camera, else the lowest-order active camera that renders to no image (Q-T452.1: never a panel's camera), captured from that camera's own render target (Q-212, spike check 4's fallback). The UI is hidden for the captured frame (`UiState::hide_for_one_frame`). One screenshot is in flight at a time, and one Bevy never answers is given up with a warning toast (Q-213). The PNG is encoded with `image` as 8-bit RGB at the target's full size (Q-214), an iTXt chunk with the version, the models' identities and poses, the clock and the camera is inserted after IHDR (Q-150), and the file is written atomically under the screenshots directory, named by the UTC date and time (Q-215, §1.11, Q-14).
+F12's `Intent::Screenshot` becomes a `ScreenshotRequest` for the desktop camera, else the lowest-order active camera, one rendering to a window or the headset's views before one rendering to an image (Q-T452.1: never a panel's camera over an eye), captured from that camera's own render target (Q-212, spike check 4's fallback). The UI is hidden for the captured frame (`UiState::hide_for_one_frame`). One screenshot is in flight at a time, and one Bevy never answers is given up with a warning toast (Q-213). The PNG is encoded with `image` as 8-bit RGB at the target's full size (Q-214), an iTXt chunk with the version, the models' identities and poses, the clock and the camera is inserted after IHDR (Q-150), and the file is written atomically under the screenshots directory, named by the UTC date and time (Q-215, §1.11, Q-14).
 
 ## Q-n rows relied on
 
