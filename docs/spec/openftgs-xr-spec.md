@@ -1728,7 +1728,7 @@ Facts this specification relies on, with their sources (Appendix A rows), as of 
 | XR\_META\_environment\_depth | occlusion (E13) | yes | yes (Quest 3 and 3S) | no: the player's adapter |
 | XR\_EXT\_hand\_tracking | hand joints (§1.8) | yes | yes | yes |
 | XR\_FB\_hand\_tracking\_aim | aim pose, pinches, system gesture | yes | yes | no: the player's adapter |
-| XR\_META\_hand\_tracking\_frequency\_hint | high-frequency hands | yes | yes | no |
+| XR\_META\_hand\_tracking\_frequency\_hint | high-frequency hands | no: added in OpenXR 1.1.61, after the 1.1.58 that 0.22.0 binds (E.3) | yes | no: the player's adapter, by name and `xrGetInstanceProcAddr` |
 | XR\_META\_simultaneous\_hands\_and\_controllers | both input kinds at once | yes | yes | no |
 | XR\_META\_touch\_controller\_plus | the Touch Plus profile (Appendix D.2) | yes | yes | through the action bindings |
 | XR\_FB\_haptic\_pcm, XR\_FB\_haptic\_amplitude\_envelope | haptic pulses (optional) | yes | yes | no |
