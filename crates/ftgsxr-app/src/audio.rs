@@ -5,7 +5,7 @@
 //! played on `PlayUiSound`, and a `Soundtrack` for every instance whose `LoadedModel`
 //! names one, decoded off the main thread and kept in step with the clock. Everything
 //! reaches the system's output through the `AudioOutput` port (Q-149, Q-187): the kira
-//! adapter on the desktop, `StubAudioOutput` in the tests. Stereo only; spatialization is
+//! adapter on the desktop and the Quest, `StubAudioOutput` in the tests. Stereo only; spatialization is
 //! M-5's.
 
 use std::collections::HashMap;
@@ -531,16 +531,10 @@ fn ui_bridge(
     }
 }
 
-/// The kira adapter on the desktop (PRD #275's spike check 3: not on Android until M-5).
-#[cfg(not(target_os = "android"))]
+/// The kira adapter, on the desktop and, since M-5, on Android (PRD #452's spike check 1,
+/// #454).
 fn default_output() -> Arc<dyn AudioOutput> {
     Arc::new(kira_output::KiraOutput::new())
-}
-
-/// A silent output on Android until M-5 (PRD #275's spike check 3's fallback).
-#[cfg(target_os = "android")]
-fn default_output() -> Arc<dyn AudioOutput> {
-    Arc::new(StubAudioOutput::without_device())
 }
 
 /// Reports a missing device and loads the UI clips.
@@ -794,7 +788,6 @@ fn synthesize(sound: UiSound, rate: u32) -> Vec<f32> {
 /// The kira adapter (Q-187): one `kira::AudioManager` on the default (cpal) backend;
 /// a missing device leaves it absent and the output unavailable.
 // Q-187
-#[cfg(not(target_os = "android"))]
 mod kira_output {
     use std::collections::HashMap;
     use std::io::Cursor;
