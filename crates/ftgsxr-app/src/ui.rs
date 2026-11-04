@@ -561,7 +561,9 @@ fn splat_toasts(
             SplatEvent::Overflow { capacity, .. } => {
                 out.write(ToastRequest::warning(overflow_text(*capacity)));
             }
-            SplatEvent::Uploaded { entity, bytes: b } => {
+            SplatEvent::Uploaded {
+                entity, bytes: b, ..
+            } => {
                 bytes.0.insert(*entity, *b);
             }
             SplatEvent::Failed { .. } => {}

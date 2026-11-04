@@ -352,6 +352,7 @@ pub(crate) fn upload_models(
             SplatEvent::Uploaded {
                 entity,
                 bytes: m.memory_bytes(),
+                sh_degree: m.sh_degree,
             }
         } else if let Some(error) = models.failed.get(&id) {
             warn!("splat upload failed: {error}");
