@@ -18,7 +18,7 @@ mod cameras;
 mod dock;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate, Update};
 use bevy::asset::Handle;
@@ -266,7 +266,7 @@ pub(crate) struct RecentScenes(pub(crate) Vec<PathBuf>);
 /// The most recent eight `*.ftgsxr-scene.json` under `dir` by modification time, newest
 /// first (Q-200); none when `dir` cannot be read.
 // Q-200
-pub(crate) fn recent_scenes(dir: &std::path::Path) -> Vec<PathBuf> {
+pub(crate) fn recent_scenes(dir: &Path) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };

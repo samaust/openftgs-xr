@@ -999,11 +999,7 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
         return;
     };
     let scenes = match &q {
-        // §1.5 Scene files, Q-200 (#417): the eight most recent, as persist keeps them.
-        Confirm::LoadScene(_) => world
-            .get_resource::<RecentScenes>()
-            .map(|r| r.0.clone())
-            .unwrap_or_default(),
+        Confirm::LoadScene(_) => load_choices(world),
         Confirm::Unload(_) => Vec::new(),
     };
     egui::Window::new("Confirm")
@@ -1048,9 +1044,19 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
         });
 }
 
+/// The scenes the load dialog offers (§1.5 Scene files, Q-200, #417): the eight most
+/// recent, as `persist` keeps them in `RecentScenes`; none without it.
+// Q-200
+fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
+    world
+        .get_resource::<RecentScenes>()
+        .map(|r| r.0.clone())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{replay_lines, replay_loaded_degree, source_from_input};
+    use super::{load_choices, replay_lines, replay_loaded_degree, source_from_input};
     use crate::SplatEvent;
     use crate::ui::{ToastRequest, Uploads, splat_toasts};
     use bevy::app::App;
@@ -1173,5 +1179,19 @@ mod tests {
         assert!(source_from_input("relative/dir").is_none());
         assert!(source_from_input("ftp://x/").is_none());
         assert!(source_from_input("").is_none());
+    }
+
+    // §1.5 Scene files, Q-200 (#417): the dialog offers exactly `RecentScenes`, in its
+    // order, and nothing without it.
+    #[test]
+    fn load_choices_are_the_recent_scenes() {
+        let mut world = bevy::ecs::world::World::new();
+        assert!(load_choices(&world).is_empty());
+        let recent = vec![
+            std::path::PathBuf::from("/c/scenes/b.ftgsxr-scene.json"),
+            std::path::PathBuf::from("/c/scenes/a.ftgsxr-scene.json"),
+        ];
+        world.insert_resource(crate::ui::RecentScenes(recent.clone()));
+        assert_eq!(load_choices(&world), recent);
     }
 }
