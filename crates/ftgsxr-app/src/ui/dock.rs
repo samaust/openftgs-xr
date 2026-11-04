@@ -29,6 +29,7 @@ enum Out {
     Intent(Intent),
     Library(LibraryCommand),
     Locate(usize),
+    Replace(usize),
     Answer(bool),
     Cue(UiCue),
     Jump(JumpToCamera),
@@ -129,6 +130,9 @@ pub(super) fn draw(
             Out::Locate(i) => {
                 world.write_message(LocateEntry(i));
             }
+            Out::Replace(i) => {
+                world.write_message(super::ReplaceRequest(i));
+            }
             Out::Cue(c) => {
                 world.write_message(c);
             }
@@ -145,6 +149,9 @@ pub(super) fn draw(
                 }
                 if let Some(p) = a.scene {
                     world.write_message(SceneLoadConfirmed(p));
+                }
+                if let Some(r) = a.replace {
+                    world.write_message(r);
                 }
                 world.write_message(a.cue);
             }
@@ -480,6 +487,11 @@ fn library_tab(
                     // Q-225: only a file of the entry's identity is accepted.
                     if button(ui, "Locate…", out, hv) {
                         out.push(Out::Locate(i));
+                    }
+                    // §1.5 Library (revision 26), Q-256: a file of any identity, once
+                    // confirmed.
+                    if button(ui, "Replace with…", out, hv) {
+                        out.push(Out::Replace(i));
                     }
                 }
             }
@@ -1031,7 +1043,7 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
     };
     let scenes = match &q {
         Confirm::LoadScene(_) => load_choices(world),
-        Confirm::Unload(_) => Vec::new(),
+        Confirm::Unload(_) | Confirm::Replace { .. } => Vec::new(),
     };
     egui::Window::new("Confirm")
         .collapsible(false)
@@ -1044,6 +1056,9 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
                         .get::<LoadedModel>(*e)
                         .map_or(String::new(), |m| m.name.clone());
                     ui.label(format!("Unload {name}?"));
+                }
+                Confirm::Replace { model, file, .. } => {
+                    ui.label(Confirm::replace_text(model, file));
                 }
                 Confirm::LoadScene(chosen) => {
                     ui.label("Replace the current scene by:");

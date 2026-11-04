@@ -33,16 +33,18 @@ use bevy::window::{MonitorSelection, PrimaryWindow, Window, WindowMode};
 use bevy_egui::input::EguiInputEvent;
 use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, egui};
 use ftgsxr_core::Pose;
-use ftgsxr_io::{DesktopSettings, ManualLighting};
+use ftgsxr_io::{DesktopSettings, ManualLighting, ModelRef};
 use ftgsxr_render::{
     BudgetSource, ColorTransform, Foveation, GpuTimes, SortMode, SplatEvent, SplatGpu, SplatStats,
     SplatTierState, SplatTime, SplatTransform,
 };
 
 use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
-use crate::library::{EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel};
+use crate::library::{
+    EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel, ReplaceEntry, ref_name, stem,
+};
 use crate::manipulate::Selected;
-use crate::platform::PickKind;
+use crate::platform::{PickHandle, PickKind, PlatformRes};
 use crate::playback::{Playback, PlaybackWarning, Scrubbing};
 
 /// Where the UI is drawn (§1.8): on the window (the desktop), or on a world quad whose
@@ -359,7 +361,33 @@ pub(crate) enum Confirm {
     Unload(Entity),
     /// Replace the scene by a file chosen from the list (Q-200).
     LoadScene(Option<PathBuf>),
+    /// Put the picked `file` in the place of the missing scene model `model` of `identity`
+    /// (§1.5 Library, Q-256).
+    Replace {
+        identity: String,
+        model: String,
+        file: ModelRef,
+    },
 }
+
+impl Confirm {
+    /// A replacement's question, naming both models (Q-256): the missing entry's name and
+    /// the picked file's stem.
+    // Q-256
+    pub(crate) fn replace_text(model: &str, file: &ModelRef) -> String {
+        format!("Replace {model} with {}?", ref_name(file))
+    }
+}
+
+/// "Replace with…" on a missing entry (§1.5 Library, Q-255, Q-256): the dock writes it;
+/// `ui` opens the picker and asks the confirmation once a file is picked.
+// Q-256
+#[derive(Message, Clone, Debug, PartialEq)]
+pub(crate) struct ReplaceRequest(pub(crate) usize);
+
+/// The open "Replace with…" pickers, each with the missing entry's identity and name.
+#[derive(Resource, Default)]
+struct ReplacePicks(Vec<(String, String, PickHandle)>);
 
 /// The UI's state: what is shown, the dock, the open question, the toast line.
 #[derive(Resource, Clone, Debug)]
@@ -419,6 +447,7 @@ impl UiState {
         let mut a = Answered {
             intent: None,
             scene: None,
+            replace: None,
             cue: UiCue::Click,
         };
         match self.confirm.take() {
@@ -434,6 +463,11 @@ impl UiState {
                 a.cue = UiCue::Confirm;
             }
             Some(Confirm::LoadScene(None)) if yes => self.confirm = Some(Confirm::LoadScene(None)),
+            // Q-256: yes replaces; no drops the pick, the entry staying missing.
+            Some(Confirm::Replace { identity, file, .. }) if yes => {
+                a.replace = Some(ReplaceEntry { identity, file });
+                a.cue = UiCue::Confirm;
+            }
             _ => {}
         }
         a
@@ -445,6 +479,8 @@ impl UiState {
 pub(crate) struct Answered {
     pub(crate) intent: Option<Intent>,
     pub(crate) scene: Option<PathBuf>,
+    /// A confirmed replacement (Q-255).
+    pub(crate) replace: Option<ReplaceEntry>,
     pub(crate) cue: UiCue,
 }
 
@@ -498,6 +534,8 @@ impl Plugin for UiPlugin {
             .add_message::<UiCue>()
             .add_message::<SceneLoadConfirmed>()
             .add_message::<UnloadRequest>()
+            .add_message::<ReplaceRequest>()
+            .add_message::<ReplaceEntry>()
             .add_message::<Intent>()
             .add_message::<LibraryCommand>()
             .add_message::<LibraryFailure>()
@@ -510,9 +548,10 @@ impl Plugin for UiPlugin {
             .init_resource::<ToastLimiter>()
             .init_resource::<SeenFailures>()
             .init_resource::<Uploads>()
+            .init_resource::<ReplacePicks>()
             .add_systems(
                 Update,
-                (ui_commands, library_toasts, clock_toasts).in_set(UiSet),
+                (ui_commands, replace_picks, library_toasts, clock_toasts).in_set(UiSet),
             )
             .add_systems(PostUpdate, (raise_toasts, fill_hud).chain())
             .add_observer(splat_toasts)
@@ -588,6 +627,58 @@ fn ui_commands(
     }
     if !selected.is_empty() {
         cues.write(UiCue::Select);
+    }
+}
+
+/// "Replace with…" (§1.5 Library, Q-256): each request on a missing entry with an identity
+/// opens the picker; its first picked file is the question `Confirm::Replace`, asked once
+/// no other question is open. An empty pick asks nothing.
+// Q-256, Q-257
+fn replace_picks(
+    mut requests: MessageReader<ReplaceRequest>,
+    mut picks: ResMut<ReplacePicks>,
+    mut state: ResMut<UiState>,
+    library: Option<Res<Library>>,
+    platform: Option<Res<PlatformRes>>,
+) {
+    let Some(platform) = platform else {
+        requests.clear();
+        return;
+    };
+    for ReplaceRequest(i) in requests.read() {
+        let Some(e) = library.as_ref().and_then(|l| l.entries.get(*i)) else {
+            continue;
+        };
+        if e.state != EntryState::Missing {
+            continue;
+        }
+        let Some(id) = e.identity.clone() else {
+            continue;
+        };
+        let name = stem(Path::new(&e.entry.name));
+        let h = platform.0.pick(PickKind::Files);
+        picks.0.push((id, name, h));
+    }
+    let open = std::mem::take(&mut picks.0);
+    for (identity, model, h) in open {
+        if state.confirm.is_some() {
+            picks.0.push((identity, model, h));
+            continue;
+        }
+        match platform.0.poll_pick(h) {
+            std::task::Poll::Pending => picks.0.push((identity, model, h)),
+            std::task::Poll::Ready(Err(e)) => warn!("the picker failed: {e}"),
+            std::task::Poll::Ready(Ok(refs)) => {
+                if let Some(file) = refs.into_iter().next() {
+                    state.visible = true;
+                    state.confirm = Some(Confirm::Replace {
+                        identity,
+                        model,
+                        file,
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -860,6 +951,147 @@ pub(crate) fn load_system_font(ctx: &egui::Context) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Q-256: the question names the missing model and the picked file; no drops it.
+    #[test]
+    fn a_replacement_asks_naming_both_models_and_no_drops_it() {
+        let file = ModelRef::File(PathBuf::from("/m/retrained.safetensors"));
+        assert_eq!(
+            Confirm::replace_text("moved", &file),
+            "Replace moved with retrained?"
+        );
+        let ask = Confirm::Replace {
+            identity: "ab".repeat(32),
+            model: "moved".into(),
+            file: file.clone(),
+        };
+        let mut s = UiState {
+            confirm: Some(ask.clone()),
+            ..UiState::default()
+        };
+        let no = s.answer(false);
+        assert_eq!((no.replace, no.cue), (None, UiCue::Click));
+        assert_eq!(s.confirm, None);
+        s.confirm = Some(ask);
+        let yes = s.answer(true);
+        assert_eq!(
+            yes.replace,
+            Some(ReplaceEntry {
+                identity: "ab".repeat(32),
+                file
+            })
+        );
+        assert_eq!(yes.cue, UiCue::Confirm);
+    }
+
+    /// A platform whose picks answer `answer`, counting the pickers opened.
+    struct OnePick {
+        paths: ftgsxr_io::AppPaths,
+        answer: Vec<ModelRef>,
+        opened: std::sync::Mutex<Vec<PickKind>>,
+    }
+
+    impl crate::platform::Platform for OnePick {
+        fn paths(&self) -> &ftgsxr_io::AppPaths {
+            &self.paths
+        }
+        fn pick(&self, kind: PickKind) -> PickHandle {
+            self.opened.lock().unwrap().push(kind);
+            PickHandle(0)
+        }
+        fn poll_pick(&self, _: PickHandle) -> std::task::Poll<Result<Vec<ModelRef>, String>> {
+            std::task::Poll::Ready(Ok(self.answer.clone()))
+        }
+        fn request_permission(
+            &self,
+            _: crate::platform::Permission,
+        ) -> crate::platform::PermissionHandle {
+            crate::platform::PermissionHandle(0)
+        }
+        fn poll_permission(&self, _: crate::platform::PermissionHandle) -> std::task::Poll<bool> {
+            std::task::Poll::Ready(true)
+        }
+        fn document_provider(&self) -> Option<std::sync::Arc<dyn ftgsxr_io::DocumentProvider>> {
+            None
+        }
+        fn camera_frames(&self) -> Option<std::sync::Arc<dyn crate::platform::CameraFrames>> {
+            None
+        }
+    }
+
+    /// An app with `replace_picks`, a library whose entry 0 is a missing model "moved",
+    /// and a platform whose pick answers `answer`.
+    fn replace_app(answer: Vec<ModelRef>) -> (App, std::sync::Arc<OnePick>) {
+        let root = PathBuf::from("/nonexistent");
+        let platform = std::sync::Arc::new(OnePick {
+            paths: ftgsxr_io::AppPaths {
+                config: root.clone(),
+                cache: root.clone(),
+                models: root.clone(),
+                scenes: root.clone(),
+                screenshots: root.clone(),
+                logs: root,
+            },
+            answer,
+            opened: Default::default(),
+        });
+        let mut library = Library::default();
+        library.entries.push(crate::library::LibraryEntry {
+            source: 0,
+            entry: ftgsxr_io::Entry {
+                name: "moved".into(),
+                kind: ftgsxr_io::EntryKind::Exchange,
+                location: "/m/moved.safetensors".into(),
+                size: None,
+                mtime: None,
+                sha256: None,
+                thumbnail: None,
+                audio: None,
+                scene: None,
+            },
+            info: None,
+            identity: Some("ab".repeat(32)),
+            thumbnail: None,
+            state: EntryState::Missing,
+        });
+        let mut app = App::new();
+        app.add_message::<ReplaceRequest>()
+            .init_resource::<ReplacePicks>()
+            .init_resource::<UiState>()
+            .insert_resource(library)
+            .insert_resource(PlatformRes(platform.clone()))
+            .add_systems(Update, replace_picks);
+        (app, platform)
+    }
+
+    // Q-256, Q-257: "Replace with…" opens the files picker; its first file is the question.
+    #[test]
+    fn replace_with_picks_a_file_then_asks() {
+        let file = ModelRef::File(PathBuf::from("/m/retrained.safetensors"));
+        let other = ModelRef::File(PathBuf::from("/m/other.safetensors"));
+        let (mut app, platform) = replace_app(vec![file.clone(), other]);
+        app.world_mut().write_message(ReplaceRequest(0));
+        app.update();
+        assert_eq!(*platform.opened.lock().unwrap(), [PickKind::Files]);
+        assert_eq!(
+            app.world().resource::<UiState>().confirm,
+            Some(Confirm::Replace {
+                identity: "ab".repeat(32),
+                model: "moved".into(),
+                file,
+            })
+        );
+    }
+
+    // Q-256: an empty pick asks nothing.
+    #[test]
+    fn an_empty_replace_pick_asks_nothing() {
+        let (mut app, _) = replace_app(Vec::new());
+        app.world_mut().write_message(ReplaceRequest(0));
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<UiState>().confirm, None);
+    }
 
     // Q-250: U-20's manual case (EV 1 → g = 2), the identity at zero, and E14's w.
     #[test]

@@ -580,7 +580,7 @@ fn kind_hint(kind: EntryKind) -> Option<ModelKind> {
 }
 
 /// The name of a reference: its file stem (§1.5 Instances).
-fn ref_name(r: &ModelRef) -> String {
+pub(crate) fn ref_name(r: &ModelRef) -> String {
     let last = match r {
         ModelRef::File(p) => return stem(p),
         ModelRef::Http(url) => url
@@ -593,7 +593,7 @@ fn ref_name(r: &ModelRef) -> String {
     stem(Path::new(&last))
 }
 
-fn stem(p: &Path) -> String {
+pub(crate) fn stem(p: &Path) -> String {
     p.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
