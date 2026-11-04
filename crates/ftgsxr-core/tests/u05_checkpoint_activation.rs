@@ -280,7 +280,8 @@ fn u05_a_manifest_path_names_its_checkpoint() {
     assert_eq!(checkpoint_dir(&dir.join("params.safetensors")), None);
     assert_eq!(
         checkpoint_dir(Path::new("manifest.json")),
-        Some(PathBuf::new())
+        Some(std::env::current_dir().unwrap()),
+        "a bare manifest names the current directory, absolute"
     );
     // `open_model` of the manifest path reads the checkpoint, as of its directory.
     let by_path = open_model(&dir.join("manifest.json")).expect("the manifest path reads");

@@ -694,6 +694,45 @@ fn i09_a_checkpoint_replaces_a_missing_model() {
 
 // Q-260
 #[test]
+fn i09_locating_a_missing_checkpoint_by_its_manifest_clears_the_entry() {
+    // Q-225, Q-260: a scene names the `tiny` checkpoint (its identity is that of its
+    // `params.safetensors`, §1.2) at a path that is gone; a load of the checkpoint's
+    // `manifest.json`, as a "Locate…" pick answers, is the model: the entry clears and
+    // the instance takes the scene's pose.
+    let mut t = TestApp::new("i09_locate_manifest");
+    let dir = fixtures_dir().join("checkpoint/tiny");
+    let id = identity_of(&dir.join("params.safetensors"));
+    let models = [scene_model("moved-checkpoint", &id, "moved", 0.5)];
+    write_scene_file(&t, "moved-ckpt", &models, 0.0, None);
+    t.frames(2);
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::LoadScene("moved-ckpt".into()));
+    assert!(
+        t.until(600, |app| app
+            .world()
+            .resource::<Library>()
+            .entries
+            .iter()
+            .any(|e| e.state == EntryState::Missing)),
+        "listed as missing"
+    );
+    t.command(LibraryCommand::LoadRef(ModelRef::File(
+        dir.join("manifest.json"),
+    )));
+    wait_for(&mut t, 1);
+    t.frames(2);
+    assert_eq!(missing_entries(&t), 0, "located");
+    let e = entity_named(&mut t, "moved");
+    let tf = t.app.world().get::<Transform>(e).unwrap();
+    assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
+    let m = t.app.world().get::<LoadedModel>(e).unwrap();
+    assert_eq!(m.identity, id);
+    assert_eq!(m.source, ModelRef::File(dir));
+}
+
+// Q-260
+#[test]
 fn i09_a_checkpoints_manifest_replaces_a_missing_model() {
     // Q-257, Q-260: a checkpoint picked as its `manifest.json` replaces the model as its
     // directory does: the entry clears, the instance takes the scene's attributes and

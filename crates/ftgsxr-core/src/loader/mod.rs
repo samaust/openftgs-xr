@@ -54,11 +54,19 @@ pub fn hex(identity: &[u8; 32]) -> String {
 
 /// The checkpoint directory `path` names (§1.2, D-51; Q-260): the parent of a path whose
 /// file name is `manifest.json`, by name alone, nothing read; `None` for any other path.
-/// A bare `manifest.json` names the empty path, the current directory.
+/// A bare `manifest.json` names the current directory by its absolute path, so the
+/// checkpoint keeps a name (its stem) and a location a scene file can record; `.` when
+/// the current directory cannot be read.
 // Q-260
 pub fn checkpoint_dir(path: &Path) -> Option<PathBuf> {
-    (path.file_name()? == checkpoint::MANIFEST)
-        .then(|| path.parent().unwrap_or(Path::new("")).to_path_buf())
+    if path.file_name()? != checkpoint::MANIFEST {
+        return None;
+    }
+    let parent = path.parent()?;
+    if parent.as_os_str().is_empty() {
+        return Some(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    }
+    Some(parent.to_path_buf())
 }
 
 /// Opens a model by its kind (§1.2): a directory holding `manifest.json` is a checkpoint

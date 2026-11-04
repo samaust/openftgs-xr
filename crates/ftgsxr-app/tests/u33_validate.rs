@@ -182,6 +182,12 @@ fn u33_validate_takes_a_checkpoints_manifest_path() {
     fs::write(&manifest, br#"{"format": "ftgs-scene", "version": 1}"#).unwrap();
     let e = cmd_validate(&[manifest]).unwrap_err();
     assert_eq!((e.code(), exit_code(&e)), ("E-FILE-FORMAT", 2));
+    // The text names the checkpoint, its directory, not the manifest file (Q-260).
+    assert!(
+        e.user_text().contains("other-format") && !e.user_text().contains("manifest.json"),
+        "{}",
+        e.user_text()
+    );
     assert_eq!(
         e.code(),
         cmd_validate(&[scratch]).unwrap_err().code(),
