@@ -2552,6 +2552,8 @@ dependencies = [
  "ftgsxr-xr",
  "rfd",
  "serde_json",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
