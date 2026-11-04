@@ -713,10 +713,11 @@ pub fn scene_from_world(world: &World) -> SceneFile {
 /// visibility, mode, offset, end rule and audio applied when the instance appears; a
 /// local file that no longer exists is listed in `library` as `EntryState::Missing` and
 /// its name returned (Q-54, E-SCENE-MISSING); a file read with another identity than the
-/// scene's is refused and its model listed as missing then (Q-245). The clock, `SettingsRes.environment`, the
-/// rig, the desktop camera and the bookmarks are set through `commands`; T and the range
-/// once the scene's instances have appeared (T_len is 0 before). The caller unloads the
-/// current instances and resolves relative locations first (`LoadScene`, Q-3).
+/// scene's is refused and its model listed as missing then (Q-245). The clock,
+/// `SettingsRes.environment`, the rig, the desktop camera and the bookmarks are set
+/// through `commands`; T and the range once the scene's instances have appeared (T_len
+/// is 0 before). The caller unloads the current instances and resolves relative
+/// locations first (`LoadScene`, Q-3).
 // Q-203, Q-245
 pub fn apply_scene(
     commands: &mut Commands,

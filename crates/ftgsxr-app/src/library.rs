@@ -317,7 +317,9 @@ fn run_scene_loads(
 }
 
 /// The source a missing model is listed under (Q-203): the first of its kind whose
-/// location is a prefix of the model's, else source 0; `None` without sources.
+/// location is a prefix of the model's, else source 0; `None` without sources. Any kind,
+/// for a model whose file is another model (Q-245).
+// Q-245
 fn missing_source(library: &Library, m: &MissingModel) -> Option<usize> {
     if library.sources.is_empty() {
         return None;
@@ -336,7 +338,9 @@ fn missing_source(library: &Library, m: &MissingModel) -> Option<usize> {
 }
 
 /// Lists the scene's model `m` of `identity` as missing (§1.5 Scene files, Q-203): the
-/// entry already at its location, when `m`'s file is gone, else an entry of its own.
+/// entry already at its location when `m`'s file is `gone`, else an entry of its own,
+/// beside the entry of the file of another identity at its location (Q-245).
+// Q-245
 pub(crate) fn list_missing(library: &mut Library, m: &MissingModel, identity: &str, gone: bool) {
     let Some(source) = missing_source(library, m) else {
         return;
@@ -906,13 +910,11 @@ fn fresh_entries(
         if entry.kind == EntryKind::Other {
             continue;
         }
-        // Q-245: a missing scene model's entry beside the present file's is not that file's.
-        let at = |o: &&LibraryEntry| o.entry.location == entry.location;
+        // Q-245: a missing scene model's entry is not the entry of the file now at its
+        // location, which is listed as any file; the missing entry stays beside it.
         let kept = old
             .iter()
-            .filter(at)
-            .find(|o| o.state != EntryState::Missing)
-            .or_else(|| old.iter().find(at));
+            .find(|o| o.entry.location == entry.location && o.state != EntryState::Missing);
         // Q-231: the listing's mtime too, where it gives one.
         let same = kept.is_some_and(|o| {
             o.entry.size == entry.size
@@ -952,13 +954,9 @@ fn fresh_entries(
         });
     }
     // Q-203: a scene's missing model stays listed until it is located; Q-245: also
-    // beside the entry of another model at its location.
+    // beside the entry of a file at its location.
     for o in old {
-        if o.state == EntryState::Missing
-            && !fresh
-                .iter()
-                .any(|f| f.entry.location == o.entry.location && f.state == EntryState::Missing)
-        {
+        if o.state == EntryState::Missing {
             fresh.push(o.clone());
         }
     }

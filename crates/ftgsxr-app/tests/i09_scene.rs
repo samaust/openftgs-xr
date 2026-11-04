@@ -280,13 +280,21 @@ fn failures_over(t: &mut TestApp, n: usize) -> Vec<LibraryFailure> {
     seen
 }
 
-/// A scene file `name` naming `models` (JSON objects) with the clock at `t` seconds.
-fn write_scene_file(t: &TestApp, name: &str, models: &[String], at: f64) {
+/// A scene file `name` naming `models` (JSON objects), with the clock at `at` seconds and
+/// the playback range `range`.
+fn write_scene_file(
+    t: &TestApp,
+    name: &str,
+    models: &[String],
+    at: f64,
+    range: Option<(f64, f64)>,
+) {
+    let range = range.map_or("null".to_owned(), |(a, b)| format!("[{a}, {b}]"));
     let scenes = t.dir.join("config/scenes");
     std::fs::create_dir_all(&scenes).unwrap();
     let json = format!(
         r#"{{"format": "ftgsxr-scene", "version": 1, "models": [{}],
-        "clock": {{"t": {at}, "speed": 1, "loop": "loop", "range": null}},
+        "clock": {{"t": {at}, "speed": 1, "loop": "loop", "range": {range}}},
         "environment": {{}}, "anchor": null, "rig": null, "camera": null, "bookmarks": []}}"#,
         models.join(", ")
     );
@@ -314,17 +322,16 @@ fn i09_a_model_of_another_identity_is_listed_as_missing() {
     // §1.5 Scene files: a scene names its models by source and identity; the file now at
     // the source is another model, so no source offers the named one (E-SCENE-MISSING).
     let mut t = TestApp::new("i09_other_identity");
+    // Written after the models directory's first listing, so that its first relisting
+    // meets the file and the missing entry together.
+    t.frames(30);
     let models = t.dir.join("models");
     std::fs::create_dir_all(&models).unwrap();
-    let path = models.join("gone.safetensors");
+    let path = models.join("swapped.safetensors");
     std::fs::copy(fixtures_dir().join("probes/P1.safetensors"), &path).unwrap();
     let id = "ab".repeat(32);
-    write_scene_file(
-        &t,
-        "other",
-        &[scene_model("gone.safetensors", &id, "gone", 0.0)],
-        0.0,
-    );
+    let scene = [scene_model("swapped.safetensors", &id, "named", 0.0)];
+    write_scene_file(&t, "other", &scene, 0.0, None);
     t.frames(2);
     t.app
         .world_mut()
@@ -332,6 +339,11 @@ fn i09_a_model_of_another_identity_is_listed_as_missing() {
     let seen = failures_over(&mut t, 120);
     assert_eq!(seen.len(), 1, "one failure: {seen:?}");
     assert_eq!(seen[0].code, "E-SCENE-MISSING");
+    // Q-225's text: the scene's model, then the file that is another model.
+    assert_eq!(
+        seen[0].text,
+        "E-SCENE-MISSING: Model named not found; locate it (swapped is another model)"
+    );
     assert_eq!(count(&mut t), 0, "the other model is not kept");
     let missing = |t: &TestApp| {
         t.app
@@ -352,6 +364,15 @@ fn i09_a_model_of_another_identity_is_listed_as_missing() {
     }
     t.frames(30);
     assert_eq!(missing(&t), want);
+    // The present file is listed as itself, beside the missing entry.
+    let lib = t.app.world().resource::<Library>();
+    let present: Vec<_> = lib
+        .entries
+        .iter()
+        .filter(|e| e.entry.location == want[0].0 && e.state != EntryState::Missing)
+        .collect();
+    assert_eq!(present.len(), 1, "the file's own entry");
+    assert_ne!(present[0].identity.as_deref(), Some(id.as_str()));
 }
 
 // Q-245
@@ -373,7 +394,7 @@ fn i09_a_scene_with_a_model_of_another_identity_still_restores_its_clock() {
         scene_model("P1.safetensors", &identity_of(&p1), "P1", 0.5),
         scene_model("P2.safetensors", &"ab".repeat(32), "P2", 0.0),
     ];
-    write_scene_file(&t, "clocked", &scene, 0.75);
+    write_scene_file(&t, "clocked", &scene, 0.75, Some((0.25, 1.5)));
     t.frames(2);
     t.app
         .world_mut()
@@ -386,6 +407,8 @@ fn i09_a_scene_with_a_model_of_another_identity_still_restores_its_clock() {
         "the scene's T, {}",
         t.app.world().resource::<Playback>().clock.time()
     );
+    let range = scene_from_world(t.app.world()).clock.range;
+    assert_eq!(range, Some((0.25, 1.5)), "the scene's range");
     assert_eq!(count(&mut t), 1);
     let e = entity_named(&mut t, "P1");
     let tf = t.app.world().get::<Transform>(e).unwrap();
@@ -412,7 +435,7 @@ fn i09_the_right_file_after_another_identity_clears_the_entry() {
         "moved",
         0.5,
     )];
-    write_scene_file(&t, "swapped", &scene, 0.0);
+    write_scene_file(&t, "swapped", &scene, 0.0, None);
     t.frames(2);
     t.app
         .world_mut()
