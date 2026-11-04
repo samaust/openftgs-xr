@@ -26,6 +26,7 @@ fn test_file_stem() -> &'static str {
 mod support;
 
 mod app_plugin;
+mod audio_spatial;
 mod b_benchmarks;
 mod dock_sections;
 mod gpu_exit_wait;
