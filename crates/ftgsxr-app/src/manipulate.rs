@@ -6,6 +6,7 @@
 //! ray and pose; the hovered and selected boxes and the desktop gizmo are drawn with
 //! Bevy's gizmo lines (§1.4 Selection and debug views). Writing `poses.json` is
 //! `persist`'s (`PersistCommand::SavePose`): this module changes `Poses` in memory only.
+//! On the headset a first load out of D-11's size range is fitted (Q-284).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,7 @@ use ftgsxr_render::{SplatAsset, SplatMode, SplatModel};
 
 use crate::intent::{GizmoMode, Hand, InstanceAction, Intent};
 use crate::library::{LibraryCommand, LoadedModel};
+use crate::platform::Headset;
 use crate::playback::StepTarget;
 
 /// What the grabs and rays obey (§1.5, §1.8, E10, E11).
@@ -334,14 +336,29 @@ fn manifest_preset(dir: &Path) -> Option<Preset> {
     Some(Preset::from_camera_ups(&ups))
 }
 
-/// D-11: an instance appears at its saved pose, else at the identity, with its hints.
+/// D-11: an instance appears at its saved pose, else at the identity, with its hints; on
+/// the headset (the `Headset` marker, Q-266), one without a saved pose whose B_m's
+/// longest side lies outside [0.1 m, 5 m] is fitted at once (§1.5 Poses), relative to
+/// the content group (Q-247). A reload keeps its `LoadedModel` (Q-238), so only a first
+/// load fits; a scene's pose, applied after, wins (Q-284).
+// Q-266, Q-284
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn on_loaded(
     add: On<Add, LoadedModel>,
-    mut q: Query<(&LoadedModel, &mut Transform)>,
+    mut q: Query<(
+        &LoadedModel,
+        &mut Transform,
+        Option<&SplatModel>,
+        Option<&ChildOf>,
+    )>,
+    groups: GroupTransforms,
     poses: Res<Poses>,
+    headset: Option<Res<Headset>>,
+    assets: Option<Res<Assets<SplatAsset>>>,
+    cameras: Query<(&Camera, &GlobalTransform)>,
     mut commands: Commands,
 ) {
-    let Ok((m, mut t)) = q.get_mut(add.entity) else {
+    let Ok((m, mut t, model, parent)) = q.get_mut(add.entity) else {
         return;
     };
     let extras = match poses.0.get(&m.identity) {
@@ -352,10 +369,28 @@ fn on_loaded(
                 fit_size_m: saved.fit_size_m,
             }
         }
-        None => hints(&m.source, m.info.kind),
+        None => {
+            let x = hints(&m.source, m.info.kind);
+            let bounds = model
+                .zip(assets.as_ref())
+                .and_then(|(model, a)| a.get(&model.0))
+                .map(|a| a.bounds);
+            if headset.is_some()
+                && let Some(b) = bounds
+                && !(AUTO_FIT_RANGE_M.0..=AUTO_FIT_RANGE_M.1).contains(&b.size().max_element())
+            {
+                let fitted = fit_pose(&b, x.preset, x.fit_size_m, head_pose(&cameras), 1.5);
+                *t = transform_of(fitted.then(&group_pose(parent, &groups).inverse()));
+            }
+            x
+        }
     };
     commands.entity(add.entity).insert(extras);
 }
+
+/// §1.5 Poses' range of B_m's longest side, in metres, inside which the headset does not
+/// fit a model on its first load (D-11).
+const AUTO_FIT_RANGE_M: (f32, f32) = (0.1, 5.0);
 
 /// `saved_at`: RFC 3339 in UTC with nine fractional digits (Q-52).
 pub(crate) fn now_rfc3339() -> String {

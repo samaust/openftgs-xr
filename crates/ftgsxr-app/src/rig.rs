@@ -4,7 +4,9 @@
 //! `ftgsxr_app::rig`, E12, §1.7 Cameras, §1.8 Locomotion, §1.14 Frames, D-17, D-44).
 //! `PlayerRig` and `ContentGroup` exist in every app; the desktop camera, a child of the
 //! rig, only where a primary window exists (Q-194). The camera controller reads
-//! `Intent::Camera`; `Locomote` and `SnapTurn` move the rig through `apply_locomotion`.
+//! `Intent::Camera`; `Locomote` and `SnapTurn` move the rig through `apply_locomotion`,
+//! `Teleport` translates it (Q-282), and `Recenter` translates the content group
+//! (Q-283).
 //! The floor grid (§1.4) is an opaque unlit line mesh at y = 0 beside the camera.
 
 use bevy::app::{App, Plugin, Startup, Update};
@@ -298,7 +300,10 @@ impl Plugin for RigPlugin {
             .add_message::<CameraJump>()
             .add_observer(parent_instance)
             .add_systems(Startup, (spawn_desktop_camera, spawn_grid))
-            .add_systems(Update, (run_camera, run_locomotion, follow_view).chain())
+            .add_systems(
+                Update,
+                (run_camera, run_locomotion, recenter, follow_view).chain(),
+            )
             .add_systems(
                 Update,
                 capture_cursor.run_if(resource_exists::<ButtonInput<MouseButton>>),
@@ -662,7 +667,7 @@ fn run_camera(
     }
 }
 
-/// `Locomote` and `SnapTurn` move the rig (E12); the head is the active camera of the
+/// `Locomote`, `SnapTurn` and `Teleport` move the rig (E12, §1.8 Locomotion); the head is the active camera of the
 /// lowest order, as manipulate's fit (Q-180), else the rig itself.
 fn run_locomotion(
     mut intents: MessageReader<Intent>,
@@ -693,7 +698,10 @@ fn run_locomotion(
             )
         });
     for intent in intents.read() {
-        if !matches!(intent, Intent::Locomote { .. } | Intent::SnapTurn { .. }) {
+        if !matches!(
+            intent,
+            Intent::Locomote { .. } | Intent::SnapTurn { .. } | Intent::Teleport { .. }
+        ) {
             continue;
         }
         // The head follows the rig within the frame: its rig-local pose is fixed.
@@ -701,11 +709,117 @@ fn run_locomotion(
             Some((inv0, h)) => h.then(&inv0).then(&rig),
             None => rig,
         };
-        rig = apply_locomotion(rig, head, intent, &loco, dt);
+        rig = match *intent {
+            Intent::Teleport { target } => teleport(rig, head, target, &loco),
+            _ => apply_locomotion(rig, head, intent, &loco, dt),
+        };
     }
     let t = transform_of(rig);
     if t != *rig_t {
         *rig_t = t;
+    }
+}
+
+/// §1.8 Locomotion's teleport: the rig translated so the head's floor point lands on
+/// the target's, its height unchanged (the target's y is not read); nothing in
+/// passthrough mode (D-17). `apply_locomotion` keeps Q-195's contract.
+// Q-269, Q-282
+fn teleport(rig: Pose, head: Pose, target: Vec3, loco: &Locomotion) -> Pose {
+    if !loco.enabled {
+        return rig;
+    }
+    let d = Vec3::new(
+        target.x - head.translation.x,
+        0.0,
+        target.z - head.translation.z,
+    );
+    Pose {
+        translation: rig.translation + d,
+        ..rig
+    }
+}
+
+/// §1.8 Session and spaces' distance of the recentered content ahead of the head.
+const RECENTER_AHEAD_M: f32 = 1.5;
+
+/// The head's horizontal forward, a unit vector: the horizontal part of its −z axis, or,
+/// when it looks straight up or down, of the direction its top points (negated when it
+/// looks up), as the fit's (Q-17).
+// Q-17
+fn horizontal_forward(head: &Pose) -> Vec3 {
+    let horizontal = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
+    let look = head.rotation * Vec3::NEG_Z;
+    let mut forward = horizontal(look);
+    if forward.length() < 1e-6 {
+        let top = horizontal(head.rotation * Vec3::Y);
+        forward = if look.y > 0.0 { -top } else { top };
+    }
+    forward.try_normalize().unwrap_or(Vec3::NEG_Z)
+}
+
+/// `Intent::Recenter` (§1.8 Session and spaces): the content group translated so the
+/// selected instance's posed box center, else the mean of every instance's, stands 1.5 m
+/// ahead of the head along its yaw at the height it has; the group's rotation and scale
+/// are kept, so it stays yaw-only (Q-254). The head is the fit's (Q-180). It works in
+/// passthrough mode too (D-17), and moves nothing without an instance.
+// Q-283, Q-180, Q-254
+#[allow(clippy::type_complexity)]
+fn recenter(
+    mut intents: MessageReader<Intent>,
+    rig: Res<RigEntities>,
+    mut groups: Query<&mut Transform, (With<ContentGroup>, Without<SplatModel>)>,
+    instances: Query<
+        (&Transform, &SplatModel, Has<Selected>, Option<&ChildOf>),
+        Without<ContentGroup>,
+    >,
+    cameras: Query<(&Camera, &GlobalTransform)>,
+    assets: Option<Res<Assets<SplatAsset>>>,
+) {
+    if intents
+        .read()
+        .filter(|i| matches!(i, Intent::Recenter))
+        .count()
+        == 0
+    {
+        return;
+    }
+    let (Some(assets), Ok(mut group_t)) = (assets, groups.get_mut(rig.group)) else {
+        return;
+    };
+    let group = pose_of(&group_t);
+    let centers: Vec<(Vec3, bool)> = instances
+        .iter()
+        .filter(|(.., parent)| parent.is_some_and(|c| c.parent() == rig.group))
+        .filter_map(|(t, m, selected, _)| {
+            let b = assets.get(&m.0)?.bounds;
+            Some((
+                pose_of(t).then(&group).transform_point(b.center()),
+                selected,
+            ))
+        })
+        .collect();
+    let center = match centers.iter().find(|(_, s)| *s) {
+        Some((c, _)) => *c,
+        None if centers.is_empty() => return,
+        None => centers.iter().map(|(c, _)| *c).sum::<Vec3>() / centers.len() as f32,
+    };
+    let head = cameras
+        .iter()
+        .filter(|(c, _)| c.is_active)
+        .min_by_key(|(c, _)| c.order)
+        .map(|(_, g)| {
+            let (_, rotation, translation) = g.to_scale_rotation_translation();
+            Pose {
+                translation,
+                rotation,
+                scale: 1.0,
+            }
+        })
+        .unwrap_or(Pose::IDENTITY);
+    let target = head.translation + RECENTER_AHEAD_M * horizontal_forward(&head);
+    let step = Vec3::new(target.x - center.x, 0.0, target.z - center.z);
+    if step != Vec3::ZERO {
+        group_t.translation += step;
     }
 }
 
