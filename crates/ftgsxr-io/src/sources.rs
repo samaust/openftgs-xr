@@ -17,7 +17,7 @@ use ftgsxr_core::{CoreError, ModelInfo, SAFETENSORS_PREFIX, checkpoint_dir, read
 pub use url::Url;
 
 use crate::http::status_error;
-use crate::http::{MANIFEST, PARAMS};
+use crate::http::{DocumentMember, MANIFEST, PARAMS};
 use crate::listing::{as_directory, checked_header_len, header_info, percent_decode};
 use crate::util::cancelled;
 use crate::{
@@ -76,7 +76,7 @@ pub trait ModelSource: Send + Sync {
     /// The entry's file, read into memory, with the reference it was read from; `progress`
     /// hears as it arrives and `cancel` stops it (§1.5, Q-47). A checkpoint comes back as
     /// its directory on disk, `ModelBytes::Checkpoint`, referenced by `ModelRef::File` of it
-    /// (D-51, Q-59); a document source refuses one (Q-61).
+    /// (D-51, Q-59); a document source copies one into the download cache first (Q-61).
     fn fetch(
         &self,
         entry: &Entry,
@@ -117,6 +117,9 @@ pub struct DocumentSource {
     /// The tree's content URI.
     pub tree_uri: String,
     provider: Arc<dyn DocumentProvider>,
+    /// The download cache a picked checkpoint is copied into (Q-61), `open_source`'s client;
+    /// `None` from `new` (Q-295).
+    client: Option<Arc<HttpClient>>,
 }
 
 /// A configured source as `settings.toml` and scene files record it (§1.11 `[[sources]]`).
@@ -153,10 +156,16 @@ impl HttpIndex {
 }
 
 impl DocumentSource {
-    /// A document tree `tree_uri` read through `provider` (Q-47).
+    /// A document tree `tree_uri` read through `provider` (Q-47), with no cache: its
+    /// `fetch` refuses a checkpoint, which only `open_source` with a client copies
+    /// (Q-295).
     // Q-47
     pub fn new(tree_uri: String, provider: Arc<dyn DocumentProvider>) -> DocumentSource {
-        DocumentSource { tree_uri, provider }
+        DocumentSource {
+            tree_uri,
+            provider,
+            client: None,
+        }
     }
 }
 
@@ -389,15 +398,69 @@ impl ModelSource for DocumentSource {
         cancel: &AtomicBool,
     ) -> Result<(ModelRef, ModelBytes), IoError> {
         fetchable(entry)?;
-        // Q-61: a picked checkpoint waits on the shim's document provider (M-5).
         if entry.kind == EntryKind::Checkpoint {
-            return Err(unsupported(&format!(
-                "{}: a checkpoint cannot be read from picked documents yet",
-                entry.location
-            )));
+            let dir = self.copy_checkpoint(entry, progress, cancel)?;
+            return Ok((ModelRef::File(dir.clone()), ModelBytes::Checkpoint(dir)));
         }
         let bytes = read_document(self.provider.as_ref(), &entry.location, progress, cancel)?;
         Ok((ModelRef::Document(entry.location.clone()), bytes))
+    }
+}
+
+impl DocumentSource {
+    /// The picked checkpoint directory `entry` copied into the client's cache (Q-61's
+    /// direction, D-51): the provider lists the directory, whose `manifest.json` (an `Other`
+    /// entry of that name) and `params.safetensors` (the `Exchange` entry `params`, Q-36's
+    /// stem) are copied into one entry keyed by the directory's URI (Q-295). Without a
+    /// client E-IO `Unsupported`; a directory missing either member E-IO `NotFound`.
+    // Q-61, Q-295
+    fn copy_checkpoint(
+        &self,
+        entry: &Entry,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<PathBuf, IoError> {
+        let client = self.client.as_ref().ok_or_else(|| {
+            unsupported(&format!(
+                "{}: a picked checkpoint needs the download cache",
+                entry.location
+            ))
+        })?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled(&entry.location));
+        }
+        let uri = |location: &str| {
+            Url::parse(location)
+                .map_err(|e| invalid(format!("{location} (not a document URI: {e})")))
+        };
+        let dir_uri = uri(&entry.location)?;
+        let members = self.provider.list_tree(&entry.location)?;
+        let find = |kind: EntryKind, name: &str, file: &str| {
+            members
+                .iter()
+                .find(|m| m.kind == kind && m.name == name)
+                .ok_or_else(|| {
+                    IoError::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("{}: no {file}", entry.location),
+                    ))
+                })
+        };
+        let manifest = find(EntryKind::Other, MANIFEST, MANIFEST)?;
+        let params = find(EntryKind::Exchange, "params", PARAMS)?;
+        let open_manifest = || self.provider.open(&manifest.location);
+        let open_params = || self.provider.open(&params.location);
+        let manifest = DocumentMember {
+            uri: uri(&manifest.location)?,
+            size: manifest.size,
+            open: &open_manifest,
+        };
+        let params = DocumentMember {
+            uri: uri(&params.location)?,
+            size: params.size,
+            open: &open_params,
+        };
+        client.copy_checkpoint(&dir_uri, &manifest, &params, progress, cancel)
     }
 }
 
@@ -425,10 +488,12 @@ pub fn open_source(
         "documents" => {
             let provider =
                 provider.ok_or_else(|| unsupported("a document source without a provider"))?;
-            Ok(Arc::new(DocumentSource::new(
-                spec.location.clone(),
+            // Q-295: the client's cache holds a picked checkpoint's copy (Q-61).
+            Ok(Arc::new(DocumentSource {
+                tree_uri: spec.location.clone(),
                 provider,
-            )))
+                client,
+            }))
         }
         other => Err(invalid(format!("unknown source kind {other:?}"))),
     }

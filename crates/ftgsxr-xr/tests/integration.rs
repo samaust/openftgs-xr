@@ -6,6 +6,7 @@
 mod dv_support;
 mod xr_support;
 
+mod dv10_storage;
 mod dv12_display;
 mod dv13_sleep_wake;
 mod dv1_install_launch;
@@ -21,3 +22,4 @@ mod u34_xr_error_catalog;
 mod xr_controllers;
 mod xr_display;
 mod xr_hands;
+mod xr_rig_binding;

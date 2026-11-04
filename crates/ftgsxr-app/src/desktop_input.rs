@@ -232,7 +232,7 @@ impl Plugin for DesktopInputPlugin {
         app.init_resource::<DockHooks>()
             .world_mut()
             .resource_mut::<DockHooks>()
-            .add(Tab::Help, help_keys);
+            .add_screen_only(Tab::Help, help_keys);
         app.add_message::<Intent>()
             .add_message::<UnloadRequest>()
             .init_resource::<KeyMap>()
