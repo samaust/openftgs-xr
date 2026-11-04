@@ -339,6 +339,7 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persist::TierPick;
 
     /// Draws `hook` once on a headless egui context.
     pub(crate) fn draw_once(world: &mut World, hook: fn(&mut World, &mut egui::Ui)) {
@@ -378,18 +379,9 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(SettingsRes::default());
         world.insert_resource(SplatTierState::of(&ftgsxr_render::QualityTier::quest_high()));
-        world.init_resource::<Messages<super::super::TierPick>>();
+        world.init_resource::<Messages<TierPick>>();
         world.clear_trackers();
         world
-    }
-
-    /// One frame of the Display tab with `events`; the texts drawn.
-    fn frame(
-        ctx: &egui::Context,
-        world: &mut World,
-        events: Vec<egui::Event>,
-    ) -> Vec<(String, egui::Pos2)> {
-        frame_of(ctx, world, events, display_section)
     }
 
     /// One frame of `hook` with `events`; the texts drawn.
@@ -424,6 +416,11 @@ mod tests {
         ]
     }
 
+    /// The picks written so far.
+    fn picks(world: &mut World) -> Vec<TierPick> {
+        world.resource_mut::<Messages<TierPick>>().drain().collect()
+    }
+
     fn at(texts: &[(String, egui::Pos2)], label: &str) -> egui::Pos2 {
         texts
             .iter()
@@ -438,7 +435,7 @@ mod tests {
     fn the_tier_picker_shows_the_running_tier() {
         let mut world = overridden();
         let ctx = egui::Context::default();
-        let drawn = frame(&ctx, &mut world, Vec::new());
+        let drawn = frame_of(&ctx, &mut world, Vec::new(), display_section);
         assert!(drawn.iter().any(|(t, _)| t == "quest-high"), "{drawn:?}");
         assert!(!drawn.iter().any(|(t, _)| t == "desktop"), "{drawn:?}");
         assert!(!world.resource_ref::<SettingsRes>().is_changed());
@@ -450,20 +447,16 @@ mod tests {
     fn choosing_the_saved_tier_under_an_override_picks_it() {
         let mut world = overridden();
         let ctx = egui::Context::default();
-        let closed = frame(&ctx, &mut world, Vec::new());
+        let closed = frame_of(&ctx, &mut world, Vec::new(), display_section);
         for events in click(at(&closed, "quest-high")) {
-            frame(&ctx, &mut world, events);
+            frame_of(&ctx, &mut world, events, display_section);
         }
         // The open popup lists the tiers.
-        let open = frame(&ctx, &mut world, Vec::new());
+        let open = frame_of(&ctx, &mut world, Vec::new(), display_section);
         for events in click(at(&open, "desktop")) {
-            frame(&ctx, &mut world, events);
+            frame_of(&ctx, &mut world, events, display_section);
         }
-        let picks: Vec<_> = world
-            .resource_mut::<Messages<super::super::TierPick>>()
-            .drain()
-            .collect();
-        assert_eq!(picks, vec![super::super::TierPick("desktop".into())]);
+        assert_eq!(picks(&mut world), vec![TierPick("desktop".into())]);
         assert_eq!(world.resource::<SettingsRes>().0.general.tier, "desktop");
     }
 
@@ -483,11 +476,7 @@ mod tests {
         let general = step(at(&closed, "[general]"), &mut world);
         let open = step(at(&general, "desktop"), &mut world);
         step(at(&open, "quest-low"), &mut world);
-        let picks: Vec<_> = world
-            .resource_mut::<Messages<super::super::TierPick>>()
-            .drain()
-            .collect();
-        assert_eq!(picks, vec![super::super::TierPick("quest-low".into())]);
+        assert_eq!(picks(&mut world), vec![TierPick("quest-low".into())]);
         assert_eq!(world.resource::<SettingsRes>().0.general.tier, "quest-low");
     }
 }

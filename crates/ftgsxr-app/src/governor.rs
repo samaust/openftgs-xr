@@ -454,10 +454,11 @@ mod tests {
         frames(&mut app, 2);
         assert_eq!(running(&app), "desktop");
         assert!(governing(&app));
-        // A name no tier has leaves the running tier alone.
+        // A name no tier has leaves the running tier alone, and is not saved.
         pick(&mut app, "no-such-tier");
         frames(&mut app, 2);
         assert_eq!(running(&app), "desktop");
+        assert_eq!(saved(&app), "desktop");
     }
 
     // Q-240 (#402): under a `--tier` override, a pick of the saved tier switches to it.

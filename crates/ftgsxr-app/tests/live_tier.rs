@@ -322,6 +322,6 @@ fn live_tier_switch_is_saved_for_the_next_start() {
             break;
         }
     }
-    assert!(written, "the pick is saved");
+    assert!(written, "the written tier is saved");
     assert_eq!(running(&t.app), "desktop");
 }

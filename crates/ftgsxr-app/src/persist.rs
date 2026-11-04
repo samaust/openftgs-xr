@@ -47,11 +47,13 @@ mod panels;
 #[derive(Message, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TierPick(pub(crate) String);
 
-/// A pick of `tier` (Q-240): writes `[general] tier` to `SettingsRes` when it differs, so
-/// the debounce saves it (Q-207), and a `TierPick` for `governor`.
+/// A pick of `tier` (Q-240): when `QualityTier::by_name` knows it, writes `[general] tier`
+/// to `SettingsRes` if it differs, so the debounce saves it (Q-207); a `TierPick` for
+/// `governor` either way (it warns of a name it does not know).
 // Q-240, Q-207
 pub(crate) fn pick_tier(world: &mut World, tier: String) {
-    if let Some(mut s) = world.get_resource_mut::<SettingsRes>()
+    if ftgsxr_render::QualityTier::by_name(&tier).is_some()
+        && let Some(mut s) = world.get_resource_mut::<SettingsRes>()
         && s.0.general.tier != tier
     {
         s.0.general.tier = tier.clone();
