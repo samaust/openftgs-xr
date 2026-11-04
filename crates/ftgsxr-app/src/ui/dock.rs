@@ -22,7 +22,7 @@ use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCo
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
 use crate::manipulate::{FIT_RANGE_M, PoseExtras, SetPoseExtras};
 use crate::platform::PickKind;
-use crate::playback::{Playback, RangeSetting};
+use crate::playback::{Playback, RangeSetting, Scrubbing};
 
 /// What the user did this frame.
 enum Out {
@@ -577,7 +577,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 }
             });
         }
-        // E14's color transform as its manual form (Q-218, Q-245).
+        // E14's color transform as its manual form (Q-218, Q-250).
         let now = light.map(|c| c.0.clone()).unwrap_or_default();
         let mut l = now.clone();
         ui.horizontal(|ui| {
@@ -904,12 +904,16 @@ fn playback_tab(
         return;
     };
     let (mut t, len, speed) = (p.clock.time(), p.clock.length(), p.clock.speed());
-    if ui
-        .add(egui::Slider::new(&mut t, 0.0..=len.max(0.0)).suffix(" s"))
-        .changed()
-    {
+    let bar = ui.add(egui::Slider::new(&mut t, 0.0..=len.max(0.0)).suffix(" s"));
+    if bar.changed() {
         out.push(Out::Intent(Intent::Playback(PlaybackCommand::Seek(t))));
     }
+    // Q-246: a scrub lasts while the bar is dragged and egui has decided the press is a
+    // drag, not the start of a click (moved past the click distance or held past the
+    // click duration); the slider senses drags only, so `dragged` alone holds from the
+    // press.
+    let decided = ui.input(|i| i.pointer.is_decidedly_dragging());
+    world.resource_mut::<Scrubbing>().0 = bar.dragged() && decided;
     ui.horizontal(|ui| {
         for s in SPEEDS.iter().rev().map(|s| -s).chain(SPEEDS) {
             if ui.selectable_label(speed == s, format!("{s}")).clicked() {
@@ -1070,7 +1074,9 @@ fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_choices, replay_lines, replay_loaded_degree, source_from_input};
+    use super::{
+        load_choices, playback_tab, replay_lines, replay_loaded_degree, source_from_input,
+    };
     use crate::SplatEvent;
     use crate::ui::{ToastRequest, Uploads, splat_toasts};
     use bevy::app::App;
@@ -1193,6 +1199,86 @@ mod tests {
         assert!(source_from_input("relative/dir").is_none());
         assert!(source_from_input("ftp://x/").is_none());
         assert!(source_from_input("").is_none());
+    }
+
+    /// The playback tab drawn on `ctx` for one frame of `events` at `time_s`; the
+    /// intents it wrote and whether `Scrubbing` held after it.
+    fn playback_frame(
+        world: &mut bevy::ecs::world::World,
+        ctx: &bevy_egui::egui::Context,
+        time_s: f64,
+        events: Vec<bevy_egui::egui::Event>,
+    ) -> (Vec<crate::intent::Intent>, bool) {
+        use bevy_egui::egui;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            time: Some(time_s),
+            events,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let mut hv = None;
+        let mut full = ctx.run_ui(input, |ui| playback_tab(world, ui, &mut out, &mut hv));
+        full.textures_delta.clear();
+        let intents = out
+            .into_iter()
+            .filter_map(|o| match o {
+                super::Out::Intent(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        (intents, world.resource::<crate::playback::Scrubbing>().0)
+    }
+
+    // Q-246 (#416): a drag of the scrub bar is a scrub, from egui's drag decision (moved
+    // past the click distance, or held past the click duration) to the release; a press
+    // released without a drag is a one-off seek.
+    #[test]
+    fn playback_tab_a_drag_of_the_scrub_bar_is_a_scrub_and_a_click_is_not() {
+        use crate::intent::{Intent, PlaybackCommand};
+        use bevy_egui::egui::{Event, Modifiers, PointerButton, pos2};
+        let press = |x: f32, pressed: bool| Event::PointerButton {
+            pos: pos2(x, 15.0),
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let moved = |x: f32| Event::PointerMoved(pos2(x, 15.0));
+        let seek = |i: &[Intent]| {
+            i.iter()
+                .any(|i| matches!(i, Intent::Playback(PlaybackCommand::Seek(_))))
+        };
+        let mut world = bevy::ecs::world::World::new();
+        world.insert_resource(crate::playback::Playback {
+            clock: ftgsxr_core::Clock::new(2.0),
+        });
+        world.init_resource::<crate::playback::Scrubbing>();
+        world.init_resource::<crate::playback::RangeSetting>();
+        let ctx = bevy_egui::egui::Context::default();
+        assert!(!playback_frame(&mut world, &ctx, 0.0, vec![moved(30.0)]).1);
+        // A click: pressed and released in place.
+        let (_, held) = playback_frame(&mut world, &ctx, 0.02, vec![press(30.0, true)]);
+        assert!(!held, "a press is not yet a scrub");
+        let (_, held) = playback_frame(&mut world, &ctx, 0.04, vec![press(30.0, false)]);
+        assert!(!held, "a click is a one-off seek");
+        // A drag: pressed, moved along the bar, released.
+        playback_frame(&mut world, &ctx, 0.06, vec![press(30.0, true)]);
+        let (i, held) = playback_frame(&mut world, &ctx, 0.08, vec![moved(80.0)]);
+        assert!(seek(&i), "the drag moves the scrub bar");
+        assert!(held, "a drag is a scrub");
+        let (_, held) = playback_frame(&mut world, &ctx, 0.10, vec![moved(90.0)]);
+        assert!(held, "the scrub lasts while the drag does");
+        let (_, held) = playback_frame(&mut world, &ctx, 0.12, vec![press(90.0, false)]);
+        assert!(!held, "the release ends the scrub");
+        // A press held in place past egui's click duration is a scrub too.
+        playback_frame(&mut world, &ctx, 0.20, vec![press(30.0, true)]);
+        let (_, held) = playback_frame(&mut world, &ctx, 1.20, vec![]);
+        assert!(held, "a long press is a scrub");
+        let (_, held) = playback_frame(&mut world, &ctx, 1.22, vec![press(30.0, false)]);
+        assert!(!held);
     }
 
     // §1.5 Scene files, Q-200 (#417): the dialog offers exactly `RecentScenes`, in its

@@ -31,7 +31,7 @@ use bevy::time::Time;
 use bevy::transform::components::GlobalTransform;
 use bevy::window::{MonitorSelection, PrimaryWindow, Window, WindowMode};
 use bevy_egui::input::EguiInputEvent;
-use bevy_egui::{EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, egui};
 use ftgsxr_core::Pose;
 use ftgsxr_io::ManualLighting;
 use ftgsxr_render::{
@@ -43,7 +43,7 @@ use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
 use crate::library::{EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel};
 use crate::manipulate::Selected;
 use crate::platform::PickKind;
-use crate::playback::{Playback, PlaybackWarning};
+use crate::playback::{Playback, PlaybackWarning, Scrubbing};
 
 /// Where the UI is drawn (§1.8): on the window (the desktop), or on a world quad whose
 /// entity carries `WorldPanel` and the quad's pose, `size_px` its texture's size and
@@ -274,7 +274,7 @@ impl InstanceLighting {
 /// E14's manual form: g = 2^EV and w = (1 + 0.4 t, 1 − 0.4 u, 1 − 0.4 t) scaled to mean
 /// 1, unclamped; the gain is g w, the identity at zero. The app's copy of
 /// `ftgsxr_xr::light::manual_gains`, which `ftgsxr-app` may not call (§2.1's bands).
-// Q-245
+// Q-250
 pub(crate) fn manual_gain(m: &ManualLighting) -> Vec3 {
     let g = m.exposure_ev.exp2();
     let w = Vec3::new(
@@ -522,10 +522,20 @@ impl Plugin for UiPlugin {
         cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
             app.init_resource::<PanelPointer>()
+                .init_resource::<Scrubbing>()
                 .add_systems(PreUpdate, panel_pointer)
+                .add_systems(PostUpdate, end_scrub.before(EguiPostUpdateSet::EndPass))
                 .add_systems(EguiPrimaryContextPass, dock::draw);
         }
     }
+}
+
+/// Ends the scrub before egui's pass, every frame: the dock's playback tab sets it again
+/// while the scrub bar is dragged, so a release, a frame without the bar or without an
+/// egui context ends it (Q-246).
+// Q-246
+fn end_scrub(mut scrubbing: ResMut<Scrubbing>) {
+    scrubbing.0 = false;
 }
 
 /// `UiCommand::Help`, `HideUi`, `Hud`, `Fullscreen`, `OpenFiles` and `LoadScene`
@@ -850,7 +860,7 @@ pub(crate) fn load_system_font(ctx: &egui::Context) -> bool {
 mod tests {
     use super::*;
 
-    // Q-245: U-20's manual case (EV 1 → g = 2), the identity at zero, and E14's w.
+    // Q-250: U-20's manual case (EV 1 → g = 2), the identity at zero, and E14's w.
     #[test]
     fn manual_gain_gives_e14s_manual_form() {
         let at = |exposure_ev, temperature, tint| {

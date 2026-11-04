@@ -56,6 +56,7 @@ mod keymap_names;
 mod library_first_run;
 mod library_refresh;
 mod live_tier;
+mod manipulate_content_group;
 mod manipulate_intents;
 mod overlay_toggles;
 mod r15_render;
