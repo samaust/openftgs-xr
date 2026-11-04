@@ -165,10 +165,10 @@ fn dock_from_settings(settings: Res<SettingsRes>, mut ui: ResMut<UiState>) {
 }
 
 /// §1.7 Panels, §1.11: the dock's width, in whole points, and whether it is open go into
-/// `[desktop]`; the width drawn within the window's range is the one saved (Q-252). The
-/// drawn and the saved width are compared in whole points, so a dock drawn at a
-/// fractional width (egui rounds to 1/32 point) does not mark the settings changed every
-/// frame (Q-207).
+/// `[desktop]`; the width is the one the user dragged the dock to, a window too narrow
+/// for it clamping only the drawing (Q-252). The dragged and the saved width are
+/// compared in whole points, so a drag to a fractional width (egui rounds to 1/32 point)
+/// does not mark the settings changed every frame (Q-207).
 // Q-252
 fn dock_into_settings(ui: Res<UiState>, mut settings: ResMut<SettingsRes>) {
     if !ui.is_changed() {
@@ -1427,7 +1427,7 @@ mod tests {
         }
     }
 
-    // §1.7 Panels, §1.11, I-10, Q-207, Q-252 (#428): a resize goes into `[desktop]` in
+    // §1.7 Panels, §1.11, I-10, Q-207, Q-252 (#428): a drag's width goes into `[desktop]` in
     // whole points, a change within the same whole point (a half point included) is no
     // change, a collapse is one, and a change is written at once (the debounce's first
     // save).
