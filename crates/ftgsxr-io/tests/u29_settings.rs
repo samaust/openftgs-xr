@@ -465,13 +465,19 @@ help = "F1"
     );
 }
 
-/// Q-251 (#428): a non-finite `[desktop] dock_width` takes the default 320 with a
-/// warning naming the key; a finite one outside §1.7's range loads as given (the dock
-/// clamps it when drawn).
+/// Q-251 (#440): a `[desktop] dock_width` below §1.7's 160-point floor, or not finite,
+/// takes the default 320 with a warning naming the key, as Q-50 treats every ranged key;
+/// one of at least 160 loads as given, however wide (the dock applies the window's 60 %
+/// bound when drawn).
 // Q-251
 #[test]
-fn u29_a_non_finite_dock_width_takes_the_default_with_a_warning() {
-    for (name, value) in [("dock_nan", "nan"), ("dock_inf", "inf")] {
+fn u29_a_dock_width_below_160_or_not_finite_takes_the_default_with_a_warning() {
+    for (name, value) in [
+        ("dock_narrow", "50"),
+        ("dock_just_under", "159.5"),
+        ("dock_nan", "nan"),
+        ("dock_inf", "inf"),
+    ] {
         let (_, s, warnings) = load_text(
             name,
             &format!(
@@ -480,17 +486,22 @@ fn u29_a_non_finite_dock_width_takes_the_default_with_a_warning() {
         );
         assert_eq!(s.desktop.dock_width, 320.0, "{value}");
         assert!(!s.desktop.dock_open, "{value}");
+        assert_eq!(warnings.len(), 1, "{value}: {warnings:?}");
         assert!(
-            warnings.iter().any(|w| w.contains("`desktop.dock_width`")),
+            warnings[0].contains("`desktop.dock_width`"),
             "{value}: {warnings:?}"
         );
     }
-    let (_, s, warnings) = load_text(
-        "dock_narrow",
-        "format = \"ftgsxr-settings\"\nversion = 1\n\n[desktop]\ndock_width = 50\n",
-    );
-    assert_eq!(s.desktop.dock_width, 50.0);
-    assert!(warnings.is_empty(), "{warnings:?}");
+    for (name, value, width) in [("dock_floor", "160", 160.0), ("dock_wide", "5000", 5000.0)] {
+        let (_, s, warnings) = load_text(
+            name,
+            &format!(
+                "format = \"ftgsxr-settings\"\nversion = 1\n\n[desktop]\ndock_width = {value}\n"
+            ),
+        );
+        assert_eq!(s.desktop.dock_width, width, "{value}");
+        assert!(warnings.is_empty(), "{value}: {warnings:?}");
+    }
 }
 
 /// Q-49: a `[playback] loop` outside Q-50's spellings takes the default

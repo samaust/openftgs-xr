@@ -228,8 +228,9 @@ pub struct DesktopSettings {
     pub fov_deg: f32,
     /// The fly camera's base speed in m/s, in \[0.1, 20\].
     pub fly_speed_mps: f32,
-    /// The dock's width in points, finite; the dock clamps it to §1.7's range when
-    /// drawn (Q-251).
+    /// The dock's width in points, finite and at least 160 (§1.7 Panels); the dock
+    /// applies §1.7's window-dependent bound, 60 % of the window's width, when drawn
+    /// (Q-251).
     pub dock_width: f32,
     /// Whether the dock is open, not collapsed (§1.7 Panels).
     pub dock_open: bool,
@@ -509,11 +510,17 @@ fn flag() -> Check<bool> {
     ("true or false".into(), Box::new(Value::as_bool))
 }
 
-/// A finite number, as f32 (Q-251).
-fn finite() -> Check<f32> {
+/// A finite number of at least `lo`, as f32: a range with no upper bound (Q-251).
+// Q-251
+fn at_least(lo: f64) -> Check<f32> {
     (
-        "a finite number".into(),
-        Box::new(|v| number(v).map(|x| x as f32).filter(|x| x.is_finite())),
+        format!("a finite number of at least {lo}"),
+        Box::new(move |v| {
+            number(v)
+                .filter(|x| *x >= lo)
+                .map(|x| x as f32)
+                .filter(|x| x.is_finite())
+        }),
     )
 }
 
@@ -1060,9 +1067,10 @@ impl Reader {
             fly_speed_mps: self
                 .take(t, p, "fly_speed_mps", range(0.1, 20.0))
                 .unwrap_or(d.fly_speed_mps),
-            // Q-251
+            // Q-251: §1.7's 160-point floor is checked here; the window's 60 % when
+            // the dock is drawn.
             dock_width: self
-                .take(t, p, "dock_width", finite())
+                .take(t, p, "dock_width", at_least(160.0))
                 .unwrap_or(d.dock_width),
             dock_open: self.take(t, p, "dock_open", flag()).unwrap_or(d.dock_open),
             keys,

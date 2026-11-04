@@ -258,6 +258,8 @@ const DOCK_MAX_SHARE: f32 = 0.6;
 
 /// The dock's panel at `width` points, kept between 160 points and 60 % of a window
 /// `window` points wide; below 267 points the 160-point floor wins (§1.7 Panels, Q-251).
+/// A saved width is at least 160 already (`load_settings`), so for it only the window's
+/// bound applies; the floor bounds a drag.
 // Q-251
 fn dock_panel(width: f32, window: f32) -> egui::Panel {
     let max = (DOCK_MAX_SHARE * window).max(DOCK_MIN_WIDTH);
@@ -1140,8 +1142,10 @@ mod tests {
         drawn
     }
 
-    // §1.7 Panels, Q-251 (#428): a saved width is drawn within [160, 60 % of the
-    // window] points, and the 160-point floor wins in a window under 267 points.
+    // §1.7 Panels, Q-251 (#440): `load_settings` already takes a width below 160 as
+    // the default, so drawing applies only the window's bound, 60 % of its width, and
+    // the 160-point floor wins in a window under 267 points. The 50-point case is the
+    // panel's own floor, which egui keeps.
     #[test]
     fn dock_panel_draws_a_saved_width_outside_the_range_clamped() {
         assert_eq!(drawn_width(50.0, 1000.0), 160.0);
