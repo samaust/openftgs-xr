@@ -1232,7 +1232,7 @@ mod tests {
     }
 
     // Q-246 (#416, #436): a press on the scrub bar is a scrub from the press to the
-    // release, whether the pointer then moves or not: a click is silent while pressed.
+    // release, whether the pointer then moves or not: a click is a scrub while pressed.
     #[test]
     fn playback_tab_a_press_on_the_scrub_bar_is_a_scrub_until_the_release() {
         use crate::intent::{Intent, PlaybackCommand};
