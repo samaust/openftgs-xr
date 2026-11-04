@@ -192,6 +192,7 @@ pub struct StubSink {
     /// Its gain.
     pub gain: f32,
     /// Its pan in \[−1, 1\], as last set; 0 until then (Q-268).
+    // Q-T453.2
     pub pan: f32,
     /// The size of the file it was made from.
     pub bytes: usize,
@@ -949,7 +950,8 @@ mod kira_output {
             self.with_sink(sink, |h| h.set_volume(decibels(gain), NOW));
         }
 
-        // Q-268: kira's `Panning` runs from −1 (left) to 1 (right), as the port's pan.
+        // Q-268, Q-T453.2: kira's `Panning` runs from −1 (left) to 1 (right), as the port's
+        // pan; a non-finite pan centers.
         fn set_panning(&self, sink: SinkId, pan: f32) {
             let pan = if pan.is_finite() {
                 pan.clamp(-1.0, 1.0)
