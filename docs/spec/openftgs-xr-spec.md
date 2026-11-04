@@ -817,7 +817,8 @@ pub fn read_info(header: &[u8], file_bytes: u64) -> Result<ModelInfo, CoreError>
 pub fn read_exchange(bytes: &[u8]) -> Result<Model, CoreError>;                   // ftgs-if, validated, identity computed
 pub fn read_checkpoint(dir: &std::path::Path) -> Result<Model, CoreError>;        // manifest + params, activated (§1.2)
 pub fn read_ply(bytes: &[u8]) -> Result<Model, CoreError>;                        // the PLY snapshot (§1.2, D-41)
-pub fn open_model(path: &std::path::Path) -> Result<Model, CoreError>;            // by kind: a directory → `read_checkpoint`; a file read into memory → the reader above (D-50)
+pub fn checkpoint_dir(path: &std::path::Path) -> Option<std::path::PathBuf>;      // a path named `manifest.json` → its parent directory, by name alone (a bare one → the current directory); else None
+pub fn open_model(path: &std::path::Path) -> Result<Model, CoreError>;            // by kind: a directory, or a `manifest.json` via `checkpoint_dir` → `read_checkpoint`; another file read into memory → the reader above (D-50)
 pub fn sha256(bytes: &[u8]) -> [u8; 32];
 pub fn hex(identity: &[u8; 32]) -> String;                                        // 64 lowercase digits
 
