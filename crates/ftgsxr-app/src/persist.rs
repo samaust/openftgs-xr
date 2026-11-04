@@ -21,9 +21,9 @@ use bevy::log::warn;
 use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use ftgsxr_io::{
-    AudioSettings, CameraState, ClockState, IoError, LocomotionSettings, ModelRef, PoseStore,
-    SceneFile, SceneModel, Settings, SourceSpec, Url, load_settings, read_scene, save_settings,
-    write_scene,
+    AudioSettings, CameraState, ClockState, IoError, LocomotionSettings, ManualLighting, ModelRef,
+    PoseStore, SceneFile, SceneModel, Settings, SourceSpec, Url, load_settings, read_scene,
+    save_settings, write_scene,
 };
 use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 
@@ -38,7 +38,8 @@ use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
-    DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState, recent_scenes,
+    DockHooks, InstanceLighting, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState,
+    recent_scenes,
 };
 
 mod panels;
@@ -601,7 +602,8 @@ fn overlays_of(o: &ftgsxr_io::OverlaySettings) -> Overlays {
 /// order with its local pose (under `ContentGroup`), the clock, `SettingsRes.environment`,
 /// the rig's pose, the desktop camera's local pose under the rig with its field of view
 /// and mode, and the bookmarks set, in slot order (Q-206). Model and audio locations
-/// follow Q-3 against `AppPaths.models`. No anchor (M-5) and no per-instance lighting yet.
+/// follow Q-3 against `AppPaths.models`. Each instance's `lighting` is its Scene-tab
+/// manual values, null at the identity; no anchor (M-5).
 // Q-206, Q-3
 pub fn scene_from_world(world: &World) -> SceneFile {
     let models_dir = world
@@ -616,10 +618,11 @@ pub fn scene_from_world(world: &World) -> SceneFile {
         Option<&Visibility>,
         Option<&SplatMode>,
         Option<&ShowOnUpload>,
+        Option<&InstanceLighting>,
     )>() {
         let mut rows: Vec<_> = q.iter(world).collect();
         rows.sort_by_key(|r| r.0);
-        for (_, m, t, vis, mode, show) in rows {
+        for (_, m, t, vis, mode, show, light) in rows {
             let (kind, location) = ref_location(&m.source, &models_dir);
             let visible = match show {
                 Some(s) => s.0,
@@ -639,7 +642,9 @@ pub fn scene_from_world(world: &World) -> SceneFile {
                 mode: mode_name(mode),
                 time_offset_s: m.time.offset_s,
                 end_rule: m.time.end_rule,
-                lighting: None,
+                lighting: light
+                    .filter(|l| l.0 != ManualLighting::default())
+                    .map(|l| l.0.clone()),
                 audio: m.audio.as_ref().map(|a| ref_location(a, &models_dir).1),
             });
         }
@@ -689,7 +694,7 @@ pub fn scene_from_world(world: &World) -> SceneFile {
 
 /// Replaces the current scene with `scene` (§1.5 Scene files): each model whose source
 /// still offers it loads through the library (`LibraryCommand::LoadRef`), its pose,
-/// visibility, mode, offset, end rule and audio applied when the instance appears; a
+/// visibility, mode, offset, end rule, lighting and audio applied when the instance appears; a
 /// local file that no longer exists is listed in `library` as `EntryState::Missing` and
 /// its name returned (Q-54, E-SCENE-MISSING); a file read with another identity than the
 /// scene's is refused and its model listed as missing then (Q-245). The clock,
@@ -846,6 +851,10 @@ fn apply_pending_instances(
             });
         }
         let mut ec = commands.entity(e);
+        // Q-206: a null `lighting` leaves the identity.
+        if let Some(l) = &p.lighting {
+            ec.try_insert(InstanceLighting::bundle(l.clone()));
+        }
         ec.try_insert(SplatMode(mode_of(&p.mode, display)));
         ec.try_insert(SplatOverlays(overlays_of(&display.overlays)));
         if !p.visible {
