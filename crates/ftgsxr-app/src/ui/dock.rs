@@ -845,8 +845,8 @@ fn replay_target(world: &mut World) -> Option<Entity> {
 /// `sh_degree`), `None` with no instance or before its first upload (Q-241).
 // Q-241
 fn replay_loaded_degree(world: &World, target: Option<Entity>) -> Option<u8> {
-    let degrees = world.get_resource::<super::UploadDegrees>()?;
-    degrees.0.get(&target?).copied()
+    let uploads = world.get_resource::<super::Uploads>()?;
+    uploads.0.get(&target?).map(|u| u.sh_degree)
 }
 
 /// The replay row's lines on what the open request changes in the view (Q-233, Q-234):
@@ -1069,7 +1069,7 @@ fn scene_files(world: &World) -> Vec<PathBuf> {
 mod tests {
     use super::{replay_lines, replay_loaded_degree, source_from_input};
     use crate::SplatEvent;
-    use crate::ui::{ToastRequest, UploadBytes, UploadDegrees, splat_toasts};
+    use crate::ui::{ToastRequest, Uploads, splat_toasts};
     use bevy::app::App;
     use ftgsxr_core::RenderRequest;
 
@@ -1127,11 +1127,10 @@ mod tests {
     // degree 3, is drawn at 1 (Q-241's detecting test); a later upload (a reload, Q-238)
     // replaces it, and before any upload the row has no degree.
     #[test]
-    fn the_sh_line_takes_the_uploaded_degree() {
+    fn replay_loaded_degree_is_the_latest_uploaded_degree() {
         let mut app = App::new();
         app.add_message::<ToastRequest>()
-            .init_resource::<UploadBytes>()
-            .init_resource::<UploadDegrees>()
+            .init_resource::<Uploads>()
             .add_observer(splat_toasts);
         let e = app.world_mut().spawn_empty().id();
         assert_eq!(
