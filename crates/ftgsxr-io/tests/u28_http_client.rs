@@ -129,6 +129,21 @@ fn fetch(http: &HttpClient, url: &Url) -> (Result<PathBuf, ftgsxr_io::IoError>, 
     (result, reports)
 }
 
+/// The bytes the partial `file.part` of `entry` holds after a download cut at `keep` bytes:
+/// more than none and at most `keep`. Q-40 (corrected, #398): under heavy load the client can
+/// receive fewer than the `keep` bytes the server sent before its read fails, so a resume is
+/// checked against what the partial holds, not against `keep`.
+fn held_after_cut(entry: &std::path::Path, keep: u64) -> u64 {
+    let held = std::fs::metadata(entry.join("file.part"))
+        .expect("the partial download is kept (Q-43)")
+        .len();
+    assert!(
+        0 < held && held <= keep,
+        "the partial holds {held} bytes, not in 1..={keep}"
+    );
+    held
+}
+
 /// The quoted SHA-256 the fixture server gives as a file's ETag (Q-39).
 fn etag_of(bytes: &[u8]) -> String {
     format!("\"{}\"", ftgsxr_core::hex(&ftgsxr_core::sha256(bytes)))
@@ -187,10 +202,9 @@ fn u28_a_resume_after_a_truncated_download_gives_the_whole_file() {
     server.truncate_next(keep);
     let (cut, _) = fetch(&http, &url);
     assert_eq!(cut.map_err(|e| e.code()), Err("E-NET-FETCH"));
-    assert!(
-        !entry_dir(&cache, &url).join("file").exists(),
-        "no complete file yet"
-    );
+    let entry = entry_dir(&cache, &url);
+    assert!(!entry.join("file").exists(), "no complete file yet");
+    let held = held_after_cut(&entry, keep);
 
     let (resumed, reports) = fetch(&http, &url);
     let path = resumed.expect("the resumed download");
@@ -200,16 +214,16 @@ fn u28_a_resume_after_a_truncated_download_gives_the_whole_file() {
         "bytes identical to the whole file"
     );
     assert!(
-        reports.iter().all(|p| p.done > keep),
+        reports.iter().all(|p| p.done > held),
         "progress counts the bytes already held"
     );
 
     let records = server.requests();
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0].body_bytes, keep);
+    assert_eq!(records[0].body_bytes, keep, "the bytes the server sent");
     assert_eq!(
         records[1].header("Range"),
-        Some(format!("bytes={keep}-").as_str())
+        Some(format!("bytes={held}-").as_str())
     );
     assert_eq!(
         records[1].header("If-Range"),
@@ -218,7 +232,7 @@ fn u28_a_resume_after_a_truncated_download_gives_the_whole_file() {
     assert_eq!(records[1].status, 206);
     assert_eq!(
         records[1].body_bytes,
-        whole.len() as u64 - keep,
+        whole.len() as u64 - held,
         "only the rest is fetched"
     );
 }
@@ -240,10 +254,7 @@ fn u28_a_partial_with_stale_validators_restarts_from_the_first_byte() {
     let (cut, _) = fetch(&http, &url);
     assert_eq!(cut.map_err(|e| e.code()), Err("E-NET-FETCH"));
     let entry = entry_dir(&cache, &url);
-    assert_eq!(
-        std::fs::metadata(entry.join("file.part")).unwrap().len(),
-        keep
-    );
+    let held = held_after_cut(&entry, keep);
     let part_meta = entry.join("meta.part.json");
     let mut record: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&part_meta).unwrap()).unwrap();
@@ -257,7 +268,7 @@ fn u28_a_partial_with_stale_validators_restarts_from_the_first_byte() {
     let last = server.requests().pop().unwrap();
     assert_eq!(
         last.header("Range"),
-        Some(format!("bytes={keep}-").as_str())
+        Some(format!("bytes={held}-").as_str())
     );
     assert_eq!(last.header("If-Range"), Some("\"stale\""));
     assert_eq!(

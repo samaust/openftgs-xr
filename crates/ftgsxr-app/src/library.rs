@@ -304,6 +304,9 @@ struct LoadCtx {
     locate: Option<String>,
     /// The kind the first load was read as, for a reload (Q-238).
     kind_hint: Option<ModelKind>,
+    /// The ETag the `HEAD` before the load's download gave, kept with the information the
+    /// load, or a reload of it (Q-238), fills (Q-242).
+    etag: Option<String>,
 }
 
 type ListTask = Task<Result<Vec<Entry>, IoError>>;
@@ -313,9 +316,21 @@ type SubTask = (u64, String, ListTask);
 type InfoTask = Task<(Result<ModelInfo, IoError>, Option<String>)>;
 /// A refresh's ETag check of an entry (Q-230).
 type RevalidationTask = Task<Result<Revalidation, IoError>>;
-/// The model's reference and bytes, its soundtrack and its index `scene` manifest's cached
-/// file.
-type Fetched = Result<(ModelRef, ModelBytes, Option<ModelRef>, Option<PathBuf>), IoError>;
+/// What a fetch brings back (`Fetched`).
+struct FetchedModel {
+    /// The model's reference.
+    reference: ModelRef,
+    /// Its bytes.
+    bytes: ModelBytes,
+    /// Its soundtrack (§1.10).
+    audio: Option<ModelRef>,
+    /// Its index `scene` manifest's cached file (§1.7).
+    scene: Option<PathBuf>,
+    /// The ETag of the `HEAD` sent before the download (Q-242).
+    etag: Option<String>,
+}
+
+type Fetched = Result<FetchedModel, IoError>;
 
 /// A fetch on the I/O task pool.
 struct Fetch {
@@ -570,6 +585,7 @@ fn run_commands(
                     continue;
                 };
                 let source = library.sources[src].1.clone();
+                let head = http_client(&library.sources[src].0, &client).cloned();
                 let id = pending.ids[src];
                 let e = &mut library.entries[entry];
                 if matches!(e.state, EntryState::Fetching(_) | EntryState::Loading) {
@@ -602,10 +618,16 @@ fn run_commands(
                     None
                 };
                 let listed = e.entry.clone();
+                // Q-242: an HTTP entry without information is checked first, so the ETag
+                // goes with the information the load fills.
+                let head = head
+                    .filter(|_| e.info.is_none())
+                    .zip(revalidation_url(&e.entry));
                 let cancel = Arc::new(AtomicBool::new(false));
                 let progress = Arc::new(Mutex::new(None));
                 let (c, p) = (cancel.clone(), progress.clone());
                 let task = IoTaskPool::get().spawn(async move {
+                    let etag = head.and_then(|(client, url)| current_etag(&client, &url));
                     let (r, bytes) = source.fetch(
                         &listed,
                         &mut |now| *p.lock().unwrap_or_else(|e| e.into_inner()) = Some(now),
@@ -620,7 +642,13 @@ fn run_commands(
                     };
                     let scene = scene_url
                         .and_then(|url| download_with(http, &url, "the scene manifest", &c));
-                    Ok((r, bytes, audio, scene))
+                    Ok(FetchedModel {
+                        reference: r,
+                        bytes,
+                        audio,
+                        scene,
+                        etag,
+                    })
                 });
                 e.state = EntryState::Fetching(Progress {
                     done: 0,
@@ -638,6 +666,7 @@ fn run_commands(
                         audio: None,
                         locate: None,
                         kind_hint: kind_hint(e.entry.kind),
+                        etag: None,
                     },
                     cancel,
                     progress,
@@ -664,6 +693,7 @@ fn run_commands(
                         audio: None,
                         locate,
                         kind_hint: None,
+                        etag: None,
                     },
                     cancel: Arc::new(AtomicBool::new(false)),
                     progress: Arc::new(Mutex::new(None)),
@@ -711,7 +741,13 @@ fn fetch_ref(
         let bytes = open_ref(&at, client.as_deref(), provider.as_deref())?;
         let audio = if with_sidecar { sidecar(&at) } else { None };
         // Q-229: a reference names no index entry, so no index `scene`.
-        Ok((at, bytes, audio, None))
+        Ok(FetchedModel {
+            reference: at,
+            bytes,
+            audio,
+            scene: None,
+            etag: None,
+        })
     })
 }
 
@@ -782,7 +818,7 @@ fn fresh_entries(
         // Q-230: the information is kept while the check runs.
         if let (Some(client), Some(etag)) = (http, pending.etags.get(&key))
             && info.is_some()
-            && let Ok(url) = Url::parse(&entry.location)
+            && let Some(url) = revalidation_url(&entry)
         {
             let (client, etag) = (client.clone(), etag.clone());
             let task = IoTaskPool::get().spawn(async move { client.revalidate(&url, Some(&etag)) });
@@ -828,14 +864,35 @@ fn read_info(
     let (m, e, client) = (model.clone(), entry.clone(), http.cloned());
     let task = IoTaskPool::get().spawn(async move {
         let etag = client
-            .zip(Url::parse(&e.location).ok())
-            .and_then(|(c, url)| match c.revalidate(&url, None) {
-                Ok(Revalidation::Current(etag)) => etag,
-                _ => None,
-            });
+            .zip(revalidation_url(&e))
+            .and_then(|(c, url)| current_etag(&c, &url));
         (m.info(&e), etag)
     });
     pending.infos.push((id, entry.location.clone(), task));
+}
+
+/// The URL whose ETag stands for an HTTP entry's file (Q-230, Q-242): its location, or for
+/// a checkpoint the location joined with `manifest.json`, which carries the digest of
+/// `params.safetensors` (D-51), so a new parameters file changes it too.
+// Q-242
+fn revalidation_url(entry: &Entry) -> Option<Url> {
+    let url = Url::parse(&entry.location).ok()?;
+    match entry.kind {
+        EntryKind::Checkpoint => url.join(MANIFEST).ok(),
+        _ => Some(url),
+    }
+}
+
+/// A checkpoint's manifest, beside its parameters (D-51).
+const MANIFEST: &str = "manifest.json";
+
+/// The ETag a bodiless `HEAD` of `url` gives; `None` when it fails or gives none (Q-230,
+/// Q-232).
+fn current_etag(client: &HttpClient, url: &Url) -> Option<String> {
+    match client.revalidate(url, None) {
+        Ok(Revalidation::Current(etag)) => etag,
+        _ => None,
+    }
 }
 
 /// The client, when `spec` is an HTTP source (Q-230).
@@ -1021,7 +1078,8 @@ fn poll_tasks(
         }
     }
     // Q-230, Q-232: a refresh's ETag checks. Another ETag drops the information, identity
-    // and thumbnail and reads the header again; a 304 or a failed check keeps them.
+    // and thumbnail and reads an `Exchange` entry's header again (a PLY's or a checkpoint's
+    // information comes back with its next load, Q-242); a 304 or a failed check keeps them.
     let mut checked = Vec::new();
     pending
         .revalidations
@@ -1088,7 +1146,7 @@ fn poll_tasks(
         // to reduce to budget asks again: Q-158's count under the running tier, against the
         // models on the device now, as a fresh load requested at this moment.
         let result = match (f.target, result) {
-            (Some(target), Ok((_, bytes, _, _))) => {
+            (Some(target), Ok(FetchedModel { bytes, .. })) => {
                 let mut ctx = f.ctx;
                 if ctx.reduce {
                     let info = entry_of(&mut library, pending, &ctx)
@@ -1120,10 +1178,17 @@ fn poll_tasks(
             (_, result) => result,
         };
         match result {
-            Ok((source, bytes, audio, scene)) => {
+            Ok(FetchedModel {
+                reference,
+                bytes,
+                audio,
+                scene,
+                etag,
+            }) => {
                 let mut ctx = f.ctx;
-                ctx.source = source;
+                ctx.source = reference;
                 ctx.audio = audio;
+                ctx.etag = etag;
                 let mut instance = commands.spawn((
                     SplatLoad {
                         bytes,
@@ -1253,6 +1318,9 @@ fn reload_on_tier_switch(
     let provider: Option<Arc<dyn DocumentProvider>> = platform.0.document_provider();
     for (entity, ctx, visibility, show) in &instances {
         let shown = show.map_or(*visibility != Visibility::Hidden, |s| s.0);
+        // Q-242: the instance keeps its load's ETag, older than any file the reload re-reads,
+        // so information the reload fills pairs it with the same or newer contents, which
+        // the next refresh catches.
         commands
             .entity(entity)
             .remove::<SplatModel>()
@@ -1284,7 +1352,7 @@ fn on_model(
     loads: Query<(&LoadCtx, &SplatModel, Option<&LoadedModel>)>,
     assets: Res<Assets<SplatAsset>>,
     mut library: ResMut<Library>,
-    pending: Res<Pending>,
+    mut pending: ResMut<Pending>,
     mut failures: MessageWriter<LibraryFailure>,
     mut commands: Commands,
 ) {
@@ -1339,13 +1407,16 @@ fn on_model(
     library
         .entries
         .retain(|e| !(e.state == EntryState::Missing && e.identity.as_ref() == Some(&identity)));
+    let mut filled = false;
     if let Some(e) = entry_of(&mut library, &pending, ctx) {
         e.identity = Some(identity.clone());
-        // Q-242: an HTTP entry's information a load fills keeps no ETag; a refresh
-        // compares the entry by size, mtime and SHA-256 only (Q-230's entry without one).
         if e.info.is_none() {
             e.info = Some(asset.info.clone());
+            filled = true;
         }
+    }
+    if filled {
+        keep_etag(&mut pending, ctx);
     }
     commands.entity(add.entity).insert(LoadedModel {
         source: ctx.source.clone(),
@@ -1360,6 +1431,20 @@ fn on_model(
     });
 }
 
+/// Keeps the ETag of the `HEAD` sent before a load (`LoadCtx.etag`) with the information the
+/// load just filled, as a header read's is kept (Q-230); a load without one leaves the entry
+/// without one, compared by size, mtime and SHA-256 only.
+// Q-242
+fn keep_etag(pending: &mut Pending, ctx: &LoadCtx) {
+    let Some(key) = ctx.entry.clone() else {
+        return;
+    };
+    match &ctx.etag {
+        Some(etag) => pending.etags.insert(key, etag.clone()),
+        None => pending.etags.remove(&key),
+    };
+}
+
 /// `Uploaded` shows the instance and marks its entry loaded; `Failed` removes the entity
 /// and marks the entry failed, an E-MEM-BUDGET text followed by ` (N = n)` (Q-117, Q-148).
 // Q-148, Q-117
@@ -1368,7 +1453,7 @@ fn on_splat_event(
     loads: Query<(&LoadCtx, Option<&SplatModel>, Option<&ShowOnUpload>)>,
     assets: Res<Assets<SplatAsset>>,
     mut library: ResMut<Library>,
-    pending: Res<Pending>,
+    mut pending: ResMut<Pending>,
     mut failures: MessageWriter<LibraryFailure>,
     mut commands: Commands,
 ) {
@@ -1399,11 +1484,12 @@ fn on_splat_event(
             {
                 text = format!("{text} (N = {n})");
             }
+            let mut filled = false;
             match entry_of(&mut library, &pending, ctx) {
                 Some(e) => {
-                    // Q-242: an HTTP entry's information a load fills keeps no ETag.
                     if e.info.is_none() && ctx.reduce_to.is_none() {
                         e.info = asset.map(|a| a.info.clone());
+                        filled = e.info.is_some();
                     }
                     e.state = EntryState::Failed(text);
                 }
@@ -1415,6 +1501,9 @@ fn on_splat_event(
                         text,
                     ));
                 }
+            }
+            if filled {
+                keep_etag(&mut pending, ctx);
             }
             commands.entity(*entity).despawn();
         }
