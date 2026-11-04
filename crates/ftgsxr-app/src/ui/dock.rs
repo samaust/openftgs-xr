@@ -34,6 +34,42 @@ enum Out {
     Toast(String),
 }
 
+/// §1.5's render modes, as the Scene and Display tabs offer them; the centers'
+/// parameters are placeholders that `persist` replaces with `[display]`'s (Q-218).
+const MODES: [(&str, RenderMode); 4] = [
+    ("Splats", RenderMode::Splats),
+    (
+        "Centers",
+        RenderMode::Centers {
+            pixel_radius: 3.0,
+            colormap: Colormap::Dc,
+        },
+    ),
+    (
+        "Both",
+        RenderMode::Both {
+            pixel_radius: 3.0,
+            colormap: Colormap::Dc,
+        },
+    ),
+    ("Hidden", RenderMode::Hidden),
+];
+
+/// One instance's render mode row (§1.5): `current` shown selected; the mode chosen,
+/// when it is another. The row edits the mode only, never the instance's visibility.
+fn mode_row(ui: &mut egui::Ui, current: RenderMode) -> Option<RenderMode> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        for (label, m) in MODES {
+            let on = std::mem::discriminant(&current) == std::mem::discriminant(&m);
+            if ui.selectable_label(on, label).clicked() && !on {
+                chosen = Some(m);
+            }
+        }
+    });
+    chosen
+}
+
 /// §1.6's speed presets.
 const SPEEDS: [f64; 6] = [0.1, 0.25, 0.5, 1.0, 2.0, 4.0];
 
@@ -481,33 +517,12 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
             }));
         }
         let current = mode.map_or(RenderMode::Splats, |m| m.0);
-        ui.horizontal(|ui| {
-            for (label, m) in [
-                ("Splats", RenderMode::Splats),
-                (
-                    "Centers",
-                    RenderMode::Centers {
-                        pixel_radius: 3.0,
-                        colormap: Colormap::Dc,
-                    },
-                ),
-                (
-                    "Both",
-                    RenderMode::Both {
-                        pixel_radius: 3.0,
-                        colormap: Colormap::Dc,
-                    },
-                ),
-            ] {
-                let on = std::mem::discriminant(&current) == std::mem::discriminant(&m);
-                if ui.selectable_label(on, label).clicked() && !on {
-                    out.push(Out::Intent(Intent::Instance {
-                        instance: e,
-                        action: InstanceAction::SetMode(m),
-                    }));
-                }
-            }
-        });
+        if let Some(m) = mode_row(ui, current) {
+            out.push(Out::Intent(Intent::Instance {
+                instance: e,
+                action: InstanceAction::SetMode(m),
+            }));
+        }
         // §1.7: metres, yaw-pitch-roll in degrees, a factor.
         let mut t = tf.translation;
         let (y, p, r) = tf.rotation.to_euler(EulerRot::YXZ);
@@ -952,23 +967,7 @@ fn display_tab(
     if !selected.is_empty() {
         ui.horizontal(|ui| {
             ui.label("selected:");
-            for (label, m) in [
-                ("Splats", RenderMode::Splats),
-                (
-                    "Centers",
-                    RenderMode::Centers {
-                        pixel_radius: 3.0,
-                        colormap: Colormap::Dc,
-                    },
-                ),
-                (
-                    "Both",
-                    RenderMode::Both {
-                        pixel_radius: 3.0,
-                        colormap: Colormap::Dc,
-                    },
-                ),
-            ] {
+            for (label, m) in MODES {
                 if button(ui, label, out, hv) {
                     for &e in &selected {
                         out.push(Out::Intent(Intent::Instance {
@@ -1067,11 +1066,19 @@ fn scene_files(world: &World) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{replay_lines, replay_loaded_degree, source_from_input};
+    use super::{
+        Colormap, Entity, InstanceAction, Intent, LoadedModel, Out, RenderMode, SplatMode,
+        Transform, Visibility, World, display_tab, egui, replay_lines, replay_loaded_degree,
+        scene_tab, source_from_input,
+    };
     use crate::SplatEvent;
+    use crate::manipulate::Selected;
     use crate::ui::{ToastRequest, Uploads, splat_toasts};
     use bevy::app::App;
     use ftgsxr_core::RenderRequest;
+    use ftgsxr_core::{ModelTime, read_info};
+    use ftgsxr_io::ModelRef;
+    use ftgsxr_testkit::fixtures_dir;
 
     fn request(sh_degree: Option<u8>) -> RenderRequest {
         RenderRequest {
@@ -1176,6 +1183,150 @@ mod tests {
                 "background not applied in passthrough"
             ]
         );
+    }
+
+    /// The instance actions `out` holds, by instance.
+    fn actions(out: &[Out]) -> Vec<(Entity, InstanceAction)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::Intent(Intent::Instance { instance, action }) => Some((*instance, *action)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// An instance of the P1 fixture in `mode`, visible, optionally selected.
+    fn instance(world: &mut World, mode: RenderMode, selected: bool) -> Entity {
+        let path = fixtures_dir().join("probes/P1.safetensors");
+        let bytes = std::fs::read(&path).unwrap();
+        let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        let info = read_info(&bytes[8..8 + n], bytes.len() as u64).unwrap();
+        let m = LoadedModel {
+            source: ModelRef::File(path),
+            identity: "0".repeat(64),
+            time: ModelTime::from_span(&info.time),
+            info,
+            name: "P1".into(),
+            reduced: false,
+            audio: None,
+            frame_step_s: 1.0 / 30.0,
+        };
+        let mut ec = world.spawn((m, Transform::IDENTITY, Visibility::Visible, SplatMode(mode)));
+        if selected {
+            ec.insert(Selected);
+        }
+        ec.id()
+    }
+
+    type Tab = fn(&mut World, &mut egui::Ui, &mut Vec<Out>, &mut Option<egui::Id>);
+
+    /// One frame of `tab` with `events`: the texts drawn and what the user did.
+    fn frame(
+        ctx: &egui::Context,
+        world: &mut World,
+        events: Vec<egui::Event>,
+        tab: Tab,
+    ) -> (Vec<(String, egui::Pos2)>, Vec<Out>) {
+        let input = egui::RawInput {
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut out = Vec::new();
+        let mut hv = None;
+        let mut full = ctx.run_ui(input, |ui| tab(world, ui, &mut out, &mut hv));
+        full.textures_delta.clear();
+        let mut texts = Vec::new();
+        fn walk(s: &egui::Shape, texts: &mut Vec<(String, egui::Pos2)>) {
+            match s {
+                egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), t.pos)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts)),
+                _ => {}
+            }
+        }
+        full.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
+        (texts, out)
+    }
+
+    /// Draws `tab`, clicks the text `label`: what the user did over the click's frames.
+    fn click(world: &mut World, tab: Tab, label: &str) -> Vec<Out> {
+        let ctx = egui::Context::default();
+        let (texts, _) = frame(&ctx, world, Vec::new(), tab);
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == label)
+            .map(|(_, p)| *p + egui::vec2(4.0, 4.0))
+            .unwrap_or_else(|| panic!("{label} is drawn: {texts:?}"));
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mut out = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(at)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            out.extend(frame(&ctx, world, events, tab).1);
+        }
+        out
+    }
+
+    // #426: §1.5's render modes include hidden, and §1.7 Panels puts the mode in the
+    // Scene tab beside visibility: the tab offers Hidden, which sets the mode alone.
+    #[test]
+    fn the_scene_tab_offers_hidden_and_it_leaves_visibility_alone() {
+        let mut world = World::new();
+        let e = instance(&mut world, RenderMode::Splats, false);
+        let out = click(&mut world, scene_tab, "Hidden");
+        assert_eq!(
+            actions(&out),
+            vec![(e, InstanceAction::SetMode(RenderMode::Hidden))]
+        );
+    }
+
+    // #426: an instance in Hidden mode shows Hidden as its current mode (choosing it
+    // again sends nothing), can leave it from the tab, and its Visible checkbox leaves
+    // the mode alone.
+    #[test]
+    fn the_scene_tab_shows_hidden_as_the_current_mode() {
+        let mut world = World::new();
+        let e = instance(&mut world, RenderMode::Hidden, false);
+        assert_eq!(actions(&click(&mut world, scene_tab, "Hidden")), vec![]);
+        assert_eq!(
+            actions(&click(&mut world, scene_tab, "Splats")),
+            vec![(e, InstanceAction::SetMode(RenderMode::Splats))]
+        );
+        assert_eq!(
+            actions(&click(&mut world, scene_tab, "Visible")),
+            vec![(e, InstanceAction::SetVisible(false))]
+        );
+    }
+
+    // #426, Q-218: the Display tab sets the selected instances' render mode, Hidden
+    // included, and leaves the others alone.
+    #[test]
+    fn the_display_tab_offers_hidden_for_the_selected_instances() {
+        let mut world = World::new();
+        let a = instance(&mut world, RenderMode::Splats, true);
+        let b = instance(
+            &mut world,
+            RenderMode::Both {
+                pixel_radius: 3.0,
+                colormap: Colormap::Dc,
+            },
+            true,
+        );
+        instance(&mut world, RenderMode::Splats, false);
+        let mut got = actions(&click(&mut world, display_tab, "Hidden"));
+        got.sort_by_key(|(e, _)| *e);
+        let mut want = vec![
+            (a, InstanceAction::SetMode(RenderMode::Hidden)),
+            (b, InstanceAction::SetMode(RenderMode::Hidden)),
+        ];
+        want.sort_by_key(|(e, _)| *e);
+        assert_eq!(got, want);
     }
 
     #[test]
