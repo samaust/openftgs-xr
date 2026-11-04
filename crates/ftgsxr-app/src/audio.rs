@@ -5,23 +5,30 @@
 //! played on `PlayUiSound`, and a `Soundtrack` for every instance whose `LoadedModel`
 //! names one, decoded off the main thread and kept in step with the clock. Everything
 //! reaches the system's output through the `AudioOutput` port (Q-149, Q-187): the kira
-//! adapter on the desktop and the Quest, `StubAudioOutput` in the tests. Stereo only;
-//! spatialization is M-5's.
+//! adapter on the desktop and the Quest, `StubAudioOutput` in the tests. On the headset
+//! (the `Headset` marker, Q-266) with `spatial` on, each soundtrack's gain and pan follow
+//! the listener and its instance's box every frame (Q-268, Q-281); elsewhere stereo.
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
+use bevy::asset::Assets;
+use bevy::camera::Camera;
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
+use bevy::math::Vec3;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
+use bevy::transform::TransformSystems;
+use bevy::transform::components::GlobalTransform;
 use ftgsxr_core::PlayState;
 use ftgsxr_io::{IoError, ModelBytes, ModelRef, SoundSwitches, open_ref};
+use ftgsxr_render::{SplatAsset, SplatCamera, SplatModel};
 
 use crate::intent::{Feature, Intent, VolumeChannel};
 use crate::library::LoadedModel;
-use crate::platform::PlatformRes;
+use crate::platform::{Headset, PlatformRes};
 use crate::playback::{Playback, Scrubbing};
 use crate::ui::{DockHooks, Tab, ToastRequest, UiCue};
 
@@ -39,7 +46,7 @@ pub struct AudioState {
     pub ui: f32,
     /// The soundtracks' gain.
     pub soundtrack: f32,
-    /// Spatialized soundtracks on the headset (M-5); the desktop plays stereo.
+    /// Spatialized soundtracks on the headset (Q-266, Q-268); the desktop plays stereo.
     pub spatial: bool,
     /// The per-sound switches.
     pub sounds: SoundSwitches,
@@ -437,9 +444,12 @@ impl Plugin for AudioPlugin {
             // egui's pass: this frame's scrub (Q-246).
             .add_systems(
                 PostUpdate,
-                (apply_gains, follow_clock)
+                // `spatialize` last: `apply_gains` and `follow_clock` set the plain gain,
+                // which it attenuates; after the propagation: this frame's poses.
+                (apply_gains, follow_clock, spatialize)
                     .chain()
-                    .after(bevy_egui::EguiPostUpdateSet::EndPass),
+                    .after(bevy_egui::EguiPostUpdateSet::EndPass)
+                    .after(TransformSystems::Propagate),
             );
     }
 }
@@ -766,6 +776,89 @@ fn follow_clock(
     }
 }
 
+/// §1.10 Soundtracks on the headset: with the `Headset` marker and `spatial` on, every
+/// ready soundtrack's gain is the soundtrack gain × min(1, 1/d) and its pan the sine of
+/// the emitter's horizontal azimuth from the listener's forward, every frame (Q-268). The
+/// listener is the midpoint of the active splat cameras, the emitter the instance's posed
+/// box center (Q-281). Otherwise, or with no camera or no box, pan 0 and the plain
+/// gain: the stereo of the desktop.
+// Q-266, Q-268, Q-281
+#[allow(clippy::too_many_arguments)]
+fn spatialize(
+    headset: Option<Res<Headset>>,
+    state: Res<AudioState>,
+    cameras: Query<(&Camera, &GlobalTransform), With<SplatCamera>>,
+    instances: Query<(&GlobalTransform, &SplatModel)>,
+    assets: Option<Res<Assets<SplatAsset>>>,
+    slots: Res<Slots>,
+    output: Res<AudioOutputRes>,
+    mut spatial_last: Local<bool>,
+) {
+    let listener = if headset.is_some() && state.spatial {
+        listener(
+            cameras
+                .iter()
+                .filter(|(c, _)| c.is_active)
+                .map(|(_, g)| (g.translation(), g.forward().as_vec3())),
+        )
+    } else {
+        None
+    };
+    // Stereo needs a call only on leaving the spatial mode; `apply_gains` and
+    // `follow_clock` keep the plain gain.
+    if listener.is_none() && !*spatial_last {
+        return;
+    }
+    *spatial_last = listener.is_some();
+    let gain = state.soundtrack_gain();
+    for (e, slot) in &slots.0 {
+        let Slot::Ready { sink, .. } = slot else {
+            continue;
+        };
+        let emitter = instances.get(*e).ok().and_then(|(g, m)| {
+            let b = assets.as_ref()?.get(&m.0)?.bounds;
+            Some(g.transform_point(b.center()))
+        });
+        let (factor, pan) = match (listener, emitter) {
+            (Some((at, forward)), Some(emitter)) => spatial_mix(at, forward, emitter),
+            _ => (1.0, 0.0),
+        };
+        output.0.set_gain(*sink, gain * factor);
+        output.0.set_panning(*sink, pan);
+    }
+}
+
+/// The listener from the splat cameras' positions and forwards: the midpoint of the
+/// positions and the sum of the forwards; `None` without a camera (Q-281).
+// Q-281
+fn listener(cameras: impl Iterator<Item = (Vec3, Vec3)>) -> Option<(Vec3, Vec3)> {
+    let (mut at, mut forward, mut n) = (Vec3::ZERO, Vec3::ZERO, 0u32);
+    for (p, f) in cameras {
+        at += p;
+        forward += f;
+        n += 1;
+    }
+    (n > 0).then(|| (at / n as f32, forward))
+}
+
+/// The attenuation factor and the pan of an emitter for a listener at `at` facing
+/// `forward` (Q-268): min(1, 1/d) over the distance d, and the sine of the horizontal
+/// azimuth from the forward, positive right, in \[−1, 1\]. The pan is 0 for an emitter
+/// straight above or below the listener, or a forward without a horizontal part
+/// (Q-281).
+// Q-268, Q-281
+fn spatial_mix(at: Vec3, forward: Vec3, emitter: Vec3) -> (f32, f32) {
+    let v = emitter - at;
+    let d = v.length();
+    let factor = if d > 1.0 { 1.0 / d } else { 1.0 };
+    let horizontal = |w: Vec3| Vec3::new(w.x, 0.0, w.z).normalize_or_zero();
+    let (f, v) = (horizontal(forward), horizontal(v));
+    // The right of a forward on the floor: forward × up.
+    let right = Vec3::new(-f.z, 0.0, f.x);
+    let pan = v.dot(right).clamp(-1.0, 1.0);
+    (factor, if pan.is_finite() { pan } else { 0.0 })
+}
+
 /// A UI sound's clip, mono at `rate` Hz, peak at most 0.5 (Q-191): sine tones under
 /// an exponential decay, a pitch sweep for the grabs, two tones for the error and the
 /// confirmation.
@@ -983,6 +1076,67 @@ mod tests {
         draw_once(&mut world, scene_section);
         draw_once(&mut world, settings_section);
         assert!(!world.resource_ref::<AudioState>().is_changed());
+    }
+
+    /// Worked by hand: listener at the origin facing −z (right is +x), 1/d beyond 1 m,
+    /// the pan the sine of the horizontal azimuth (Q-268, Q-281).
+    // Q-268, Q-281
+    #[test]
+    fn spatial_mix_attenuates_beyond_a_metre_and_pans_by_the_azimuth() {
+        let close = |(g, p): (f32, f32), (eg, ep): (f32, f32)| {
+            assert!((g - eg).abs() < 1e-6 && (p - ep).abs() < 1e-6, "{g} {p}");
+        };
+        let fwd = Vec3::NEG_Z;
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(2.0, 0.0, 0.0)),
+            (0.5, 1.0),
+        );
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(-4.0, 0.0, 0.0)),
+            (0.25, -1.0),
+        );
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(0.0, 0.0, -0.5)),
+            (1.0, 0.0),
+        );
+        // Behind: the azimuth 180°, sine 0.
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(0.0, 0.0, 3.0)),
+            (1.0 / 3.0, 0.0),
+        );
+        // 30° to the right at 2 m, 1 m up: d = √5, the height leaves the azimuth.
+        let (s, c) = 30f32.to_radians().sin_cos();
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(2.0 * s, 1.0, -2.0 * c)),
+            (1.0 / 5f32.sqrt(), 0.5),
+        );
+        // Straight above, and a forward straight down: centered.
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(0.0, 2.0, 0.0)),
+            (0.5, 0.0),
+        );
+        close(
+            spatial_mix(Vec3::ZERO, Vec3::NEG_Y, Vec3::new(2.0, 0.0, 0.0)),
+            (0.5, 0.0),
+        );
+        // A listener turned to face +x: an emitter at −z is on its left.
+        close(
+            spatial_mix(Vec3::ONE, Vec3::X, Vec3::new(1.0, 1.0, -1.0)),
+            (0.5, -1.0),
+        );
+    }
+
+    /// The midpoint of the cameras and the sum of their forwards; none without one.
+    #[test]
+    fn listener_is_the_cameras_midpoint() {
+        assert_eq!(listener(std::iter::empty()), None);
+        let eyes = [
+            (Vec3::new(-0.032, 1.6, 0.0), Vec3::NEG_Z),
+            (Vec3::new(0.032, 1.6, 0.0), Vec3::NEG_Z),
+        ];
+        let (at, forward) = listener(eyes.into_iter()).unwrap();
+        assert!(at.distance(Vec3::new(0.0, 1.6, 0.0)) < 1e-6);
+        assert!(forward.normalize().distance(Vec3::NEG_Z) < 1e-6);
     }
 
     /// The stub records each sink's pan, centered until set (Q-268).
