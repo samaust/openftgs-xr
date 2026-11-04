@@ -14,8 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::Assets;
-use bevy::camera::Camera;
 use bevy::camera::visibility::Visibility;
+use bevy::camera::{Camera, RenderTarget};
 use bevy::color::Color;
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::prelude::*;
@@ -269,15 +269,38 @@ pub(crate) fn transform_of(p: Pose) -> Transform {
     }
 }
 
-/// The head pose the desktop fit places the instance ahead of: the active camera of the
-/// lowest order, the stage origin facing −z when there is none.
-// Q-180
-fn head_pose(cameras: &Query<(&Camera, &GlobalTransform)>) -> Pose {
+/// The distance ahead of the head that the fit (§1.5 Poses), the headset's auto-fit and
+/// `rig`'s recenter (§1.8 Session and spaces) place the content at, metres.
+pub(crate) const AHEAD_M: f32 = 1.5;
+
+/// Whether a camera may be the head (Q-180, Q-T452.1): active, and rendering to a window
+/// or the headset's views, not to an image (the panels' cameras, a bench's target).
+// Q-T452.1
+pub(crate) fn head_candidate(camera: &Camera, target: &RenderTarget) -> bool {
+    camera.is_active && !matches!(target, RenderTarget::Image(_))
+}
+
+/// The cameras the head is picked from.
+pub(crate) type HeadCameras<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Camera,
+        &'static RenderTarget,
+        &'static GlobalTransform,
+    ),
+>;
+
+/// The head (Q-180, Q-T452.1): the candidate camera of the lowest order (rotation and
+/// translation, scale 1); `None` without one. The fit, the auto-fit, locomotion and
+/// recenter share it.
+// Q-180, Q-T452.1
+pub(crate) fn head_pose(cameras: &HeadCameras) -> Option<Pose> {
     cameras
         .iter()
-        .filter(|(c, _)| c.is_active)
-        .min_by_key(|(c, _)| c.order)
-        .map(|(_, g)| {
+        .filter(|(c, t, _)| head_candidate(c, t))
+        .min_by_key(|(c, ..)| c.order)
+        .map(|(.., g)| {
             let (_, rotation, translation) = g.to_scale_rotation_translation();
             Pose {
                 translation,
@@ -285,7 +308,6 @@ fn head_pose(cameras: &Query<(&Camera, &GlobalTransform)>) -> Pose {
                 scale: 1.0,
             }
         })
-        .unwrap_or(Pose::IDENTITY)
 }
 
 /// §1.5's hints for a local model: the preset from the first `ftgs-scene` manifest in
@@ -355,7 +377,7 @@ fn on_loaded(
     poses: Res<Poses>,
     headset: Option<Res<Headset>>,
     assets: Option<Res<Assets<SplatAsset>>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     mut commands: Commands,
 ) {
     let Ok((m, mut t, model, parent)) = q.get_mut(add.entity) else {
@@ -379,7 +401,13 @@ fn on_loaded(
                 && let Some(b) = bounds
                 && !(AUTO_FIT_RANGE_M.0..=AUTO_FIT_RANGE_M.1).contains(&b.size().max_element())
             {
-                let fitted = fit_pose(&b, x.preset, x.fit_size_m, head_pose(&cameras), 1.5);
+                let fitted = fit_pose(
+                    &b,
+                    x.preset,
+                    x.fit_size_m,
+                    head_pose(&cameras).unwrap_or(Pose::IDENTITY),
+                    AHEAD_M,
+                );
                 *t = transform_of(fitted.then(&group_pose(parent, &groups).inverse()));
             }
             x
@@ -536,7 +564,7 @@ fn run_intents(
     groups: GroupTransforms,
     selected: Query<Entity, With<Selected>>,
     assets: Res<Assets<SplatAsset>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     settings: Res<ManipulateSettings>,
     mut poses: ResMut<Poses>,
     mut hs: ResMut<HandStates>,
@@ -829,7 +857,13 @@ fn run_intents(
                             preset: Preset::YUp,
                             fit_size_m: 1.0,
                         });
-                        fit_pose(&b, x.preset, x.fit_size_m, head_pose(&cameras), 1.5)
+                        fit_pose(
+                            &b,
+                            x.preset,
+                            x.fit_size_m,
+                            head_pose(&cameras).unwrap_or(Pose::IDENTITY),
+                            AHEAD_M,
+                        )
                     } else {
                         snap_to_floor(&b, current, 0.0)
                     };
@@ -1063,10 +1097,10 @@ fn draw(
     q: Query<DrawItem, With<LoadedModel>>,
     groups: GroupTransforms,
     assets: Res<Assets<SplatAsset>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     gizmo: Res<GizmoState>,
 ) {
-    let eye = head_pose(&cameras).translation;
+    let eye = head_pose(&cameras).unwrap_or(Pose::IDENTITY).translation;
     for (t, m, hovered, selected, parent) in &q {
         let Some(asset) = assets.get(&m.0) else {
             continue;

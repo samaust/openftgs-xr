@@ -208,3 +208,29 @@ fn headset_fit_without_the_marker_nothing_is_fitted() {
         assert!(is_identity(pose(&t, e)), "{len}: {:?}", pose(&t, e));
     }
 }
+
+/// A panel's camera (order −1, rendering to an image, as `ui`'s panel mode spawns on the
+/// headset) far from the stage origin.
+fn panel_camera(t: &mut TestApp) {
+    t.app.world_mut().spawn((
+        Camera3d::default(),
+        Camera {
+            order: -1,
+            ..Default::default()
+        },
+        bevy::camera::RenderTarget::Image(Handle::<Image>::default().into()),
+        Transform::from_xyz(10.0, 1.0, 10.0).with_rotation(Quat::from_rotation_y(2.0)),
+    ));
+}
+
+#[test]
+fn headset_fit_ignores_a_panel_camera() {
+    // Q-T452.1: the head is never an image-target camera, so with only a panel's camera
+    // the head is still the stage origin facing −z (Q-180).
+    let mut t = app("headset_fit_panel_camera", true, None);
+    panel_camera(&mut t);
+    let path = model_file(&t, 20.0);
+    let e = load(&mut t, path);
+    let b = bounds(&t, e);
+    assert_fitted(&b, pose(&t, e));
+}
