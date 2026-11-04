@@ -13,8 +13,8 @@ use ftgsxr_app::{
     PlaybackCommand, SettingsRes, scene_from_world,
 };
 use ftgsxr_core::{EndRule, LoopMode, Pose};
-use ftgsxr_io::{SceneFile, read_scene};
-use ftgsxr_render::{RenderMode, SplatMode};
+use ftgsxr_io::{ManualLighting, SceneFile, read_scene};
+use ftgsxr_render::{RenderMode, SplatMode, SplatTransform};
 use ftgsxr_testkit::fixtures_dir;
 use support::TestApp;
 
@@ -260,4 +260,76 @@ fn i09_loading_the_missing_models_file_from_elsewhere_clears_the_entry() {
     let mut q = t.app.world_mut().query::<(&LoadedModel, &Transform)>();
     let (_, tf) = q.single(t.app.world()).unwrap();
     assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
+}
+
+/// A scene naming P1 at its fixture path with the given `lighting` JSON, loaded.
+fn p1_lit(t: &mut TestApp, name: &str, lighting: &str) -> Entity {
+    let path = fixtures_dir().join("probes/P1.safetensors");
+    let id = ftgsxr_core::hex(&ftgsxr_core::sha256(&std::fs::read(&path).unwrap()));
+    let scenes = t.dir.join("config/scenes");
+    std::fs::create_dir_all(&scenes).unwrap();
+    let json = format!(
+        r#"{{"format": "ftgsxr-scene", "version": 1,
+        "models": [{{"source": {{"kind": "dir", "location": {loc}}},
+            "identity": "{id}", "name": "P1",
+            "pose": {{"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": 1}},
+            "visible": true, "mode": "splats", "time_offset_s": 0, "end_rule": "hold",
+            "lighting": {lighting}, "audio": null}}],
+        "clock": {{"t": 0, "speed": 1, "loop": "loop", "range": null}},
+        "environment": {{}}, "anchor": null, "rig": null, "camera": null, "bookmarks": []}}"#,
+        loc = serde_json::to_string(&path.to_string_lossy()).unwrap(),
+    );
+    std::fs::write(scenes.join(format!("{name}.ftgsxr-scene.json")), json).unwrap();
+    t.frames(2);
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::LoadScene(name.into()));
+    wait_for(t, 1);
+    entity_named(t, "P1")
+}
+
+// Q-206, Q-218, Q-245
+#[test]
+fn i09_an_instances_lighting_is_restored_and_saved() {
+    // §1.5 Scene files: the scene records each instance's color transform (#423).
+    let mut t = TestApp::new("i09_lighting");
+    let e = p1_lit(
+        &mut t,
+        "lit",
+        r#"{"exposure_ev": 1, "temperature": 0, "tint": 0}"#,
+    );
+    let gain = t
+        .app
+        .world()
+        .get::<SplatTransform>(e)
+        .expect("a transform")
+        .0
+        .gain;
+    assert!(
+        (gain - Vec3::splat(2.0)).abs().max_element() < 1e-6,
+        "{gain}"
+    );
+    let saved = scene_from_world(t.app.world());
+    assert_eq!(
+        saved.models[0].lighting,
+        Some(ManualLighting {
+            exposure_ev: 1.0,
+            temperature: 0.0,
+            tint: 0.0,
+        })
+    );
+}
+
+// Q-206
+#[test]
+fn i09_a_null_lighting_loads_at_the_identity() {
+    let mut t = TestApp::new("i09_unlit");
+    let e = p1_lit(&mut t, "unlit", "null");
+    let gain = t
+        .app
+        .world()
+        .get::<SplatTransform>(e)
+        .map_or(Vec3::ONE, |c| c.0.gain);
+    assert_eq!(gain, Vec3::ONE);
+    assert_eq!(scene_from_world(t.app.world()).models[0].lighting, None);
 }

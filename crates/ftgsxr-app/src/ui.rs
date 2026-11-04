@@ -33,9 +33,10 @@ use bevy::window::{MonitorSelection, PrimaryWindow, Window, WindowMode};
 use bevy_egui::input::EguiInputEvent;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass, egui};
 use ftgsxr_core::Pose;
+use ftgsxr_io::ManualLighting;
 use ftgsxr_render::{
-    BudgetSource, Foveation, GpuTimes, SortMode, SplatEvent, SplatGpu, SplatStats, SplatTierState,
-    SplatTime,
+    BudgetSource, ColorTransform, Foveation, GpuTimes, SortMode, SplatEvent, SplatGpu, SplatStats,
+    SplatTierState, SplatTime, SplatTransform,
 };
 
 use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
@@ -256,6 +257,35 @@ pub(crate) enum UiCue {
 #[derive(Message, Clone, Debug, PartialEq)]
 pub(crate) struct SceneLoadConfirmed(pub(crate) PathBuf);
 
+/// An instance's E14 manual values, edited in the Scene tab and saved as its scene
+/// `lighting` (§1.5 Instances, §1.11); an instance without one is at the identity.
+// Q-218, Q-206
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
+
+impl InstanceLighting {
+    /// The component with the `SplatTransform` its values give.
+    pub(crate) fn bundle(m: ManualLighting) -> (InstanceLighting, SplatTransform) {
+        let gain = manual_gain(&m);
+        (InstanceLighting(m), SplatTransform(ColorTransform { gain }))
+    }
+}
+
+/// E14's manual form: g = 2^EV and w = (1 + 0.4 t, 1 − 0.4 u, 1 − 0.4 t) scaled to mean
+/// 1, unclamped; the gain is g w, the identity at zero. The app's copy of
+/// `ftgsxr_xr::light::manual_gains`, which `ftgsxr-app` may not call (§2.1's bands).
+// Q-245
+pub(crate) fn manual_gain(m: &ManualLighting) -> Vec3 {
+    let g = m.exposure_ev.exp2();
+    let w = Vec3::new(
+        1.0 + 0.4 * m.temperature,
+        1.0 - 0.4 * m.tint,
+        1.0 - 0.4 * m.temperature,
+    );
+    let mean = (w.x + w.y + w.z) / 3.0;
+    g * w / mean
+}
+
 /// A section a later module draws into a dock tab (`persist`'s Settings tables, the
 /// governor's knobs, `audio`'s volumes), so ui names none of their types.
 pub(crate) type DockHook = fn(&mut World, &mut egui::Ui);
@@ -458,6 +488,8 @@ impl Plugin for UiPlugin {
             .add_systems(PostUpdate, (raise_toasts, fill_hud).chain())
             .add_observer(splat_toasts)
             .add_observer(triggered_toasts);
+        // `persist`'s scene query needs the component known before any instance has one.
+        app.world_mut().register_component::<InstanceLighting>();
         // §1.7 Training cameras and requests.
         cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
@@ -789,6 +821,37 @@ pub(crate) fn load_system_font(ctx: &egui::Context) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Q-245: U-20's manual case (EV 1 → g = 2), the identity at zero, and E14's w.
+    #[test]
+    fn the_manual_form_gives_e14s_gain() {
+        let at = |exposure_ev, temperature, tint| {
+            manual_gain(&ManualLighting {
+                exposure_ev,
+                temperature,
+                tint,
+            })
+        };
+        assert_eq!(at(0.0, 0.0, 0.0), Vec3::ONE);
+        assert!((at(1.0, 0.0, 0.0) - Vec3::splat(2.0)).abs().max_element() < 1e-6);
+        // w = (1.4, 1, 0.6), already of mean 1: warmer.
+        assert!(
+            (at(0.0, 1.0, 0.0) - Vec3::new(1.4, 1.0, 0.6))
+                .abs()
+                .max_element()
+                < 1e-6
+        );
+        // w = (1, 0.6, 1) / (2.6 / 3): less green.
+        let k = 3.0 / 2.6;
+        assert!(
+            (at(0.0, 0.0, 1.0) - Vec3::new(k, 0.6 * k, k))
+                .abs()
+                .max_element()
+                < 1e-6
+        );
+        // Unclamped: EV 3 → g = 8.
+        assert!((at(3.0, 0.0, 0.0) - Vec3::splat(8.0)).abs().max_element() < 1e-5);
+    }
 
     // Q-199: Delete's request asks; yes unloads, no leaves the instance.
     #[test]

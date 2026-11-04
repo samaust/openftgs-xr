@@ -13,10 +13,12 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
 use ftgsxr_core::{EndRule, LoopMode, PlayState, Preset};
 use ftgsxr_io::{EntryKind, SourceSpec, Url};
-use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTime, SplatTransform};
+use ftgsxr_render::{Colormap, RenderMode, SplatMode, SplatTime};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
-use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
+use super::{
+    Confirm, DockHooks, InstanceLighting, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState,
+};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
 use crate::manipulate::{FIT_RANGE_M, PoseExtras, SetPoseExtras};
@@ -451,7 +453,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         &mut Transform,
         Option<&Visibility>,
         Option<&SplatMode>,
-        Option<&SplatTransform>,
+        Option<&InstanceLighting>,
         Option<&PoseExtras>,
         Option<&SplatTime>,
     )>();
@@ -576,21 +578,34 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 }
             });
         }
-        // E14's color transform, per channel (Q-218).
-        let gain = color.map_or(ColorTransform::IDENTITY.gain, |c| c.0.gain);
-        let mut g = gain.to_array();
+        // E14's color transform as its manual form (Q-218, Q-245).
+        let now = color.map(|c| c.0.clone()).unwrap_or_default();
+        let mut l = now.clone();
         ui.horizontal(|ui| {
-            ui.label("color gain");
-            for v in &mut g {
-                ui.add(egui::DragValue::new(v).range(0.0..=4.0).speed(0.01));
-            }
+            ui.label("exposure EV");
+            ui.add(
+                egui::DragValue::new(&mut l.exposure_ev)
+                    .range(-4.0..=4.0)
+                    .speed(0.01),
+            );
+            ui.label("temperature");
+            ui.add(
+                egui::DragValue::new(&mut l.temperature)
+                    .range(-1.0..=1.0)
+                    .speed(0.01),
+            );
+            ui.label("tint");
+            ui.add(
+                egui::DragValue::new(&mut l.tint)
+                    .range(-1.0..=1.0)
+                    .speed(0.01),
+            );
             if ui.small_button("reset").clicked() {
-                g = ColorTransform::IDENTITY.gain.to_array();
+                l = Default::default();
             }
         });
-        let g = bevy::math::Vec3::from_array(g);
-        if g != gain {
-            gains.push((e, g));
+        if l != now {
+            gains.push((e, l));
         }
         // §1.5 Poses: the orientation preset and L_fit the fit uses.
         let x = extras.copied().unwrap_or(PoseExtras {
@@ -656,9 +671,9 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         world.write_message(x);
     }
     training_cameras(world, ui, out, hv);
-    for (e, gain) in gains {
+    for (e, l) in gains {
         if let Ok(mut ec) = world.get_entity_mut(e) {
-            ec.insert(SplatTransform(ColorTransform { gain }));
+            ec.insert(InstanceLighting::bundle(l));
         }
     }
     if let Some(e) = ask {
