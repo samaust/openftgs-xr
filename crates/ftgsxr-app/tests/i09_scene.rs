@@ -4,7 +4,9 @@
 //! then loading a scene restores the instances, their poses, the clock and the
 //! environment settings; a model under the models directory is written relative to it and
 //! one outside as given; a scene naming a missing model, or a model whose file is now
-//! another model, lists it as missing.
+//! another model, lists it as missing; replacing a missing model with a file of another
+//! identity gives that file the scene's attributes, and the next save records the new
+//! identity (§1.5 Library, spec revision 26, Q-255).
 
 use crate::support;
 
@@ -12,10 +14,10 @@ use bevy::ecs::message::Messages;
 use bevy::prelude::*;
 use ftgsxr_app::{
     EntryState, Intent, Library, LibraryCommand, LibraryFailure, LoadedModel, ModelRef,
-    PersistCommand, Playback, PlaybackCommand, SettingsRes, scene_from_world,
+    PersistCommand, Playback, PlaybackCommand, Poses, ReplaceEntry, SettingsRes, scene_from_world,
 };
-use ftgsxr_core::{EndRule, LoopMode, Pose};
-use ftgsxr_io::{ManualLighting, SceneFile, read_scene};
+use ftgsxr_core::{EndRule, LoopMode, Pose, Preset};
+use ftgsxr_io::{ManualLighting, SavedPose, SceneFile, read_scene};
 use ftgsxr_render::{RenderMode, SplatMode, SplatTransform};
 use ftgsxr_testkit::fixtures_dir;
 use support::TestApp;
@@ -536,5 +538,240 @@ fn i09_the_right_file_after_another_identity_clears_the_entry() {
     let mut q = t.app.world_mut().query::<(&LoadedModel, &Transform)>();
     let (m, tf) = q.single(t.app.world()).unwrap();
     assert_eq!(m.name, "moved", "the scene's name");
+    assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
+}
+
+/// A scene naming P1 at a gone path as "moved", posed at x = 0.5, with a time offset,
+/// end rule, mode, visibility and lighting of its own; loaded, P1 listed as missing.
+/// The missing model's identity.
+fn p1_missing_with_attributes(t: &mut TestApp, name: &str) -> String {
+    let id = identity_of(&fixtures_dir().join("probes/P1.safetensors"));
+    let model = format!(
+        r#"{{"source": {{"kind": "dir", "location": "moved.safetensors"}},
+            "identity": "{id}", "name": "moved",
+            "pose": {{"translation": [0.5, 0, 0], "rotation": [0, 0, 0, 1], "scale": 1}},
+            "visible": false, "mode": "centers", "time_offset_s": 0.125,
+            "end_rule": "extrapolate",
+            "lighting": {{"exposure_ev": 0.5, "temperature": 0.25, "tint": -0.25}},
+            "audio": null}}"#
+    );
+    write_scene_file(t, name, &[model], 0.0, None);
+    t.frames(2);
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::LoadScene(name.into()));
+    assert!(
+        t.until(600, |app| app
+            .world()
+            .resource::<Library>()
+            .entries
+            .iter()
+            .any(|e| e.state == EntryState::Missing)),
+        "listed as missing"
+    );
+    id
+}
+
+fn missing_entries(t: &TestApp) -> usize {
+    t.app
+        .world()
+        .resource::<Library>()
+        .entries
+        .iter()
+        .filter(|e| e.state == EntryState::Missing)
+        .count()
+}
+
+/// A saved pose for `identity` in the pose store, so that a change to it shows.
+fn save_a_pose_for(t: &mut TestApp, identity: &str) {
+    t.app.world_mut().resource_mut::<Poses>().0.set(
+        identity,
+        SavedPose {
+            pose: Pose::IDENTITY,
+            preset: Preset::ZUp,
+            fit_size_m: 1.0,
+            saved_at: "2026-11-04T00:00:00Z".into(),
+        },
+    );
+}
+
+// Q-255
+#[test]
+fn i09_replacing_a_missing_model_gives_the_file_the_scenes_attributes() {
+    // §1.5 Library (revision 26): "Replace" takes a file of any identity in the missing
+    // model's place, with the scene's name, pose, visibility, mode, time offset and end
+    // rule, color transform and audio; the next save records its source and identity;
+    // the pose store keeps the old identity's saved pose under that identity.
+    let mut t = TestApp::new("i09_replace");
+    let old = p1_missing_with_attributes(&mut t, "retrained");
+    save_a_pose_for(&mut t, &old);
+    let poses = t.app.world().resource::<Poses>().clone();
+    let p2 = fixtures_dir().join("probes/P2.safetensors");
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: old.clone(),
+        file: ModelRef::File(p2.clone()),
+    });
+    wait_for(&mut t, 1);
+    assert_eq!(missing_entries(&t), 0, "the entry is cleared");
+    let e = entity_named(&mut t, "moved");
+    let w = t.app.world();
+    let m = w.get::<LoadedModel>(e).unwrap();
+    assert_eq!(m.identity, identity_of(&p2), "the file's own identity");
+    assert_eq!(m.time.offset_s, 0.125);
+    assert_eq!(m.time.end_rule, EndRule::Extrapolate);
+    assert!((w.get::<Transform>(e).unwrap().translation.x - 0.5).abs() < 1e-6);
+    assert!(
+        matches!(
+            w.get::<SplatMode>(e).map(|m| m.0),
+            Some(RenderMode::Centers { .. })
+        ),
+        "the scene's mode"
+    );
+    assert_eq!(w.get::<Visibility>(e), Some(&Visibility::Hidden));
+    assert_eq!(*w.resource::<Poses>(), poses, "the pose store is unchanged");
+    let lighting = scene_from_world(w).models[0].lighting.clone();
+    assert_eq!(
+        lighting,
+        Some(ManualLighting {
+            exposure_ev: 0.5,
+            temperature: 0.25,
+            tint: -0.25,
+        })
+    );
+    // The next save records the file's source and identity.
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::SaveScene("retrained".into()));
+    t.frames(1);
+    let file = t.dir.join("config/scenes/retrained.ftgsxr-scene.json");
+    let written = read_scene(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(written.models.len(), 1);
+    assert_eq!(written.models[0].identity, identity_of(&p2));
+    assert_eq!(written.models[0].source.location, p2.to_string_lossy());
+    assert_eq!(written.models[0].name, "moved");
+}
+
+// Q-255
+#[test]
+fn i09_a_replacement_naming_no_missing_entry_loads_nothing() {
+    let mut t = TestApp::new("i09_replace_none");
+    p1_missing_with_attributes(&mut t, "nothing");
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: "cd".repeat(32),
+        file: ModelRef::File(fixtures_dir().join("probes/P2.safetensors")),
+    });
+    t.frames(60);
+    assert_eq!(count(&mut t), 0);
+    assert_eq!(missing_entries(&t), 1);
+}
+
+// Q-257
+#[test]
+fn i09_a_checkpoint_replaces_a_missing_model() {
+    let mut t = TestApp::new("i09_replace_checkpoint");
+    let old = p1_missing_with_attributes(&mut t, "ckpt");
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: old,
+        file: ModelRef::File(fixtures_dir().join("checkpoint/tiny")),
+    });
+    wait_for(&mut t, 1);
+    assert_eq!(missing_entries(&t), 0);
+    let e = entity_named(&mut t, "moved");
+    let tf = t.app.world().get::<Transform>(e).unwrap();
+    assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
+}
+
+// Q-258
+#[test]
+fn i09_replacing_with_the_models_own_file_is_locating_it() {
+    let mut t = TestApp::new("i09_replace_own");
+    let old = p1_missing_with_attributes(&mut t, "own");
+    let p1 = fixtures_dir().join("probes/P1.safetensors");
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: old.clone(),
+        file: ModelRef::File(p1),
+    });
+    wait_for(&mut t, 1);
+    assert_eq!(missing_entries(&t), 0);
+    let e = entity_named(&mut t, "moved");
+    assert_eq!(t.app.world().get::<LoadedModel>(e).unwrap().identity, old);
+}
+
+// Q-258
+#[test]
+fn i09_replacing_with_another_missing_models_file_clears_only_the_replaced_entry() {
+    // Two missing scene models, P1 as "first" and P2 as "second"; "first" is replaced by
+    // P2's file: "second" stays missing, the instance is "first".
+    let mut t = TestApp::new("i09_replace_other");
+    let p1 = identity_of(&fixtures_dir().join("probes/P1.safetensors"));
+    let p2_path = fixtures_dir().join("probes/P2.safetensors");
+    let p2 = identity_of(&p2_path);
+    let models = [
+        scene_model("first.safetensors", &p1, "first", 0.5),
+        scene_model("second.safetensors", &p2, "second", 0.75),
+    ];
+    write_scene_file(&t, "two", &models, 0.0, None);
+    t.frames(2);
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::LoadScene("two".into()));
+    assert!(t.until(600, |app| {
+        app.world()
+            .resource::<Library>()
+            .entries
+            .iter()
+            .filter(|e| e.state == EntryState::Missing)
+            .count()
+            == 2
+    }));
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: p1,
+        file: ModelRef::File(p2_path),
+    });
+    wait_for(&mut t, 1);
+    let lib = t.app.world().resource::<Library>();
+    let left: Vec<_> = lib
+        .entries
+        .iter()
+        .filter(|e| e.state == EntryState::Missing)
+        .map(|e| e.identity.clone())
+        .collect();
+    assert_eq!(left, vec![Some(p2)], "the other model stays missing");
+    let e = entity_named(&mut t, "first");
+    let tf = t.app.world().get::<Transform>(e).unwrap();
+    assert!(
+        (tf.translation.x - 0.5).abs() < 1e-6,
+        "the replaced model's pose"
+    );
+}
+
+// Q-259
+#[test]
+fn i09_a_failed_replacement_keeps_the_entry_and_its_attributes() {
+    let mut t = TestApp::new("i09_replace_fail");
+    let old = p1_missing_with_attributes(&mut t, "broken");
+    let bad = t.dir.join("bad.safetensors");
+    std::fs::write(&bad, b"not a model").unwrap();
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: old.clone(),
+        file: ModelRef::File(bad.clone()),
+    });
+    let failures = failures_over(&mut t, 120);
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.reference == Some(ModelRef::File(bad.clone()))),
+        "the failure is reported"
+    );
+    assert_eq!(count(&mut t), 0);
+    assert_eq!(missing_entries(&t), 1, "still missing");
+    // The scene's attributes are still kept for a later replacement.
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: old,
+        file: ModelRef::File(fixtures_dir().join("probes/P2.safetensors")),
+    });
+    wait_for(&mut t, 1);
+    let e = entity_named(&mut t, "moved");
+    let tf = t.app.world().get::<Transform>(e).unwrap();
     assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
 }

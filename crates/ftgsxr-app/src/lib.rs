@@ -38,8 +38,10 @@ pub use intent::{
     CameraCommand, Feature, GizmoMode, Hand, InstanceAction, Intent, OverlayToggle,
     PlaybackCommand, UiCommand, VolumeChannel,
 };
-// §2.1 `ftgsxr_app::library`; Q-173: `LibraryFailure`.
-pub use library::{EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel};
+// §2.1 `ftgsxr_app::library`; Q-173: `LibraryFailure`; Q-255: `ReplaceEntry`.
+pub use library::{
+    EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel, ReplaceEntry,
+};
 // §2.1 `ftgsxr_app::playback`.
 pub use playback::Playback;
 // §2.1 `ftgsxr_app::audio`; Q-149, Q-187: the output port, its sinks and the stub.
