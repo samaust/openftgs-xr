@@ -9,7 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Tests that check the layer another way, as `<crate>/tests/<file>:<function>`: the
-/// binary's runs, R-15's, `bench`'s and `play`'s, read the layer's own log file (Q-105).
+/// binary's runs, R-15's, `bench`'s and `play`'s, read the layer's own log file (Q-105);
+/// so do the window resize tests, whose child is the test binary itself, since wgpu-hal
+/// drops the message they check for before the guard could see it (Q-244).
 // Q-113
 const EXEMPT: &[&str] = &[
     "ftgsxr-desktop/tests/cli.rs:gpu_r15_render_writes_the_renders_file",
@@ -17,6 +19,8 @@ const EXEMPT: &[&str] = &[
     "ftgsxr-desktop/tests/cli.rs:gpu_bench_compares_neither_b6_nor_another_profile",
     "ftgsxr-desktop/tests/cli.rs:gpu_b9_bench_writes_the_desktops_startup_figures",
     "ftgsxr-desktop/tests/play_exit.rs:gpu_play_interrupted_in_its_first_frames_exits_by_its_code",
+    "ftgsxr-desktop/tests/window_resize.rs:gpu_window_resized_seconds_apart_leaves_no_validation_message",
+    "ftgsxr-desktop/tests/window_resize.rs:gpu_window_resized_in_a_burst_settles_with_no_message_but_the_resize_race",
 ];
 
 /// This file, whose sample text declares unguarded tests.

@@ -45,6 +45,7 @@ ftgsxr-testkit.workspace = true
 # `ftgsxr-render` reads its fixture pose files.
 serde_json.workspace = true # Q-104
 # D-52 (#401): a window and a surface of its own, presented without a draw; the same
-# winit and wgpu as Bevy's, one copy of each in the graph.
+# winit and wgpu as Bevy's, one copy of each in the graph. Q-244 (#409): winit also
+# resizes the resize tests' Bevy window, as the window system would.
 wgpu = { workspace = true, features = ["vulkan"] }
 winit = { workspace = true, features = ["rwh_06", "x11", "wayland"] }
