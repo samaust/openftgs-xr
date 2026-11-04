@@ -106,6 +106,8 @@ confirm = false
 [desktop]
 fov_deg = 75
 fly_speed_mps = 0.1
+dock_width = 412.5
+dock_open = false
 
 [desktop.keys]
 play_pause = "P"
