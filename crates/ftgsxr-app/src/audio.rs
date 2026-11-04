@@ -419,8 +419,14 @@ impl Plugin for AudioPlugin {
                 Update,
                 (ui_bridge, run_intents, play_ui_sounds, attach, decode).chain(),
             )
-            // After playback's `advance` (in `Update`): the clock of this frame.
-            .add_systems(PostUpdate, (apply_gains, follow_clock).chain());
+            // After playback's `advance` (in `Update`): the clock of this frame; after
+            // egui's pass: this frame's scrub (Q-245).
+            .add_systems(
+                PostUpdate,
+                (apply_gains, follow_clock)
+                    .chain()
+                    .after(bevy_egui::EguiPostUpdateSet::EndPass),
+            );
     }
 }
 
@@ -1083,10 +1089,12 @@ mod tests {
         *sinks.keys().next().unwrap()
     }
 
-    // Q-190, Q-245: I-5's scrub clause (§1.6 Audio, D-22, #416). `Scrubbing` is
-    // crate-private, so the clause is pinned here; `tests/i05_audio.rs` has the rest.
+    // Q-190, Q-245 (#416): while `Scrubbing` holds, a sink is silent with the clock at
+    // speed 1, and plays at the clock's position once it ends. `Scrubbing` is
+    // crate-private, so this is a private test; `tests/i05_audio.rs` pins the rest of
+    // I-5's audio clause.
     #[test]
-    fn i05_audio_a_scrub_while_playing_at_speed_one_is_silent() {
+    fn follow_clock_is_silent_while_a_scrub_is_in_progress() {
         const TOL: f64 = 1e-6;
         let out = Arc::new(StubAudioOutput::new());
         let mut app = app(out.clone());

@@ -43,9 +43,6 @@ pub(super) fn draw(
     mut font: Local<Option<bool>>,
     mut hovered: Local<Option<egui::Id>>,
 ) {
-    // Q-245: a scrub ends in the first frame the scrub bar is not drawn; the playback
-    // tab sets it again while the bar is dragged.
-    world.resource_mut::<Scrubbing>().0 = false;
     let Some(ctx) = world
         .query_filtered::<&mut EguiContext, With<PrimaryEguiContext>>()
         .iter_mut(world)

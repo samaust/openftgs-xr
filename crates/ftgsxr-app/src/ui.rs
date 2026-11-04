@@ -31,7 +31,7 @@ use bevy::time::Time;
 use bevy::transform::components::GlobalTransform;
 use bevy::window::{MonitorSelection, PrimaryWindow, Window, WindowMode};
 use bevy_egui::input::EguiInputEvent;
-use bevy_egui::{EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, egui};
 use ftgsxr_core::Pose;
 use ftgsxr_render::{
     BudgetSource, Foveation, GpuTimes, SortMode, SplatEvent, SplatGpu, SplatStats, SplatTierState,
@@ -42,7 +42,7 @@ use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
 use crate::library::{EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel};
 use crate::manipulate::Selected;
 use crate::platform::PickKind;
-use crate::playback::{Playback, PlaybackWarning};
+use crate::playback::{Playback, PlaybackWarning, Scrubbing};
 
 /// Where the UI is drawn (§1.8): on the window (the desktop), or on a world quad whose
 /// entity carries `WorldPanel` and the quad's pose, `size_px` its texture's size and
@@ -462,11 +462,20 @@ impl Plugin for UiPlugin {
         cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
             app.init_resource::<PanelPointer>()
-                .init_resource::<crate::playback::Scrubbing>()
+                .init_resource::<Scrubbing>()
                 .add_systems(PreUpdate, panel_pointer)
+                .add_systems(PostUpdate, end_scrub.before(EguiPostUpdateSet::EndPass))
                 .add_systems(EguiPrimaryContextPass, dock::draw);
         }
     }
+}
+
+/// Ends the scrub before egui's pass, every frame: the dock's playback tab sets it again
+/// while the scrub bar is dragged, so a release, a frame without the bar or without an
+/// egui context ends it (Q-245).
+// Q-245
+fn end_scrub(mut scrubbing: ResMut<Scrubbing>) {
+    scrubbing.0 = false;
 }
 
 /// `UiCommand::Help`, `HideUi`, `Hud`, `Fullscreen`, `OpenFiles` and `LoadScene`

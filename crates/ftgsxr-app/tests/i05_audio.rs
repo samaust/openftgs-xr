@@ -6,9 +6,9 @@
 //! (r = 1), so the soundtrack's position is T − o. The stub has no clock: each frame the
 //! test moves its playing sinks by the frame's Δt, as a device would.
 //!
-//! The clause for a scrub while playing (silent until it ends, Q-190, Q-245, #416) is
-//! `audio`'s own test, since the scrub state is crate-private; this file pins that a
-//! one-off seek while playing is not a scrub.
+//! A scrub while playing (silent until it ends, Q-190, Q-245, #416) is pinned by
+//! `audio`'s and the dock's private tests, since the scrub state is crate-private; this
+//! file pins that a one-off seek while playing is not a scrub.
 
 use crate::support;
 
