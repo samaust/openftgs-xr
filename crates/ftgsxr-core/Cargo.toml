@@ -8,6 +8,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+# #413: one integration-test binary, whose modules are the `tests/*.rs` files
+# (`tests/integration.rs`), not one executable per file.
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 bytemuck.workspace = true

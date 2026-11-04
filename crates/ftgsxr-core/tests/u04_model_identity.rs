@@ -20,9 +20,9 @@ fn sha256sum(name: &str) -> String {
 }
 
 /// A fresh scratch directory for this test.
-/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test file and process (#94, #413, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 #[test]

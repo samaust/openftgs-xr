@@ -13,7 +13,7 @@ use ftgsxr_testkit::{random_model, scratch_dir};
 
 /// A scratch directory of this test binary's own, emptied first (Q-62).
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// A two-row degree-1 model with a background and a producer of its own, worked by hand.

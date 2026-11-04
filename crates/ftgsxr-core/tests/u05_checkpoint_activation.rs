@@ -133,7 +133,7 @@ fn u05_single_timestamp_checkpoint_uses_the_unit_1() {
 /// A copy of the tiny checkpoint's two read files in a scratch directory, the binary's own
 /// per-process folder (#94, Q-62).
 fn copy_tiny(name: &str) -> PathBuf {
-    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name);
+    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name);
     let src = fixtures_dir().join("checkpoint/tiny");
     for file in ["manifest.json", "params.safetensors"] {
         fs::copy(src.join(file), dir.join(file)).unwrap();
