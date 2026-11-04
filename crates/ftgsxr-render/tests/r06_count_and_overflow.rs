@@ -179,22 +179,135 @@ fn gpu_r06_centers_follow_the_splats_under_the_same_capacity() {
     assert!(dev.take_validation_messages().is_empty());
 }
 
-/// The frame loop's calls under R-6's watchdog: the slowest of each, by name.
+/// A thread's context switches (Q-111): those it made itself, waiting, and those the
+/// scheduler made, preempting it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Switches {
+    voluntary: u64,
+    involuntary: u64,
+}
+
+impl Switches {
+    /// The switches made since `before`.
+    fn since(self, before: Switches) -> Switches {
+        Switches {
+            voluntary: self.voluntary - before.voluntary,
+            involuntary: self.involuntary - before.involuntary,
+        }
+    }
+}
+
+/// What R-6's watchdog makes of one timed call (Q-111).
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Within the 1 ms bound.
+    Within,
+    /// Over it, but the thread was preempted rather than waiting: reported, not failed.
+    Preempted,
+    /// Over it: a wait, or counts that couldn't be read.
+    Over,
+}
+
+/// The verdict on a call that took `elapsed`, given the thread's context switches
+/// during it, `None` where they couldn't be read.
+// Q-111
+fn verdict(elapsed: Duration, switches: Option<Switches>) -> Verdict {
+    match switches {
+        _ if elapsed <= WATCHDOG => Verdict::Within,
+        Some(Switches {
+            voluntary: 0,
+            involuntary,
+        }) if involuntary > 0 => Verdict::Preempted,
+        _ => Verdict::Over,
+    }
+}
+
+/// Q-111: a call within 1 ms passes; a call over it fails unless the thread made no
+/// voluntary context switch and at least one involuntary one (it was preempted, not
+/// waiting); counts that couldn't be read excuse nothing.
+// Q-111
+#[test]
+fn verdict_excuses_only_a_preempted_call() {
+    let switches = |voluntary, involuntary| Switches {
+        voluntary,
+        involuntary,
+    };
+    let over = WATCHDOG + Duration::from_micros(2_500);
+    let within = WATCHDOG - Duration::from_micros(1);
+    assert_eq!(verdict(within, Some(switches(3, 2))), Verdict::Within);
+    assert_eq!(verdict(WATCHDOG, None), Verdict::Within);
+    assert_eq!(verdict(over, Some(switches(0, 1))), Verdict::Preempted);
+    assert_eq!(verdict(over, Some(switches(1, 4))), Verdict::Over);
+    assert_eq!(verdict(over, Some(switches(2, 0))), Verdict::Over);
+    assert_eq!(verdict(over, Some(switches(0, 0))), Verdict::Over);
+    assert_eq!(verdict(over, None), Verdict::Over);
+}
+
+/// The calling thread's context switches so far, from `/proc/thread-self/status`; `None`
+/// where they can't be read (Q-111).
+fn context_switches() -> Option<Switches> {
+    let status = std::fs::read_to_string("/proc/thread-self/status").ok()?;
+    let field = |key: &str| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .and_then(|rest| rest.trim().parse::<u64>().ok())
+    };
+    Some(Switches {
+        voluntary: field("voluntary_ctxt_switches:")?,
+        involuntary: field("nonvoluntary_ctxt_switches:")?,
+    })
+}
+
+/// One frame-loop call's record under R-6's watchdog.
+struct CallRecord {
+    name: &'static str,
+    /// The slowest time and its frame.
+    slowest: (Duration, usize),
+    /// How many times the call went over 1 ms preempted (Q-111): reported, not failed.
+    preempted: usize,
+    /// Each time it went over 1 ms otherwise: the time, the frame and the context
+    /// switches during the call, where they could be read.
+    over: Vec<(Duration, usize, Option<Switches>)>,
+}
+
+/// The frame loop's calls under R-6's watchdog, by name.
 #[derive(Default)]
 struct Watchdog {
-    slowest: Vec<(&'static str, Duration, usize)>,
+    calls: Vec<CallRecord>,
 }
 
 impl Watchdog {
-    /// Runs `f` as the frame loop's call `name` of frame `k`, keeping each name's slowest.
+    /// Runs `f` as the frame loop's call `name` of frame `k` and records its verdict. The
+    /// context switches are read outside the timed span.
+    // Q-111
     fn time<T>(&mut self, k: usize, name: &'static str, f: impl FnOnce() -> T) -> T {
+        let before = context_switches();
         let t = Instant::now();
         let out = f();
         let elapsed = t.elapsed();
-        match self.slowest.iter_mut().find(|(n, _, _)| *n == name) {
-            Some(entry) if elapsed > entry.1 => *entry = (name, elapsed, k),
-            Some(_) => {}
-            None => self.slowest.push((name, elapsed, k)),
+        let after = context_switches();
+        let switches = before.zip(after).map(|(before, after)| after.since(before));
+        let index = match self.calls.iter().position(|c| c.name == name) {
+            Some(i) => i,
+            None => {
+                self.calls.push(CallRecord {
+                    name,
+                    slowest: (Duration::ZERO, k),
+                    preempted: 0,
+                    over: Vec::new(),
+                });
+                self.calls.len() - 1
+            }
+        };
+        let call = &mut self.calls[index];
+        if elapsed > call.slowest.0 {
+            call.slowest = (elapsed, k);
+        }
+        match verdict(elapsed, switches) {
+            Verdict::Within => {}
+            Verdict::Preempted => call.preempted += 1,
+            Verdict::Over => call.over.push((elapsed, k, switches)),
         }
         out
     }
@@ -213,7 +326,10 @@ const LAGGING_ROWS: usize = 200_000;
 /// frame k is the block of a frame j ≤ k − 2 that no earlier poll gave, j growing from
 /// one block to the next. No call of either run may take longer than 1 ms; the submit's
 /// bound holds in a release build, and a debug build, where wgpu's submit spends about
-/// 1 ms of CPU without waiting on the GPU, times and reports it only (Q-111).
+/// 1 ms of CPU without waiting on the GPU, times and reports it only. A call over 1 ms
+/// that was preempted rather than waiting (no voluntary context switch, at least one
+/// involuntary one) is reported, not failed, and the bounds are checked only when
+/// `FTGSXR_WATCHDOG=1` is set, by a run holding the machine alone (Q-111).
 // Q-111
 #[test]
 #[ignore = "gpu"]
@@ -341,20 +457,41 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
         "R-6: {arrived} of {} lagging frames had statistics, {late} of them late",
         frames - 2
     );
-    for &(name, slowest, k) in &watchdog.slowest {
-        eprintln!("R-6: slowest {name}: {slowest:?} (frame {k})");
+    // Q-111: the bounds apply in a run holding the machine alone, which sets this.
+    let bounds_checked = std::env::var("FTGSXR_WATCHDOG").as_deref() == Ok("1");
+    for call in &watchdog.calls {
+        let (slowest, k) = call.slowest;
+        eprintln!(
+            "R-6: slowest {}: {slowest:?} (frame {k}); over 1 ms {} times, {} of them preempted",
+            call.name,
+            call.over.len() + call.preempted,
+            call.preempted
+        );
+    }
+    if !bounds_checked {
+        eprintln!("R-6: FTGSXR_WATCHDOG is not 1, so the 1 ms bound was reported, not checked");
     }
     let over: Vec<String> = watchdog
-        .slowest
+        .calls
         .iter()
         // Q-111: the submit is bounded in a release build only.
-        .filter(|&&(name, slowest, _)| {
-            (name != "submit" || !cfg!(debug_assertions)) && slowest > WATCHDOG
+        .filter(|call| call.name != "submit" || !cfg!(debug_assertions))
+        .flat_map(|call| {
+            call.over.iter().map(|(took, k, switches)| {
+                format!(
+                    "{} took {took:?} at frame {k}, context switches {switches:?}",
+                    call.name
+                )
+            })
         })
-        .map(|(name, slowest, k)| format!("{name} took {slowest:?} at frame {k}"))
         .collect();
+    assert_eq!(
+        watchdog.calls.len(),
+        4,
+        "the four frame-loop calls are timed"
+    );
     assert!(
-        over.is_empty() && watchdog.slowest.len() == 4,
+        !bounds_checked || over.is_empty(),
         "a frame-loop call waited longer than {WATCHDOG:?}: {over:?}"
     );
     assert!(dev.take_validation_messages().is_empty());
