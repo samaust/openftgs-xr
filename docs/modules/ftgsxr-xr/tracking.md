@@ -53,7 +53,7 @@ D-44's four pulses (`Pulse` and its `HOVER`, `GRAB` and `TICK`) are declared her
 
 ## The meshes
 
-In VR mode `meshes` draws each side's owner, children of the tracking root so their transforms are reference-space poses (§1.8 Controllers and Hands, Q-288): a hand as capsules between its joints with the joint radii, made the first frame both joints of a bone are located; a controller as the player's generated low-polygon box with a ring at the grip pose. Both share one unlit neutral grey material; nothing is drawn in passthrough mode, and no binary asset ships.
+In VR mode `meshes` draws each side's owner, children of the tracking root so their transforms are reference-space poses (§1.8 Controllers and Hands, Q-288): a hand as capsules between its joints with the joint radii, made the first frame both joints of a bone are located; a controller as the player's generated low-polygon box with a ring at the grip pose. Both share one unlit neutral grey material; nothing is drawn in passthrough mode, and no binary asset ships. `tracking` comes before `passthrough` in §2.1's order, so it does not read `Environment`: the meshes follow a crate-private `DevicesDrawn` flag, which `passthrough::devices_drawn` sets from the mode each frame before the meshes are placed (`plugin` orders it).
 
 ## Dv-8's device side
 

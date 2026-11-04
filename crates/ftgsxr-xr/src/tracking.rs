@@ -17,6 +17,12 @@ mod hands;
 mod meshes;
 
 pub(crate) use hands::FREQUENCY_HINT_EXT;
+pub(crate) use meshes::DevicesDrawn;
+
+/// The set of the system that places the hands' and controllers' meshes, which
+/// `passthrough`'s mode check runs before.
+#[derive(bevy::prelude::SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DrawDevices;
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -148,6 +154,7 @@ impl Plugin for TrackingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<XrHands>()
             .init_resource::<HapticLog>()
+            .init_resource::<DevicesDrawn>()
             .insert_resource(hands::HandsWanted(self.hands))
             .init_resource::<hands::HandsPermission>()
             .init_resource::<hands::LocatedHands>()
@@ -188,7 +195,7 @@ impl Plugin for TrackingPlugin {
                     hands::locate_hands,
                     write_hands,
                     hands::send_hint,
-                    meshes::draw_hands_and_controllers,
+                    meshes::draw_hands_and_controllers.in_set(DrawDevices),
                 )
                     .chain()
                     .after(locate_views)
