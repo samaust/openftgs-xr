@@ -668,6 +668,34 @@ _Avoid_: audio track, music, sidecar (unqualified)
 One of the short synthesized clips the player plays on hover, select, grab, snap turn, click, error and confirmation, each switchable. §1.10
 _Avoid_: sound effect, SFX, cue
 
+**Main panel**:
+The player's XR interface, the desktop's tabs plus Environment and Comfort drawn into a texture on a world-locked quad, summoned 1 m in front of the user. §1.8, D-21
+_Avoid_: menu, HUD, dock (the desktop's)
+
+**Wrist menu**:
+The five-button quad attached above the grip pose of one hand, shown when the palm faces the user. §1.8
+_Avoid_: hand menu, watch, quick menu
+
+**Aim state**:
+The per-hand pose, pinch strengths and flags XR_FB_hand_tracking_aim gives, the source of a tracked hand's ray and gestures. §1.8, D-25
+_Avoid_: gesture recognizer, hand pose (the joints)
+
+**Haptic pulse**:
+One short amplitude vibration on the hand that acted. §1.8, D-44
+_Avoid_: rumble, feedback (unqualified)
+
+**Panel mode**:
+The UI surface in which the interface draws on the main panel's texture instead of the window. §1.8, §2.1
+_Avoid_: XR UI, VR mode (the environment)
+
+**Document tree**:
+A folder granted through Android's picker, listed and read through the shim as a model source. §1.5, §2.5, D-49
+_Avoid_: folder (unqualified), SAF tree
+
+**Listener**:
+The point a spatialized soundtrack is heard from, the midpoint of the splat cameras. §1.10
+_Avoid_: receiver, audio camera
+
 ### Files
 
 **File format**:
