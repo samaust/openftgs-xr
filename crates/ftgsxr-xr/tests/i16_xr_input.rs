@@ -117,8 +117,10 @@ fn xr_i16_controller_select_and_pointer_and_hand_grabs_at_the_thresholds() {
     });
     let (h, origin, dir) = pointer.expect("a Pointer from the aim pose");
     assert_eq!(h, Hand::Right);
-    assert!(origin.distance(c.aim.translation) < 1e-6);
-    assert!(dir.distance(want_dir) < 1e-6);
+    // I-16 is exact: the origin passes through unchanged, and the direction is the aim's
+    // −z normalized by the same expression.
+    assert_eq!(origin, c.aim.translation);
+    assert_eq!(dir, want_dir);
     assert!(!out.iter().any(|i| matches!(i, Intent::Select { .. })));
     let out = frame(&mut app, TrackedHand { trigger: 0.6, ..c });
     assert!(
