@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 use ftgsxr_app::cmd_info;
 use ftgsxr_testkit::{fixtures_dir, probe, scratch_dir};
 
-mod common;
+use crate::common;
 use common::{layer_log, layer_settings};
 
 fn ftgsxr(args: &[&str]) -> Output {
@@ -74,7 +74,7 @@ fn validate_prints_one_line_per_model() {
 fn an_invalid_input_exits_2() {
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
-        env!("CARGO_CRATE_NAME"),
+        crate::test_file_stem(),
         "invalid",
     );
     let bad = dir.join("bad.safetensors");
@@ -101,7 +101,7 @@ fn validate_prints_each_valid_model_before_the_first_invalid_one() {
     // invalid file stops the run with exit 2, so the models after it are not printed.
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
-        env!("CARGO_CRATE_NAME"),
+        crate::test_file_stem(),
         "validate_order",
     );
     let bad = dir.join("bad.safetensors");
@@ -134,7 +134,7 @@ fn validate_warns_of_a_convention_rendered_as_openftgss() {
     // `"classic"` replaced by a word of the same length, so the header keeps its size.
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
-        env!("CARGO_CRATE_NAME"),
+        crate::test_file_stem(),
         "validate_warning",
     );
     let mut bytes = fs::read(fixtures_dir().join("probes/P1.safetensors")).unwrap();
@@ -164,7 +164,7 @@ fn validate_warns_of_a_convention_rendered_as_openftgss() {
 fn export_writes_the_file() {
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
-        env!("CARGO_CRATE_NAME"),
+        crate::test_file_stem(),
         "export",
     );
     let input = fixtures_dir().join("probes/P1.safetensors");
@@ -207,7 +207,7 @@ fn r15_render_refuses_a_request_with_exit_2() {
         ("unit", "time_unit", "\"ms\"", "E-REQ-UNIT"),
         ("degree", "sh_degree", "1", "E-REQ-DEGREE"),
     ] {
-        let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name);
+        let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name);
         let request = altered_p1_request(&dir, field, value);
         let out = dir.join("out.safetensors");
         let o = ftgsxr(&[
@@ -231,11 +231,7 @@ fn r15_render_refuses_a_request_with_exit_2() {
 #[test]
 fn render_tier_names() {
     let model = fixtures_dir().join("probes/P1.safetensors");
-    let dir = scratch_dir(
-        env!("CARGO_TARGET_TMPDIR"),
-        env!("CARGO_CRATE_NAME"),
-        "tier",
-    );
+    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), "tier");
     // A request the model refuses before the GPU, so each accepted tier exits 2 with
     // E-REQ-UNIT rather than clap's usage error.
     let request = altered_p1_request(&dir, "time_unit", "\"ms\"");
@@ -290,7 +286,7 @@ fn metadata<'a>(header: &'a str, key: &str) -> &'a str {
 fn gpu_r15_render_writes_the_renders_file() {
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
-        env!("CARGO_CRATE_NAME"),
+        crate::test_file_stem(),
         "render",
     );
     let model = fixtures_dir().join("probes/P1.safetensors");
@@ -407,7 +403,11 @@ fn gpu_bench_reports_a_regression_against_a_baseline_20_percent_better() {
     // budgeted figure is 20 % better (B-5's seconds per 100 MB × 0.8: lower is better)
     // makes the second run list the budget as a regression and exit 3. B-5, not B-6,
     // whose `within_1_percent` budgets are not compared (Q-103, #180).
-    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), "cli", "bench-regression");
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "bench-regression",
+    );
     let baselines = dir.join("baselines");
     fs::create_dir_all(&baselines).unwrap();
     // A load time is noisy: 1000 rows missed the 10 % margin about once in 15 runs,
@@ -459,7 +459,11 @@ fn gpu_bench_compares_neither_b6_nor_another_profile() {
     // Q-103 (#180): a B-6 baseline 20 % better lists nothing, its `within_1_percent`
     // budgets being their own check; a baseline of the other profile is not compared,
     // and a note in the file and on standard error says which field differs.
-    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), "cli", "bench-not-compared");
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "bench-not-compared",
+    );
     let baselines = dir.join("baselines");
     fs::create_dir_all(&baselines).unwrap();
     let model = dir.join("tiny.ftgs-if");
@@ -521,7 +525,11 @@ fn gpu_b9_bench_writes_the_desktops_startup_figures() {
     // §3.5 B-9, Q-155, Q-103: `ftgsxr bench B-9` writes the startup's figures in the
     // benchmark file, the medians without and with the UI and the process's first
     // startup (without the UI) apart, and no budget (B-9 is reported).
-    let dir = scratch_dir(env!("CARGO_TARGET_TMPDIR"), "cli", "bench-b9");
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "bench-b9",
+    );
     let baselines = dir.join("baselines");
     fs::create_dir_all(&baselines).unwrap();
     let (o, file) = bench_file(&["B-9", "--out"], &dir.join("b9.json"), &baselines);

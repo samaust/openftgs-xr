@@ -12,7 +12,7 @@ use std::process::{Command, Output};
 use ftgsxr_testkit::scratch_dir;
 
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// `ftgsxr` with `args`, its home and XDG directories under `home` and no display.

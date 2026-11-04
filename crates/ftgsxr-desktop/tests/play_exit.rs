@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 
-mod common;
+use crate::common;
 use common::{layer_log, layer_settings};
 
 /// The line bevy_winit logs once the window exists.
@@ -39,7 +39,7 @@ const WINDOW_LINE: &str = "Creating new window";
 const LIMIT: Duration = Duration::from_secs(30);
 
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// `ftgsxr play model` with its home and XDG directories under `home`, on the session's
