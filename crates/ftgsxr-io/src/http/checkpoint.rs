@@ -2,18 +2,24 @@
 
 //! `HttpClient::download_checkpoint`: a checkpoint's two files downloaded into one cache
 //! entry, which is itself the checkpoint directory `read_checkpoint` reads (§1.5 Loading and
-//! unloading, §1.11 `index.json` and Cache entries, D-51, Q-42, Q-57, Q-59).
+//! unloading, §1.11 `index.json` and Cache entries, D-51, Q-42, Q-57, Q-59), and
+//! `HttpClient::copy_checkpoint`: a picked checkpoint's two documents copied into one
+//! entry of the same layout (Q-61, Q-T458.1).
 
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use url::Url;
 
-use super::cache::{Entry, entry_dir, remove_if_present};
-use super::download::parse_digest;
+use super::cache::{Entry, Record, entry_dir, remove_if_present};
+use super::download::{parse_digest, reuse};
 use super::{HttpClient, Progress, lock};
 use crate::IoError;
+use crate::util::{cancelled, now_rfc3339};
 
 /// The first member of a checkpoint's entry: its manifest (§1.11 `index.json`, D-51).
 pub(crate) const MANIFEST: &str = "manifest.json";
@@ -96,6 +102,156 @@ impl HttpClient {
         result?;
         Ok(dir)
     }
+}
+
+/// One document of a picked checkpoint directory (Q-61, Q-T458.1): its content URI, the
+/// size its listing gives, and how to open it.
+pub(crate) struct DocumentMember<'a> {
+    /// The document's content URI, the member's record `url`.
+    pub(crate) uri: Url,
+    /// The size the provider's listing gives, which a reused copy must still have.
+    pub(crate) size: Option<u64>,
+    /// Opens the document for reading.
+    pub(crate) open: &'a dyn Fn() -> Result<File, IoError>,
+}
+
+/// The bytes a document member is copied in between two cancel checks (Q-47's chunk).
+const COPY_CHUNK: usize = 1 << 20;
+
+impl HttpClient {
+    /// Copies the picked checkpoint directory `dir_uri` (a document URI, Q-61) into its
+    /// cache entry `<cache dir>/http/<sha256 of dir_uri>/` and returns the entry's
+    /// directory, as `download_checkpoint` fills one from a URL (D-51, Q-42): `manifest.json`
+    /// first, then `params.safetensors` against the manifest's digest for it, a mismatch
+    /// being E-NET-CHECKSUM that discards both members (Q-57). A member whose complete
+    /// record names its URI, has the size the listing gives now and, for the params, the
+    /// manifest's digest, is reused without opening the document; any other is copied again
+    /// (Q-T458.1). Both copies hold the cache lock, so `prune` never sees half an entry;
+    /// `progress` is cumulative over both (Q-59); `cancel` is read before each chunk, and a
+    /// cancelled copy keeps nothing (E-IO `Interrupted`, Q-47).
+    // D-51, Q-57, Q-59, Q-61, Q-T458.1
+    pub(crate) fn copy_checkpoint(
+        &self,
+        dir_uri: &Url,
+        manifest: &DocumentMember<'_>,
+        params: &DocumentMember<'_>,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<PathBuf, IoError> {
+        let _guard = lock(&self.cache_lock);
+        let dir = entry_dir(&self.entries, dir_uri);
+        std::fs::create_dir_all(&dir)?;
+        let manifest_entry = Entry::member(&dir, MANIFEST);
+        // Q-59: the params size is not known yet.
+        let path = copy_member(
+            &manifest_entry,
+            manifest,
+            None,
+            &mut |p| {
+                progress(Progress {
+                    done: p.done,
+                    total: None,
+                })
+            },
+            cancel,
+        )?;
+        let held = std::fs::metadata(&path)?.len();
+        let expected = params_digest(&path);
+        let result = copy_member(
+            &Entry::member(&dir, PARAMS),
+            params,
+            expected,
+            &mut |p| {
+                progress(Progress {
+                    done: held + p.done,
+                    total: p.total.map(|t| held + t),
+                })
+            },
+            cancel,
+        );
+        // Q-57: the manifest the params disagree with may be the bad file; a retry copies
+        // both.
+        if matches!(result, Err(IoError::Checksum(_))) {
+            remove_if_present(&manifest_entry.meta)?;
+            remove_if_present(&manifest_entry.file)?;
+        }
+        result?;
+        Ok(dir)
+    }
+}
+
+/// One member of `copy_checkpoint`: reused when its complete record is current
+/// (Q-T458.1), else copied through `<name>.part` and checked against `expected`.
+// Q-T458.1
+fn copy_member(
+    entry: &Entry,
+    member: &DocumentMember<'_>,
+    expected: Option<String>,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<PathBuf, IoError> {
+    let uri = &member.uri;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(cancelled(uri));
+    }
+    let current = entry.complete(Some(uri)).filter(|record| {
+        member.size.is_none_or(|size| record.size == Some(size))
+            && expected
+                .as_ref()
+                .is_none_or(|e| record.sha256.as_ref() == Some(e))
+    });
+    if let Some(record) = current {
+        return reuse(entry, record, progress);
+    }
+    entry.discard_partial()?;
+    let mut source = (member.open)()?;
+    let total = source.metadata()?.len();
+    let mut file = File::create(&entry.part)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; COPY_CHUNK];
+    let mut done = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            drop(file);
+            entry.discard_partial()?;
+            return Err(cancelled(uri));
+        }
+        let n = match source.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                drop(file);
+                entry.discard_partial()?;
+                return Err(e.into());
+            }
+        };
+        file.write_all(&buf[..n])?;
+        hasher.update(&buf[..n]);
+        done += n as u64;
+        progress(Progress {
+            done,
+            total: Some(total),
+        });
+    }
+    file.sync_all()?;
+    drop(file);
+    let digest = ftgsxr_core::hex(&hasher.finalize().into());
+    if expected.as_ref().is_some_and(|e| *e != digest) {
+        entry.discard_partial()?;
+        return Err(IoError::Checksum(uri.to_string()));
+    }
+    std::fs::rename(&entry.part, &entry.file)?;
+    let record = Record {
+        url: uri.as_str().to_owned(),
+        etag: None,
+        last_modified: None,
+        size: Some(done),
+        sha256: Some(digest),
+        fetched_at: now_rfc3339(),
+    };
+    record.write(&entry.meta)?;
+    Ok(entry.file.clone())
 }
 
 /// The manifest's digest of `params.safetensors` (`files`, openftgs `ftgs-checkpoint`), or

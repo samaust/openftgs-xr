@@ -1287,3 +1287,275 @@ fn u31_open_source_refuses_what_it_cannot_serve() {
     }
     assert_eq!(code(&spec("http", "http://127.0.0.1/m/"), Some(http)), None);
 }
+
+/// A stub document provider holding one picked tree, `content://stub/ckpt-tree`, whose one
+/// entry is a checkpoint directory; its two documents are copies of the listing fixture's
+/// `tiny` checkpoint in a fresh directory (so a test may change them). The provider
+/// classifies as Q-T458.3 says: the directory as `Checkpoint`, `manifest.json` as `Other`,
+/// `params.safetensors` as `Exchange` named by its stem (Q-47). Every call is recorded.
+struct CheckpointProvider {
+    dir: PathBuf,
+    /// Added to the size the listing gives for `params.safetensors`.
+    params_size_delta: Mutex<u64>,
+    calls: Mutex<Vec<String>>,
+}
+
+const CKPT_TREE: &str = "content://stub/ckpt-tree";
+const CKPT_DIR: &str = "content://stub/ckpt-tree/document/tiny";
+const CKPT_MANIFEST: &str = "content://stub/ckpt-tree/document/tiny%2Fmanifest.json";
+const CKPT_PARAMS: &str = "content://stub/ckpt-tree/document/tiny%2Fparams.safetensors";
+
+impl CheckpointProvider {
+    fn new(test: &str) -> Arc<CheckpointProvider> {
+        let dir = fresh_dir(test);
+        for name in ["manifest.json", "params.safetensors"] {
+            fs::copy(listing_models().join("tiny").join(name), dir.join(name)).unwrap();
+        }
+        Arc::new(CheckpointProvider {
+            dir,
+            params_size_delta: Mutex::new(0),
+            calls: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn file_of(&self, uri: &str) -> Option<PathBuf> {
+        match uri {
+            CKPT_MANIFEST => Some(self.dir.join("manifest.json")),
+            CKPT_PARAMS => Some(self.dir.join("params.safetensors")),
+            _ => None,
+        }
+    }
+
+    fn size(&self, uri: &str) -> u64 {
+        fs::metadata(self.file_of(uri).unwrap()).unwrap().len()
+    }
+
+    fn entry(name: &str, uri: &str, kind: EntryKind, size: u64) -> Entry {
+        Entry {
+            name: name.to_owned(),
+            location: uri.to_owned(),
+            kind,
+            size: Some(size),
+            mtime: None,
+            sha256: None,
+            thumbnail: None,
+            audio: None,
+            scene: None,
+        }
+    }
+
+    fn checkpoint_entry(&self) -> Entry {
+        let size = self.size(CKPT_MANIFEST) + self.size(CKPT_PARAMS);
+        CheckpointProvider::entry("tiny", CKPT_DIR, EntryKind::Checkpoint, size)
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    fn opens(&self) -> Vec<String> {
+        self.calls()
+            .into_iter()
+            .filter(|c| c.starts_with("open "))
+            .collect()
+    }
+}
+
+impl DocumentProvider for CheckpointProvider {
+    fn list_tree(&self, tree_uri: &str) -> Result<Vec<Entry>, IoError> {
+        self.calls.lock().unwrap().push(format!("list {tree_uri}"));
+        match tree_uri {
+            CKPT_TREE => Ok(vec![self.checkpoint_entry()]),
+            CKPT_DIR => {
+                let delta = *self.params_size_delta.lock().unwrap();
+                Ok(vec![
+                    CheckpointProvider::entry(
+                        "manifest.json",
+                        CKPT_MANIFEST,
+                        EntryKind::Other,
+                        self.size(CKPT_MANIFEST),
+                    ),
+                    CheckpointProvider::entry(
+                        "params",
+                        CKPT_PARAMS,
+                        EntryKind::Exchange,
+                        self.size(CKPT_PARAMS) + delta,
+                    ),
+                ])
+            }
+            _ => Err(IoError::Io(std::io::ErrorKind::NotFound.into())),
+        }
+    }
+
+    fn open(&self, uri: &str) -> Result<fs::File, IoError> {
+        self.calls.lock().unwrap().push(format!("open {uri}"));
+        let path = self
+            .file_of(uri)
+            .ok_or_else(|| IoError::Io(std::io::ErrorKind::NotFound.into()))?;
+        Ok(fs::File::open(path)?)
+    }
+}
+
+/// A `documents` source over `provider`'s tree, opened as the library opens one, with the
+/// client whose cache holds the checkpoint's entry (Q-61, Q-T458.1).
+fn checkpoint_source(
+    provider: &Arc<CheckpointProvider>,
+    http: Arc<HttpClient>,
+) -> Arc<dyn ModelSource> {
+    let spec = SourceSpec {
+        kind: "documents".into(),
+        location: CKPT_TREE.into(),
+        name: "picked".into(),
+        flavor: None,
+    };
+    let provider: Arc<dyn DocumentProvider> = provider.clone();
+    open_source(&spec, Some(http), Some(provider)).unwrap()
+}
+
+#[test]
+fn u31_document_source_fetch_of_a_checkpoint_fills_one_cache_entry() {
+    // Q-61's direction (D-51): both files copied into one cache entry keyed by the
+    // checkpoint directory's document URI, each under its own name with its
+    // `<name>.meta.json`, returned as `File(<entry dir>)` and `Checkpoint(<entry dir>)`.
+    let test = "doc-checkpoint";
+    let provider = CheckpointProvider::new(test);
+    let source = checkpoint_source(&provider, client(test));
+    let entries = source.list("").unwrap();
+    assert_eq!(entries, vec![provider.checkpoint_entry()]);
+    let tiny = &entries[0];
+
+    let (r, bytes, reports) = fetch_all(source.as_ref(), tiny);
+    let dir = checkpoint(&bytes).to_path_buf();
+    assert_eq!(r, ModelRef::File(dir.clone()));
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    let key = ftgsxr_core::hex(&ftgsxr_core::sha256(CKPT_DIR.as_bytes()));
+    assert_eq!(
+        dir.canonicalize().unwrap(),
+        cache_dir(test)
+            .join("http")
+            .join(key)
+            .canonicalize()
+            .unwrap()
+    );
+    for name in ["manifest.json", "params.safetensors"] {
+        let picked = fs::read(provider.dir.join(name)).unwrap();
+        assert_eq!(fs::read(dir.join(name)).unwrap(), picked, "{name}");
+        assert!(dir.join(format!("{name}.meta.json")).is_file(), "{name}");
+    }
+    // The directory listed, then the manifest read first, then the params (Q-57).
+    assert_eq!(
+        provider.calls(),
+        vec![
+            format!("list {CKPT_TREE}"),
+            format!("list {CKPT_DIR}"),
+            format!("open {CKPT_MANIFEST}"),
+            format!("open {CKPT_PARAMS}"),
+        ]
+    );
+    // Progress is cumulative over both files and ends at their sum (Q-59).
+    let size = tiny.size.unwrap();
+    assert_eq!(
+        reports.last(),
+        Some(&Progress {
+            done: size,
+            total: Some(size)
+        })
+    );
+    assert!(reports.windows(2).all(|w| w[0].done <= w[1].done));
+
+    // A second fetch, the sizes unchanged, reuses the entry and reads no document
+    // (Q-T458.1).
+    let opened = provider.opens().len();
+    let (again, bytes, reports) = fetch_all(source.as_ref(), tiny);
+    assert_eq!(again, ModelRef::File(dir.clone()));
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    assert_eq!(provider.opens().len(), opened);
+    assert_eq!(reports.last().map(|p| p.done), Some(size));
+
+    // A member whose listed size changed is copied again; the other is kept (Q-T458.1).
+    *provider.params_size_delta.lock().unwrap() = 1;
+    let opened = provider.opens().len();
+    let (_, bytes, _) = fetch_all(source.as_ref(), tiny);
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    assert_eq!(provider.opens()[opened..], [format!("open {CKPT_PARAMS}")]);
+}
+
+#[test]
+fn u31_document_checkpoint_params_against_the_manifest_digest() {
+    // Q-57 as Q-61 applies it: with no index entry, the params are checked against the
+    // manifest's digest; a mismatch is E-NET-CHECKSUM and discards both members, so a
+    // retry copies both.
+    let test = "doc-checkpoint-digest";
+    let provider = CheckpointProvider::new(test);
+    let manifest = provider.dir.join("manifest.json");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let digest = "5456b847ca9238c2c9f915e0ab034014ffe052842f0581c4e9c6e103ada2ed87";
+    assert!(text.contains(digest), "the manifest's params digest");
+    fs::write(&manifest, text.replace(digest, &"0".repeat(64))).unwrap();
+    let source = checkpoint_source(&provider, client(test));
+    let tiny = provider.checkpoint_entry();
+
+    let cancel = AtomicBool::new(false);
+    let err = source.fetch(&tiny, &mut |_| {}, &cancel).unwrap_err();
+    assert_eq!(err.code(), "E-NET-CHECKSUM");
+    let key = ftgsxr_core::hex(&ftgsxr_core::sha256(CKPT_DIR.as_bytes()));
+    let dir = cache_dir(test).join("http").join(key);
+    for name in [
+        "manifest.json",
+        "manifest.json.meta.json",
+        "params.safetensors",
+        "params.safetensors.meta.json",
+        "params.safetensors.part",
+    ] {
+        assert!(!dir.join(name).exists(), "{name} discarded");
+    }
+
+    // The picked manifest repaired, the retry copies both and the checkpoint loads.
+    fs::write(&manifest, &text).unwrap();
+    let opened = provider.opens().len();
+    let (_, bytes, _) = fetch_all(source.as_ref(), &tiny);
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    assert_eq!(
+        provider.opens()[opened..],
+        [
+            format!("open {CKPT_MANIFEST}"),
+            format!("open {CKPT_PARAMS}")
+        ]
+    );
+}
+
+#[test]
+fn u31_document_checkpoint_cancel_and_no_cache_are_e_io() {
+    // A cancel set before the copy is E-IO `Interrupted` (Q-47); a document source
+    // without a cache (`DocumentSource::new`, or `open_source` with no client) refuses a
+    // checkpoint with E-IO `Unsupported` (Q-T458.1).
+    let test = "doc-checkpoint-cancel";
+    let provider = CheckpointProvider::new(test);
+    let source = checkpoint_source(&provider, client(test));
+    let tiny = provider.checkpoint_entry();
+    let cancel = AtomicBool::new(true);
+    match source.fetch(&tiny, &mut |_| {}, &cancel) {
+        Err(IoError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::Interrupted),
+        other => panic!("a cancel is E-IO Interrupted: {other:?}"),
+    }
+
+    let dyn_provider: Arc<dyn DocumentProvider> = provider.clone();
+    let spec = SourceSpec {
+        kind: "documents".into(),
+        location: CKPT_TREE.into(),
+        name: "picked".into(),
+        flavor: None,
+    };
+    let without = [
+        Arc::new(DocumentSource::new(CKPT_TREE.into(), dyn_provider.clone()))
+            as Arc<dyn ModelSource>,
+        open_source(&spec, None, Some(dyn_provider)).unwrap(),
+    ];
+    for source in without {
+        let cancel = AtomicBool::new(false);
+        match source.fetch(&tiny, &mut |_| {}, &cancel) {
+            Err(IoError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::Unsupported),
+            other => panic!("no cache is E-IO Unsupported: {other:?}"),
+        }
+    }
+}
