@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A window presented in frames that nothing drew to (#401, §1.13 GPU validation, R-16,
-//! Q-243, `gpu` lane). In `ftgsxr play`'s first frames, while pipelines compile, Bevy
+//! D-52, `gpu` lane). In `ftgsxr play`'s first frames, while pipelines compile, Bevy
 //! acquires the window's surface texture and presents it with no command having used it.
 //! wgpu 29.0.4 then presented the image in the `UNDEFINED` layout
 //! (`VUID-VkPresentInfoKHR-pImageIndices-01430`) and left its acquire semaphore signaled
 //! for the next acquire (`VUID-vkAcquireNextImageKHR-semaphore-01286`). The vendored
-//! wgpu-core's present now readies such a texture first (Q-243).
+//! wgpu-core's present now readies such a texture first (D-52).
 //!
 //! The test makes the window with winit and presents through wgpu directly, so it doesn't
 //! depend on when Bevy's pipelines happen to compile: frames presented without a draw,
@@ -74,7 +74,7 @@ fn frame(surface: &wgpu::Surface, device: &wgpu::Device, queue: &wgpu::Queue, dr
 }
 
 /// Frames presented with nothing drawn, between drawn ones, leave no validation message
-/// (§1.13, R-16; Q-243).
+/// (§1.13, R-16; D-52).
 #[test]
 #[ignore = "gpu"]
 fn gpu_frames_presented_without_a_draw_leave_no_validation_message() {

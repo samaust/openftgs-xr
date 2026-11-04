@@ -276,7 +276,7 @@ impl Surface {
     pub fn present(&self) -> Result<Status, SurfaceError> {
         profiling::scope!("Surface::present");
 
-        self.ready_unused_for_present(); // openftgs-xr, Q-243
+        self.ready_unused_for_present(); // openftgs-xr, D-52
 
         let mut presentation = self.presentation.lock();
         let present = match presentation.as_mut() {
@@ -327,7 +327,7 @@ impl Surface {
         }
     }
 
-    // openftgs-xr change (Q-243), to wgpu-core 29.0.4 (crates.io), file src/present.rs,
+    // openftgs-xr change (D-52), to wgpu-core 29.0.4 (crates.io), file src/present.rs,
     // MIT OR Apache-2.0: a surface texture presented with no submission having used it
     // since its acquire was presented in the layout it was acquired in (on Vulkan
     // `UNDEFINED`, VUID-VkPresentInfoKHR-pImageIndices-01430), and its acquire semaphore,

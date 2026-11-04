@@ -713,7 +713,7 @@ impl DeviceTextureTracker {
         self.metadata.owned_resources()
     }
 
-    // openftgs-xr change (Q-243), to wgpu-core 29.0.4 (crates.io), file
+    // openftgs-xr change (D-52), to wgpu-core 29.0.4 (crates.io), file
     // src/track/texture.rs, MIT OR Apache-2.0: a query for `Surface::present`, which
     // readies a surface texture nothing used since its acquire (src/present.rs).
     /// True if `texture` is tracked and still in the `UNINITIALIZED` state it was inserted
