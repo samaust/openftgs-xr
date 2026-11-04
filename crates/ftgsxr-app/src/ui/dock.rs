@@ -1198,8 +1198,8 @@ mod tests {
 
     // §1.7 Panels, Q-251 (#440): `load_settings` already takes a width below 160 as
     // the default, so drawing applies only the window's bound, 60 % of its width, and
-    // the 160-point floor wins in a window under 267 points. The 50-point case is the
-    // panel's own floor, which egui keeps.
+    // the 160-point floor wins in a window under 267 points. The 50-point case is
+    // `dock_range`'s floor, which still bounds every width drawn.
     #[test]
     fn dock_panel_draws_a_saved_width_outside_the_range_clamped() {
         assert_eq!(drawn_width(50.0, 1000.0), 160.0);
