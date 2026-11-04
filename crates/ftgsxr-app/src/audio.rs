@@ -26,8 +26,9 @@ use ftgsxr_core::PlayState;
 use ftgsxr_io::{IoError, ModelBytes, ModelRef, SoundSwitches, open_ref};
 use ftgsxr_render::{SplatAsset, SplatCamera, SplatModel};
 
-use crate::intent::{Feature, Intent, VolumeChannel};
+use crate::intent::{Feature, Hand, Intent, VolumeChannel};
 use crate::library::LoadedModel;
+use crate::manipulate::Grabbed;
 use crate::platform::{Headset, PlatformRes};
 use crate::playback::{Playback, Scrubbing};
 use crate::ui::{DockHooks, Tab, ToastRequest, UiCue};
@@ -438,7 +439,15 @@ impl Plugin for AudioPlugin {
             .add_systems(Startup, start)
             .add_systems(
                 Update,
-                (ui_bridge, run_intents, play_ui_sounds, attach, decode).chain(),
+                (
+                    ui_bridge,
+                    run_intents,
+                    grab_sounds,
+                    play_ui_sounds,
+                    attach,
+                    decode,
+                )
+                    .chain(),
             )
             // After playback's `advance` (in `Update`): the clock of this frame; after
             // egui's pass: this frame's scrub (Q-246).
@@ -578,10 +587,18 @@ fn start(output: Res<AudioOutputRes>, mut failed: MessageWriter<AudioFailed>) {
     }
 }
 
-/// `Intent::Volume` and `Intent::Toggle(Feature::Sound)` (§1.10, Appendix D.1).
-fn run_intents(mut reader: MessageReader<Intent>, mut state: ResMut<AudioState>) {
+/// `Intent::Volume` and `Intent::Toggle(Feature::Sound)` (§1.10, Appendix D.1), and the
+/// snap turn's sound on `Intent::SnapTurn` (§1.10, Q-270's event), once per frame.
+// Q-270
+fn run_intents(
+    mut reader: MessageReader<Intent>,
+    mut state: ResMut<AudioState>,
+    mut sounds: MessageWriter<PlayUiSound>,
+) {
+    let mut turned = false;
     for intent in reader.read() {
         match *intent {
+            Intent::SnapTurn { steps } if steps != 0 => turned = true,
             Intent::Toggle(Feature::Sound) => state.muted = !state.muted,
             Intent::Volume { channel, value } => {
                 if !value.is_finite() {
@@ -598,6 +615,45 @@ fn run_intents(mut reader: MessageReader<Intent>, mut state: ResMut<AudioState>)
             _ => {}
         }
     }
+    if turned {
+        sounds.write(PlayUiSound(UiSound::SnapTurn));
+    }
+}
+
+/// The hands holding each grabbed instance.
+fn grab_hands(g: &Grabbed) -> Vec<Hand> {
+    match g {
+        Grabbed::One { hand, .. } => vec![*hand],
+        Grabbed::Two { .. } => vec![Hand::Left, Hand::Right],
+    }
+}
+
+/// The grab sounds (§1.10) from `Grabbed`'s edges, as the haptics take them (Q-270): grab
+/// start when a hand joins an instance's `Grabbed` (it appears, or turns two-handed),
+/// grab end when a hand leaves it (one hand released, or the component gone); each at
+/// most once a frame. A squeeze on nothing changes no `Grabbed` and sounds nothing.
+// Q-270
+fn grab_sounds(
+    grabbed: Query<(Entity, &Grabbed)>,
+    mut last: Local<HashMap<Entity, Vec<Hand>>>,
+    mut sounds: MessageWriter<PlayUiSound>,
+) {
+    let now: HashMap<Entity, Vec<Hand>> = grabbed.iter().map(|(e, g)| (e, grab_hands(g))).collect();
+    let joined = now.iter().any(|(e, hands)| {
+        let before = last.get(e);
+        hands.iter().any(|h| before.is_none_or(|b| !b.contains(h)))
+    });
+    let left = last.iter().any(|(e, hands)| {
+        let after = now.get(e);
+        hands.iter().any(|h| after.is_none_or(|a| !a.contains(h)))
+    });
+    if joined {
+        sounds.write(PlayUiSound(UiSound::GrabBegin));
+    }
+    if left {
+        sounds.write(PlayUiSound(UiSound::GrabEnd));
+    }
+    *last = now;
 }
 
 /// Plays each `PlayUiSound` whose switch is on, at the UI gain; nothing when muted.
@@ -1175,6 +1231,49 @@ mod tests {
         let near = |a: usize, b: usize| clip[a..b].iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(near(half - 50, half) < 0.01);
         assert!(near(half + 100, half + 1000) > 0.2);
+    }
+
+    /// §1.10's grab start and end and snap turn sounds (Q-270's events), on the stub:
+    /// `Grabbed` appearing, turning two-handed, back to one hand and gone, and a
+    /// `SnapTurn`; a frame without a change sounds nothing.
+    #[test]
+    fn grab_edges_and_snap_turns_play_their_sounds() {
+        use ftgsxr_core::{Grab, Pose, TwoHandGrab};
+        let out = Arc::new(StubAudioOutput::new());
+        let mut app = app(out.clone());
+        app.update();
+        out.take_played();
+        let played = |app: &mut App| {
+            app.update();
+            out.take_played()
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect::<Vec<_>>()
+        };
+        let one = |hand| Grabbed::One {
+            hand,
+            grab: Grab::begin(Pose::IDENTITY, Pose::IDENTITY),
+        };
+        let e = app.world_mut().spawn(one(Hand::Left)).id();
+        assert_eq!(played(&mut app), [UiSound::GrabBegin]);
+        assert!(played(&mut app).is_empty(), "no change, no sound");
+        app.world_mut().entity_mut(e).insert(Grabbed::Two {
+            grab: TwoHandGrab::begin(Pose::IDENTITY, Pose::IDENTITY, Pose::IDENTITY),
+        });
+        assert_eq!(
+            played(&mut app),
+            [UiSound::GrabBegin],
+            "the second hand joins"
+        );
+        app.world_mut().entity_mut(e).insert(one(Hand::Right));
+        assert_eq!(played(&mut app), [UiSound::GrabEnd], "the left hand leaves");
+        app.world_mut().entity_mut(e).remove::<Grabbed>();
+        assert_eq!(played(&mut app), [UiSound::GrabEnd]);
+        app.world_mut()
+            .write_message(Intent::SnapTurn { steps: -1 });
+        assert_eq!(played(&mut app), [UiSound::SnapTurn]);
+        app.world_mut().write_message(Intent::SnapTurn { steps: 0 });
+        assert!(played(&mut app).is_empty());
     }
 
     /// A headless app with the audio plugin alone on `output`.
