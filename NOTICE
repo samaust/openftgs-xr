@@ -45,8 +45,10 @@ Its LICENSE-MIT and LICENSE-APACHE are copied from the upstream repository's mai
 the repository has no 0.6.0 release tag; neither file names a copyright holder.
 
 vendor/wgpu-core-29.0.4 is wgpu-core 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
-used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with one change
-marked in src/instance.rs (an instance made from a Vulkan HAL instance keeps its flags).
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two changes:
+one marked in src/instance.rs (an instance made from a Vulkan HAL instance keeps its flags), and
+one marked in src/present.rs and src/track/texture.rs (a surface texture presented with no
+submission having used it is cleared and submitted first).
 Copyright (c) 2025 The gfx-rs developers.
 
 vendor/wgpu-hal-29.0.4 is wgpu-hal 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
