@@ -44,6 +44,13 @@ Its LICENSE-MIT and LICENSE-APACHE are copied from the upstream repository's mai
 (commit 18b64bec26f343931f1b439d2e4a4013f6a095e8), since the crates.io package ships none and
 the repository has no 0.6.0 release tag; neither file names a copyright holder.
 
+vendor/bevy_render-0.19.1 is bevy_render 0.19.1 from crates.io (https://github.com/bevyengine/bevy),
+used under the Apache License, Version 2.0 (it is dual-licensed MIT OR Apache-2.0), with one change
+marked in src/view/window/mod.rs (a window surface reconfigured when found out of date or when
+its window's size changed takes the surface's current extent, not a size the window has left).
+Its LICENSE-MIT and LICENSE-APACHE are those of the crates.io package; neither file names a
+copyright holder.
+
 vendor/wgpu-core-29.0.4 is wgpu-core 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
 used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two changes:
 one marked in src/instance.rs (an instance made from a Vulkan HAL instance keeps its flags), and
