@@ -4,7 +4,7 @@ How `ftgsxr-desktop`'s `play` command and `LinuxPlatform` (§1.7 Command line, �
 
 ## `play`
 
-`ftgsxr play [MODEL|URL|SCENE]... [--settings FILE] [--tier TIER] [--log-level LEVEL] [--xr]`. The desktop crate depends on bevy for the window and the `App` (Q-154).
+`ftgsxr play [MODEL|URL|SCENE]... [--settings FILE] [--tier TIER] [--log-level LEVEL] [--xr]`. The desktop crate depends on bevy for the window and the `App` (§2.1).
 
 1. **Arguments.** An argument that parses as an `http` or `https` URL is a URL, a path ending in `.ftgsxr-scene.json` the scene (one at most, else a usage error), any other path a file (Q-157).
 2. **Settings and log.** The settings file is read once, before the log; the level and the tier come from it unless `--log-level` or `--tier` override them for the session, unsaved. The log is installed, the file's warnings logged, and `SettingsPath` and `SettingsRes` are inserted by the binary, so `AppPlugin` keeps them (Q-170, Q-163). A log that cannot be installed is a warning, and the player runs on.
@@ -28,4 +28,4 @@ The platform port's Linux adapter: `LinuxPlatform::new` takes the XDG locations 
 
 ## Q-n rows relied on
 
-`play` and `LinuxPlatform`: Q-154, Q-157, Q-160, Q-162, Q-163, Q-168 (the re-exported `ModelRef`, `Url` and `DocumentProvider`), Q-169, Q-170, Q-220, D-52, D-53; with Q-120, Q-121 and Q-14. The log: Q-151, Q-167. `desktop_input`: Q-152, Q-180, Q-196, Q-197, Q-198, Q-199; with Q-50.
+`play` and `LinuxPlatform`: Q-157, Q-160, Q-162, Q-163, Q-168 (the re-exported `ModelRef`, `Url` and `DocumentProvider`), Q-169, Q-170, Q-220, D-52, D-53; with Q-120, Q-121 and Q-14. The log: Q-151, Q-167. `desktop_input`: Q-152, Q-180, Q-196, Q-197, Q-198, Q-199; with Q-50.

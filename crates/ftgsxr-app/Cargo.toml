@@ -32,7 +32,7 @@ ftgsxr-render.workspace = true
 # log (Q-151).
 bevy_egui = { workspace = true, features = ["render"] }
 image = { workspace = true, features = ["png"] }
-tracing-subscriber.workspace = true # Q-151
+tracing-subscriber.workspace = true # §2.1
 
 [dev-dependencies]
 # #277: the test support's `gpu_` variant adds the camera and pipeline plugins, as
@@ -54,4 +54,4 @@ bevy_kira_audio = { workspace = true, features = ["ogg", "wav", "flac", "mp3"] }
 # Q-187: the adapter drives kira (§2.3's row under bevy_kira_audio, at its pin) itself, since
 # bevy_kira_audio keeps its `AudioManager` crate-private and only logs a missing device;
 # bevy_kira_audio's features above choose kira's decoders.
-kira.workspace = true # Q-187
+kira.workspace = true # §2.1
