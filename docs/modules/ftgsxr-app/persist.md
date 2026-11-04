@@ -8,7 +8,7 @@ How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's po
 
 `persist/panels.rs` draws the Display, Environment and Settings tabs' sections through `ui`'s `DockHooks`, each editing `SettingsRes` (Q-218); `[audio]` is `audio`'s section and the governor `governor`'s. The tier pickers (the Display tab's showing the running tier, the Settings tab's the saved one) write `[general] tier` and a crate-private `TierPick` that `governor` switches to (Q-240).
 
-The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startup, before the dock's first draw, `[desktop] dock_width` and `dock_open` become `ui`'s dock state, and Help's first run opens the dock after them (Q-226); while the UI is on the window, a resize (in whole points, a change under half a point being none) or a collapse goes back into `[desktop]`. The width saved is the one drawn, clamped to the window (Q-251); the Settings tab does not draw the two keys (Q-252).
+The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startup, before the dock's first draw, `[desktop] dock_width` and `dock_open` become `ui`'s dock state, and Help's first run opens the dock after them (Q-226); while the UI is on the window, a resize (in whole points, a change under half a point being none) or a collapse goes back into `[desktop]`. The width saved is the one drawn, clamped to the window (Q-252); the Settings tab does not draw the two keys (Q-253).
 
 ## Poses
 
@@ -18,7 +18,7 @@ The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startu
 
 A relative scene path names a file under `AppPaths.scenes`; `Intent::Ui(SaveScene)` saves under a UTC date-and-time name, and `Intent::Ui(LoadScene)` is `ui`'s to confirm first (Q-200). Model locations are relative to `AppPaths.models` by Q-3's rule.
 
-- **`scene_from_world`** writes the instances, their poses, visibility (`ShowOnUpload` before the upload, Q-202), modes and time mappings, the clock with its range (Q-204), the rig's pose, the desktop camera and its bookmarks; lighting and the anchor are written null until M-5 and M-9 hold them (Q-206).
+- **`scene_from_world`** writes the instances, their poses, visibility (`ShowOnUpload` before the upload, Q-202), modes and time mappings, the clock with its range (Q-204), the rig's pose, the desktop camera and its bookmarks; each instance's `lighting` is its Scene-tab manual values, null at the identity, and a loaded scene's `lighting` is applied as its instance appears; the anchor is written null until M-5 and M-9 hold it (Q-206, Q-250).
 - **`LoadScene`** resolves the locations, unloads every instance and calls `apply_scene`. A local model whose file is missing becomes a library entry in its missing state with an E-SCENE-MISSING toast (Q-203). A model whose source now holds a file of another identity is refused once read and becomes a missing entry too, with E-SCENE-MISSING, and the clock does not wait for it (Q-245). A hidden instance stays hidden through its upload (Q-202). The clock's T and range are applied one frame after every instance appeared (Q-204).
 
 ## Failures
@@ -27,4 +27,4 @@ A crate-private `PersistFailure { code, text }` carries the settings' and the po
 
 ## Q-n rows relied on
 
-Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-245, Q-251, Q-252; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.
+Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-245, Q-252, Q-253; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.

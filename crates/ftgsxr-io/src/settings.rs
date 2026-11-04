@@ -229,7 +229,7 @@ pub struct DesktopSettings {
     /// The fly camera's base speed in m/s, in \[0.1, 20\].
     pub fly_speed_mps: f32,
     /// The dock's width in points, finite; the dock clamps it to §1.7's range when
-    /// drawn (Q-250).
+    /// drawn (Q-251).
     pub dock_width: f32,
     /// Whether the dock is open, not collapsed (§1.7 Panels).
     pub dock_open: bool,
@@ -509,7 +509,7 @@ fn flag() -> Check<bool> {
     ("true or false".into(), Box::new(Value::as_bool))
 }
 
-/// A finite number, as f32 (Q-250).
+/// A finite number, as f32 (Q-251).
 fn finite() -> Check<f32> {
     (
         "a finite number".into(),
@@ -1060,7 +1060,7 @@ impl Reader {
             fly_speed_mps: self
                 .take(t, p, "fly_speed_mps", range(0.1, 20.0))
                 .unwrap_or(d.fly_speed_mps),
-            // Q-250
+            // Q-251
             dock_width: self
                 .take(t, p, "dock_width", finite())
                 .unwrap_or(d.dock_width),

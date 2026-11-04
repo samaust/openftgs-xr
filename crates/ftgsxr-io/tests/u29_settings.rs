@@ -465,10 +465,10 @@ help = "F1"
     );
 }
 
-/// Q-250 (#428): a non-finite `[desktop] dock_width` takes the default 320 with a
+/// Q-251 (#428): a non-finite `[desktop] dock_width` takes the default 320 with a
 /// warning naming the key; a finite one outside §1.7's range loads as given (the dock
 /// clamps it when drawn).
-// Q-250
+// Q-251
 #[test]
 fn u29_a_non_finite_dock_width_takes_the_default_with_a_warning() {
     for (name, value) in [("dock_nan", "nan"), ("dock_inf", "inf")] {

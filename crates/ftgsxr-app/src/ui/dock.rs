@@ -11,11 +11,12 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
 use ftgsxr_core::{EndRule, LoopMode, PlayState, Preset};
 use ftgsxr_io::{EntryKind, SourceSpec, Url};
-use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTime, SplatTransform};
+use ftgsxr_render::{Colormap, RenderMode, SplatMode, SplatTime};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
 use super::{
-    Confirm, DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState,
+    Confirm, DockHooks, InstanceLighting, RecentScenes, SceneLoadConfirmed, Tab, ToastLevel, UiCue,
+    UiState,
 };
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
@@ -220,8 +221,8 @@ const DOCK_MIN_WIDTH: f32 = 160.0;
 const DOCK_MAX_SHARE: f32 = 0.6;
 
 /// The dock's panel at `width` points, kept between 160 points and 60 % of a window
-/// `window` points wide; below 267 points the 160-point floor wins (§1.7 Panels, Q-250).
-// Q-250
+/// `window` points wide; below 267 points the 160-point floor wins (§1.7 Panels, Q-251).
+// Q-251
 fn dock_panel(width: f32, window: f32) -> egui::Panel {
     let max = (DOCK_MAX_SHARE * window).max(DOCK_MIN_WIDTH);
     egui::Panel::left("ftgsxr-dock")
@@ -231,7 +232,7 @@ fn dock_panel(width: f32, window: f32) -> egui::Panel {
 }
 
 /// The dock and its tabs; its width is kept in `UiState`, and `persist` saves it with
-/// whether it is open (§1.7 Panels, Q-251).
+/// whether it is open (§1.7 Panels, Q-252).
 fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Option<egui::Id>) {
     let (open, width, tab) = {
         let s = world.resource::<UiState>();
@@ -466,14 +467,14 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         &mut Transform,
         Option<&Visibility>,
         Option<&SplatMode>,
-        Option<&SplatTransform>,
+        Option<&InstanceLighting>,
         Option<&PoseExtras>,
         Option<&SplatTime>,
     )>();
     let mut ask = None;
-    let mut gains = Vec::new();
+    let mut lightings = Vec::new();
     let mut extras_out = Vec::new();
-    for (e, mut m, mut tf, vis, mode, color, extras, time) in q.iter_mut(world) {
+    for (e, mut m, mut tf, vis, mode, light, extras, time) in q.iter_mut(world) {
         ui.separator();
         // §1.5: the instance's name is editable; §1.6: an "extrapolating" badge.
         ui.horizontal(|ui| {
@@ -591,21 +592,34 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                 }
             });
         }
-        // E14's color transform, per channel (Q-218).
-        let gain = color.map_or(ColorTransform::IDENTITY.gain, |c| c.0.gain);
-        let mut g = gain.to_array();
+        // E14's color transform as its manual form (Q-218, Q-250).
+        let now = light.map(|c| c.0.clone()).unwrap_or_default();
+        let mut l = now.clone();
         ui.horizontal(|ui| {
-            ui.label("color gain");
-            for v in &mut g {
-                ui.add(egui::DragValue::new(v).range(0.0..=4.0).speed(0.01));
-            }
+            ui.label("exposure EV");
+            ui.add(
+                egui::DragValue::new(&mut l.exposure_ev)
+                    .range(-4.0..=4.0)
+                    .speed(0.01),
+            );
+            ui.label("temperature");
+            ui.add(
+                egui::DragValue::new(&mut l.temperature)
+                    .range(-1.0..=1.0)
+                    .speed(0.01),
+            );
+            ui.label("tint");
+            ui.add(
+                egui::DragValue::new(&mut l.tint)
+                    .range(-1.0..=1.0)
+                    .speed(0.01),
+            );
             if ui.small_button("reset").clicked() {
-                g = ColorTransform::IDENTITY.gain.to_array();
+                l = Default::default();
             }
         });
-        let g = bevy::math::Vec3::from_array(g);
-        if g != gain {
-            gains.push((e, g));
+        if l != now {
+            lightings.push((e, l));
         }
         // §1.5 Poses: the orientation preset and L_fit the fit uses.
         let x = extras.copied().unwrap_or(PoseExtras {
@@ -671,9 +685,9 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         world.write_message(x);
     }
     training_cameras(world, ui, out, hv);
-    for (e, gain) in gains {
+    for (e, l) in lightings {
         if let Ok(mut ec) = world.get_entity_mut(e) {
-            ec.insert(SplatTransform(ColorTransform { gain }));
+            ec.insert(InstanceLighting::bundle(l));
         }
     }
     if let Some(e) = ask {
@@ -1124,7 +1138,7 @@ mod tests {
         drawn
     }
 
-    // §1.7 Panels, Q-250 (#428): a saved width is drawn within [160, 60 % of the
+    // §1.7 Panels, Q-251 (#428): a saved width is drawn within [160, 60 % of the
     // window] points, and the 160-point floor wins in a window under 267 points.
     #[test]
     fn a_saved_width_outside_the_range_is_drawn_clamped() {
