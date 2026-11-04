@@ -1019,7 +1019,7 @@ pub struct DepthFrame { pub image: Handle<Image>, pub camera: Camera, pub near: 
 #[derive(Resource)] pub struct SplatOcclusion { pub frames: Vec<DepthFrame> /* one per view, the runtime's left and right */, pub soft: bool, pub delta_m: f32 }
 #[derive(Resource)] pub struct SplatStats(pub Option<FrameStats>);
 #[derive(Resource)] pub struct SplatTierState { pub tier: QualityTier, pub render_scale: f32, pub sh_cap: u8, pub sort_mode: SortMode, pub foveation: Foveation }  // the governor's copy (E16)
-#[derive(Event)] pub enum SplatEvent { Uploaded { entity: Entity, bytes: u64 }, Failed { entity: Entity, error: String }, Overflow { visible: u32, capacity: u32 } }
+#[derive(Event)] pub enum SplatEvent { Uploaded { entity: Entity, bytes: u64, sh_degree: u8 /* the uploaded degree, L′ (§1.2 load options) */ }, Failed { entity: Entity, error: String }, Overflow { visible: u32, capacity: u32 } }
 ```
 
 ```rust
