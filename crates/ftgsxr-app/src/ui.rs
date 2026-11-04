@@ -405,9 +405,19 @@ struct ToastLimiter(HashMap<String, f64>);
 #[derive(Resource, Default)]
 struct SeenFailures(HashMap<(usize, String), String>);
 
-/// The upload bytes per instance (`SplatEvent::Uploaded`), for the HUD.
+/// What each instance's latest `SplatEvent::Uploaded` reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Upload {
+    /// Its static GPU bytes, for the HUD.
+    bytes: u64,
+    /// The SH degree it was uploaded at, for the replay row (Q-241).
+    sh_degree: u8,
+}
+
+/// The latest upload per instance; a reload's upload replaces it (Q-238, Q-241).
+// Q-241
 #[derive(Resource, Default)]
-struct UploadBytes(HashMap<Entity, u64>);
+struct Uploads(HashMap<Entity, Upload>);
 
 /// The panel pointer's last hit and the select changes waiting for it.
 #[derive(Resource, Default)]
@@ -440,7 +450,7 @@ impl Plugin for UiPlugin {
             .init_resource::<DockHooks>()
             .init_resource::<ToastLimiter>()
             .init_resource::<SeenFailures>()
-            .init_resource::<UploadBytes>()
+            .init_resource::<Uploads>()
             .add_systems(
                 Update,
                 (ui_commands, library_toasts, clock_toasts).in_set(UiSet),
@@ -554,15 +564,25 @@ fn clock_toasts(
 fn splat_toasts(
     event: On<SplatEvent>,
     mut out: MessageWriter<ToastRequest>,
-    mut bytes: ResMut<UploadBytes>,
+    mut uploads: ResMut<Uploads>,
 ) {
     {
         match &*event {
             SplatEvent::Overflow { capacity, .. } => {
                 out.write(ToastRequest::warning(overflow_text(*capacity)));
             }
-            SplatEvent::Uploaded { entity, bytes: b } => {
-                bytes.0.insert(*entity, *b);
+            SplatEvent::Uploaded {
+                entity,
+                bytes: b,
+                sh_degree,
+            } => {
+                uploads.0.insert(
+                    *entity,
+                    Upload {
+                        bytes: *b,
+                        sh_degree: *sh_degree,
+                    },
+                );
             }
             SplatEvent::Failed { .. } => {}
         }
@@ -624,7 +644,7 @@ fn fill_hud(
     tier: Option<Res<SplatTierState>>,
     gpu: Option<Res<SplatGpu>>,
     playback: Option<Res<Playback>>,
-    mut bytes: ResMut<UploadBytes>,
+    mut uploads: ResMut<Uploads>,
     instances: Query<(Entity, &LoadedModel, Option<&SplatTime>)>,
     mut hud: ResMut<HudData>,
 ) {
@@ -659,8 +679,8 @@ fn fill_hud(
     if let Some(p) = playback {
         hud.clock_t = p.clock.time();
     }
-    bytes.0.retain(|e, _| instances.contains(*e));
-    hud.gpu_bytes_used = bytes.0.values().sum();
+    uploads.0.retain(|e, _| instances.contains(*e));
+    hud.gpu_bytes_used = uploads.0.values().map(|u| u.bytes).sum();
     hud.loaded = instances.iter().map(|(_, m, _)| m.info.n).sum();
     hud.instances = instances
         .iter()

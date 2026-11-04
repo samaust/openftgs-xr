@@ -66,7 +66,7 @@ With `OutputSpace::FileEncoded` the draw writes straight into the view target, w
 
 A `SplatCamera` must cover its whole render target in M-2: no viewport, or one equal to the target (§2.4 rule 4, "the layer sized from the swapchain or window"; Q-91, Q-100). The adapter sizes a view's E6 camera and its `LinearOver` layer from the camera's viewport, but the depth attachment it tests against is the target's, and the `FileEncoded` draw scales its sample point by the camera's size over the target's. A sub-viewport would therefore give a `LinearOver` view a layer and a depth attachment of different sizes, and a `FileEncoded` view a shifted sample point. Nothing warns or refuses at runtime. Viewports (thumbnails, split views) are M-4's to support.
 
-The main world loads on the async compute task pool (`SplatLoad`, Q-99), uploads in chunks of at most 64 MB a frame, and reports `SplatEvent::Uploaded` or `Failed`; the render world extracts the visible instances whose models are on the GPU. The adapter's device is Bevy's, with Bevy's error handlers kept (Q-98).
+The main world loads on the async compute task pool (`SplatLoad`, Q-99), uploads in chunks of at most 64 MB a frame, and reports `SplatEvent::Uploaded`, with the model's static bytes and the SH degree it was uploaded at (L′, min(the file's degree, the governor's `sh_cap` at the load), Q-241), or `Failed`; the render world extracts the visible instances whose models are on the GPU. The adapter's device is Bevy's, with Bevy's error handlers kept (Q-98).
 
 ## The governor's knobs, the render scale and the depth-gated resolve (M-4)
 

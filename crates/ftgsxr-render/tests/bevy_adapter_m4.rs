@@ -929,3 +929,94 @@ fn gpu_bevy_adapter_sh_limit_caps_the_drawn_degree() {
         "no limit draws the loaded degree again: {m:?}"
     );
 }
+
+impl Scene {
+    /// Loads `file` on a new instance and runs frames until its `Uploaded`; the degree it
+    /// reports.
+    fn load_and_wait(&mut self, file: &str) -> u8 {
+        let bytes = std::fs::read(fixtures_dir().join(file)).expect("the model's file");
+        let entity = self
+            .app
+            .world_mut()
+            .spawn((
+                SplatLoad {
+                    bytes: ModelBytes::Owned(bytes),
+                    kind_hint: None,
+                    reduce_to: None,
+                },
+                SplatTime {
+                    tau: 0.0,
+                    extrapolating: false,
+                },
+                Transform::IDENTITY,
+            ))
+            .id();
+        for _ in 0..MAX_FRAMES {
+            self.frames(1);
+            let events = self.seen.events.lock().unwrap().clone();
+            for e in &events {
+                match e {
+                    SplatEvent::Failed { entity: x, error } if *x == entity => {
+                        panic!("{file}'s load failed: {error}")
+                    }
+                    SplatEvent::Uploaded {
+                        entity: x,
+                        sh_degree,
+                        ..
+                    } if *x == entity => return *sh_degree,
+                    _ => {}
+                }
+            }
+        }
+        panic!("{file} uploaded within {MAX_FRAMES} frames");
+    }
+}
+
+// Q-241 (#403), spec §2 revision 17: `Uploaded` reports the degree the model was
+// uploaded at, L′ = min(its file's degree, `SplatTierState.sh_cap` at its load) (§1.2
+// load option 1), whatever the cap does afterwards.
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_uploaded_reports_the_loaded_sh_degree() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let (p5, request) = probe("P5");
+    assert_eq!(p5.sh_degree, 3);
+    let (r19, _) = probe("R19_transmittance");
+    assert_eq!(r19.sh_degree, 0);
+    let item = &request.items[1];
+    let (camera, projection) = probe_camera(&item.camera);
+    let mut scene = Scene::settled(
+        OutputSpace::FileEncoded,
+        TextureFormat::Rgba16Float,
+        (item.camera.width, item.camera.height),
+        camera,
+        projection,
+        None,
+        false,
+    );
+    let cap = |scene: &mut Scene, c: u8| {
+        scene
+            .app
+            .world_mut()
+            .resource_mut::<SplatTierState>()
+            .sh_cap = c;
+    };
+    cap(&mut scene, 1);
+    assert_eq!(
+        scene.load_and_wait("probes/P5.safetensors"),
+        1,
+        "degree 3 under a cap of 1"
+    );
+    cap(&mut scene, 3);
+    assert_eq!(
+        scene.load_and_wait("probes/P5.safetensors"),
+        3,
+        "degree 3 under a cap of 3"
+    );
+    cap(&mut scene, 2);
+    assert_eq!(
+        scene.load_and_wait("probes/R19_transmittance.safetensors"),
+        0,
+        "degree 0 under a cap of 2"
+    );
+}
