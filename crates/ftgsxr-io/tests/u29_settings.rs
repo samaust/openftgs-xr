@@ -5,7 +5,7 @@
 //! version 2 is set aside and defaults load; the write is atomic (a temporary file
 //! renamed). Values without a §1 default follow Q-49 to Q-51.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -21,9 +21,9 @@ use ftgsxr_io::{
 use ftgsxr_testkit::scratch_dir;
 
 /// A fresh, empty directory of this test binary's own under the target directory.
-/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test file and process (#94, #413, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// U-29 defaults: every key carries the default §1 gives (§1.4, §1.6–§1.13, E12–E14),

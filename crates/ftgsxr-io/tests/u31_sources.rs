@@ -27,12 +27,12 @@ use url::Url;
 
 /// This test binary's per-process folder under Cargo's temporary directory (#94, Q-62).
 fn binary_dir() -> PathBuf {
-    process_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"))
+    process_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem())
 }
 
 /// A fresh, empty directory in this binary's folder.
 fn fresh_dir(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// The listing fixture's models directory (tests/fixtures/README.md, Layout).

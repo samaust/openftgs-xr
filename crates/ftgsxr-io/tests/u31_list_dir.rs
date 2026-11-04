@@ -14,9 +14,9 @@ use ftgsxr_io::{Entry, EntryKind, list_dir};
 use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 
 /// A fresh, empty directory under Cargo's temporary directory for integration tests.
-/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test file and process (#94, #413, Q-62).
 fn fresh_dir(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 fn entry(dir: &Path, file: &str, name: &str, kind: EntryKind, size: u64) -> Entry {
