@@ -44,7 +44,7 @@ ftgsxr-testkit.workspace = true
 # An independent reader of the benchmark files `bench` writes (#122, Q-103), as
 # `ftgsxr-render` reads its fixture pose files.
 serde_json.workspace = true # Q-104
-# #401 (Q-243): a window and a surface of its own, presented without a draw; the same
+# Q-243 (#401): a window and a surface of its own, presented without a draw; the same
 # winit and wgpu as Bevy's, one copy of each in the graph.
 wgpu = { workspace = true, features = ["vulkan"] }
 winit = { workspace = true, features = ["rwh_06", "x11", "wayland"] }

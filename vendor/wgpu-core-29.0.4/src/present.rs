@@ -338,7 +338,8 @@ impl Surface {
     // submission waits on the acquire semaphore and moves the texture to the present
     // state, as for any surface texture a submission uses; one that has pending writes not
     // yet submitted is submitted the same way. A texture a submission used presents as
-    // before. Was: nothing before the present.
+    // before. A surface configured without `RENDER_ATTACHMENT` is not cleared, only
+    // submitted. Every backend takes this path. Was: nothing before the present.
     fn ready_unused_for_present(&self) {
         let (device, texture) = match self.presentation.lock().as_ref() {
             Some(present) => match present.acquired_texture.as_ref() {
@@ -359,9 +360,19 @@ impl Surface {
             let mut trackers = device.trackers.lock();
             if trackers.textures.is_uninitialized(&texture) {
                 let encoder = pending_writes.activate();
-                let layers = texture.initialization_status.write().mips[0]
-                    .drain(0..1)
-                    .collect::<Vec<_>>();
+                // The surface clear is a render pass; without the usage, only the
+                // submission's transition is recorded.
+                let layers = if texture
+                    .desc
+                    .usage
+                    .contains(wgt::TextureUsages::RENDER_ATTACHMENT)
+                {
+                    texture.initialization_status.write().mips[0]
+                        .drain(0..1)
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
                 for layer_range in layers {
                     if let Err(e) = crate::command::clear_texture(
                         &texture,

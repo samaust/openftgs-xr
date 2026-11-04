@@ -24,7 +24,7 @@ Three crates are vendored under `vendor/` and used through `[patch.crates-io]`, 
 - **wgpu-hal 29.0.4** (D-30): a public `flags()` getter on the Vulkan instance.
 - **wgpu-core 29.0.4** (D-30): `Instance::from_hal_instance` keeps a Vulkan HAL instance's flags instead of taking the defaults, which had made the removal above ineffective. A second change serves the desktop window, not the headset (Q-243, #401): `Surface::present` first clears and submits a surface texture that no submission used since its acquire, which Bevy presents while its pipelines compile, so the image reaches the present layout and its acquire semaphore is waited on; R-16 stays at zero messages for windowed `play`. The XR swapchain is bevy\_mod\_openxr's and doesn't go through it.
 
-With all three, the XR path's device has no indirect-call validation on the Quest, and its indirect draws draw (D-30, `ftgsxr-render/pipeline.md`). The wgpu patch is platform-neutral; a wgpu release that carries it lets both wgpu crates be dropped.
+With all three, the XR path's device has no indirect-call validation on the Quest, and its indirect draws draw (D-30, `ftgsxr-render/pipeline.md`). The wgpu patches are platform-neutral; the copies are dropped once a wgpu release that Bevy's pin takes carries both the flags fix and Q-243's.
 
 ## The reference-space chain
 
