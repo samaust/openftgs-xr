@@ -234,6 +234,24 @@ pub struct HudData {
     /// Whether the head is tracked this frame; false without an XR session.
     // Q-274
     pub head_tracked: bool,
+    /// The left side's device and whether its aim is tracked this frame; `None` while
+    /// no device is active for the side and without an XR session.
+    // Q-274
+    pub left_hand: Option<(HudHandSource, bool)>,
+    /// The right side's device and whether its aim is tracked; as `left_hand`.
+    // Q-274
+    pub right_hand: Option<(HudHandSource, bool)>,
+}
+
+/// Which device a side's HUD line shows (Q-274): the XR crate's `HandSource`, which the
+/// app cannot name, mapped by the XR crate.
+// Q-274
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HudHandSource {
+    /// A controller.
+    Controller,
+    /// Hand tracking.
+    Hand,
 }
 
 /// One instance's line of the HUD (Q-159).

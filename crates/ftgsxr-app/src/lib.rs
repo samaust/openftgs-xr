@@ -55,10 +55,11 @@ pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick
 pub use rig::{
     ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
 };
-// §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`.
+// §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`; Q-274:
+// `HudHandSource`.
 pub use ui::{
-    HudData, HudInstance, PanelPointer, Toast, ToastLevel, UiSurface, WorldPanel, WristMenu,
-    panel_hit,
+    HudData, HudHandSource, HudInstance, PanelPointer, Toast, ToastLevel, UiSurface, WorldPanel,
+    WristMenu, panel_hit,
 };
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;

@@ -44,7 +44,7 @@ use bevy_mod_openxr::resources::{OxrInstance, OxrViews};
 use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrTrackingRoot};
 use bevy_mod_xr::spaces::XrSpaceLocationFlags;
-use ftgsxr_app::{HudData, SettingsRes};
+use ftgsxr_app::{HudData, HudHandSource, SettingsRes};
 use ftgsxr_core::Pose;
 use openxr::{Action, ActionSet, Haptic, Path, Posef};
 
@@ -251,6 +251,40 @@ pub(crate) const TICK: Pulse = Pulse {
     amplitude: 0.5,
 };
 
+#[cfg(test)]
+mod hud_tests {
+    use super::*;
+    use ftgsxr_core::Pose;
+
+    /// Q-274: a side's HUD line is its device and whether its aim is tracked; none
+    /// without an active device.
+    #[test]
+    fn hud_hand_maps_the_device_and_its_tracking() {
+        let t = TrackedHand {
+            aim: Pose::IDENTITY,
+            grip: Pose::IDENTITY,
+            pinch: 0.0,
+            pinch_middle: 0.0,
+            squeeze: 0.0,
+            trigger: 0.0,
+            stick: Vec2::ZERO,
+            primary: false,
+            secondary: false,
+            menu: false,
+            source: HandSource::Hand,
+            tracked: false,
+        };
+        assert_eq!(hud_hand(Some(&t)), Some((HudHandSource::Hand, false)));
+        let c = TrackedHand {
+            source: HandSource::Controller,
+            tracked: true,
+            ..t
+        };
+        assert_eq!(hud_hand(Some(&c)), Some((HudHandSource::Controller, true)));
+        assert_eq!(hud_hand(None), None);
+    }
+}
+
 /// The haptics' record (D-44), which Dv-8 reads (Q-272): the pulses `xr_input` wanted on
 /// a controller-owned side this frame, and the last calls of `Actions::pulse` it made,
 /// numbered, with their outcomes.
@@ -447,11 +481,25 @@ fn rooted(root: &GlobalTransform, mut hand: TrackedHand) -> TrackedHand {
     hand
 }
 
-/// `HudData`'s head field is false without a session (Q-274).
+/// `HudData`'s XR fields without a session (Q-274): the head untracked, no hands.
 fn clear_hud(hud: Option<ResMut<HudData>>) {
     if let Some(mut hud) = hud {
         hud.head_tracked = false;
+        hud.left_hand = None;
+        hud.right_hand = None;
     }
+}
+
+/// A side's HUD line (Q-274): its device and whether its aim is tracked.
+// Q-274
+pub(crate) fn hud_hand(hand: Option<&TrackedHand>) -> Option<(HudHandSource, bool)> {
+    hand.map(|t| {
+        let source = match t.source {
+            HandSource::Controller => HudHandSource::Controller,
+            HandSource::Hand => HudHandSource::Hand,
+        };
+        (source, t.tracked)
+    })
 }
 
 /// Writes `XrHands` from the synced actions, the located spaces, the located hands and
@@ -559,8 +607,15 @@ fn write_hands(
     }
     // Q-274, Q-289: the head counts as tracked once the views are located (the crate keeps the
     // last views and drops the view-state flags, source-log 273).
-    if let Some(mut hud) = hud {
-        hud.head_tracked = views_located;
-    }
     hands.left_handed = settings.is_some_and(|s| s.0.locomotion.left_handed);
+    if let Some(mut hud) = hud {
+        let now = (
+            views_located,
+            hud_hand(hands.left.as_ref()),
+            hud_hand(hands.right.as_ref()),
+        );
+        if (hud.head_tracked, hud.left_hand, hud.right_hand) != now {
+            (hud.head_tracked, hud.left_hand, hud.right_hand) = now;
+        }
+    }
 }
