@@ -1141,7 +1141,7 @@ mod tests {
     // §1.7 Panels, Q-251 (#428): a saved width is drawn within [160, 60 % of the
     // window] points, and the 160-point floor wins in a window under 267 points.
     #[test]
-    fn a_saved_width_outside_the_range_is_drawn_clamped() {
+    fn dock_panel_draws_a_saved_width_outside_the_range_clamped() {
         assert_eq!(drawn_width(50.0, 1000.0), 160.0);
         assert_eq!(drawn_width(900.0, 1000.0), 600.0);
         assert_eq!(drawn_width(320.0, 1000.0), 320.0);

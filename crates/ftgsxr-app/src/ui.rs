@@ -33,7 +33,7 @@ use bevy::window::{MonitorSelection, PrimaryWindow, Window, WindowMode};
 use bevy_egui::input::EguiInputEvent;
 use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, egui};
 use ftgsxr_core::Pose;
-use ftgsxr_io::ManualLighting;
+use ftgsxr_io::{DesktopSettings, ManualLighting};
 use ftgsxr_render::{
     BudgetSource, ColorTransform, Foveation, GpuTimes, SortMode, SplatEvent, SplatGpu, SplatStats,
     SplatTierState, SplatTime, SplatTransform,
@@ -393,8 +393,9 @@ impl Default for UiState {
         UiState {
             visible: true,
             hud: false,
-            dock_open: true,
-            dock_width: 320.0,
+            // §1.7 Panels' defaults, as `[desktop]`'s.
+            dock_open: DesktopSettings::default().dock_open,
+            dock_width: DesktopSettings::default().dock_width,
             tab: Tab::Library,
             confirm: None,
             hidden_frames: 0,

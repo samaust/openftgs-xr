@@ -165,23 +165,24 @@ fn dock_from_settings(settings: Res<SettingsRes>, mut ui: ResMut<UiState>) {
 }
 
 /// §1.7 Panels, §1.11: the dock's width, in whole points, and whether it is open go into
-/// `[desktop]`; the width drawn within the window's range is the one saved (Q-252). A
-/// change under half a point is none, so a dock drawn at a fractional width does not
-/// mark the settings changed every frame (Q-207).
+/// `[desktop]`; the width drawn within the window's range is the one saved (Q-252). The
+/// drawn and the saved width are compared in whole points, so a dock drawn at a
+/// fractional width (egui rounds to 1/32 point) does not mark the settings changed every
+/// frame (Q-207).
 // Q-252
 fn dock_into_settings(ui: Res<UiState>, mut settings: ResMut<SettingsRes>) {
     if !ui.is_changed() {
         return;
     }
-    let d = &settings.0.desktop;
     let width = ui.dock_width.round();
-    let resized = ui.dock_width.is_finite() && (ui.dock_width - d.dock_width).abs() >= 0.5;
-    if resized || ui.dock_open != d.dock_open {
-        let d = &mut settings.0.desktop;
+    let saved = &settings.0.desktop;
+    let resized = width.is_finite() && width != saved.dock_width.round();
+    if resized || ui.dock_open != saved.dock_open {
+        let desktop = &mut settings.0.desktop;
         if resized {
-            d.dock_width = width;
+            desktop.dock_width = width;
         }
-        d.dock_open = ui.dock_open;
+        desktop.dock_open = ui.dock_open;
     }
 }
 
@@ -353,7 +354,14 @@ impl Plugin for PersistPlugin {
                     // multi-threaded executor could run the library first (§2.4 Threads).
                     .before(crate::library::LibraryCommands),
             )
-            .add_systems(Update, ui_scale_follows_settings)
+            // Before egui's pass begins, so the zoom applies from the first drawn frame
+            // and the dock's range is taken in the zoomed points (§1.7 Panels, Q-252).
+            .add_systems(
+                bevy::app::PreUpdate,
+                ui_scale_follows_settings
+                    .after(bevy_egui::EguiPreUpdateSet::InitContexts)
+                    .before(bevy_egui::EguiPreUpdateSet::BeginPass),
+            )
             .add_systems(
                 bevy::app::Startup,
                 (
@@ -1396,7 +1404,7 @@ mod tests {
     // §1.7 Panels (spec revision 24, #428): the saved width and collapsed state are the
     // dock's at startup, before its first draw.
     #[test]
-    fn the_saved_dock_layout_is_the_docks_at_startup() {
+    fn dock_from_settings_gives_the_dock_the_saved_layout() {
         let mut settings = Settings::default();
         settings.desktop.dock_width = 412.5;
         settings.desktop.dock_open = false;
@@ -1420,10 +1428,11 @@ mod tests {
     }
 
     // §1.7 Panels, §1.11, I-10, Q-207, Q-252 (#428): a resize goes into `[desktop]` in
-    // whole points, a sub-point change is no change, a collapse is one, and a change is
-    // written at once (the first save of the debounce).
+    // whole points, a change within the same whole point (a half point included) is no
+    // change, a collapse is one, and a change is written at once (the debounce's first
+    // save).
     #[test]
-    fn the_dock_layout_goes_into_the_settings_in_whole_points() {
+    fn dock_into_settings_saves_whole_points_and_the_collapse() {
         let dir = std::env::temp_dir().join(format!("ftgsxr-dock-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1464,6 +1473,12 @@ mod tests {
         // The same width, drawn again: no change.
         app.update();
         assert_eq!(changes(&app), 1);
+        // Exactly half a point off the saved 413, drawn frame after frame: no change.
+        app.world_mut().resource_mut::<UiState>().dock_width = 412.5;
+        app.update();
+        app.update();
+        assert_eq!(changes(&app), 1);
+        assert_eq!(desktop(&app).dock_width, 413.0);
         // A collapse.
         app.world_mut().resource_mut::<UiState>().dock_open = false;
         app.update();
