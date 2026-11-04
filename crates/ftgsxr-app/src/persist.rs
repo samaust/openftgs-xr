@@ -21,23 +21,25 @@ use bevy::log::warn;
 use bevy::time::{Real, Time};
 use bevy::transform::components::Transform;
 use ftgsxr_io::{
-    AudioSettings, CameraState, ClockState, Entry, IoError, LocomotionSettings, ModelRef,
-    PoseStore, SceneFile, SceneModel, Settings, SourceSpec, Url, classify_name, load_settings,
-    read_scene, save_settings, write_scene,
+    AudioSettings, CameraState, ClockState, IoError, LocomotionSettings, ManualLighting, ModelRef,
+    PoseStore, SceneFile, SceneModel, Settings, SourceSpec, Url, load_settings, read_scene,
+    save_settings, write_scene,
 };
 use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 
 use crate::audio::AudioState;
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{
-    EntryState, Library, LibraryCommand, LibraryEntry, LibraryFailure, LoadedModel, ShowOnUpload,
+    Library, LibraryCommand, LibraryFailure, LoadedModel, MissingModel, SceneLoad, ShowOnUpload,
+    list_missing,
 };
 use crate::manipulate::{Poses, now_rfc3339, pose_of, transform_of};
 use crate::platform::PlatformRes;
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
-    DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState, recent_scenes,
+    DockHooks, InstanceLighting, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState,
+    recent_scenes,
 };
 
 mod panels;
@@ -600,7 +602,8 @@ fn overlays_of(o: &ftgsxr_io::OverlaySettings) -> Overlays {
 /// order with its local pose (under `ContentGroup`), the clock, `SettingsRes.environment`,
 /// the rig's pose, the desktop camera's local pose under the rig with its field of view
 /// and mode, and the bookmarks set, in slot order (Q-206). Model and audio locations
-/// follow Q-3 against `AppPaths.models`. No anchor (M-5) and no per-instance lighting yet.
+/// follow Q-3 against `AppPaths.models`. Each instance's `lighting` is its Scene-tab
+/// manual values, null at the identity; no anchor (M-5).
 // Q-206, Q-3
 pub fn scene_from_world(world: &World) -> SceneFile {
     let models_dir = world
@@ -615,10 +618,11 @@ pub fn scene_from_world(world: &World) -> SceneFile {
         Option<&Visibility>,
         Option<&SplatMode>,
         Option<&ShowOnUpload>,
+        Option<&InstanceLighting>,
     )>() {
         let mut rows: Vec<_> = q.iter(world).collect();
         rows.sort_by_key(|r| r.0);
-        for (_, m, t, vis, mode, show) in rows {
+        for (_, m, t, vis, mode, show, light) in rows {
             let (kind, location) = ref_location(&m.source, &models_dir);
             let visible = match show {
                 Some(s) => s.0,
@@ -638,7 +642,9 @@ pub fn scene_from_world(world: &World) -> SceneFile {
                 mode: mode_name(mode),
                 time_offset_s: m.time.offset_s,
                 end_rule: m.time.end_rule,
-                lighting: None,
+                lighting: light
+                    .filter(|l| l.0 != ManualLighting::default())
+                    .map(|l| l.0.clone()),
                 audio: m.audio.as_ref().map(|a| ref_location(a, &models_dir).1),
             });
         }
@@ -688,13 +694,15 @@ pub fn scene_from_world(world: &World) -> SceneFile {
 
 /// Replaces the current scene with `scene` (§1.5 Scene files): each model whose source
 /// still offers it loads through the library (`LibraryCommand::LoadRef`), its pose,
-/// visibility, mode, offset, end rule and audio applied when the instance appears; a
+/// visibility, mode, offset, end rule, lighting and audio applied when the instance appears; a
 /// local file that no longer exists is listed in `library` as `EntryState::Missing` and
-/// its name returned (Q-54, E-SCENE-MISSING). The clock, `SettingsRes.environment`, the
-/// rig, the desktop camera and the bookmarks are set through `commands`; T and the range
-/// once the scene's instances have appeared (T_len is 0 before). The caller unloads the
-/// current instances and resolves relative locations first (`LoadScene`, Q-3).
-// Q-203
+/// its name returned (Q-54, E-SCENE-MISSING); a file read with another identity than the
+/// scene's is refused and its model listed as missing then (Q-245). The clock,
+/// `SettingsRes.environment`, the rig, the desktop camera and the bookmarks are set
+/// through `commands`; T and the range once the scene's instances have appeared (T_len
+/// is 0 before). The caller unloads the current instances and resolves relative
+/// locations first (`LoadScene`, Q-3).
+// Q-203, Q-245
 pub fn apply_scene(
     commands: &mut Commands,
     scene: &SceneFile,
@@ -708,53 +716,26 @@ pub fn apply_scene(
             missing.push(m.name.clone());
             continue;
         };
+        let model = MissingModel {
+            kind: m.source.kind.clone(),
+            location: m.source.location.clone(),
+            name: m.name.clone(),
+            audio: m.audio.clone(),
+        };
         if let ModelRef::File(p) = &r
             && !p.exists()
         {
             missing.push(m.name.clone());
             located.push(m.clone());
-            let source = library
-                .sources
-                .iter()
-                .position(|(s, _)| s.kind == "dir" && p.starts_with(&s.location))
-                .unwrap_or(0);
-            if library.sources.is_empty() {
-                continue;
-            }
-            let location = m.source.location.clone();
-            if library
-                .entries
-                .iter()
-                .any(|e| e.source == source && e.entry.location == location)
-            {
-                for e in &mut library.entries {
-                    if e.source == source && e.entry.location == location {
-                        e.state = EntryState::Missing;
-                    }
-                }
-                continue;
-            }
-            library.entries.push(LibraryEntry {
-                source,
-                entry: Entry {
-                    name: m.name.clone(),
-                    kind: classify_name(&location),
-                    location,
-                    size: None,
-                    mtime: None,
-                    sha256: None,
-                    thumbnail: None,
-                    audio: m.audio.clone(),
-                    scene: None,
-                },
-                info: None,
-                identity: Some(m.identity.clone()),
-                thumbnail: None,
-                state: EntryState::Missing,
-            });
+            list_missing(library, &model, &m.identity, true);
             continue;
         }
-        commands.write_message(LibraryCommand::LoadRef(r));
+        // Q-245: the file read must have the scene's identity, else it is missing too.
+        commands.write_message(SceneLoad {
+            reference: r,
+            identity: m.identity.clone(),
+            model,
+        });
         pending.push(m.clone());
     }
     let clock = scene.clock.clone();
@@ -820,7 +801,8 @@ fn apply_pending_instances(
     mut fresh: Query<(Entity, &mut LoadedModel, &mut Transform), Added<LoadedModel>>,
     mut commands: Commands,
 ) {
-    // A scene model whose load failed waits no more (Q-203, Q-173).
+    // A scene model whose load failed waits no more (Q-203, Q-173); one whose file was
+    // another model keeps its attributes for a later load of its identity (Q-245).
     for f in failures.read() {
         if let Some(r) = &f.reference
             && let Some(at) = pending
@@ -828,7 +810,10 @@ fn apply_pending_instances(
                 .iter()
                 .position(|p| model_ref(&p.source).as_ref() == Some(r))
         {
-            pending.models.remove(at);
+            let m = pending.models.remove(at);
+            if f.code == "E-SCENE-MISSING" {
+                pending.located.push(m);
+            }
         }
     }
     let display = &settings.0.display;
@@ -866,6 +851,10 @@ fn apply_pending_instances(
             });
         }
         let mut ec = commands.entity(e);
+        // Q-206: a null `lighting` leaves the identity.
+        if let Some(l) = &p.lighting {
+            ec.try_insert(InstanceLighting::bundle(l.clone()));
+        }
         ec.try_insert(SplatMode(mode_of(&p.mode, display)));
         ec.try_insert(SplatOverlays(overlays_of(&display.overlays)));
         if !p.visible {
