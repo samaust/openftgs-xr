@@ -66,48 +66,9 @@ fn i06_every_key_row_produces_its_intent() {
         (&[], KeyCode::KeyO, cam(CameraCommand::ToggleOrbit)),
         (&[], KeyCode::KeyF, cam(CameraCommand::Frame)),
         (&[], KeyCode::Home, cam(CameraCommand::ResetView)),
-        (
-            &[CTRL],
-            KeyCode::Digit1,
-            cam(CameraCommand::SaveBookmark(1)),
-        ),
-        (
-            &[CTRL],
-            KeyCode::Digit9,
-            cam(CameraCommand::SaveBookmark(9)),
-        ),
-        (
-            &[ALT],
-            KeyCode::Digit3,
-            cam(CameraCommand::RecallBookmark(3)),
-        ),
         (&[], KeyCode::KeyG, Intent::Gizmo(GizmoMode::Translate)),
         (&[], KeyCode::KeyR, Intent::Gizmo(GizmoMode::Rotate)),
         (&[], KeyCode::KeyT, Intent::Gizmo(GizmoMode::Scale)),
-        (
-            &[],
-            KeyCode::ArrowLeft,
-            Intent::Nudge {
-                instance: e,
-                delta: Vec3::new(-0.01, 0.0, 0.0),
-            },
-        ),
-        (
-            &[],
-            KeyCode::PageUp,
-            Intent::Nudge {
-                instance: e,
-                delta: Vec3::new(0.0, 0.01, 0.0),
-            },
-        ),
-        (
-            &[],
-            KeyCode::BracketLeft,
-            Intent::Turn {
-                instance: e,
-                yaw_deg: 5.0,
-            },
-        ),
         (&[CTRL], KeyCode::KeyF, inst(InstanceAction::Fit)),
         (&[CTRL], KeyCode::KeyP, inst(InstanceAction::SavePose)),
         (&[CTRL], KeyCode::Backspace, inst(InstanceAction::ResetPose)),
@@ -169,6 +130,9 @@ fn i06_every_key_row_produces_its_intent() {
                 colormap: Colormap::Dc,
             })),
         ),
+        // The rows of several keys (arrows, PageUp and PageDown, the brackets, the
+        // bookmarks) are pressed key by key in
+        // `i06_every_key_of_the_multi_key_rows_produces_its_intent`.
         // Esc last: it deselects.
         (&[], KeyCode::Escape, inst(InstanceAction::Deselect)),
     ];
@@ -189,6 +153,63 @@ fn i06_every_key_row_produces_its_intent() {
             .any(|i| matches!(i, Intent::Playback(PlaybackCommand::Seek(_)))),
         "{got:?}"
     );
+}
+
+// Q-198
+#[test]
+fn i06_every_key_of_the_multi_key_rows_produces_its_intent() {
+    // Appendix D.1's rows that list several keys, each key pressed on its own: the
+    // arrows (1 cm, 10 cm with Shift) and PageUp and PageDown in the stage's axes, `[`
+    // and `]` (5°), Ctrl+n and Alt+n for n = 1 … 9 (§1.7, Q-198).
+    let mut t = windowed("i06_multi_key_rows");
+    let e = load_p1(&mut t);
+    t.app.world_mut().entity_mut(e).insert(Selected);
+    t.frames(1);
+    take(&mut t);
+    let nudge = |delta| Intent::Nudge { instance: e, delta };
+    let turn = |yaw_deg| Intent::Turn {
+        instance: e,
+        yaw_deg,
+    };
+    let mut rows: Vec<(&[KeyCode], KeyCode, Intent)> = Vec::new();
+    let arrows = [
+        (KeyCode::ArrowLeft, Vec3::NEG_X),
+        (KeyCode::ArrowRight, Vec3::X),
+        (KeyCode::ArrowUp, Vec3::NEG_Z),
+        (KeyCode::ArrowDown, Vec3::Z),
+    ];
+    for (k, d) in arrows {
+        rows.push((&[], k, nudge(d * 0.01)));
+        // Shift: × 10 the 1 cm step (Q-197).
+        rows.push((&[SHIFT], k, nudge(d * (10.0 * 0.01))));
+    }
+    rows.push((&[], KeyCode::PageUp, nudge(Vec3::Y * 0.01)));
+    rows.push((&[], KeyCode::PageDown, nudge(Vec3::NEG_Y * 0.01)));
+    for (k, yaw_deg) in [(KeyCode::BracketLeft, 5.0), (KeyCode::BracketRight, -5.0)] {
+        rows.push((&[], k, turn(yaw_deg)));
+    }
+    let digits = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    for (n, k) in (1u8..=9).zip(digits) {
+        rows.push((&[CTRL], k, cam(CameraCommand::SaveBookmark(n))));
+        rows.push((&[ALT], k, cam(CameraCommand::RecallBookmark(n))));
+    }
+    for (mods, k, want) in rows {
+        let got = no_pointer(chord(&mut t, mods, k));
+        assert!(
+            has(&got, want),
+            "{mods:?} {k:?}: want {want:?}, got {got:?}"
+        );
+    }
 }
 
 #[test]
