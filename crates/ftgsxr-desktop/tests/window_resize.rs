@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A window resized by the window system (#409, §1.7 Window, §1.13 GPU validation, R-16,
-//! Q-244, `gpu` lane). When the X server resizes `play`'s window, its surface goes out of
+//! D-53, `gpu` lane). When the X server resizes `play`'s window, its surface goes out of
 //! date before the new size reaches Bevy's render world, and Bevy 0.19.1 reconfigured the
 //! surface at a size the window had left: `vkCreateSwapchainKHR` got an extent outside the
 //! surface's current one (`VUID-VkSwapchainCreateInfoKHR-pNext-07781`), once per resize. The
-//! vendored bevy_render now reconfigures it at the surface's current extent (Q-244).
+//! vendored bevy_render now reconfigures it at the surface's current extent (D-53).
 //!
 //! wgpu-hal's messenger callback drops that message by its id, so Q-105's in-process guard
 //! never sees it; only the layer's own log does. Each test therefore runs itself again as a
@@ -19,9 +19,9 @@
 //! an error.
 //!
 //! Resizes seconds apart, growing and shrinking, must leave no message. In a burst 20 to
-//! 150 ms apart, a resize can land inside wgpu's `configure`, between Bevy's query of the
-//! surface and wgpu-core's own; that race's `07781` is accepted (Q-244, owner answer on
-//! #409) and counted, and any other message fails the test.
+//! 150 ms apart, a resize can land between Bevy's query of the surface and wgpu-core's own
+//! inside wgpu's `configure`; that race's `07781` is accepted (D-53, owner answer on #409)
+//! and counted, and any other message fails the test.
 //!
 //! Prerequisites: an X11 display (`DISPLAY`; XWayland on a Wayland session) and a Vulkan
 //! GPU. The child runs on X11 only, where the surface reports a fixed current extent.
@@ -351,7 +351,7 @@ fn summary(text: &str) -> &str {
         .unwrap_or("")
 }
 
-/// #409 (§1.7 Window, §1.13, R-16, Q-244): a window that the window system resizes seconds
+/// #409 (§1.7 Window, §1.13, R-16, D-53): a window that the window system resizes seconds
 /// apart, growing and shrinking, leaves no validation message in the layer's own log, and
 /// each resize settles at the size asked for.
 #[test]
@@ -367,9 +367,9 @@ fn gpu_window_resized_seconds_apart_leaves_no_validation_message() {
     eprintln!("{}", summary(&text));
 }
 
-/// #409 (§1.7 Window, §1.13, R-16, Q-244): a window that the window system resizes in a
+/// #409 (§1.7 Window, §1.13, R-16, D-53): a window that the window system resizes in a
 /// burst 20 to 150 ms apart settles at the last size asked for, and the layer's own log
-/// holds no message but the resize race's `07781`, which Q-244 accepts.
+/// holds no message but the resize race's `07781`, which D-53 accepts.
 #[test]
 #[ignore = "gpu"]
 fn gpu_window_resized_in_a_burst_settles_with_no_message_but_the_resize_race() {
@@ -378,16 +378,16 @@ fn gpu_window_resized_in_a_burst_settles_with_no_message_but_the_resize_race() {
     }
     let (status, text, (active, messages)) =
         run_child("gpu_window_resized_in_a_burst_settles_with_no_message_but_the_resize_race");
-    // Q-244: a resize that lands inside `configure`, between Bevy's query of the surface
-    // and wgpu-core's, is accepted (owner answer, #409); counted, so that one per resize, the
-    // stale size Q-244 fixes, shows in the output.
+    // D-53: a resize that lands between Bevy's query of the surface and wgpu-core's own
+    // inside `configure` is accepted (owner answer, #409); counted, so that one per resize,
+    // the stale size D-53 fixes, shows in the output.
     let (race, others): (Vec<String>, Vec<String>) = messages
         .into_iter()
         .partition(|m| m.starts_with(EXTENT_OUTSIDE));
     let failed = failures(status, &text, active, &others);
     assert!(failed.is_empty(), "{failed}");
     eprintln!(
-        "{}; {} resize race message(s) over {} resizes (accepted, Q-244)",
+        "{}; {} resize race message(s) over {} resizes (accepted, D-53)",
         summary(&text),
         race.len(),
         BURST.len()

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// Tests that check the layer another way, as `<crate>/tests/<file>:<function>`: the
 /// binary's runs, R-15's, `bench`'s and `play`'s, read the layer's own log file (Q-105);
 /// so do the window resize tests, whose child is the test binary itself, since wgpu-hal
-/// drops the message they check for before the guard could see it (Q-244).
+/// drops the message they check for before the guard could see it (D-53).
 // Q-113
 const EXEMPT: &[&str] = &[
     "ftgsxr-desktop/tests/cli.rs:gpu_r15_render_writes_the_renders_file",

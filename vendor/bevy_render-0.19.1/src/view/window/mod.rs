@@ -247,7 +247,7 @@ pub fn prepare_windows(
     render_device: Res<RenderDevice>,
     sorted_cameras: Res<crate::camera::SortedCameras>,
     #[cfg(target_os = "linux")] render_instance: Res<RenderInstance>,
-    render_adapter: Res<RenderAdapter>, // openftgs-xr, Q-244
+    render_adapter: Res<RenderAdapter>, // openftgs-xr, D-53
 ) {
     for window in windows.windows.values_mut() {
         // Skip acquiring a swap-chain texture for windows that no camera
@@ -317,7 +317,7 @@ pub fn prepare_windows(
                 // The windowing system may have resized the surface before the window's new
                 // size was extracted. Where the surface reports a fixed extent, the swapchain
                 // must be created at that extent, so prefer it over the cached size.
-                // openftgs-xr, Q-244
+                // openftgs-xr, D-53
                 if let Some(extent) = surface_current_extent(surface, &render_adapter) {
                     surface_data.configuration.width = extent.width;
                     surface_data.configuration.height = extent.height;
@@ -470,7 +470,7 @@ pub fn create_surfaces(
             // The windowing system may have resized the surface again since this size was
             // extracted, as it does while the window is dragged to a new size, so prefer the
             // surface's current extent where it reports a fixed one.
-            // openftgs-xr, Q-244
+            // openftgs-xr, D-53
             if let Some(extent) = surface_current_extent(&data.surface, &render_adapter) {
                 data.configuration.width = extent.width;
                 data.configuration.height = extent.height;
@@ -528,7 +528,7 @@ fn present_mode(
     new_present_mode
 }
 
-// openftgs-xr change (Q-244), to bevy_render 0.19.1 (crates.io), file src/view/window/mod.rs,
+// openftgs-xr change (D-53), to bevy_render 0.19.1 (crates.io), file src/view/window/mod.rs,
 // MIT OR Apache-2.0: when `get_current_texture` found the surface `Outdated`,
 // `prepare_windows` reconfigured it with its cached configuration, whose size is still the
 // window's previous one when the windowing system resized the window before the new size was
