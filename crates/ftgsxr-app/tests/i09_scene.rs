@@ -692,6 +692,30 @@ fn i09_a_checkpoint_replaces_a_missing_model() {
     assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
 }
 
+// Q-260
+#[test]
+fn i09_a_checkpoints_manifest_replaces_a_missing_model() {
+    // Q-257, Q-260: a checkpoint picked as its `manifest.json` replaces the model as its
+    // directory does: the entry clears, the instance takes the scene's attributes and
+    // its source is the directory, which the scene then records (D-51).
+    let mut t = TestApp::new("i09_replace_manifest");
+    let old = p1_missing_with_attributes(&mut t, "manifest");
+    let dir = fixtures_dir().join("checkpoint/tiny");
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: old,
+        file: ModelRef::File(dir.join("manifest.json")),
+    });
+    wait_for(&mut t, 1);
+    assert_eq!(missing_entries(&t), 0);
+    let e = entity_named(&mut t, "moved");
+    let tf = t.app.world().get::<Transform>(e).unwrap();
+    assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
+    assert_eq!(
+        t.app.world().get::<LoadedModel>(e).unwrap().source,
+        ModelRef::File(dir)
+    );
+}
+
 // Q-257
 #[test]
 fn i09_a_ply_replaces_a_missing_model() {
