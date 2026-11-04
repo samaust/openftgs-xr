@@ -22,7 +22,7 @@ use ftgsxr_io::{IoError, ModelBytes, ModelRef, SoundSwitches, open_ref};
 use crate::intent::{Feature, Intent, VolumeChannel};
 use crate::library::LoadedModel;
 use crate::platform::PlatformRes;
-use crate::playback::Playback;
+use crate::playback::{Playback, Scrubbing};
 use crate::ui::{DockHooks, Tab, ToastRequest, UiCue};
 
 /// The volumes, the mute and the per-sound switches (§1.10). The volumes are gains in
@@ -412,6 +412,7 @@ impl Plugin for AudioPlugin {
             .add_message::<UiCue>()
             .add_message::<ToastRequest>()
             .init_resource::<AudioState>()
+            .init_resource::<Scrubbing>()
             .init_resource::<Slots>()
             .add_systems(Startup, start)
             .add_systems(
@@ -697,18 +698,21 @@ fn apply_gains(state: Res<AudioState>, slots: Res<Slots>, output: Res<AudioOutpu
 }
 
 /// §1.6 Audio, D-22: soundtrack time 0 is τ₀,m, so the position is (τ_m − τ₀,m)/r_m =
-/// T − o_m; a sink plays only while the clock plays at speed 1 with T − o_m within the
-/// soundtrack and the model's span, and is moved to the clock's position when it starts
-/// again, or when it drifts by more than `DRIFT_S` (a seek, a loop's wrap).
+/// T − o_m; a sink plays only while the clock plays at speed 1, no scrub is in progress
+/// and T − o_m lies within the soundtrack and the model's span, and is moved to the
+/// clock's position when it starts again (a scrub's end included), or when it drifts by
+/// more than `DRIFT_S` (a one-off seek, a loop's wrap).
+// Q-190, Q-245
 fn follow_clock(
     playback: Res<Playback>,
+    scrubbing: Res<Scrubbing>,
     state: Res<AudioState>,
     models: Query<&LoadedModel>,
     mut slots: ResMut<Slots>,
     output: Res<AudioOutputRes>,
 ) {
     let clock = &playback.clock;
-    let forward = clock.state() == PlayState::Playing && clock.speed() == 1.0;
+    let forward = clock.state() == PlayState::Playing && clock.speed() == 1.0 && !scrubbing.0;
     let t = clock.time();
     for (e, slot) in slots.0.iter_mut() {
         let Slot::Ready {
@@ -1043,6 +1047,75 @@ mod tests {
         assert_eq!(seen[0].instance, Some(e));
         assert!(seen[0].text.starts_with("E-AUDIO: "));
         assert!(out.sinks().is_empty());
+    }
+
+    /// P1 loaded with a soundtrack beside it on `out`'s stub; the instance's sink.
+    fn with_soundtrack(app: &mut App, out: &StubAudioOutput, name: &str) -> SinkId {
+        let dir = std::env::temp_dir().join(format!("ftgsxr-audio-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = ftgsxr_testkit::fixtures_dir().join("probes/P1.safetensors");
+        let bytes = std::fs::read(&path).unwrap();
+        let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        let info = ftgsxr_core::read_info(&bytes[8..8 + n], bytes.len() as u64).unwrap();
+        // The stub decodes any non-empty file.
+        let wav = dir.join("P1.wav");
+        std::fs::write(&wav, b"RIFF").unwrap();
+        app.world_mut().spawn(LoadedModel {
+            source: ModelRef::File(path),
+            identity: "0".repeat(64),
+            time: ftgsxr_core::ModelTime::from_span(&info.time),
+            info,
+            name: "P1".into(),
+            reduced: false,
+            audio: Some(ModelRef::File(wav)),
+            frame_step_s: 1.0 / 30.0,
+        });
+        for _ in 0..200 {
+            app.update();
+            if out.sinks().len() == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let sinks = out.sinks();
+        assert_eq!(sinks.len(), 1, "P1's soundtrack decodes");
+        *sinks.keys().next().unwrap()
+    }
+
+    // Q-190, Q-245: I-5's scrub clause (§1.6 Audio, D-22, #416). `Scrubbing` is
+    // crate-private, so the clause is pinned here; `tests/i05_audio.rs` has the rest.
+    #[test]
+    fn i05_audio_a_scrub_while_playing_at_speed_one_is_silent() {
+        const TOL: f64 = 1e-6;
+        let out = Arc::new(StubAudioOutput::new());
+        let mut app = app(out.clone());
+        let sink = with_soundtrack(&mut app, &out, "scrub");
+        {
+            let mut p = app.world_mut().resource_mut::<Playback>();
+            p.clock.seek(0.3);
+            p.clock.set_state(PlayState::Playing);
+        }
+        app.update();
+        let s = out.sinks()[&sink].clone();
+        assert!(s.playing, "plays at speed 1");
+        // A scrub: seeks over several frames while the clock plays at speed 1.
+        app.world_mut().resource_mut::<Scrubbing>().0 = true;
+        for t in [0.5, 0.7, 0.9, 1.1] {
+            app.world_mut().resource_mut::<Playback>().clock.seek(t);
+            app.update();
+            assert!(
+                !out.sinks()[&sink].playing,
+                "silent while scrubbing, T = {t}"
+            );
+        }
+        // The scrub ends: the sink plays from the clock's position.
+        app.world_mut().resource_mut::<Scrubbing>().0 = false;
+        app.update();
+        let s = out.sinks()[&sink].clone();
+        let t = app.world().resource::<Playback>().clock.time();
+        assert!(s.playing, "plays again after the scrub");
+        assert!((s.position - t).abs() < TOL, "{} vs T {t}", s.position);
     }
 
     #[test]
