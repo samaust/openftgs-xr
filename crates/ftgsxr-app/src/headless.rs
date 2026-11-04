@@ -9,8 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ftgsxr_core::{
-    CoreError, InfoReply, Model, ModelInfo, ModelKind, Pose, RenderConventions, info_json,
-    open_model, read_request, sha256, write_exchange, write_renders,
+    CoreError, InfoReply, Model, ModelInfo, ModelKind, Pose, RenderConventions, checkpoint_dir,
+    info_json, open_model, read_request, sha256, write_exchange, write_renders,
 };
 use ftgsxr_render::{HeadlessRenderer, QualityTier, RenderError};
 
@@ -294,19 +294,30 @@ fn core_input(path: &Path, e: &CoreError) -> HeadlessError {
     ))
 }
 
-/// Reads and validates the model at `path` (§1.2): `open_model`, its errors as `core_input`.
+/// The model a command's `MODEL` path names (§1.7): a checkpoint's `manifest.json` names
+/// its directory (Q-260); any other path names itself.
+// Q-260
+fn model_path(path: &Path) -> PathBuf {
+    checkpoint_dir(path).unwrap_or_else(|| path.to_path_buf())
+}
+
+/// Reads and validates the model at `path` (§1.2): `open_model`, its errors as `core_input`
+/// naming the model (`model_path`).
 fn load(path: &Path) -> Result<Model, HeadlessError> {
-    open_model(path).map_err(|e| core_input(path, &e))
+    let path = model_path(path);
+    open_model(&path).map_err(|e| core_input(&path, &e))
 }
 
 /// The size of the file a model's identity hashes (D-40): `params.safetensors` for a
-/// checkpoint directory, the file itself otherwise (Q-76).
-// Q-76
+/// checkpoint, given as its directory or its `manifest.json` (Q-260), the file itself
+/// otherwise (Q-76).
+// Q-76, Q-260
 fn identity_file(path: &Path) -> PathBuf {
+    let path = model_path(path);
     if path.is_dir() {
         path.join("params.safetensors")
     } else {
-        path.to_path_buf()
+        path
     }
 }
 

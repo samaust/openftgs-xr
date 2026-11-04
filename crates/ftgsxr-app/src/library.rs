@@ -22,7 +22,7 @@ use bevy::log::warn;
 use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
 use bevy::transform::components::Transform;
 use bevy::window::FileDragAndDrop;
-use ftgsxr_core::{ModelInfo, ModelKind, ModelTime, memory_estimate};
+use ftgsxr_core::{ModelInfo, ModelKind, ModelTime, checkpoint_dir, memory_estimate};
 use ftgsxr_io::{
     DocumentProvider, Entry, EntryKind, HttpClient, IoError, ModelBytes, ModelRef, ModelSource,
     Progress, Revalidation, SourceSpec, TlsRoots, Url, classify_name, open_ref, open_source,
@@ -849,6 +849,12 @@ fn run_commands(
                     .iter()
                     .position(|(x, _)| *x == r)
                     .map(|i| pending.locating.remove(i).1);
+                // Q-260: a checkpoint's `manifest.json` is the checkpoint directory, named
+                // and recorded as a listed checkpoint is (D-51).
+                let r = match &r {
+                    ModelRef::File(path) => checkpoint_dir(path).map_or(r, ModelRef::File),
+                    _ => r,
+                };
                 let task = fetch_ref(r.clone(), client.0.clone(), provider.clone(), true);
                 pending.fetches.push(Fetch {
                     target: None,

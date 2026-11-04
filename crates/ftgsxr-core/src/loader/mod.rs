@@ -15,7 +15,7 @@ mod container;
 mod exchange;
 mod ply;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -52,14 +52,35 @@ pub fn hex(identity: &[u8; 32]) -> String {
     out
 }
 
+/// The checkpoint directory `path` names (§1.2, D-51; Q-260): the parent of a path whose
+/// file name is `manifest.json`, by name alone, nothing read; `None` for any other path.
+/// A bare `manifest.json` names the current directory by its absolute path, so the
+/// checkpoint keeps a name (its stem) and a location a scene file can record; `.` when
+/// the current directory cannot be read.
+// Q-260
+pub fn checkpoint_dir(path: &Path) -> Option<PathBuf> {
+    if path.file_name()? != checkpoint::MANIFEST {
+        return None;
+    }
+    let parent = path.parent()?;
+    if parent.as_os_str().is_empty() {
+        return Some(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    }
+    Some(parent.to_path_buf())
+}
+
 /// Opens a model by its kind (§1.2): a directory holding `manifest.json` is a checkpoint
-/// (`read_checkpoint`), a file with a `.ply` suffix (any case) a PLY snapshot (`read_ply`),
-/// any other file an exchange model (`read_exchange`). The file is read into memory, not
+/// (`read_checkpoint`), as is the path of a checkpoint's `manifest.json` (`checkpoint_dir`,
+/// Q-260), a file with a `.ply` suffix (any case) a PLY snapshot (`read_ply`), any other
+/// file an exchange model (`read_exchange`). The file is read into memory, not
 /// memory-mapped: `ftgsxr-core` forbids `unsafe` (§2.6) and mapping a file is `unsafe`
 /// (D-50). A directory without `manifest.json` is E-FILE-FORMAT; a file that cannot be
 /// read is E-IO, its message naming the path.
-// D-50
+// D-50, Q-260
 pub fn open_model(path: &Path) -> Result<Model, CoreError> {
+    if let Some(dir) = checkpoint_dir(path) {
+        return read_checkpoint(&dir);
+    }
     if path.is_dir() {
         if !path.join(checkpoint::MANIFEST).is_file() {
             return Err(CoreError::Format(format!(

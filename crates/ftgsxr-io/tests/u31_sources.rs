@@ -264,6 +264,21 @@ fn u31_open_ref_of_a_checkpoint_directory_returns_it() {
     assert_eq!(read_fetched(&bytes), fixture_checkpoint());
 }
 
+// Q-260
+#[test]
+fn u31_open_ref_of_a_checkpoints_manifest_returns_its_directory() {
+    // Q-260: a `File` of a checkpoint's `manifest.json` names the checkpoint directory
+    // that holds it, loaded by path as the directory is (D-51).
+    let dir =
+        local_models("u31_open_ref_of_a_checkpoints_manifest_returns_its_directory").join("tiny");
+    let bytes = open_ref(&ModelRef::File(dir.join("manifest.json")), None, None).unwrap();
+    assert_eq!(bytes, ModelBytes::Checkpoint(dir.clone()));
+    assert_eq!(read_fetched(&bytes), fixture_checkpoint());
+    // Only the manifest names the directory: its parameters file is read as a file.
+    let params = open_ref(&ModelRef::File(dir.join("params.safetensors")), None, None).unwrap();
+    assert!(matches!(params, ModelBytes::Owned(_)));
+}
+
 #[test]
 fn u31_local_dir_fetch_of_a_checkpoint_returns_its_directory() {
     // D-51: a local checkpoint loads from its directory; one progress report of the two

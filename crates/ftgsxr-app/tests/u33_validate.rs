@@ -156,3 +156,41 @@ fn u33_validate_refuses_an_invalid_file_with_exit_2() {
     let e = cmd_validate(&[dir.join("missing.safetensors")]).unwrap_err();
     assert_eq!((e.code(), exit_code(&e)), ("E-IO", 2));
 }
+
+// Q-260
+#[test]
+fn u33_validate_takes_a_checkpoints_manifest_path() {
+    // Q-260: a checkpoint's `manifest.json` names the checkpoint, so `validate` of it
+    // gives the directory's information, the size being `params.safetensors`' (Q-76).
+    let dir = fixture("checkpoint/tiny");
+    let by_manifest = cmd_validate(&[dir.join("manifest.json")]).expect("the manifest path");
+    assert_eq!(
+        by_manifest,
+        cmd_validate(std::slice::from_ref(&dir)).unwrap()
+    );
+    assert_eq!(
+        by_manifest[0].file_bytes,
+        fs::metadata(dir.join("params.safetensors")).unwrap().len()
+    );
+    // A `manifest.json` of another format is E-FILE-FORMAT, exit 2, as its directory.
+    let scratch = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "other-format",
+    );
+    let manifest = scratch.join("manifest.json");
+    fs::write(&manifest, br#"{"format": "ftgs-scene", "version": 1}"#).unwrap();
+    let e = cmd_validate(&[manifest]).unwrap_err();
+    assert_eq!((e.code(), exit_code(&e)), ("E-FILE-FORMAT", 2));
+    // The text names the checkpoint, its directory, not the manifest file (Q-260).
+    assert!(
+        e.user_text().contains("other-format") && !e.user_text().contains("manifest.json"),
+        "{}",
+        e.user_text()
+    );
+    assert_eq!(
+        e.code(),
+        cmd_validate(&[scratch]).unwrap_err().code(),
+        "the manifest path fails as its directory does"
+    );
+}

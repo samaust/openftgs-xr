@@ -66,3 +66,25 @@ fn i20_a_dropped_non_model_reports_e_file_format() {
     let mut q = t.app.world_mut().query::<&LoadedModel>();
     assert_eq!(q.iter(t.app.world()).count(), 0);
 }
+
+// Q-260
+#[test]
+fn i20_a_dropped_checkpoint_manifest_loads_the_checkpoint() {
+    // Q-260: a checkpoint's `manifest.json` dropped on the window loads the checkpoint,
+    // named after its directory, its source the directory (D-51).
+    let mut t = TestApp::new("i20-manifest");
+    let dir = fixtures_dir().join("checkpoint/tiny");
+    drop_file(&mut t, dir.join("manifest.json"));
+    let ok = t.until(600, |app| {
+        app.world_mut()
+            .query::<&LoadedModel>()
+            .iter(app.world())
+            .count()
+            == 1
+    });
+    assert!(ok, "the dropped manifest loads its checkpoint");
+    let mut q = t.app.world_mut().query::<&LoadedModel>();
+    let m = q.single(t.app.world()).unwrap();
+    assert_eq!(m.name, "tiny");
+    assert_eq!(m.source, ModelRef::File(dir));
+}
