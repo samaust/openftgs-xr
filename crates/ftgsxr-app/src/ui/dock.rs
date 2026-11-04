@@ -803,10 +803,7 @@ fn request_replay(
         let governor = world
             .get_resource::<ftgsxr_render::SplatTierState>()
             .map(|t| t.sh_cap);
-        // Q-241: its loaded degree is taken as the file's.
-        let loaded = target
-            .and_then(|e| world.get::<LoadedModel>(e))
-            .map(|m| m.info.sh_degree);
+        let loaded = replay_loaded_degree(world, target);
         for line in replay_lines(&r.request, governor, loaded, passthrough) {
             ui.label(line);
         }
@@ -844,11 +841,19 @@ fn replay_target(world: &mut World) -> Option<Entity> {
     })
 }
 
+/// The degree the replayed instance was last uploaded at (`SplatEvent::Uploaded`'s
+/// `sh_degree`), `None` with no instance or before its first upload (Q-241).
+// Q-241
+fn replay_loaded_degree(world: &World, target: Option<Entity>) -> Option<u8> {
+    let degrees = world.get_resource::<super::UploadDegrees>()?;
+    degrees.0.get(&target?).copied()
+}
+
 /// The replay row's lines on what the open request changes in the view (Q-233, Q-234):
 /// its background, whether a passthrough camera leaves it out, and, when the request
 /// names a degree above the governor's cap, the degree the replayed instance is drawn
-/// at, min(its loaded degree, the cap, the request's degree). `loaded` is that
-/// instance's `LoadedModel.info.sh_degree` (Q-241), `None` with no instance loaded.
+/// at, min(its loaded degree, the cap, the request's degree). `loaded` is the degree
+/// that instance was uploaded at (Q-241), `None` with no instance uploaded.
 // Q-233, Q-234, Q-241
 fn replay_lines(
     request: &ftgsxr_core::RenderRequest,
@@ -1062,7 +1067,10 @@ fn scene_files(world: &World) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{replay_lines, source_from_input};
+    use super::{replay_lines, replay_loaded_degree, source_from_input};
+    use crate::SplatEvent;
+    use crate::ui::{ToastRequest, UploadBytes, UploadDegrees, splat_toasts};
+    use bevy::app::App;
     use ftgsxr_core::RenderRequest;
 
     fn request(sh_degree: Option<u8>) -> RenderRequest {
@@ -1111,6 +1119,48 @@ mod tests {
             sh_line(&replay_lines(&request(Some(3)), Some(2), None, false)),
             None
         );
+    }
+
+    // Q-241 (#403): the row's loaded degree is the one the instance was uploaded at,
+    // `SplatEvent::Uploaded`'s `sh_degree` (§2, revision 17), not its file's: a degree-3
+    // model uploaded under a governor's cap of 1, with the cap now 2 and a request of
+    // degree 3, is drawn at 1 (Q-241's detecting test); a later upload (a reload, Q-238)
+    // replaces it, and before any upload the row has no degree.
+    #[test]
+    fn the_sh_line_takes_the_uploaded_degree() {
+        let mut app = App::new();
+        app.add_message::<ToastRequest>()
+            .init_resource::<UploadBytes>()
+            .init_resource::<UploadDegrees>()
+            .add_observer(splat_toasts);
+        let e = app.world_mut().spawn_empty().id();
+        assert_eq!(
+            replay_loaded_degree(app.world(), Some(e)),
+            None,
+            "no upload yet"
+        );
+        app.world_mut().trigger(SplatEvent::Uploaded {
+            entity: e,
+            bytes: 0,
+            sh_degree: 1,
+        });
+        let loaded = replay_loaded_degree(app.world(), Some(e));
+        assert_eq!(loaded, Some(1));
+        assert_eq!(
+            sh_line(&replay_lines(&request(Some(3)), Some(2), loaded, false)).map(String::as_str),
+            Some("SH degree 1 drawn (request 3, governor cap 2)")
+        );
+        app.world_mut().trigger(SplatEvent::Uploaded {
+            entity: e,
+            bytes: 0,
+            sh_degree: 2,
+        });
+        assert_eq!(
+            replay_loaded_degree(app.world(), Some(e)),
+            Some(2),
+            "a reload's upload"
+        );
+        assert_eq!(replay_loaded_degree(app.world(), None), None, "no instance");
     }
 
     // Q-234 (#388): the row names the request's background, and says it is not applied
