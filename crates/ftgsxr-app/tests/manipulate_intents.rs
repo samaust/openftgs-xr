@@ -135,6 +135,34 @@ fn hover_select_and_deselect() {
     assert!(t.app.world().get::<Selected>(e).is_none());
 }
 
+/// `Hovered` is recomputed each frame from that frame's `Pointer` intents (Q-263, which
+/// rewords Q-182): a hand whose ray hits the instance hovers it, and in a frame without
+/// that hand's `Pointer` (its ray on a panel, or no ray) the hover goes; another hand's
+/// ray that frame keeps its own hover.
+// Q-263, Q-182
+#[test]
+fn a_hand_s_hover_clears_in_a_frame_without_its_pointer() {
+    let mut t = TestApp::new("manip_hover_frame");
+    let e = loaded(&mut t);
+    send(&mut t, &[at_it(Hand::Right)]);
+    assert_eq!(
+        t.app.world().get::<Hovered>(e).map(|h| h.hand),
+        Some(Hand::Right)
+    );
+    send(&mut t, &[]);
+    assert!(
+        t.app.world().get::<Hovered>(e).is_none(),
+        "no Pointer, no hover"
+    );
+    // The left hand's ray alone: the hover is the left's, the right staying cleared.
+    send(&mut t, &[at_it(Hand::Right)]);
+    send(&mut t, &[at_it(Hand::Left)]);
+    assert_eq!(
+        t.app.world().get::<Hovered>(e).map(|h| h.hand),
+        Some(Hand::Left)
+    );
+}
+
 #[test]
 fn one_and_two_hand_grabs() {
     let mut t = TestApp::new("manip_grab");
