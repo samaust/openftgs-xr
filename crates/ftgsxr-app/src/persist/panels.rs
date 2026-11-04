@@ -145,6 +145,40 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
     });
 }
 
+/// E12's snap angles (§1.11 `[locomotion] snap_deg`).
+const SNAP_DEGS: [f32; 3] = [30.0, 45.0, 90.0];
+
+/// The main panel's Comfort tab (§1.8 Comfort and accessibility, User interface): the
+/// turn mode and snap angle, the speed, the vignette, teleport, the height offset,
+/// reduced motion, left-handed mode, the UI scale and high contrast, each editing
+/// `SettingsRes` (Q-207, Q-218, Q-278); sliders and buttons, which a ray can drag and
+/// press, rather than drag values.
+// Q-207, Q-218, Q-278, Q-T456.5
+pub(crate) fn comfort_section(world: &mut World, ui: &mut egui::Ui) {
+    edit(world, ui, |s, ui| {
+        let l = &mut s.locomotion;
+        ui.horizontal(|ui| {
+            ui.label("turn");
+            ui.selectable_value(&mut l.snap_turn, true, "snap");
+            ui.selectable_value(&mut l.snap_turn, false, "smooth");
+        });
+        ui.horizontal(|ui| {
+            ui.label("snap angle");
+            for d in SNAP_DEGS {
+                ui.selectable_value(&mut l.snap_deg, d, format!("{d}°"));
+            }
+        });
+        ui.add(egui::Slider::new(&mut l.speed_mps, 1.0..=4.0).text("speed (m/s)"));
+        ui.checkbox(&mut l.vignette, "vignette");
+        ui.checkbox(&mut l.teleport, "teleport");
+        ui.add(egui::Slider::new(&mut l.height_offset_m, -0.5..=0.5).text("height offset (m)"));
+        ui.checkbox(&mut l.reduced_motion, "reduced motion");
+        ui.checkbox(&mut l.left_handed, "left-handed");
+        ui.add(egui::Slider::new(&mut s.general.ui_scale, 0.8..=1.5).text("UI scale"));
+        ui.checkbox(&mut s.display.high_contrast, "high contrast");
+    });
+}
+
 fn loop_name(m: LoopMode) -> &'static str {
     match m {
         LoopMode::Loop => "loop",
