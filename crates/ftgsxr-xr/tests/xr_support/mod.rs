@@ -24,6 +24,7 @@ use bevy::asset::AssetPlugin;
 use bevy::camera::CameraPlugin;
 use bevy::core_pipeline::CorePipelinePlugin;
 use bevy::image::ImagePlugin;
+use bevy::input::InputPlugin;
 use bevy::mesh::MeshPlugin;
 use bevy::prelude::{MinimalPlugins, PluginGroup, Resource};
 use bevy::render::RenderPlugin;
@@ -31,6 +32,10 @@ use bevy::render::error_handler::{RenderErrorHandler, RenderErrorPolicy};
 use bevy::render::pipelined_rendering::PipelinedRenderingPlugin;
 use bevy::transform::TransformPlugin;
 use bevy::window::{ExitCondition, WindowPlugin};
+use ftgsxr_app::{
+    AppPaths, AppPlugin, AudioOutputRes, CameraFrames, DocumentProvider, ModelRef, Permission,
+    PermissionHandle, PickHandle, PickKind, Platform, StubAudioOutput,
+};
 use ftgsxr_render::{QualityTier, SplatPlugin};
 use ftgsxr_xr::{XrPlugin, add_xr};
 use tracing::field::{Field, Visit};
@@ -188,7 +193,71 @@ pub struct RenderErrored;
 pub fn xr_app(xr: XrPlugin, setup: impl FnOnce(&mut App)) -> App {
     let mut app = App::new();
     setup(&mut app);
-    let group = MinimalPlugins
+    app.add_plugins(add_xr(xr_group(), xr))
+        .add_plugins(SplatPlugin {
+            tier: QualityTier::conformance(),
+        });
+    finish(app)
+}
+
+/// The player on the headset's composition (#461): as [`xr_app`], with `AppPlugin` (which
+/// adds `SplatPlugin` itself) over a stub `Platform` whose directories are under `root`,
+/// the stub audio output and Bevy's input plugin, as the app's own tests build it.
+pub fn xr_player_app(xr: XrPlugin, root: &std::path::Path) -> App {
+    let mut app = App::new();
+    app.insert_resource(AudioOutputRes(std::sync::Arc::new(StubAudioOutput::new())));
+    app.add_plugins(add_xr(xr_group().add(InputPlugin), xr))
+        .add_plugins(AppPlugin {
+            platform: std::sync::Arc::new(StubPlatform(paths_under(root))),
+            tier: QualityTier::conformance(),
+            initial: Vec::new(),
+            scene: None,
+        });
+    finish(app)
+}
+
+/// The player's directories under `root` (§1.11's layout).
+fn paths_under(root: &std::path::Path) -> AppPaths {
+    AppPaths {
+        config: root.join("config"),
+        cache: root.join("cache"),
+        models: root.join("models"),
+        scenes: root.join("config/scenes"),
+        screenshots: root.join("pictures"),
+        logs: root.join("cache/logs"),
+    }
+}
+
+/// A `Platform` whose picks are empty, permissions granted, no documents or camera.
+struct StubPlatform(AppPaths);
+
+impl Platform for StubPlatform {
+    fn paths(&self) -> &AppPaths {
+        &self.0
+    }
+    fn pick(&self, _: PickKind) -> PickHandle {
+        PickHandle(0)
+    }
+    fn poll_pick(&self, _: PickHandle) -> std::task::Poll<Result<Vec<ModelRef>, String>> {
+        std::task::Poll::Ready(Ok(Vec::new()))
+    }
+    fn request_permission(&self, _: Permission) -> PermissionHandle {
+        PermissionHandle(0)
+    }
+    fn poll_permission(&self, _: PermissionHandle) -> std::task::Poll<bool> {
+        std::task::Poll::Ready(true)
+    }
+    fn document_provider(&self) -> Option<std::sync::Arc<dyn DocumentProvider>> {
+        None
+    }
+    fn camera_frames(&self) -> Option<std::sync::Arc<dyn CameraFrames>> {
+        None
+    }
+}
+
+/// The minimal plugin group without winit or Bevy's log plugin.
+fn xr_group() -> bevy::app::PluginGroupBuilder {
+    MinimalPlugins
         .build()
         .add(TransformPlugin)
         .add(AssetPlugin::default())
@@ -203,16 +272,16 @@ pub fn xr_app(xr: XrPlugin, setup: impl FnOnce(&mut App)) -> App {
         .add(PipelinedRenderingPlugin)
         .add(MeshPlugin)
         .add(CameraPlugin)
-        .add(CorePipelinePlugin);
-    app.add_plugins(add_xr(group, xr))
-        .add_plugins(SplatPlugin {
-            tier: QualityTier::conformance(),
-        })
-        .insert_resource(RenderErrorHandler(|error, main_world, _| {
-            tracing::error!("render error: {:?}: {}", error.ty, error.description);
-            main_world.insert_resource(RenderErrored);
-            RenderErrorPolicy::StopRendering
-        }));
+        .add(CorePipelinePlugin)
+}
+
+/// Inserts the render error handler, finishes and cleans the app up.
+fn finish(mut app: App) -> App {
+    app.insert_resource(RenderErrorHandler(|error, main_world, _| {
+        tracing::error!("render error: {:?}: {}", error.ty, error.description);
+        main_world.insert_resource(RenderErrored);
+        RenderErrorPolicy::StopRendering
+    }));
     while app.plugins_state() == PluginsState::Adding {
         bevy::tasks::tick_global_task_pools_on_main_thread();
     }

@@ -18,3 +18,4 @@ mod i17_reference_spaces;
 mod u34_xr_error_catalog;
 mod xr_controllers;
 mod xr_display;
+mod xr_rig_binding;
