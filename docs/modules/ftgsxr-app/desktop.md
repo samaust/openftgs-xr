@@ -10,7 +10,7 @@ How `ftgsxr-desktop`'s `play` command and `LinuxPlatform` (§1.7 Command line, �
 2. **Settings and log.** The settings file is read once, before the log; the level and the tier come from it unless `--log-level` or `--tier` override them for the session, unsaved. The log is installed, the file's warnings logged, and `SettingsPath` and `SettingsRes` are inserted by the binary, so `AppPlugin` keeps them (Q-170, Q-163). A log that cannot be installed is a warning, and the player runs on.
 3. **The `App`.** `DefaultPlugins` with the window, `AppPlugin` with the tier, the initial models and the scene, and with `--xr` the XR session through `add_xr` (Q-120, Q-121). With `--xr` and no OpenXR runtime, `play` prints `ftgsxr: E-XR-RUNTIME: <user text>` and exits 2 before running, which `ftgsxr_xr::runtime_unavailable` tells it (Q-162, Q-220); a runtime whose session fails later leaves the desktop running with a toast.
 
-**The window's first frames.** While Bevy's pipelines compile, it presents the window's surface texture with nothing drawn to it. The vendored wgpu-core clears and submits such a texture before presenting it, so those frames leave the validation layer nothing to report (§1.13, R-16; Q-243, `ftgsxr-xr/session.md`), which `present_undrawn`'s `gpu_` test pins without Bevy.
+**The window's first frames.** While Bevy's pipelines compile, it presents the window's surface texture with nothing drawn to it. The vendored wgpu-core clears and submits such a texture before presenting it, so those frames leave the validation layer nothing to report (§1.13, R-16; D-52, `ftgsxr-xr/session.md`), which `present_undrawn`'s `gpu_` test pins without Bevy.
 
 ## `LinuxPlatform`
 
@@ -26,4 +26,4 @@ The platform port's Linux adapter: `LinuxPlatform::new` takes the XDG locations 
 
 ## Q-n rows relied on
 
-`play` and `LinuxPlatform`: Q-154, Q-157, Q-160, Q-162, Q-163, Q-168 (the re-exported `ModelRef`, `Url` and `DocumentProvider`), Q-169, Q-170, Q-220, Q-243; with Q-120, Q-121 and Q-14. The log: Q-151, Q-167. `desktop_input`: Q-152, Q-180, Q-196, Q-197, Q-198, Q-199; with Q-50.
+`play` and `LinuxPlatform`: Q-154, Q-157, Q-160, Q-162, Q-163, Q-168 (the re-exported `ModelRef`, `Url` and `DocumentProvider`), Q-169, Q-170, Q-220, D-52; with Q-120, Q-121 and Q-14. The log: Q-151, Q-167. `desktop_input`: Q-152, Q-180, Q-196, Q-197, Q-198, Q-199; with Q-50.
