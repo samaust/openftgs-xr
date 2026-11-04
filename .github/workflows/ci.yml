@@ -90,8 +90,11 @@ jobs:
           df -h "$GITHUB_WORKSPACE"
           du -sh target || true
 
+      # U-35's skeleton test (§2.7), through the workspace and the settings of the `cpu
+      # lane` step, so that it reuses that step's build: `-p ftgsxr-core` unifies features
+      # differently and built a second set of dependencies (#413).
       - name: skeleton test
-        run: cargo --config "$CARGO_DEPS_OPT_LEVEL" test -p ftgsxr-core skeleton
+        run: cargo --config "$CARGO_DEPS_OPT_LEVEL" test --workspace skeleton
 
   # The Quest build (§2.7): `cargo ndk` with the Android NDK, without Gradle, to catch
   # compile breaks of `ftgsxr-quest` (#224). NDK 25.1.8937393 (§2.5), installed with the
