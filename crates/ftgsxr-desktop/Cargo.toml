@@ -22,7 +22,7 @@ path = "src/main.rs"
 
 # M-2 (#117): the headless commands that need no GPU. clap's builder API, so no derive
 # macro is needed. M-4 (#277): `play` takes bevy for `DefaultPlugins` and the window
-# (Q-154: winit with X11 and Wayland), rfd's dialogs with its defaults (Q-160: the XDG
+# (§2.1: winit with X11 and Wayland), rfd's dialogs with its defaults (Q-160: the XDG
 # portal) and `ftgsxr-xr` under the feature `xr`, on by default (§2.1).
 [features]
 default = ["xr"]
@@ -40,7 +40,7 @@ bevy = { workspace = true, features = [
     "x11",
     "wayland",
     "bevy_gizmos_render",
-] } # Q-154; #289: `bevy_gizmos_render` draws manipulate's gizmo, the boxes and the frustums
+] } # §2.1; #289: `bevy_gizmos_render` draws manipulate's gizmo, the boxes and the frustums
 clap.workspace = true
 ftgsxr-app.workspace = true
 ftgsxr-xr = { workspace = true, optional = true }

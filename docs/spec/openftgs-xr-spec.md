@@ -558,9 +558,9 @@ The workspace is one Cargo workspace with one `[workspace.dependencies]` table, 
 | Foundation | `ftgsxr-core` | lib, no engine dependency | safetensors, bytemuck, half, glam, serde, serde\_json, sha2, thiserror, rayon, tracing | the model and its loaders (§1.2), E1–E5 and E8–E11 on the CPU, the temporal index, the clock, the GPU layout, the openftgs request and renders formats |
 | Foundation | `ftgsxr-io` | lib, no engine dependency | `ftgsxr-core`, toml, ureq, rustls, url, directories, serde\_json, sha2, thiserror, tracing | paths, settings, scene and pose files, listings, HTTP, model sources (§1.5, §1.11) |
 | Engine | `ftgsxr-render` | lib | the two above, bevy (render features) | the wgpu render layer (shaders, passes, the headless renderer) and its Bevy plugin adapter (§1.4) |
-| Application | `ftgsxr-app` | lib | the three above, bevy, bevy\_egui, bevy\_kira\_audio, image | everything both builds share: intents, the platform port, library, playback, manipulation, locomotion, UI, audio, capture, persistence, the headless commands, desktop input (§1.5–§1.7, §1.10–§1.13) |
+| Application | `ftgsxr-app` | lib | the three above, bevy, bevy\_egui, bevy\_kira\_audio, kira, image, tracing-subscriber | everything both builds share: intents, the platform port, library, playback, manipulation, locomotion, UI, audio, capture, persistence, the headless commands, desktop input (§1.5–§1.7, §1.10–§1.13) |
 | XR | `ftgsxr-xr` | lib | the four above, bevy (render and log features), bevy\_mod\_openxr, bevy\_mod\_xr, openxr | the OpenXR session, tracking, XR intents, passthrough, depth, light, anchors, the panel (§1.8, §1.9) |
-| Platform | `ftgsxr-desktop` | bin `ftgsxr` | `ftgsxr-app`, `ftgsxr-xr` (feature `xr`, on by default), clap, rfd | the Linux player and the command line (§1.7) |
+| Platform | `ftgsxr-desktop` | bin `ftgsxr` | `ftgsxr-app`, `ftgsxr-xr` (feature `xr`, on by default), bevy (window, winit with X11 and Wayland, render and gizmo features), clap, rfd | the Linux player and the command line (§1.7) |
 | Platform | `ftgsxr-quest` | cdylib `libftgsxr_quest.so` | `ftgsxr-app`, `ftgsxr-xr`, bevy, bevy\_mod\_xr (Android only), android-activity, jni, ndk-context, android\_logger, tracing (Android only, with its `log` feature, so Bevy's events reach android\_logger) | the Android entry point and the JNI adapter of the shim (§2.5) |
 | Dev | `ftgsxr-testkit` | lib, dev-dependency | `ftgsxr-core`, `ftgsxr-render`, image, sha2, serde\_json, bytemuck, tiny\_http | fixtures, checksums, image metrics (E15), a wgpu test context, synthetic tiny models (§3) |
 | Dev | `tools/fixtures/` | Python | openftgs (as a program) | writes the probe models, requests and reference renders of §3.2 |
@@ -1241,7 +1241,7 @@ Every dependency is under a license compatible with an Apache-2.0 release; none 
 | image | 0.25 | PNG screenshots and thumbnails | app | MIT OR Apache-2.0 | knowledge |
 | clap | 4 | the command line | desktop | MIT OR Apache-2.0 | knowledge |
 | rfd | 0.17 | file dialogs (XDG portal, GTK fallback) | desktop | MIT | verified |
-| tracing, tracing-subscriber | 0.1, 0.3 | logging | core | MIT | verified |
+| tracing, tracing-subscriber | 0.1, 0.3 | logging | core, app | MIT | verified |
 | android\_logger | 0.15 | logcat | quest | MIT OR Apache-2.0 | verified |
 | jni | 0.20 (the XR crates' pin) | calling the shim | quest | MIT OR Apache-2.0 | verified |
 | ndk-context | 0.1 | the JavaVM and activity handles | quest | MIT OR Apache-2.0 | verified |
