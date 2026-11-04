@@ -8,7 +8,6 @@
 
 mod system;
 
-#[allow(unused_imports)] // `panel` (a later ticket) inserts it on both quads (Q-265).
 pub(crate) use system::PanelQuad;
 pub(crate) use system::XrInputPlugin;
 

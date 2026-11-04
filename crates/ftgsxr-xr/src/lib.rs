@@ -9,6 +9,7 @@
 
 mod display;
 mod error;
+mod panel;
 mod passthrough;
 mod plugin;
 mod session;
@@ -22,6 +23,8 @@ pub use display::DisplaySettings;
 pub use ftgsxr_render::Foveation;
 // §2.1; Q-119: `code` and `user_text`.
 pub use error::XrError;
+// §2.1 `MainPanel`, `PanelFollow` (#462); Q-265, Q-305: the placement functions.
+pub use panel::{MainPanel, PanelFollow, summon_pose, wrist_menu_pose, wrist_menu_visible};
 // §2.1 (M-3: the declarations I-15 reads).
 pub use passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 // §2.1 `XrPlugin`; Q-120: `add_xr`; Q-220: `runtime_unavailable`.
