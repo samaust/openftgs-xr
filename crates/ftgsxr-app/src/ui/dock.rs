@@ -251,7 +251,24 @@ fn toast_line(world: &mut World, ctx: &mut egui::Ui) {
     });
 }
 
-/// The dock and its tabs; its width is kept in `UiState`.
+/// §1.7 Panels: the dock's narrowest width, in points.
+const DOCK_MIN_WIDTH: f32 = 160.0;
+/// §1.7 Panels: the dock's widest, as a share of the window's width.
+const DOCK_MAX_SHARE: f32 = 0.6;
+
+/// The dock's panel at `width` points, kept between 160 points and 60 % of a window
+/// `window` points wide; below 267 points the 160-point floor wins (§1.7 Panels, Q-251).
+// Q-251
+fn dock_panel(width: f32, window: f32) -> egui::Panel {
+    let max = (DOCK_MAX_SHARE * window).max(DOCK_MIN_WIDTH);
+    egui::Panel::left("ftgsxr-dock")
+        .resizable(true)
+        .default_size(width)
+        .size_range(DOCK_MIN_WIDTH..=max)
+}
+
+/// The dock and its tabs; its width is kept in `UiState`, and `persist` saves it with
+/// whether it is open (§1.7 Panels, Q-252).
 fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Option<egui::Id>) {
     let (open, width, tab) = {
         let s = world.resource::<UiState>();
@@ -260,56 +277,54 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
     if !open {
         return;
     }
-    let r = egui::Panel::left("ftgsxr-dock")
-        .resizable(true)
-        .default_size(width)
-        .show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for t in Tab::ALL {
-                    let r = ui.selectable_label(t == tab, format!("{t:?}"));
-                    if r.hovered() {
-                        *hv = Some(r.id);
-                    }
-                    if r.clicked() {
-                        world.resource_mut::<UiState>().tab = t;
-                        out.push(Out::Cue(UiCue::Click));
-                    }
+    let window = ctx.ctx().viewport_rect().width();
+    let r = dock_panel(width, window).show(ctx, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for t in Tab::ALL {
+                let r = ui.selectable_label(t == tab, format!("{t:?}"));
+                if r.hovered() {
+                    *hv = Some(r.id);
                 }
-            });
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                match tab {
-                    Tab::Library => {
-                        library_tab(world, ui, out, hv);
-                        request_replay(world, ui, out, hv);
-                    }
-                    Tab::Scene => scene_tab(world, ui, out, hv),
-                    Tab::Playback => playback_tab(world, ui, out, hv),
-                    Tab::Display => display_tab(world, ui, out, hv),
-                    // §1.1, §1.7 Panels, §1.15 E-XR-UNSUPPORTED: no passthrough control on
-                    // the desktop (absent, not disabled); `persist` adds the background
-                    // and the grid.
-                    Tab::Environment => {}
-                    Tab::Settings => {
-                        ui.label("Settings (§1.11)");
-                    }
-                    Tab::Help => {
-                        ui.label(format!("openftgs-xr {}", env!("CARGO_PKG_VERSION")));
-                        ui.label("F1 Help · F2 hide the UI · F3 HUD · F11 fullscreen");
-                    }
+                if r.clicked() {
+                    world.resource_mut::<UiState>().tab = t;
+                    out.push(Out::Cue(UiCue::Click));
                 }
-                let hooks = world
-                    .resource::<DockHooks>()
-                    .0
-                    .get(&tab)
-                    .cloned()
-                    .unwrap_or_default();
-                for h in hooks {
-                    ui.separator();
-                    h(world, ui);
-                }
-            });
+            }
         });
+        ui.separator();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            match tab {
+                Tab::Library => {
+                    library_tab(world, ui, out, hv);
+                    request_replay(world, ui, out, hv);
+                }
+                Tab::Scene => scene_tab(world, ui, out, hv),
+                Tab::Playback => playback_tab(world, ui, out, hv),
+                Tab::Display => display_tab(world, ui, out, hv),
+                // §1.1, §1.7 Panels, §1.15 E-XR-UNSUPPORTED: no passthrough control on
+                // the desktop (absent, not disabled); `persist` adds the background
+                // and the grid.
+                Tab::Environment => {}
+                Tab::Settings => {
+                    ui.label("Settings (§1.11)");
+                }
+                Tab::Help => {
+                    ui.label(format!("openftgs-xr {}", env!("CARGO_PKG_VERSION")));
+                    ui.label("F1 Help · F2 hide the UI · F3 HUD · F11 fullscreen");
+                }
+            }
+            let hooks = world
+                .resource::<DockHooks>()
+                .0
+                .get(&tab)
+                .cloned()
+                .unwrap_or_default();
+            for h in hooks {
+                ui.separator();
+                h(world, ui);
+            }
+        });
+    });
     world.resource_mut::<UiState>().dock_width = r.response.rect.width();
 }
 
@@ -1074,8 +1089,8 @@ fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
 mod tests {
     use super::{
         Colormap, Entity, InstanceAction, Intent, LoadedModel, Out, RenderMode, SplatMode,
-        Transform, Visibility, World, display_tab, egui, load_choices, playback_tab, replay_lines,
-        replay_loaded_degree, scene_tab, source_from_input,
+        Transform, Visibility, World, display_tab, dock_panel, egui, load_choices, playback_tab,
+        replay_lines, replay_loaded_degree, scene_tab, source_from_input,
     };
     use crate::SplatEvent;
     use crate::manipulate::Selected;
@@ -1094,6 +1109,45 @@ mod tests {
             items: Vec::new(),
             sha256: [0; 32],
         }
+    }
+
+    /// The width a dock saved at `width` is drawn at in a window `window` points wide.
+    fn drawn_width(width: f32, window: f32) -> f32 {
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(window, 600.0),
+            )),
+            ..Default::default()
+        };
+        let mut drawn = 0.0;
+        // Two frames: the second draws from the panel's remembered state.
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(input(), |ui| {
+                let w = ui.ctx().viewport_rect().width();
+                drawn = dock_panel(width, w)
+                    // Content that fills the panel's width, as the dock's tabs do.
+                    .show(ui, |ui| {
+                        ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
+                    })
+                    .response
+                    .rect
+                    .width();
+            });
+            out.textures_delta.clear();
+        }
+        drawn
+    }
+
+    // §1.7 Panels, Q-251 (#428): a saved width is drawn within [160, 60 % of the
+    // window] points, and the 160-point floor wins in a window under 267 points.
+    #[test]
+    fn dock_panel_draws_a_saved_width_outside_the_range_clamped() {
+        assert_eq!(drawn_width(50.0, 1000.0), 160.0);
+        assert_eq!(drawn_width(900.0, 1000.0), 600.0);
+        assert_eq!(drawn_width(320.0, 1000.0), 320.0);
+        assert_eq!(drawn_width(320.0, 200.0), 160.0);
     }
 
     fn sh_line(lines: &[String]) -> Option<&String> {

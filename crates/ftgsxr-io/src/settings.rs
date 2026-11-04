@@ -228,6 +228,11 @@ pub struct DesktopSettings {
     pub fov_deg: f32,
     /// The fly camera's base speed in m/s, in \[0.1, 20\].
     pub fly_speed_mps: f32,
+    /// The dock's width in points, finite; the dock clamps it to §1.7's range when
+    /// drawn (Q-251).
+    pub dock_width: f32,
+    /// Whether the dock is open, not collapsed (§1.7 Panels).
+    pub dock_open: bool,
     /// Rebindings, action → key; an action not named keeps Appendix D.1's binding.
     pub keys: BTreeMap<String, String>,
 }
@@ -416,6 +421,9 @@ impl Default for DesktopSettings {
         DesktopSettings {
             fov_deg: 60.0,
             fly_speed_mps: 2.0,
+            // §1.7 Panels (spec revision 24).
+            dock_width: 320.0,
+            dock_open: true,
             keys: BTreeMap::new(),
         }
     }
@@ -499,6 +507,14 @@ fn number(v: &Value) -> Option<f64> {
 /// `true` or `false`.
 fn flag() -> Check<bool> {
     ("true or false".into(), Box::new(Value::as_bool))
+}
+
+/// A finite number, as f32 (Q-251).
+fn finite() -> Check<f32> {
+    (
+        "a finite number".into(),
+        Box::new(|v| number(v).map(|x| x as f32).filter(|x| x.is_finite())),
+    )
 }
 
 /// A finite number in \[lo, hi\], as f32.
@@ -1011,7 +1027,17 @@ impl Reader {
     fn desktop(&mut self, root: Option<&Table>) -> DesktopSettings {
         let p = "desktop";
         let t = self.table(root, "", p);
-        self.unknown(t, p, &["fov_deg", "fly_speed_mps", "keys"]);
+        self.unknown(
+            t,
+            p,
+            &[
+                "fov_deg",
+                "fly_speed_mps",
+                "dock_width",
+                "dock_open",
+                "keys",
+            ],
+        );
         let d = DesktopSettings::default();
         let pk = "desktop.keys";
         let mut keys = BTreeMap::new();
@@ -1034,6 +1060,11 @@ impl Reader {
             fly_speed_mps: self
                 .take(t, p, "fly_speed_mps", range(0.1, 20.0))
                 .unwrap_or(d.fly_speed_mps),
+            // Q-251
+            dock_width: self
+                .take(t, p, "dock_width", finite())
+                .unwrap_or(d.dock_width),
+            dock_open: self.take(t, p, "dock_open", flag()).unwrap_or(d.dock_open),
             keys,
         }
     }
@@ -1343,6 +1374,8 @@ fn document(s: &Settings) -> Table {
             Value::Table(table([
                 ("fov_deg", float(dk.fov_deg)),
                 ("fly_speed_mps", float(dk.fly_speed_mps)),
+                ("dock_width", float(dk.dock_width)),
+                ("dock_open", Value::Boolean(dk.dock_open)),
                 (
                     "keys",
                     Value::Table(

@@ -8,6 +8,8 @@ How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's po
 
 `persist/panels.rs` draws the Display, Environment and Settings tabs' sections through `ui`'s `DockHooks`, each editing `SettingsRes` (Q-218); `[audio]` is `audio`'s section and the governor `governor`'s. The tier pickers (the Display tab's showing the running tier, the Settings tab's the saved one) write `[general] tier` and a crate-private `TierPick` that `governor` switches to (Q-240).
 
+The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startup, before the dock's first draw, `[desktop] dock_width` and `dock_open` become `ui`'s dock state, and Help's first run opens the dock after them (Q-226); while the UI is on the window, a resize (in whole points, a change under half a point being none) or a collapse goes back into `[desktop]`. The width saved is the one drawn, clamped to the window (Q-252); the Settings tab does not draw the two keys (Q-253).
+
 ## Poses
 
 `Poses` is read from `<config>/poses.json` at `AppPlugin`'s build when absent. `manipulate` changes it in memory; `persist` forwards `SavePose` and `ForgetPose` to it as intents and writes the file atomically whenever the store's content differs from what was last written (Q-205).
@@ -25,4 +27,4 @@ A crate-private `PersistFailure { code, text }` carries the settings' and the po
 
 ## Q-n rows relied on
 
-Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-245; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.
+Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-245, Q-252, Q-253; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.

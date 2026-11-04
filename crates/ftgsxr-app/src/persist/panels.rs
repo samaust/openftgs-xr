@@ -288,6 +288,7 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
             ui.checkbox(&mut l.left_handed, "left_handed");
             ui.checkbox(&mut l.reduced_motion, "reduced_motion");
         });
+        // Q-253: the dock's width and collapsed state are the dock's own controls.
         egui::CollapsingHeader::new("[desktop]").show(ui, |ui| {
             let d = &mut s.desktop;
             num(ui, "fov_deg", &mut d.fov_deg, 40.0, 110.0, 0.5);

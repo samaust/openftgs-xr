@@ -15,7 +15,7 @@ How `ftgsxr_app::ui` meets the panels (§1.7 Panels, D-21, §1.8 User interface)
 
 What runs without egui (the toasts and their limit, the confirmations, the UI commands, `HudData`) is added in every app; the drawing and the panel pointer only when `EguiPlugin` is, which `AppPlugin` adds only when the render app exists (PRD #275's spike check 1 and its fallback).
 
-- **The screen.** `ui/dock.rs` draws the bar above the viewport, the dock on the left with its seven tabs, the toast line and the confirmation dialogs in one exclusive system, which collects what the user did and sends it after the frame. egui draws no text without a font: the desktop loads the first readable system font of a fixed list at startup (Q-211).
+- **The screen.** `ui/dock.rs` draws the bar above the viewport, the dock on the left with its seven tabs (resizable between 160 points and 60 % of the window, §1.7 Panels and Q-251; `persist` saves its width and whether it is open), the toast line and the confirmation dialogs in one exclusive system, which collects what the user did and sends it after the frame. egui draws no text without a font: the desktop loads the first readable system font of a fixed list at startup (Q-211).
 - **Toasts.** The rate limit keys on a toast's text: one toast of the same text a second, a later one within the second dropped; a toast stays on the line for a few seconds, the newest few shown (Q-208). The capacity overflow has its own warning text, naming the capacity only, so it is the same each frame and a per-frame overflow shows once a second (Q-209). An unavailable XR feature gives a toast only when it was explicitly asked for, at most once per session per extension (Q-161).
 - **Instance color.** The Scene tab edits each instance's E14 manual form (exposure in EV, temperature and tint) as `InstanceLighting`, and sets its `SplatTransform` to the gain that form gives, computed in the app because `ftgsxr-xr`'s `manual_gains` lies above it (Q-218, Q-250). `persist` saves and restores it as the scene's `lighting`.
 - **Confirmations.** Delete's `UnloadRequest` (Q-199) and `Intent::Ui(LoadScene)` (Q-200) open a dialog; only a confirmation sends the unload or the load.
@@ -29,4 +29,4 @@ F12's `Intent::Screenshot` becomes a `ScreenshotRequest` for the desktop camera,
 
 ## Q-n rows relied on
 
-`ui`: Q-159, Q-161, Q-166, Q-173, Q-193, Q-199, Q-200, Q-208, Q-209, Q-210, Q-211, Q-217, Q-218, Q-219, Q-221, Q-250; with Q-64 and Q-117 (the error texts). `capture`: Q-150, Q-166, Q-180, Q-212, Q-213, Q-214, Q-215; with Q-14.
+`ui`: Q-159, Q-161, Q-166, Q-173, Q-193, Q-199, Q-200, Q-208, Q-209, Q-210, Q-211, Q-217, Q-218, Q-219, Q-221, Q-250, Q-251; with Q-64 and Q-117 (the error texts). `capture`: Q-150, Q-166, Q-180, Q-212, Q-213, Q-214, Q-215; with Q-14.

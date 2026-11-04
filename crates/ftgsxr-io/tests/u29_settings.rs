@@ -129,6 +129,8 @@ fn u29_defaults_are_section_1s() {
         DesktopSettings {
             fov_deg: 60.0,
             fly_speed_mps: 2.0,
+            dock_width: 320.0,
+            dock_open: true,
             keys: BTreeMap::new(),
         }
     );
@@ -276,6 +278,8 @@ fn non_default() -> Settings {
         desktop: DesktopSettings {
             fov_deg: 75.0,
             fly_speed_mps: 0.1,
+            dock_width: 412.5,
+            dock_open: false,
             keys,
         },
         xr: XrSettings {
@@ -415,6 +419,10 @@ kind = "http"
 location = "http://example.org/"
 flavor = "xml"
 
+[desktop]
+dock_width = "wide"
+dock_open = 1
+
 [desktop.keys]
 play_pause = 32
 help = "F1"
@@ -443,6 +451,8 @@ help = "F1"
         "`sources[0].kind`",
         "`sources[1].flavor`",
         "`desktop.keys.play_pause`",
+        "`desktop.dock_width`",
+        "`desktop.dock_open`",
     ] {
         assert!(
             warnings.iter().any(|w| w.contains(key)),
@@ -453,6 +463,34 @@ help = "F1"
         !warnings.iter().any(|w| w.contains("unknown")),
         "{warnings:?}"
     );
+}
+
+/// Q-251 (#428): a non-finite `[desktop] dock_width` takes the default 320 with a
+/// warning naming the key; a finite one outside §1.7's range loads as given (the dock
+/// clamps it when drawn).
+// Q-251
+#[test]
+fn u29_a_non_finite_dock_width_takes_the_default_with_a_warning() {
+    for (name, value) in [("dock_nan", "nan"), ("dock_inf", "inf")] {
+        let (_, s, warnings) = load_text(
+            name,
+            &format!(
+                "format = \"ftgsxr-settings\"\nversion = 1\n\n[desktop]\ndock_width = {value}\ndock_open = false\n"
+            ),
+        );
+        assert_eq!(s.desktop.dock_width, 320.0, "{value}");
+        assert!(!s.desktop.dock_open, "{value}");
+        assert!(
+            warnings.iter().any(|w| w.contains("`desktop.dock_width`")),
+            "{value}: {warnings:?}"
+        );
+    }
+    let (_, s, warnings) = load_text(
+        "dock_narrow",
+        "format = \"ftgsxr-settings\"\nversion = 1\n\n[desktop]\ndock_width = 50\n",
+    );
+    assert_eq!(s.desktop.dock_width, 50.0);
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
 
 /// Q-49: a `[playback] loop` outside Q-50's spellings takes the default
