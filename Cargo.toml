@@ -115,6 +115,11 @@ tiny_http = "0.12"
 # instance drops wgpu's VALIDATION_INDIRECT_CALL, D-30), approved by the owner.
 [patch.crates-io]
 bevy_mod_openxr = { path = "vendor/bevy_mod_openxr-0.6.0" }
+# Q-244: bevy_render 0.19.1 vendored with one change (src/view/window/mod.rs, a window
+# surface reconfigured when found `Outdated` or when the window's size changed takes the
+# surface's current extent, not a window size the window system has already left, #409),
+# approved by the owner.
+bevy_render = { path = "vendor/bevy_render-0.19.1" }
 # D-30: wgpu-core 29.0.4 vendored with one change (src/instance.rs, an instance made
 # from a Vulkan HAL instance keeps its flags). D-52: and a second (src/present.rs and
 # src/track/texture.rs, a surface texture presented with no submission having used it is
