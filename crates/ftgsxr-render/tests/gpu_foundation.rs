@@ -292,14 +292,13 @@ fn gpu_guard_fails_when_the_validation_layer_is_not_loaded() {
         assert!(text.contains("validation layer is not loaded"), "{text}");
         return;
     }
+    // The test's full path in the crate's one test binary (#413).
+    let path = format!(
+        "{}::gpu_guard_fails_when_the_validation_layer_is_not_loaded",
+        crate::test_file_stem()
+    );
     let out = std::process::Command::new(std::env::current_exe().expect("the test binary"))
-        .args([
-            "--ignored",
-            "--exact",
-            "gpu_guard_fails_when_the_validation_layer_is_not_loaded",
-            "--test-threads",
-            "1",
-        ])
+        .args(["--ignored", "--exact", path.as_str(), "--test-threads", "1"])
         .env(NO_LAYER_CHILD, "1")
         .env("VK_LOADER_LAYERS_DISABLE", "*validation*")
         .output()

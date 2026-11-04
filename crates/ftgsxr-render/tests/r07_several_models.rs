@@ -6,7 +6,7 @@
 //! pre-posed merged model at eight times (Q-12: `merged/R7_instance_a`, `R7_instance_b`,
 //! their poses in `merged/R7_poses.json`, the reference `probes/R7_merged`). E15's tier.
 
-mod probe_support;
+use crate::probe_support;
 
 use ftgsxr_render::{HeadlessRenderer, QualityTier};
 use ftgsxr_testkit::layer_messages;

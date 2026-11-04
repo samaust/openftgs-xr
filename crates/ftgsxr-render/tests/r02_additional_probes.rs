@@ -5,7 +5,7 @@
 //! request's black; a single-timestamp model at τ ≠ τ₀; a model with τ₀ = 10⁹ s; a random
 //! model at three times. Each item passes E15's tier against openftgs's reference render.
 
-mod probe_support;
+use crate::probe_support;
 
 use ftgsxr_testkit::layer_messages;
 use probe_support::check_probe;

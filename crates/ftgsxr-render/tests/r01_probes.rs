@@ -5,7 +5,7 @@
 //! reference render (PSNR ≥ 45 dB, s ≤ 0.5 %, s_α ≤ 0.5 %); the per-probe minimum PSNR is
 //! reported on standard error.
 
-mod probe_support;
+use crate::probe_support;
 
 use ftgsxr_testkit::layer_messages;
 use probe_support::check_probe;

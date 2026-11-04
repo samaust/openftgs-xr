@@ -8,7 +8,7 @@
 //! §1.12's half-float rounding allowance: one binary16 step of the larger of the two values
 //! compared (Q-88). The tier is not required.
 
-mod probe_support;
+use crate::probe_support;
 
 use ftgsxr_core::{Vec3, sh_color};
 use ftgsxr_testkit::{layer_messages, probe};

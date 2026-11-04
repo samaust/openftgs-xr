@@ -6,7 +6,7 @@
 //! on P5's degree-3 model against openftgs's reference rendered with `sh_degree` 2 (the
 //! `R10_deg2` probe, Q-70), E15's tier.
 
-mod probe_support;
+use crate::probe_support;
 
 use ftgsxr_core::Pose;
 use ftgsxr_render::{HeadlessRenderer, QualityTier};

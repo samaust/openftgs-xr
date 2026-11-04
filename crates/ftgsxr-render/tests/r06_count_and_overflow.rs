@@ -4,7 +4,7 @@
 //! count equals the CPU count; C below it sets the overflow flag and clamps; the
 //! statistics arrive two frames later; the frame loop never waits longer than 1 ms.
 
-mod cull_support;
+use crate::cull_support;
 
 use std::time::{Duration, Instant};
 

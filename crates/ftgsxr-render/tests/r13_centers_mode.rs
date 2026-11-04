@@ -8,7 +8,7 @@
 //! centers draw over the splats (Q-96). The time-center colormap maps \[τ₀, τ₁\] onto
 //! viridis \[0, 1\], and a single-timestamp model to viridis(0) (Q-92, Q-97).
 
-mod display_support;
+use crate::display_support;
 
 use display_support::{Frame, Row, Run, draw, model, probe_camera, render, upload};
 use ftgsxr_core::Vec2;

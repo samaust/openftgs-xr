@@ -8,6 +8,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+# #413: one integration-test binary, whose modules are the `tests/*.rs` files
+# (`tests/integration.rs`), not one executable per file.
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 
 # Bevy's render layer (§2.1 band table): `bevy_core_pipeline` for the 3D pass the plugin

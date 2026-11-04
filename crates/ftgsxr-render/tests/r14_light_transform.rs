@@ -4,7 +4,7 @@
 //! drawn and resolved onto an sRGB view target: the displayed value equals the file's grey
 //! decoded, multiplied by 2 in red, clamped and encoded, by hand, within 1/255.
 
-mod display_support;
+use crate::display_support;
 
 use display_support::{
     Run, center_block, draw, flat_probe, linear_to_srgb, probe_camera, render, srgb_to_linear,

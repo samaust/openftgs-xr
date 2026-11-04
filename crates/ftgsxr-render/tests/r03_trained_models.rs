@@ -14,7 +14,7 @@
 //! (§2.7 Lanes), so a missing one is a fault, not a pass. A directory that holds only some of
 //! a model's three files fails the same way.
 
-mod probe_support;
+use crate::probe_support;
 
 use std::path::PathBuf;
 
