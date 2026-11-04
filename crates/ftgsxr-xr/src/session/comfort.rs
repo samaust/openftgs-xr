@@ -29,7 +29,7 @@ use bevy::time::Time;
 use bevy_mod_openxr::render::locate_views;
 use bevy_mod_openxr::resources::OxrViews;
 use bevy_mod_xr::camera::XrCamera;
-use ftgsxr_app::{Intent, Locomotion, PlayerRig, SettingsRes};
+use ftgsxr_app::{Headset, Intent, Locomotion, PlayerRig, SettingsRes};
 
 // Q-269
 /// The vignette's darkest alpha, at and beyond the edge of the half field of view.
@@ -176,14 +176,20 @@ fn reduced_motion(settings: Option<&SettingsRes>) -> bool {
 }
 
 /// Adds the change of the wanted height offset to the rig's y (§1.8 Locomotion's seated
-/// option), so E12's motion, which keeps the rig's height, carries it.
-// Q-299
+/// option), so E12's motion, which keeps the rig's height, carries it. Only on the
+/// headset (the `Headset` marker, Q-266): the desktop, `play --xr` included, has no
+/// offset (Q-299, Q-T452.9).
+// Q-299, Q-T452.9
 fn apply_height_offset(
     loco: Option<Res<Locomotion>>,
+    headset: Option<Res<Headset>>,
     mut comfort: ResMut<Comfort>,
     mut rigs: Query<&mut Transform, With<PlayerRig>>,
 ) {
-    let wanted = loco.as_deref().map_or(0.0, height_offset);
+    let wanted = match (headset, loco.as_deref()) {
+        (Some(_), Some(l)) => height_offset(l),
+        _ => 0.0,
+    };
     let delta = wanted - comfort.applied_offset_m;
     if delta == 0.0 {
         return;
@@ -463,6 +469,7 @@ mod tests {
         let mut l = loco();
         l.height_offset_m = 0.4;
         app.insert_resource(l)
+            .insert_resource(Headset)
             .init_resource::<Comfort>()
             .add_systems(Update, apply_height_offset);
         let rig = app
@@ -482,6 +489,26 @@ mod tests {
             (y(&app).y - 0.2).abs() <= 1e-6,
             "removed in passthrough mode"
         );
+    }
+
+    // Q-299 ("the desktop has no offset"), Q-T452.9: without the `Headset` marker
+    // (`play --xr`) the rig keeps its height.
+    #[test]
+    fn apply_height_offset_needs_the_headset_marker() {
+        let mut app = App::new();
+        let mut l = loco();
+        l.height_offset_m = 0.4;
+        app.insert_resource(l)
+            .init_resource::<Comfort>()
+            .add_systems(Update, apply_height_offset);
+        let rig = app
+            .world_mut()
+            .spawn((PlayerRig, Transform::from_xyz(1.0, 0.2, -2.0)))
+            .id();
+        app.update();
+        app.update();
+        let t = app.world().get::<Transform>(rig).unwrap().translation;
+        assert_eq!(t, Vec3::new(1.0, 0.2, -2.0));
     }
 
     #[test]
