@@ -11,9 +11,10 @@
 //! window succeeds, reporting whether any frame saw an active hand, the aim state's
 //! COMPUTED and VALID flags seen (PRD #452's spike check 2), the simultaneous
 //! hands-and-controllers resume (spike check 5) and the wrist's rate seen under each
-//! frequency hint (Q-275, Q-309); (2) the pulse: D-44's 20 ms grab pulse on the
-//! active controller's haptic output, the call succeeding, "no controller" when none is
-//! active; (3) the pinch: a synthetic index pinch of 0.8 on the right hand, written into
+//! frequency hint (Q-275, Q-309); (2) the pulse: a grab start on the active
+//! controller's side (a `Grabbed` for that hand, the event `xr_input`'s haptics read),
+//! which must reach D-44's 20 ms grab pulse on its haptic output with the call
+//! succeeding, "no controller" when none is active; (3) the pinch: a synthetic index pinch of 0.8 on the right hand, written into
 //! `XrHands` after `tracking` wrote it, makes `xr_input`'s system write `Select`.
 
 use std::time::{Duration, Instant};
@@ -22,19 +23,18 @@ use bevy::app::{App, PostUpdate};
 use bevy::ecs::message::MessageReader;
 use bevy::log::info;
 use bevy::prelude::{
-    Commands, IntoScheduleConfigs, Name, Query, Res, ResMut, Resource, not, resource_exists,
+    Commands, Entity, IntoScheduleConfigs, Name, Query, Res, ResMut, Resource, not, resource_exists,
 };
 use bevy_mod_openxr::exts::OxrEnabledExtensions;
-use bevy_mod_openxr::session::OxrSession;
-use ftgsxr_app::{Hand, Intent, PanelPointer};
-use ftgsxr_core::{Pose, Quat, Vec3};
+use ftgsxr_app::{Grabbed, Hand, Intent, PanelPointer};
+use ftgsxr_core::{Grab, Pose, Quat, Vec3};
 use openxr::sys;
 
 use super::hands::{
     Flow, FrequencyHint, HandTrackers, HandsPermission, HandsWanted, LocatedHands, RawHand, Resume,
     WRIST, located,
 };
-use super::{Actions, GRAB, HandSource, TrackedHand, XrHands};
+use super::{GRAB, HandSource, HapticLog, TrackedHand, XrHands};
 
 /// The name of the entity the quest runner spawns to start the test (Q-308).
 // Q-308
@@ -49,6 +49,8 @@ const TRACKERS_TIMEOUT: Duration = Duration::from_secs(60);
 const PINCH: f32 = 0.8;
 /// How many frames the pinch may take to produce `Select`.
 const PINCH_FRAMES: u32 = 30;
+/// How many frames the injected grab may take to reach a pulse.
+const PULSE_FRAMES: u32 = 30;
 
 /// The joints clause's tally over its window.
 #[derive(Clone, Debug, Default)]
@@ -218,8 +220,20 @@ pub(crate) enum PinchStep {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Phase {
     Trackers,
-    Joints { started: Instant },
+    Joints {
+        started: Instant,
+    },
     Pulse,
+    /// The injected grab (`entity`) on `side`'s controller, waiting for its grab pulse
+    /// among the haptics' calls numbered from `from`; `wanted` once the haptics asked
+    /// for it.
+    PulseWait {
+        entity: Entity,
+        side: usize,
+        from: u64,
+        frames: u32,
+        wanted: bool,
+    },
     Pinch(PinchStep),
     Done,
 }
@@ -298,11 +312,11 @@ pub(crate) fn run(
     permission: Option<Res<HandsPermission>>,
     wanted: Option<Res<HandsWanted>>,
     exts: Option<Res<OxrEnabledExtensions>>,
-    session: Option<Res<OxrSession>>,
-    actions: Option<Res<Actions>>,
+    log: Option<Res<HapticLog>>,
     mut hands: ResMut<XrHands>,
     mut intents: MessageReader<Intent>,
     mut pointers: MessageReader<PanelPointer>,
+    mut commands: Commands,
 ) {
     let selected = intents.read().any(|i| {
         matches!(
@@ -389,26 +403,89 @@ pub(crate) fn run(
                 let slot = if s == 0 { hands.left } else { hands.right };
                 slot.is_some_and(|t| t.source == HandSource::Controller)
             });
-            let name = |s: usize| if s == 0 { "left" } else { "right" };
-            match (side, session.as_deref(), actions.as_deref()) {
-                (None, ..) => test.parts.push("pulse: no controller".into()),
-                (Some(s), Some(session), Some(actions)) => {
-                    match actions.pulse(session, s, GRAB.duration_ms, GRAB.amplitude) {
-                        Ok(()) => test.parts.push(format!(
-                            "pulse: {} ms at {} on the {} controller succeeded",
-                            GRAB.duration_ms,
-                            GRAB.amplitude,
-                            name(s)
-                        )),
-                        Err(e) => test.fail(format!("pulse: the {} controller: {e}", name(s))),
-                    }
+            match side {
+                None => {
+                    test.parts.push("pulse: no controller".into());
+                    test.phase = Phase::Pinch(PinchStep::Open);
                 }
-                (Some(s), ..) => test.fail(format!(
-                    "pulse: the {} controller has no session or action set",
-                    name(s)
-                )),
+                Some(side) => {
+                    // A grab start on that side, through the haptics (Q-270's event).
+                    let hand = if side == 0 { Hand::Left } else { Hand::Right };
+                    let entity = commands
+                        .spawn((
+                            Name::new("ftgsxr-test: dv8 grab"),
+                            Grabbed::One {
+                                hand,
+                                grab: Grab::begin(Pose::IDENTITY, Pose::IDENTITY),
+                            },
+                        ))
+                        .id();
+                    test.phase = Phase::PulseWait {
+                        entity,
+                        side,
+                        from: log.as_deref().map_or(0, |l| l.next),
+                        frames: 0,
+                        wanted: false,
+                    };
+                }
             }
-            test.phase = Phase::Pinch(PinchStep::Open);
+        }
+        Phase::PulseWait {
+            entity,
+            side,
+            from,
+            frames,
+            wanted,
+        } => {
+            let name = if side == 0 { "left" } else { "right" };
+            let wanted = wanted
+                || log
+                    .as_deref()
+                    .is_some_and(|l| l.wanted.contains(&(side, GRAB)));
+            let applied = log.as_deref().and_then(|l| {
+                l.applied
+                    .iter()
+                    .find(|(n, s, p, _)| *n >= from && *s == side && *p == GRAB)
+                    .map(|(.., r)| r.clone())
+            });
+            let done = match applied {
+                Some(Ok(())) => {
+                    test.parts.push(format!(
+                        "pulse: a grab start gave {} ms at {} on the {name} controller,                          applied",
+                        GRAB.duration_ms, GRAB.amplitude
+                    ));
+                    true
+                }
+                Some(Err(e)) => {
+                    test.fail(format!("pulse: the {name} controller: {e}"));
+                    true
+                }
+                None if frames >= PULSE_FRAMES => {
+                    test.fail(format!(
+                        "pulse: a grab start on the {name} controller {} after                          {PULSE_FRAMES} frames",
+                        if wanted {
+                            "reached the haptics but no pulse was applied (no running \
+                             session)"
+                        } else {
+                            "reached no pulse"
+                        }
+                    ));
+                    true
+                }
+                None => false,
+            };
+            if done {
+                commands.entity(entity).despawn();
+                test.phase = Phase::Pinch(PinchStep::Open);
+            } else {
+                test.phase = Phase::PulseWait {
+                    entity,
+                    side,
+                    from,
+                    frames: frames + 1,
+                    wanted,
+                };
+            }
         }
         Phase::Pinch(step) => match step {
             PinchStep::Open => {

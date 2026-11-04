@@ -19,6 +19,7 @@ mod meshes;
 pub(crate) use hands::FREQUENCY_HINT_EXT;
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate, Update};
 use bevy::ecs::message::MessageWriter;
@@ -146,6 +147,7 @@ pub(crate) struct TrackingPlugin {
 impl Plugin for TrackingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<XrHands>()
+            .init_resource::<HapticLog>()
             .insert_resource(hands::HandsWanted(self.hands))
             .init_resource::<hands::HandsPermission>()
             .init_resource::<hands::LocatedHands>()
@@ -241,6 +243,33 @@ pub(crate) const TICK: Pulse = Pulse {
     duration_ms: 15,
     amplitude: 0.5,
 };
+
+/// The haptics' record (D-44), which Dv-8 reads (Q-272): the pulses `xr_input` wanted on
+/// a controller-owned side this frame, and the last calls of `Actions::pulse` it made,
+/// numbered, with their outcomes.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct HapticLog {
+    /// This frame's pulses, by side (0 the left hand), before they are applied.
+    pub(crate) wanted: Vec<(usize, Pulse)>,
+    /// The next call's number.
+    pub(crate) next: u64,
+    /// The last `HAPTIC_LOG_LEN` calls: (number, side, pulse, outcome).
+    pub(crate) applied: VecDeque<(u64, usize, Pulse, Result<(), String>)>,
+}
+
+/// How many applied pulses `HapticLog` keeps.
+const HAPTIC_LOG_LEN: usize = 32;
+
+impl HapticLog {
+    /// Records one call of `Actions::pulse`.
+    pub(crate) fn record(&mut self, side: usize, pulse: Pulse, result: Result<(), String>) {
+        if self.applied.len() == HAPTIC_LOG_LEN {
+            self.applied.pop_front();
+        }
+        self.applied.push_back((self.next, side, pulse, result));
+        self.next += 1;
+    }
+}
 
 fn create_actions(instance: &OxrInstance) -> openxr::Result<Actions> {
     let hands = [

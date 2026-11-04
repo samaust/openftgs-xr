@@ -33,6 +33,8 @@ The main panel is grabbed through `PanelPointer`'s grab presses, which `xr_input
 - while one hand holds it, the other hand's grab press anywhere on the panel makes it a two-hand grab, E11 with "keep upright", whose scale is the panel's width, kept in §1.8's range, the height following the 4:3 aspect;
 - a `GrabEnd` of either hand returns to a one-hand grab by the other, a release of the one hand frees it; the panel follows only tracked hands.
 
+Each hand that joins or leaves the grab sends `xr_input`'s crate-private `PanelGrabEdge`, which the haptics turn into D-44's grab pulse (Q-T452.4).
+
 During a two-hand grab the quad scales live: the transform's scale, `PanelQuad.size_m` and `UiSurface::Panel.size_m` follow each frame, each written only when it changes. When the two-hand grab ends, the image is re-created at the new width's resolution (Q-306's pixels per metre, rounded), and `WorldPanel.image`, the material, `PanelQuad.size_px` and `UiSurface::Panel.size_px` are updated, so `ui` gets a new panel camera for the new image (`ftgsxr-app/ui.md`). Since a hand's pinch is `select` and `grab` at once (Appendix D.3), a pinch on the title bar also clicks the tab under it.
 
 ## The wrist menu

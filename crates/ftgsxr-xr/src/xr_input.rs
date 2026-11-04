@@ -8,8 +8,8 @@
 
 mod system;
 
-pub(crate) use system::PanelQuad;
 pub(crate) use system::XrInputPlugin;
+pub(crate) use system::{PanelGrabEdge, PanelQuad};
 
 use bevy::ecs::entity::Entity;
 use bevy::math::{Vec2, Vec3};
