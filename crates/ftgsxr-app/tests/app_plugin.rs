@@ -11,7 +11,7 @@ use crate::support;
 use std::fs;
 
 use bevy::render::RenderApp;
-use ftgsxr_app::{PlatformRes, Settings, SettingsPath, SettingsRes};
+use ftgsxr_app::{Headset, PlatformRes, Settings, SettingsPath, SettingsRes};
 use ftgsxr_testkit::layer_messages;
 use support::{Setup, TestApp};
 
@@ -23,6 +23,16 @@ fn app_plugin_builds_without_a_render_app() {
     assert!(t.app.world().contains_resource::<PlatformRes>());
     let paths = &t.app.world().resource::<PlatformRes>().0.paths().config;
     assert_eq!(paths, &t.dir.join("config"));
+}
+
+/// The headset marker is the caller's to insert (Q-266): `AppPlugin` never does, so a
+/// desktop or headless app is not "on the headset".
+// Q-266
+#[test]
+fn app_plugin_does_not_insert_the_headset_marker() {
+    let mut t = TestApp::new("no-headset");
+    t.frames(2);
+    assert!(!t.app.world().contains_resource::<Headset>());
 }
 
 #[test]
