@@ -247,7 +247,7 @@ pub fn prepare_windows(
     render_device: Res<RenderDevice>,
     sorted_cameras: Res<crate::camera::SortedCameras>,
     #[cfg(target_os = "linux")] render_instance: Res<RenderInstance>,
-    #[cfg(not(target_arch = "wasm32"))] render_adapter: Res<RenderAdapter>, // openftgs-xr, Q-244
+    render_adapter: Res<RenderAdapter>, // openftgs-xr, Q-244
 ) {
     for window in windows.windows.values_mut() {
         // Skip acquiring a swap-chain texture for windows that no camera
@@ -318,7 +318,6 @@ pub fn prepare_windows(
                 // size was extracted. Where the surface reports a fixed extent, the swapchain
                 // must be created at that extent, so prefer it over the cached size.
                 // openftgs-xr, Q-244
-                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(extent) = surface_current_extent(surface, &render_adapter) {
                     surface_data.configuration.width = extent.width;
                     surface_data.configuration.height = extent.height;
@@ -466,17 +465,16 @@ pub fn create_surfaces(
 
             data.configuration.width = window.physical_width;
             data.configuration.height = window.physical_height;
+            let caps = data.surface.get_capabilities(&render_adapter);
+            data.configuration.present_mode = present_mode(window, &caps);
             // The windowing system may have resized the surface again since this size was
             // extracted, as it does while the window is dragged to a new size, so prefer the
             // surface's current extent where it reports a fixed one.
             // openftgs-xr, Q-244
-            #[cfg(not(target_arch = "wasm32"))]
             if let Some(extent) = surface_current_extent(&data.surface, &render_adapter) {
                 data.configuration.width = extent.width;
                 data.configuration.height = extent.height;
             }
-            let caps = data.surface.get_capabilities(&render_adapter);
-            data.configuration.present_mode = present_mode(window, &caps);
             render_device.configure_surface(&data.surface, &data.configuration);
         }
 
@@ -534,21 +532,21 @@ fn present_mode(
 // MIT OR Apache-2.0: when `get_current_texture` found the surface `Outdated`,
 // `prepare_windows` reconfigured it with its cached configuration, whose size is still the
 // window's previous one when the windowing system resized the window before the new size was
-// extracted (X11); and when the window's size changed, `create_surfaces` reconfigured it at
-// the extracted size, which the window has already left while it is resized in quick
-// succession. Either way `vkCreateSwapchainKHR` got an extent outside the surface's current
-// one (VUID-VkSwapchainCreateInfoKHR-pNext-07781; bevyengine/bevy#3451). At both sites the
-// configuration now takes the surface's current extent first, where a Vulkan surface reports
-// a fixed one; otherwise it is used as before. Was: the cached or extracted size as it was,
-// `prepare_windows` without its `render_adapter` parameter, and the surface data read there
-// with `get`.
-/// Returns the current extent of `surface`, if it is a Vulkan surface that reports a fixed one.
+// extracted (X11); and when the window's size or present mode changed, `create_surfaces`
+// reconfigured it at the extracted size, which the window has already left while it is resized
+// in quick succession. Either way `vkCreateSwapchainKHR` got an extent outside the surface's
+// current one (VUID-VkSwapchainCreateInfoKHR-pNext-07781; bevyengine/bevy#3451). At both sites
+// the configuration now takes the surface's current extent last, where a Vulkan surface on
+// Linux or Android reports a fixed one; otherwise it is used as before. Was: the cached or
+// extracted size as it was, `prepare_windows` without its `render_adapter` parameter, and the
+// surface data read there with `get`.
+/// Returns the current extent of `surface`, if it is a Vulkan surface that reports a fixed,
+/// non-zero one.
 ///
-/// On platforms such as X11 and Windows, the current extent of a surface is the size of its
-/// window, and a swapchain must be created at exactly that size. Where the swapchain decides
-/// the size of the surface instead, such as on Wayland, no extent is reported. Surfaces of
-/// other backends are not queried.
-#[cfg(not(target_arch = "wasm32"))]
+/// On X11, the current extent of a surface is the size of its window, and a swapchain must be
+/// created at exactly that size. Where the swapchain decides the size of the surface instead,
+/// such as on Wayland, no extent is reported. Surfaces of other backends are not queried.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn surface_current_extent(
     surface: &wgpu::Surface,
     adapter: &wgpu::Adapter,
@@ -565,4 +563,13 @@ fn surface_current_extent(
     capabilities
         .current_extent
         .filter(|extent| extent.width > 0 && extent.height > 0)
+}
+
+/// Returns the current extent of `surface`, which is not queried on this platform.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn surface_current_extent(
+    _surface: &wgpu::Surface,
+    _adapter: &wgpu::Adapter,
+) -> Option<wgpu::Extent3d> {
+    None
 }

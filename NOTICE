@@ -47,7 +47,8 @@ the repository has no 0.6.0 release tag; neither file names a copyright holder.
 vendor/bevy_render-0.19.1 is bevy_render 0.19.1 from crates.io (https://github.com/bevyengine/bevy),
 used under the Apache License, Version 2.0 (it is dual-licensed MIT OR Apache-2.0), with one change
 marked in src/view/window/mod.rs (a window surface reconfigured when found out of date or when
-its window's size changed takes the surface's current extent, not a size the window has left).
+its window's size or present mode changed takes the surface's current extent, not a size the
+window has left).
 Its LICENSE-MIT and LICENSE-APACHE are those of the crates.io package; neither file names a
 copyright holder.
 

@@ -232,7 +232,9 @@ fn resized_app(resizes: &'static [Resize]) {
                 run_on_any_thread: true,
             }),
     )
-    // Bevy's own handler logs the error, which the guard's logger drops: say it here.
+    // As bevy_render 0.19.1's default `RenderErrorHandler` (src/error_handler.rs, MIT OR
+    // Apache-2.0) does, but printing the error, which its log line would lose to the guard's
+    // logger.
     .insert_resource(RenderErrorHandler(|error, main_world, _| {
         eprintln!("wgpu error: {:?}: {}", error.ty, error.description);
         main_world.write_message(AppExit::error());
