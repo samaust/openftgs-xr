@@ -531,7 +531,7 @@ impl Plugin for UiPlugin {
 }
 
 /// Ends the scrub before egui's pass, every frame: the dock's playback tab sets it again
-/// while the scrub bar is dragged, so a release, a frame without the bar or without an
+/// while the scrub bar is pressed, so a release, a frame without the bar or without an
 /// egui context ends it (Q-246).
 // Q-246
 fn end_scrub(mut scrubbing: ResMut<Scrubbing>) {
