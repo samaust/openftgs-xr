@@ -10,7 +10,7 @@
 use crate::support::{Setup, TestApp};
 
 use bevy::prelude::*;
-use ftgsxr_app::{Headset, LibraryCommand, LoadedModel, ModelRef, Poses};
+use ftgsxr_app::{ContentGroup, Headset, LibraryCommand, LoadedModel, ModelRef, Poses};
 use ftgsxr_core::{Aabb, Pose, Preset};
 use ftgsxr_io::{PoseStore, SavedPose};
 use ftgsxr_render::{SplatAsset, SplatModel};
@@ -117,12 +117,38 @@ fn assert_fitted(b: &Aabb, p: Pose) {
 
 #[test]
 fn headset_fit_a_20_m_model_is_fitted_on_its_first_load() {
+    // Under a yaw-only content group moved off the origin (Q-254): the fit is a stage
+    // pose, written relative to the group (Q-247).
     let mut t = app("headset_fit_20", true, None);
+    {
+        let mut q = t
+            .app
+            .world_mut()
+            .query_filtered::<&mut Transform, With<ContentGroup>>();
+        *q.single_mut(t.app.world_mut()).unwrap() = Transform {
+            translation: Vec3::new(2.0, 0.4, -1.0),
+            rotation: Quat::from_rotation_y(50f32.to_radians()),
+            scale: Vec3::ONE,
+        };
+    }
     let path = model_file(&t, 20.0);
     let e = load(&mut t, path);
     let b = bounds(&t, e);
     assert!(b.size().max_element() > 5.0, "{b:?}");
-    assert_fitted(&b, pose(&t, e));
+    let (s, rotation, translation) = t
+        .app
+        .world()
+        .get::<GlobalTransform>(e)
+        .unwrap()
+        .to_scale_rotation_translation();
+    assert_fitted(
+        &b,
+        Pose {
+            translation,
+            rotation,
+            scale: s.x,
+        },
+    );
 }
 
 #[test]
