@@ -179,6 +179,24 @@ fn gpu_r06_centers_follow_the_splats_under_the_same_capacity() {
     assert!(dev.take_validation_messages().is_empty());
 }
 
+/// A thread's context switches (Q-111): those it made itself, waiting, and those the
+/// scheduler made, preempting it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Switches {
+    voluntary: u64,
+    involuntary: u64,
+}
+
+impl Switches {
+    /// The switches made since `before`.
+    fn since(self, before: Switches) -> Switches {
+        Switches {
+            voluntary: self.voluntary - before.voluntary,
+            involuntary: self.involuntary - before.involuntary,
+        }
+    }
+}
+
 /// What R-6's watchdog makes of one timed call (Q-111).
 #[derive(Debug, PartialEq, Eq)]
 enum Verdict {
@@ -190,13 +208,16 @@ enum Verdict {
     Over,
 }
 
-/// The verdict on a call that took `elapsed`, given the thread's voluntary and
-/// involuntary context switches during it, `None` where they couldn't be read.
+/// The verdict on a call that took `elapsed`, given the thread's context switches
+/// during it, `None` where they couldn't be read.
 // Q-111
-fn verdict(elapsed: Duration, switches: Option<(u64, u64)>) -> Verdict {
+fn verdict(elapsed: Duration, switches: Option<Switches>) -> Verdict {
     match switches {
         _ if elapsed <= WATCHDOG => Verdict::Within,
-        Some((0, involuntary)) if involuntary > 0 => Verdict::Preempted,
+        Some(Switches {
+            voluntary: 0,
+            involuntary,
+        }) if involuntary > 0 => Verdict::Preempted,
         _ => Verdict::Over,
     }
 }
@@ -207,20 +228,24 @@ fn verdict(elapsed: Duration, switches: Option<(u64, u64)>) -> Verdict {
 // Q-111
 #[test]
 fn verdict_excuses_only_a_preempted_call() {
+    let switches = |voluntary, involuntary| Switches {
+        voluntary,
+        involuntary,
+    };
     let over = WATCHDOG + Duration::from_micros(2_500);
     let within = WATCHDOG - Duration::from_micros(1);
-    assert_eq!(verdict(within, Some((3, 2))), Verdict::Within);
+    assert_eq!(verdict(within, Some(switches(3, 2))), Verdict::Within);
     assert_eq!(verdict(WATCHDOG, None), Verdict::Within);
-    assert_eq!(verdict(over, Some((0, 1))), Verdict::Preempted);
-    assert_eq!(verdict(over, Some((1, 4))), Verdict::Over);
-    assert_eq!(verdict(over, Some((2, 0))), Verdict::Over);
-    assert_eq!(verdict(over, Some((0, 0))), Verdict::Over);
+    assert_eq!(verdict(over, Some(switches(0, 1))), Verdict::Preempted);
+    assert_eq!(verdict(over, Some(switches(1, 4))), Verdict::Over);
+    assert_eq!(verdict(over, Some(switches(2, 0))), Verdict::Over);
+    assert_eq!(verdict(over, Some(switches(0, 0))), Verdict::Over);
     assert_eq!(verdict(over, None), Verdict::Over);
 }
 
-/// The calling thread's voluntary and involuntary context switches so far, from
-/// `/proc/thread-self/status`; `None` where they can't be read (Q-111).
-fn context_switches() -> Option<(u64, u64)> {
+/// The calling thread's context switches so far, from `/proc/thread-self/status`; `None`
+/// where they can't be read (Q-111).
+fn context_switches() -> Option<Switches> {
     let status = std::fs::read_to_string("/proc/thread-self/status").ok()?;
     let field = |key: &str| {
         status
@@ -228,10 +253,10 @@ fn context_switches() -> Option<(u64, u64)> {
             .find_map(|line| line.strip_prefix(key))
             .and_then(|rest| rest.trim().parse::<u64>().ok())
     };
-    Some((
-        field("voluntary_ctxt_switches:")?,
-        field("nonvoluntary_ctxt_switches:")?,
-    ))
+    Some(Switches {
+        voluntary: field("voluntary_ctxt_switches:")?,
+        involuntary: field("nonvoluntary_ctxt_switches:")?,
+    })
 }
 
 /// One frame-loop call's record under R-6's watchdog.
@@ -242,8 +267,8 @@ struct CallRecord {
     /// How many times the call went over 1 ms preempted (Q-111): reported, not failed.
     preempted: usize,
     /// Each time it went over 1 ms otherwise: the time, the frame and the context
-    /// switches during the call (voluntary, involuntary), where they could be read.
-    over: Vec<(Duration, usize, Option<(u64, u64)>)>,
+    /// switches during the call, where they could be read.
+    over: Vec<(Duration, usize, Option<Switches>)>,
 }
 
 /// The frame loop's calls under R-6's watchdog, by name.
@@ -262,9 +287,7 @@ impl Watchdog {
         let out = f();
         let elapsed = t.elapsed();
         let after = context_switches();
-        let switches = before
-            .zip(after)
-            .map(|((v0, i0), (v1, i1))| (v1 - v0, i1 - i0));
+        let switches = before.zip(after).map(|(before, after)| after.since(before));
         let index = match self.calls.iter().position(|c| c.name == name) {
             Some(i) => i,
             None => {
@@ -456,8 +479,7 @@ fn gpu_r06_statistics_arrive_two_frames_later_without_blocking() {
         .flat_map(|call| {
             call.over.iter().map(|(took, k, switches)| {
                 format!(
-                    "{} took {took:?} at frame {k}, context switches (voluntary, \
-                         involuntary) {switches:?}",
+                    "{} took {took:?} at frame {k}, context switches {switches:?}",
                     call.name
                 )
             })
