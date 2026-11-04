@@ -45,7 +45,7 @@ use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrTrackingRoot};
 use bevy_mod_xr::spaces::XrSpaceLocationFlags;
 use ftgsxr_app::{HudData, SettingsRes};
-use ftgsxr_core::{Pose, Quat, Vec3};
+use ftgsxr_core::Pose;
 use openxr::{Action, ActionSet, Haptic, Path, Posef};
 
 use crate::XrError;
@@ -421,26 +421,27 @@ fn despawn_spaces(spaces: Query<Entity, With<HandSpace>>, mut commands: Commands
 /// stage space, the rig the root is bound to and the LOCAL fallback's lift included;
 /// Q-128, #461).
 fn to_pose(root: &GlobalTransform, t: &Transform) -> Pose {
-    let (_, r, p) = root.mul_transform(*t).to_scale_rotation_translation();
+    let (_, rotation, translation) = root.mul_transform(*t).to_scale_rotation_translation();
     Pose {
-        translation: Vec3::new(p.x, p.y, p.z),
-        rotation: Quat::from_xyzw(r.x, r.y, r.z, r.w),
+        translation,
+        rotation,
+        scale: 1.0,
+    }
+}
+
+/// A transform's translation and rotation as a `Pose` of scale 1 (a quad's scale is its
+/// size, a located space's 1); the crate's one conversion.
+pub(crate) fn pose_of(t: &Transform) -> Pose {
+    Pose {
+        translation: t.translation,
+        rotation: t.rotation,
         scale: 1.0,
     }
 }
 
 /// A located hand's poses taken into the tracking root's frame, as the controllers'.
 fn rooted(root: &GlobalTransform, mut hand: TrackedHand) -> TrackedHand {
-    let t = |p: &Pose| Transform {
-        translation: bevy::math::Vec3::new(p.translation.x, p.translation.y, p.translation.z),
-        rotation: bevy::math::Quat::from_xyzw(
-            p.rotation.x,
-            p.rotation.y,
-            p.rotation.z,
-            p.rotation.w,
-        ),
-        scale: bevy::math::Vec3::ONE,
-    };
+    let t = |p: &Pose| Transform::from_translation(p.translation).with_rotation(p.rotation);
     hand.aim = to_pose(root, &t(&hand.aim));
     hand.grip = to_pose(root, &t(&hand.grip));
     hand

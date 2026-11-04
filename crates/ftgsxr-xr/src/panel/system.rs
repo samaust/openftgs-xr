@@ -23,7 +23,7 @@ use ftgsxr_app::{Feature, Hand, Headset, Intent, PanelPointer, UiSurface, WorldP
 use ftgsxr_core::{Grab, Pose, Quat, ScaleLimits, TwoHandGrab};
 
 use super::{MainPanel, PanelFollow, summon_pose, wrist_menu_pose, wrist_menu_visible};
-use crate::tracking::{HandSource, TrackedHand, XrHands};
+use crate::tracking::{HandSource, TrackedHand, XrHands, pose_of};
 use crate::xr_input::{PanelGrabEdge, PanelQuad, TITLE_FRACTION};
 
 /// The main panel's default size (§1.8): 0.56 m × 0.42 m at 1024 × 768 px.
@@ -169,15 +169,6 @@ pub(crate) fn spawn_quads(
     match surface {
         Some(mut s) => *s = surface_now,
         None => commands.insert_resource(surface_now),
-    }
-}
-
-/// The pose of a quad's transform (its scale is its size, not the pose's).
-fn pose_of(t: &Transform) -> Pose {
-    Pose {
-        translation: t.translation,
-        rotation: t.rotation,
-        scale: 1.0,
     }
 }
 

@@ -19,7 +19,7 @@ use ftgsxr_app::{Permission, PermissionHandle, PlatformRes, Toast, ToastLevel};
 use ftgsxr_core::Pose;
 use openxr::sys;
 
-use super::{HandSource, TrackedHand};
+use super::{HandSource, TrackedHand, pose_of};
 use crate::XrError;
 
 /// The joint count of XR\_EXT\_hand\_tracking's default set (source-log 276).
@@ -52,20 +52,6 @@ pub(crate) fn transform_of(p: &sys::Posef) -> Transform {
         translation: bevy::math::Vec3::new(p.position.x, p.position.y, p.position.z),
         rotation: bevy::math::Quat::from_xyzw(o.x, o.y, o.z, o.w),
         scale: bevy::math::Vec3::ONE,
-    }
-}
-
-/// A transform as a `Pose` (scale 1).
-pub(crate) fn pose_of(t: &Transform) -> Pose {
-    Pose {
-        translation: ftgsxr_core::Vec3::new(t.translation.x, t.translation.y, t.translation.z),
-        rotation: ftgsxr_core::Quat::from_xyzw(
-            t.rotation.x,
-            t.rotation.y,
-            t.rotation.z,
-            t.rotation.w,
-        ),
-        scale: 1.0,
     }
 }
 
