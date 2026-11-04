@@ -54,10 +54,12 @@ pub(crate) const BONES: [(usize, usize); 24] = [
     (24, 25),
 ];
 
-/// The controller's box, metres: 3 × 3 cm across, 10 cm along the grip's −z (PRD #452).
+/// The controller's box, metres: 3 × 3 cm across, 10 cm along the grip's −z (PRD #452's
+/// geometry).
+// Q-T452.7
 const BOX_M: Vec3 = Vec3::new(0.03, 0.03, 0.10);
 /// The ring around the box's front end: its radius and its tube's radius, metres.
-// Q-288
+// Q-288, Q-T452.7
 const RING_M: (f32, f32) = (0.04, 0.004);
 /// The neutral grey (§1.8 "a neutral material").
 // Q-288

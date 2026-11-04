@@ -113,8 +113,10 @@ pub(crate) fn hand_state(raw: &RawHand) -> TrackedHand {
 }
 
 /// An aim moved farther than this counts as input for ownership, metres (Q-262).
+// Q-262
 const MOVED_M: f32 = 0.01;
 /// A pinch strength changed by more than this counts as input for ownership (Q-262).
+// Q-262
 const PINCH_STEP: f32 = 0.05;
 
 /// One side's ownership between its controller and its hand (§1.8 Hands, Q-262): the

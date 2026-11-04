@@ -24,22 +24,20 @@ use ftgsxr_core::{Grab, Pose, Quat, ScaleLimits, TwoHandGrab};
 
 use super::{MainPanel, PanelFollow, summon_pose, wrist_menu_pose, wrist_menu_visible};
 use crate::tracking::{HandSource, TrackedHand, XrHands};
-use crate::xr_input::{PanelGrabEdge, PanelQuad};
+use crate::xr_input::{PanelGrabEdge, PanelQuad, TITLE_FRACTION};
 
 /// The main panel's default size (§1.8): 0.56 m × 0.42 m at 1024 × 768 px.
 const PANEL_M: Vec2 = Vec2::new(0.56, 0.42);
 const PANEL_PX: UVec2 = UVec2::new(1024, 768);
-/// The texture's resolution after a resize, pixels per metre of width (PRD #452: 1024 px
-/// for 0.56 m), and the panel's 4:3 aspect, height over width.
+/// The texture's resolution after a resize, pixels per metre of width (PRD #452's
+/// geometry: 1024 px for 0.56 m), and the panel's 4:3 aspect, height over width.
+// Q-T452.7
 const PX_PER_M: f32 = 1829.0;
 const ASPECT: f32 = 0.75;
 /// The width a two-hand grab keeps the panel between (§1.8: 0.3–1.2 m).
 const WIDTH_LIMITS: ScaleLimits = ScaleLimits { min: 0.3, max: 1.2 };
-/// The title bar: the top strip of the texture, as a fraction of its height (48 px of
-/// 768).
-// Q-306
-const TITLE_FRACTION: f32 = 1.0 / 16.0;
 /// The wrist menu (Q-265): 0.16 m × 0.05 m at 640 × 200 px.
+// Q-265
 const WRIST_M: Vec2 = Vec2::new(0.16, 0.05);
 const WRIST_PX: UVec2 = UVec2::new(640, 200);
 
@@ -141,6 +139,7 @@ pub(crate) fn spawn_quads(
             PanelQuad {
                 size_m: PANEL_M,
                 size_px: PANEL_PX,
+                title_bar: true,
             },
             quad(&mut meshes, &mut materials, &image),
             quad_transform(Pose::IDENTITY, PANEL_M),
@@ -156,6 +155,7 @@ pub(crate) fn spawn_quads(
         PanelQuad {
             size_m: WRIST_M,
             size_px: WRIST_PX,
+            title_bar: false,
         },
         quad(&mut meshes, &mut materials, &wrist),
         quad_transform(Pose::IDENTITY, WRIST_M),

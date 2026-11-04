@@ -9,7 +9,7 @@
 mod system;
 
 pub(crate) use system::XrInputPlugin;
-pub(crate) use system::{PanelGrabEdge, PanelQuad};
+pub(crate) use system::{PanelGrabEdge, PanelQuad, TITLE_FRACTION};
 
 use bevy::ecs::entity::Entity;
 use bevy::math::{Vec2, Vec3};
@@ -45,6 +45,7 @@ pub struct XrInputConfig {
 }
 
 /// §1.8's and Appendix D.3's thresholds, D-44's dead zone, snap turn, locomotion on.
+// Q-302
 impl Default for XrInputConfig {
     fn default() -> Self {
         XrInputConfig {
@@ -113,7 +114,8 @@ pub(crate) fn aim_ray(aim: &Pose) -> (Vec3, Vec3) {
     (aim.translation, (aim.rotation * Vec3::NEG_Z).normalize())
 }
 
-const SIDES: [Hand; 2] = [Hand::Left, Hand::Right];
+/// The two sides in `XrHands`' order, left then right.
+pub(crate) const SIDES: [Hand; 2] = [Hand::Left, Hand::Right];
 
 /// Appendix D.2 and D.3 to intents, pure given the state (§2.1): per hand in the order
 /// left, right, its `Pointer` (while tracked), its `Select` edge, its grab (`GrabBegin`

@@ -35,7 +35,7 @@ The main panel is grabbed through `PanelPointer`'s grab presses, which `xr_input
 
 Each hand that joins or leaves the grab sends `xr_input`'s crate-private `PanelGrabEdge`, which the haptics turn into D-44's grab pulse (Q-T452.4).
 
-During a two-hand grab the quad scales live: the transform's scale, `PanelQuad.size_m` and `UiSurface::Panel.size_m` follow each frame, each written only when it changes. When the two-hand grab ends, the image is re-created at the new width's resolution (Q-306's pixels per metre, rounded), and `WorldPanel.image`, the material, `PanelQuad.size_px` and `UiSurface::Panel.size_px` are updated, so `ui` gets a new panel camera for the new image (`ftgsxr-app/ui.md`). Since a hand's pinch is `select` and `grab` at once (Appendix D.3), a pinch on the title bar also clicks the tab under it.
+During a two-hand grab the quad scales live: the transform's scale, `PanelQuad.size_m` and `UiSurface::Panel.size_m` follow each frame, each written only when it changes. When the two-hand grab ends, the image is re-created at the new width's resolution (Q-306's pixels per metre, rounded), and `WorldPanel.image`, the material, `PanelQuad.size_px` and `UiSurface::Panel.size_px` are updated, so `ui` gets a new panel camera for the new image (`ftgsxr-app/ui.md`). A hand's pinch is `select` and `grab` at once (Appendix D.3), so on the title bar `xr_input` withholds the pinch's select from the `PanelPointer`: the pinch moves the panel and clicks no tab (Q-T452.6). The strip's extent is `xr_input`'s `TITLE_FRACTION`, and `PanelQuad.title_bar` marks the main panel's quad (the wrist menu has none).
 
 ## The wrist menu
 

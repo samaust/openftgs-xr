@@ -8,26 +8,27 @@
 //! D-44's haptic pulses from what the frame changed (Q-270).
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate};
+use bevy::asset::Assets;
 use bevy::color::Color;
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::gizmos::config::GizmoConfigStore;
 use bevy::gizmos::gizmos::Gizmos;
 use bevy::math::{Isometry3d, UVec2, Vec2, Vec3};
 use bevy::prelude::{
-    Component, Entity, GlobalTransform, InheritedVisibility, IntoScheduleConfigs, Query, Res,
-    ResMut, Resource, With, resource_exists,
+    ChildOf, Component, Entity, GlobalTransform, InheritedVisibility, IntoScheduleConfigs, Query,
+    Res, ResMut, Resource, Transform, With, Without, resource_exists,
 };
 use bevy::time::Time;
 use bevy_mod_openxr::openxr_session_running;
 use bevy_mod_openxr::session::OxrSession;
 use ftgsxr_app::{
-    Grabbed, Hand, Hovered, Intent, Locomotion, PanelPointer, PlayUiSound, Selected, SettingsRes,
-    UiSound, panel_hit, stick_response,
+    Grabbed, Hand, Hovered, Intent, LoadedModel, Locomotion, ManipulateSettings, PanelPointer,
+    PlayUiSound, Selected, SettingsRes, UiSound, panel_hit, pick_instance, stick_response,
 };
-use ftgsxr_core::Pose;
-use ftgsxr_render::{Colormap, RenderMode, SplatMode};
+use ftgsxr_core::{Aabb, Pose};
+use ftgsxr_render::{Colormap, RenderMode, SplatAsset, SplatMode, SplatModel};
 
-use super::{XrInputConfig, XrInputState, aim_ray, hands_to_intents};
+use super::{SIDES, XrInputConfig, XrInputState, aim_ray, hands_to_intents};
 use crate::XrError;
 use crate::error::log_warning;
 use crate::tracking::{Actions, GRAB, HOVER, HandSource, HapticLog, Pulse, TICK, XrHands};
@@ -42,19 +43,31 @@ pub(crate) struct PanelQuad {
     pub(crate) size_m: Vec2,
     /// Its texture's size in pixels.
     pub(crate) size_px: UVec2,
+    /// Whether its texture's top `TITLE_FRACTION` is a title bar (the main panel's,
+    /// Q-306), where a grab press is the panel's and no click (Q-T452.6).
+    pub(crate) title_bar: bool,
 }
+
+/// The title bar: the top strip of a quad's texture, as a fraction of its height (48 px
+/// of 768); `panel` grabs by it.
+// Q-306
+pub(crate) const TITLE_FRACTION: f32 = 1.0 / 16.0;
 
 /// The ray's length without a hit (§1.8 Rays, E10's t\_max).
 const RAY_M: f32 = 10.0;
-/// The dot at the hit: 1 cm across (PRD #452).
+/// The dot at the hit: 1 cm across (PRD #452's geometry).
+// Q-T452.7
 const DOT_RADIUS_M: f32 = 0.005;
 /// The stick's scroll on a panel at full deflection, in pixels per second (Q-304).
+// Q-304
 const SCROLL_PX_PER_S: f32 = 600.0;
 /// The teleport arc's launch speed, gravity and samples (Q-269).
+// Q-269
 const ARC_SPEED_MPS: f32 = 5.0;
 const ARC_GRAVITY: f32 = 9.8;
 const ARC_SAMPLES: usize = 64;
 /// The move stick's forward value that shows the arc, and the release (Q-269).
+// Q-269
 const ARC_SHOW: f32 = 0.7;
 const ARC_RELEASE: f32 = 0.3;
 
@@ -87,6 +100,9 @@ impl Plugin for XrInputPlugin {
 #[derive(Resource, Default)]
 struct InputState {
     input: XrInputState,
+    /// Per side, a select press withheld from a title bar's grab, whose release is
+    /// withheld too (Q-T452.6).
+    withheld: [bool; 2],
     /// The arc's end while the `move` stick is held forward (Q-269), `None` while not
     /// aiming; `Some(None)` aiming at nothing.
     aiming: Option<Option<Vec3>>,
@@ -184,6 +200,33 @@ pub(crate) fn teleport_arc(aim: &Pose) -> Option<Vec<Vec3>> {
     Some(points)
 }
 
+/// Every instance's (entity, stage pose, B_m) for E10, as `manipulate` picks them: its
+/// pose relative to the content group followed by the group's (§1.14), the scale from
+/// x; an instance whose asset is not loaded has none.
+fn instance_boxes(
+    instances: &Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    groups: &Query<&Transform, Without<LoadedModel>>,
+    assets: Option<&Assets<SplatAsset>>,
+) -> Vec<(Entity, Pose, Aabb)> {
+    let Some(assets) = assets else {
+        return Vec::new();
+    };
+    let pose = |t: &Transform| Pose {
+        translation: t.translation,
+        rotation: t.rotation,
+        scale: t.scale.x,
+    };
+    instances
+        .iter()
+        .filter_map(|(e, t, m, parent)| {
+            let group = parent
+                .and_then(|c| groups.get(c.parent()).ok())
+                .map_or(Pose::IDENTITY, pose);
+            Some((e, pose(t).then(&group), assets.get(&m.0)?.bounds))
+        })
+        .collect()
+}
+
 /// The hands that hold an instance (a `Grabbed` names them): their rays stay with the
 /// instances (Q-304).
 fn holding(grabbed: &Query<&Grabbed>) -> Vec<Hand> {
@@ -197,8 +240,6 @@ fn holding(grabbed: &Query<&Grabbed>) -> Vec<Hand> {
     out
 }
 
-const SIDES: [Hand; 2] = [Hand::Left, Hand::Right];
-
 /// One frame of input: the arbitration (Q-263), `hands_to_intents`, the teleport
 /// (Q-269), and the frame's record for the drawing.
 // Q-263, Q-269, Q-303, Q-304
@@ -210,6 +251,10 @@ fn write_intents(
     time: Option<Res<Time>>,
     selected: Query<(Entity, Option<&SplatMode>), With<Selected>>,
     grabbed: Query<&Grabbed>,
+    instances: Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    groups: Query<&Transform, Without<LoadedModel>>,
+    assets: Option<Res<Assets<SplatAsset>>>,
+    manipulate: Option<Res<ManipulateSettings>>,
     quads: Query<(
         Entity,
         &PanelQuad,
@@ -246,8 +291,11 @@ fn write_intents(
         })
         .collect();
     let dt = time.map_or(0.0, |t| t.delta_secs());
+    let boxes = instance_boxes(&instances, &groups, assets.as_deref());
+    let ray_max_m = manipulate.map_or(RAY_M, |m| m.ray_max_m);
 
-    // The arbitration: a tracked hand that holds no instance and points at a quad.
+    // The arbitration: a tracked hand that holds no instance and points at a quad nearer
+    // than any instance (§1.8 Rays' first hit, Q-T452.8).
     let mut now = *hands;
     let mut on_panel: [Option<(Entity, Vec2, f32)>; 2] = [None, None];
     let mut scroll = [0.0f32; 2];
@@ -266,7 +314,9 @@ fn write_intents(
         let hit = if held.contains(&side) {
             None
         } else {
-            nearest_panel(origin, dir, &quads)
+            nearest_panel(origin, dir, &quads).filter(|(_, _, d)| {
+                pick_instance(origin, dir, &boxes, ray_max_m).is_none_or(|(_, t)| *d <= t)
+            })
         };
         frame.rays[i] = Some(RayDraw {
             origin,
@@ -315,6 +365,31 @@ fn write_intents(
         presses[i].1.extend(grab);
         false
     });
+    // Q-T452.6: a grab press on a title bar is the panel's; the select press that comes
+    // with it (a pinch is both, Appendix D.3) is withheld, and so is its release.
+    for (i, side) in SIDES.into_iter().enumerate() {
+        let on_strip = on_panel[i].is_some_and(|(panel, pixel, _)| {
+            quads.iter().any(|(e, _, q)| {
+                *e == panel && q.title_bar && pixel.y < q.size_px.y as f32 * TITLE_FRACTION
+            })
+        });
+        let (select, grab) = &mut presses[i];
+        if on_strip && grab.contains(&true) && select.contains(&true) {
+            select.retain(|p| !*p);
+            state.withheld[i] = true;
+        }
+        if state.withheld[i] && select.contains(&false) {
+            select.retain(|p| *p);
+            state.withheld[i] = false;
+        }
+        if out
+            .iter()
+            .any(|x| matches!(x, Intent::Select { hand, pressed: false } if *hand == side))
+        {
+            // Released off the quads: nothing is withheld any more.
+            state.withheld[i] = false;
+        }
+    }
     for (i, side) in SIDES.into_iter().enumerate() {
         if let Some((panel, pixel, _)) = on_panel[i] {
             let (select, grab) = std::mem::take(&mut presses[i]);
@@ -752,6 +827,7 @@ mod tests {
         let q = PanelQuad {
             size_m: Vec2::new(0.56, 0.42),
             size_px: UVec2::new(1024, 768),
+            title_bar: true,
         };
         let at = |z: f32| Pose {
             translation: Vec3::new(0.0, 0.0, z),
@@ -898,6 +974,7 @@ mod tests {
                 PanelQuad {
                     size_m: Vec2::new(0.56, 0.42),
                     size_px: UVec2::new(1024, 768),
+                    title_bar: true,
                 },
                 Transform::from_xyz(0.0, 0.0, 1.5),
                 GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 1.5)),
@@ -1055,5 +1132,86 @@ mod tests {
         assert!(detail.contains("wrote Select"), "{detail}");
         let mut q = app.world_mut().query::<&Grabbed>();
         assert_eq!(q.iter(app.world()).count(), 0, "the injected grab is gone");
+    }
+
+    /// §1.8 Rays ("to the first hit"), Q-T452.8: a panel behind the instance does not
+    /// take the ray; the instance, the nearer hit, is hovered and selected.
+    #[test]
+    fn arbitration_an_instance_in_front_of_a_panel_takes_the_ray() {
+        use bevy::prelude::Transform;
+        let (mut app, instance) = app_with_p1();
+        // The main panel 1 m behind P1, seen from the hand through it.
+        app.world_mut().spawn((
+            PanelQuad {
+                size_m: Vec2::new(0.56, 0.42),
+                size_px: UVec2::new(1024, 768),
+                title_bar: true,
+            },
+            Transform::from_xyz(0.0, 0.0, -1.0),
+            GlobalTransform::from(Transform::from_xyz(0.0, 0.0, -1.0)),
+        ));
+        aiming(&mut app, 0.0);
+        app.update();
+        app.update();
+        let hovered = app.world().get::<Hovered>(instance).copied();
+        assert_eq!(hovered.map(|h| h.hand), Some(Hand::Right), "hovered");
+        aiming(&mut app, 1.0);
+        app.update();
+        assert!(app.world().get::<Selected>(instance).is_some(), "selected");
+        assert!(
+            app.world().resource::<Seen>().0.is_empty(),
+            "nothing went to the panel"
+        );
+    }
+
+    /// Q-T452.6 (Q-306's side effect removed): a pinch on the main panel's title bar is
+    /// its grab and no click: the panel gets the grab press and release and no select;
+    /// a pinch below the strip clicks.
+    #[test]
+    fn a_pinch_on_the_title_bar_grabs_and_does_not_click() {
+        use bevy::app::Update;
+        use bevy::prelude::Transform;
+        let mut app = App::new();
+        app.add_plugins(XrInputPlugin)
+            .init_resource::<Seen>()
+            .add_systems(Update, collect);
+        app.world_mut().spawn((
+            PanelQuad {
+                size_m: Vec2::new(0.56, 0.42),
+                size_px: UVec2::new(1024, 768),
+                title_bar: true,
+            },
+            Transform::default(),
+            GlobalTransform::default(),
+        ));
+        // Pixel row 20 (of the 48 px strip) and row 300, from 3 m in front.
+        let pinch = |app: &mut App, row: f32, strength: f32| {
+            let y = 0.21 - row / 768.0 * 0.42;
+            let aim = aim_at(0.0, y, 3.0, Quat::IDENTITY);
+            app.world_mut().resource_mut::<XrHands>().right = Some(crate::TrackedHand {
+                aim,
+                grip: aim,
+                pinch: strength,
+                pinch_middle: 0.0,
+                squeeze: 0.0,
+                trigger: 0.0,
+                stick: Vec2::ZERO,
+                primary: false,
+                secondary: false,
+                menu: false,
+                source: HandSource::Hand,
+                tracked: true,
+            });
+            app.update();
+            let seen = std::mem::take(&mut app.world_mut().resource_mut::<Seen>().0);
+            let select: Vec<bool> = seen.iter().flat_map(|p| p.select.clone()).collect();
+            let grab: Vec<bool> = seen.iter().flat_map(|p| p.grab.clone()).collect();
+            (select, grab)
+        };
+        pinch(&mut app, 20.0, 0.0);
+        assert_eq!(pinch(&mut app, 20.0, 0.9), (vec![], vec![true]));
+        assert_eq!(pinch(&mut app, 20.0, 0.0), (vec![], vec![false]));
+        assert_eq!(pinch(&mut app, 300.0, 0.9), (vec![true], vec![true]));
+        assert_eq!(pinch(&mut app, 300.0, 0.0), (vec![false], vec![false]));
     }
 }
