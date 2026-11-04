@@ -493,6 +493,7 @@ fn run_camera(
     rigs: Query<&Transform, (With<PlayerRig>, Without<DesktopCamera>)>,
     selected: Instances,
     newly_selected: Query<(), Added<Selected>>,
+    mut deselected: RemovedComponents<Selected>,
     groups: Groups<'_, '_>,
     assets: Option<Res<Assets<SplatAsset>>>,
     time: Res<Time>,
@@ -500,19 +501,30 @@ fn run_camera(
     let Ok((mut local, mut projection)) = cameras.single_mut() else {
         intents.clear();
         jumps.clear();
+        deselected.clear();
         return;
     };
     let rig = rigs.iter().next().map(pose_of).unwrap_or(Pose::IDENTITY);
     let mut pose = pose_of(&local).then(&rig);
     pose.scale = 1.0;
-    // §1.7 Orbit: the orbit follows a new selection, at its distance.
-    if ctl.orbit
-        && !newly_selected.is_empty()
-        && let Some(c) = assets
+    // §1.7 Orbit: the orbit follows a new selection, at its distance, and returns to the
+    // stage origin, at its distance, when the selection becomes empty (a deselect, or the
+    // selected instance unloaded; #421).
+    let emptied = deselected.read().count() > 0 && selected.is_empty();
+    let retarget = if !ctl.orbit {
+        None
+    } else if !newly_selected.is_empty() {
+        assets
             .as_ref()
             .and_then(|a| selected_corners(&selected, &groups, a))
-    {
-        ctl.target = c.iter().sum::<Vec3>() / 8.0;
+            .map(|c| c.iter().sum::<Vec3>() / 8.0)
+    } else if emptied {
+        Some(Vec3::ZERO)
+    } else {
+        None
+    };
+    if let Some(target) = retarget {
+        ctl.target = target;
         pose.rotation = look_at(pose.translation, ctl.target);
         pose.translation = ctl.target - pose.rotation * Vec3::NEG_Z * ctl.distance;
     }
