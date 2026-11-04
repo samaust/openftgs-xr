@@ -10,7 +10,7 @@ use bevy::window::{Monitor, OnMonitor, PrimaryWindow};
 use ftgsxr_render::{Foveation, SortMode, SplatStats, SplatTierState};
 
 use crate::library::TierReload;
-use crate::persist::SettingsRes;
+use crate::persist::{SettingsRes, TierPick};
 use crate::ui::{DockHooks, Tab};
 
 /// The governor's switch and thresholds (§2.1, E16): it steps a knob down after
@@ -237,6 +237,7 @@ impl Plugin for GovernorPlugin {
                 ladder: &DESKTOP_LADDER,
                 counters: GovernorCounters::default(),
             })
+            .add_message::<TierPick>()
             .add_systems(Update, (follow_settings, run_governor).chain())
             // Q-238, Q-240: the switch lands before `Update` and before the library's
             // reload, so no load or upload of the frame sees the old tier.
@@ -244,23 +245,18 @@ impl Plugin for GovernorPlugin {
     }
 }
 
-/// The live tier switch (§1.7 Panels, §1.12): when `[general] tier` changes while the
-/// app runs to a tier `by_name` knows, the running tier becomes it, its knobs at its own
-/// values. Only a change switches, so a `--tier` override at startup holds (Q-240).
+/// The live tier switch (§1.7 Panels, §1.12): the last tier the user picked this frame,
+/// when `by_name` knows it and it is not the running one, becomes the running tier, its
+/// knobs at its own values, even when it equals the saved `[general] tier`. Only a pick
+/// switches: neither the first frame nor a difference between the settings and the
+/// running tier does, so a `--tier` override at startup holds until the user picks a tier
+/// (Q-240).
 // Q-240, Q-239
-fn follow_tier(
-    settings: Option<Res<SettingsRes>>,
-    mut tier: ResMut<SplatTierState>,
-    mut seen: Local<Option<String>>,
-) {
-    let Some(settings) = settings else { return };
-    let wanted = &settings.0.general.tier;
-    if seen.as_ref() == Some(wanted) {
+fn follow_tier(mut picks: MessageReader<TierPick>, mut tier: ResMut<SplatTierState>) {
+    let Some(TierPick(wanted)) = picks.read().last() else {
         return;
-    }
-    let first = seen.is_none();
-    *seen = Some(wanted.clone());
-    if first || tier.tier.name == *wanted {
+    };
+    if tier.tier.name == *wanted {
         return;
     }
     match ftgsxr_render::QualityTier::by_name(wanted) {
@@ -273,7 +269,8 @@ fn follow_tier(
 }
 
 /// `Governor.enabled` from the settings and the running tier, whenever either changes
-/// (§1.12).
+/// (§1.12), so a pick of the build's default tier with `[general] governor` on turns the
+/// governor back on (Q-240).
 // Q-179, Q-240
 fn follow_settings(
     settings: Option<Res<SettingsRes>>,
@@ -295,8 +292,8 @@ fn follow_settings(
 /// The Display tab's section (§1.7 Panels): the running tier and its knobs, the
 /// governor's switch (`[general] governor`, which `follow_settings` maps), and the render
 /// scale by hand while the governor is off, in tenths between E16's floor and the tier's
-/// own (Q-218). The tier itself is `persist`'s choice of `[general] tier`, which
-/// `follow_tier` switches to (Q-240).
+/// own (Q-218). The tier picker is `persist`'s, whose pick `follow_tier` switches to
+/// (Q-240).
 // Q-218, Q-240
 fn display_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
     use bevy_egui::egui;
@@ -367,6 +364,7 @@ fn run_governor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftgsxr_render::QualityTier;
 
     /// Draws a dock section once on a headless egui context (#286).
     fn draw_once(world: &mut World, hook: fn(&mut World, &mut bevy_egui::egui::Ui)) {
@@ -393,6 +391,114 @@ mod tests {
         draw_once(&mut world, display_section);
         assert!(!world.resource_ref::<SplatTierState>().is_changed());
         assert!(!world.resource_ref::<SettingsRes>().is_changed());
+    }
+
+    /// The tier switch's systems on their own (Q-240): `[general] tier` saved as `saved`,
+    /// `running` as `--tier` would set it, the governor at its defaults.
+    fn tier_app(saved: &str, running: &QualityTier) -> App {
+        let mut app = App::new();
+        let mut settings = SettingsRes::default();
+        settings.0.general.tier = saved.into();
+        app.add_message::<TierPick>()
+            .insert_resource(settings)
+            .insert_resource(SplatTierState::of(running))
+            .insert_resource(Governor::default())
+            .add_systems(PreUpdate, follow_tier)
+            .add_systems(Update, follow_settings);
+        app
+    }
+
+    /// A pick as the Display or Settings tab's tier picker makes it.
+    fn pick(app: &mut App, tier: &str) {
+        crate::persist::pick_tier(app.world_mut(), tier.into());
+    }
+
+    fn running(app: &App) -> String {
+        app.world().resource::<SplatTierState>().tier.name.clone()
+    }
+
+    fn saved(app: &App) -> String {
+        app.world().resource::<SettingsRes>().0.general.tier.clone()
+    }
+
+    fn governing(app: &App) -> bool {
+        app.world().resource::<Governor>().enabled
+    }
+
+    fn frames(app: &mut App, n: usize) {
+        for _ in 0..n {
+            app.update();
+        }
+    }
+
+    // Q-240, Q-179 (moved from `tests/live_tier.rs`: the pick is crate-private, #402)
+    #[test]
+    fn live_tier_switch_follows_the_settings() {
+        let mut app = tier_app("desktop", &QualityTier::desktop());
+        frames(&mut app, 2);
+        assert_eq!(running(&app), "desktop");
+        assert!(governing(&app));
+        pick(&mut app, "quest-low");
+        frames(&mut app, 2);
+        // §1.12's table: `quest-low` runs at render scale 0.8, SH cap 1; the knobs start at
+        // the new tier's own values.
+        let s = app.world().resource::<SplatTierState>().clone();
+        assert_eq!(s.tier, QualityTier::quest_low());
+        assert_eq!((s.render_scale, s.sh_cap), (0.8, 1));
+        // The pick is saved too (Q-207's debounce writes `SettingsRes`).
+        assert_eq!(saved(&app), "quest-low");
+        // Q-179: a tier chosen by hand turns the governor off.
+        assert!(!governing(&app));
+        // Back to the build's default with `[general] governor` on: back on.
+        pick(&mut app, "desktop");
+        frames(&mut app, 2);
+        assert_eq!(running(&app), "desktop");
+        assert!(governing(&app));
+        // A name no tier has leaves the running tier alone, and is not saved.
+        pick(&mut app, "no-such-tier");
+        frames(&mut app, 2);
+        assert_eq!(running(&app), "desktop");
+        assert_eq!(saved(&app), "desktop");
+    }
+
+    // Q-240 (#402): under a `--tier` override, a pick of the saved tier switches to it.
+    #[test]
+    fn a_pick_of_the_saved_tier_ends_a_startup_override() {
+        let mut app = tier_app("desktop", &QualityTier::quest_high());
+        frames(&mut app, 5);
+        // Nothing switches at the first frame or because the settings differ.
+        assert_eq!(running(&app), "quest-high");
+        assert!(!governing(&app));
+        pick(&mut app, "desktop");
+        frames(&mut app, 2);
+        assert_eq!(running(&app), "desktop");
+        assert_eq!(saved(&app), "desktop");
+        // Q-179: the build's default with `[general] governor` on.
+        assert!(governing(&app));
+    }
+
+    // Q-240: only a pick switches; a write of `[general] tier` alone does not.
+    #[test]
+    fn a_settings_write_alone_leaves_the_running_tier() {
+        let mut app = tier_app("desktop", &QualityTier::desktop());
+        frames(&mut app, 2);
+        app.world_mut().resource_mut::<SettingsRes>().0.general.tier = "quest-low".into();
+        frames(&mut app, 2);
+        assert_eq!(running(&app), "desktop");
+    }
+
+    // Q-240: picking the tier already running changes nothing, its knobs included.
+    #[test]
+    fn a_pick_of_the_running_tier_changes_nothing() {
+        let mut app = tier_app("desktop", &QualityTier::quest_high());
+        frames(&mut app, 2);
+        app.world_mut()
+            .resource_mut::<SplatTierState>()
+            .render_scale = 0.7;
+        pick(&mut app, "quest-high");
+        frames(&mut app, 2);
+        let s = app.world().resource::<SplatTierState>();
+        assert_eq!((s.tier.name.as_str(), s.render_scale), ("quest-high", 0.7));
     }
 
     #[test]

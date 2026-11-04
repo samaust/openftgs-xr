@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The live tier switch (#373; §1.7 Panels, §1.12, D-37; Q-179, Q-238, Q-239, Q-240): a
-//! change of `[general] tier` while the app runs switches the running tier, the governor
-//! follows Q-179's rule, and the loaded instances are reloaded with the new tier's layout
-//! on their own entities, without a restart; a reduced instance takes the new tier's
-//! reduce-to-budget count (#395).
+//! pick of a tier in the dock switches the running tier and the loaded instances are
+//! reloaded with the new tier's layout on their own entities, without a restart; a
+//! reduced instance takes the new tier's reduce-to-budget count (#395). The pick is
+//! crate-private, so the tests that pick are `governor`'s and `persist::panels`'s own
+//! (#402); these switch the running tier as a pick does, by writing `SplatTierState`, and
+//! check what only the whole app shows.
 
 mod support;
 
 use bevy::prelude::*;
-use ftgsxr_app::{Governor, QualityTier, SettingsRes};
+use ftgsxr_app::{QualityTier, SettingsRes};
 use ftgsxr_render::{SplatModel, SplatTierState};
 use support::{Setup, TestApp};
 
@@ -18,36 +20,9 @@ fn running(app: &App) -> String {
     app.world().resource::<SplatTierState>().tier.name.clone()
 }
 
-/// Sets `[general] tier` as the Display or Settings tab's choice does.
-fn pick(app: &mut App, tier: &str) {
-    app.world_mut().resource_mut::<SettingsRes>().0.general.tier = tier.into();
-}
-
-// Q-240, Q-179
-#[test]
-fn live_tier_switch_follows_the_settings() {
-    let mut t = TestApp::new("live_follow");
-    t.frames(2);
-    assert_eq!(running(&t.app), "desktop");
-    assert!(t.app.world().resource::<Governor>().enabled);
-    pick(&mut t.app, "quest-low");
-    t.frames(2);
-    // §1.12's table: `quest-low` runs at render scale 0.8, SH cap 1; the knobs start at
-    // the new tier's own values.
-    let s = t.app.world().resource::<SplatTierState>().clone();
-    assert_eq!(s.tier, QualityTier::quest_low());
-    assert_eq!((s.render_scale, s.sh_cap), (0.8, 1));
-    // Q-179: a tier chosen by hand turns the governor off.
-    assert!(!t.app.world().resource::<Governor>().enabled);
-    // Back to the build's default with `[general] governor` on: back on.
-    pick(&mut t.app, "desktop");
-    t.frames(2);
-    assert_eq!(running(&t.app), "desktop");
-    assert!(t.app.world().resource::<Governor>().enabled);
-    // A name no tier has leaves the running tier alone.
-    pick(&mut t.app, "no-such-tier");
-    t.frames(2);
-    assert_eq!(running(&t.app), "desktop");
+/// Switches the running tier to `tier`, as `governor` does for a pick.
+fn switch(app: &mut App, tier: QualityTier) {
+    *app.world_mut().resource_mut::<SplatTierState>() = SplatTierState::of(&tier);
 }
 
 // Q-240: `--tier` at startup holds until the user picks a tier.
@@ -68,6 +43,15 @@ fn live_tier_switch_leaves_a_startup_override_alone() {
         .0
         .display
         .centers_radius = 3.0;
+    t.frames(2);
+    assert_eq!(running(&t.app), "quest-high");
+    // Nor does a write of `[general] tier` that is not a pick (#402).
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .general
+        .tier = "quest-low".into();
     t.frames(2);
     assert_eq!(running(&t.app), "quest-high");
 }
@@ -111,7 +95,7 @@ fn live_tier_switch_keeps_the_instance() {
         .get::<ftgsxr_app::LoadedModel>(e)
         .unwrap()
         .clone();
-    pick(&mut t.app, "quest-balanced");
+    switch(&mut t.app, QualityTier::quest_balanced());
     assert!(
         t.until_for(std::time::Duration::from_secs(30), |app| {
             asset_of(app, e).is_some_and(|a| a != before)
@@ -177,7 +161,7 @@ fn gpu_live_tier_switch_reloads_with_the_new_layout() {
     );
     // A hidden instance stays hidden through the reload (Q-238).
     t.app.world_mut().entity_mut(e).insert(Visibility::Hidden);
-    pick(&mut t.app, "quest-balanced");
+    switch(&mut t.app, QualityTier::quest_balanced());
     assert!(
         t.until_for(std::time::Duration::from_secs(30), |_| uploads(&events, e)
             .len()
@@ -453,6 +437,9 @@ fn gpu_live_tier_switch_reduces_instead_of_refusing() {
 }
 
 // Q-240: a pick is also saved, so the next start runs it.
+// Q-240: a pick is also saved, so the next start runs it. The pick writes `[general]
+// tier` (`governor::tests::live_tier_switch_follows_the_settings`); this writes it as the
+// pick does and checks the debounce saves it, while the write alone switches nothing.
 #[test]
 fn live_tier_switch_is_saved_for_the_next_start() {
     let target = support::scratch("live_saved_target").join("s.toml");
@@ -461,7 +448,12 @@ fn live_tier_switch_is_saved_for_the_next_start() {
         app.insert_resource(ftgsxr_app::SettingsPath(given));
     });
     t.frames(2);
-    pick(&mut t.app, "quest-high");
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .general
+        .tier = "quest-high".into();
     // The settings are written within a second (§1.11; 60 frames at 60 Hz).
     let saved = |p: &std::path::Path| {
         p.exists()
@@ -480,6 +472,6 @@ fn live_tier_switch_is_saved_for_the_next_start() {
             break;
         }
     }
-    assert!(written, "the pick is saved");
-    assert_eq!(running(&t.app), "quest-high");
+    assert!(written, "the written tier is saved");
+    assert_eq!(running(&t.app), "desktop");
 }
