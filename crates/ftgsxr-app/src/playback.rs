@@ -88,11 +88,11 @@ pub(crate) fn next_loop(m: LoopMode) -> LoopMode {
     }
 }
 
-/// Whether the scrub bar is being dragged (§1.6 Audio, "while scrubbing … it is
-/// silent"): the dock sets it while egui counts the press on the bar as a drag and clears
-/// it on release and in every frame the bar is not drawn; `audio` keeps the soundtracks
-/// silent while it holds. A click on the bar and every other seek are one-off seeks, not
-/// scrubs (Q-246).
+/// Whether the scrub bar is pressed (§1.6 Audio, "while scrubbing … it is silent"): the
+/// dock sets it from the press on the bar, whether the pointer then moves or not (a click
+/// included), and it ends on release and in every frame the bar is not drawn; `audio`
+/// keeps the soundtracks silent while it holds. Every other seek is a one-off seek, not a
+/// scrub (Q-246).
 // Q-246
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Scrubbing(pub(crate) bool);

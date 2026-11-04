@@ -126,8 +126,9 @@ fn i05_audio_mutes_otherwise_and_seeks_on_resume() {
     follows(&mut t, 5);
 }
 
-// Q-190, Q-246: a seek while playing at speed 1 (the start and end keys, a click on the
-// scrub bar) moves the sink to the clock's position and leaves it playing.
+// Q-190, Q-246: a one-off seek while playing at speed 1 (the start and end keys, the
+// frame step, a camera's seek) moves the sink to the clock's position and leaves it
+// playing.
 #[test]
 fn i05_audio_a_one_off_seek_while_playing_keeps_playing() {
     let mut t = with_soundtrack("i05-audio-one-off-seek");
