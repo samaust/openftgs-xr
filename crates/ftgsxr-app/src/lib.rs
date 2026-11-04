@@ -55,9 +55,10 @@ pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick
 pub use rig::{
     ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
 };
-// §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`.
+// §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`.
 pub use ui::{
-    HudData, HudInstance, Toast, ToastLevel, UiSurface, WorldPanel, WristMenu, panel_hit,
+    HudData, HudInstance, PanelPointer, Toast, ToastLevel, UiSurface, WorldPanel, WristMenu,
+    panel_hit,
 };
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;
@@ -66,10 +67,10 @@ pub use capture::ScreenshotRequest;
 pub use persist::{
     PersistCommand, SettingsPath, SettingsRes, SettingsWarnings, apply_scene, scene_from_world,
 };
-// §2.1 `ftgsxr_app::platform`.
+// §2.1 `ftgsxr_app::platform`; Q-266: `Headset`.
 pub use platform::{
-    CameraFrames, CameraThumb, Permission, PermissionHandle, PickHandle, PickKind, Platform,
-    PlatformRes,
+    CameraFrames, CameraThumb, Headset, Permission, PermissionHandle, PickHandle, PickKind,
+    Platform, PlatformRes,
 };
 // §2.1 `ftgsxr_app::plugin`; Q-151: `init_desktop_log` and the `IoError` it returns.
 pub use ftgsxr_io::IoError;

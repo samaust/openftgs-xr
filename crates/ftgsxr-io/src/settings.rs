@@ -177,6 +177,10 @@ pub struct DisplaySettings {
     pub colormap: String,
     /// The floor grid at y = 0 (§1.4).
     pub grid: bool,
+    /// The high-contrast alternative for the rays and the highlight (§1.8 Comfort and
+    /// accessibility).
+    // Q-278
+    pub high_contrast: bool,
     /// The optional overlays (§1.4).
     pub overlays: OverlaySettings,
 }
@@ -380,6 +384,7 @@ impl Default for DisplaySettings {
             centers_radius: 3.0,
             colormap: "dc".into(),
             grid: true,
+            high_contrast: false, // Q-278
             overlays: OverlaySettings::default(),
         }
     }
@@ -810,6 +815,7 @@ impl Reader {
                 "colormap",
                 "background",
                 "grid",
+                "high_contrast", // Q-278
                 "overlays",
             ],
         );
@@ -849,6 +855,10 @@ impl Reader {
                 .take(t, p, "colormap", choice(COLORMAPS))
                 .unwrap_or(d.colormap),
             grid: self.take(t, p, "grid", flag()).unwrap_or(d.grid),
+            // Q-278
+            high_contrast: self
+                .take(t, p, "high_contrast", flag())
+                .unwrap_or(d.high_contrast),
             overlays,
         };
         (display, background)
@@ -1326,6 +1336,7 @@ fn document(s: &Settings) -> Table {
                 ("colormap", Value::String(d.colormap.clone())),
                 ("background", floats(&e.background)),
                 ("grid", Value::Boolean(d.grid)),
+                ("high_contrast", Value::Boolean(d.high_contrast)), // Q-278
                 (
                     "overlays",
                     Value::Table(table([

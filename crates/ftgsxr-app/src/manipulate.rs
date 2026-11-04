@@ -528,10 +528,15 @@ fn run_intents(
         let (o, d) = ray?;
         pick_instance(o, d, &boxes(q, &groups, &assets), s.ray_max_m)
     };
+    // The hands with a `Pointer` this frame: only they hover (Q-263).
+    let mut pointed: Vec<Hand> = Vec::new();
     for intent in intents.read() {
         match *intent {
             Intent::Pointer { hand, origin, dir } => {
                 hs.hands.entry(hand).or_default().ray = Some((origin, dir));
+                if !pointed.contains(&hand) {
+                    pointed.push(hand);
+                }
                 if hand == Hand::Mouse
                     && let Some(d) = &gizmo.drag
                 {
@@ -813,12 +818,16 @@ fn run_intents(
             commands.entity(e).insert(Selected);
         }
     }
-    // Hovered: each hand's last ray over the instances as they now stand; an instance
-    // two rays hit carries the nearer (Q-182).
+    // Hovered: recomputed each frame from that frame's `Pointer` intents, each hand's
+    // last ray of the frame over the instances as they now stand, a hand without one
+    // hovering nothing (Q-263, rewording Q-182); an instance two rays hit carries the
+    // nearer (Q-182).
     let all = boxes(&q, &groups, &assets);
     let mut hovered: HashMap<Entity, Hovered> = HashMap::new();
-    for (&hand, h) in &hs.hands {
-        let Some((o, d)) = h.ray else { continue };
+    for &hand in &pointed {
+        let Some((o, d)) = hs.hands.get(&hand).and_then(|h| h.ray) else {
+            continue;
+        };
         if let Some((e, distance)) = pick_instance(o, d, &all, s.ray_max_m)
             && hovered.get(&e).is_none_or(|v| distance < v.distance)
         {

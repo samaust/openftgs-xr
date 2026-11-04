@@ -91,3 +91,11 @@ pub trait CameraFrames: Send + Sync {
 /// The platform in the world.
 #[derive(Resource, Clone)]
 pub struct PlatformRes(pub Arc<dyn Platform>);
+
+/// The headset marker: present when the app runs on the headset, so panel mode, spatial
+/// audio and D-11's auto-fit apply (§1.5 Poses, §1.8 User interface, §1.10). The Quest's
+/// `main` inserts it before `AppPlugin`, as do the tests that need it; `play` never does,
+/// so `play --xr` keeps the dock, stereo audio and no auto-fit.
+// Q-266
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Headset;

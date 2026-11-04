@@ -81,6 +81,15 @@ fn send(t: &mut TestApp, intents: &[Intent]) {
     t.frames(2);
 }
 
+/// A ray in each of `send`'s two frames, as the adapters write it every frame:
+/// `Hovered` follows the frame's `Pointer` intents (Q-263).
+fn point(t: &mut TestApp, ray: Intent) {
+    for _ in 0..2 {
+        t.app.world_mut().write_message(ray);
+        t.frames(1);
+    }
+}
+
 /// Where the instance is drawn: its stage pose.
 fn stage(t: &TestApp, e: Entity) -> Pose {
     let (s, rotation, translation) = t
@@ -149,7 +158,7 @@ fn content_group_rays_pick_the_instance_where_it_is_drawn() {
         (drawn - unmoved).abs().max_element() > half,
         "{drawn} {unmoved}"
     );
-    send(&mut t, &[ray_at(Hand::Mouse, drawn)]);
+    point(&mut t, ray_at(Hand::Mouse, drawn));
     let h = *t
         .app
         .world()
@@ -165,7 +174,7 @@ fn content_group_rays_pick_the_instance_where_it_is_drawn() {
         }],
     );
     assert!(t.app.world().get::<Selected>(e).is_some());
-    send(&mut t, &[ray_at(Hand::Mouse, unmoved)]);
+    point(&mut t, ray_at(Hand::Mouse, unmoved));
     assert!(
         t.app.world().get::<Hovered>(e).is_none(),
         "nothing is drawn there"
