@@ -5,8 +5,8 @@
 //! played on `PlayUiSound`, and a `Soundtrack` for every instance whose `LoadedModel`
 //! names one, decoded off the main thread and kept in step with the clock. Everything
 //! reaches the system's output through the `AudioOutput` port (Q-149, Q-187): the kira
-//! adapter on the desktop and the Quest, `StubAudioOutput` in the tests. Stereo only; spatialization is
-//! M-5's.
+//! adapter on the desktop and the Quest, `StubAudioOutput` in the tests. Stereo only;
+//! spatialization is M-5's.
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
