@@ -462,6 +462,7 @@ impl Plugin for UiPlugin {
         cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
             app.init_resource::<PanelPointer>()
+                .init_resource::<crate::playback::Scrubbing>()
                 .add_systems(PreUpdate, panel_pointer)
                 .add_systems(EguiPrimaryContextPass, dock::draw);
         }
