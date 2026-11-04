@@ -510,6 +510,7 @@ fn run_camera(
     // §1.7 Orbit: the orbit follows a new selection, at its distance, and returns to the
     // stage origin, at its distance, when the selection becomes empty (a deselect, or the
     // selected instance unloaded; #421).
+    // The removals are read every frame, orbiting or not, so that none goes stale.
     let emptied = deselected.read().count() > 0 && selected.is_empty();
     let retarget = if !ctl.orbit {
         None

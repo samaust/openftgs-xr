@@ -10,7 +10,10 @@ use crate::support;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ftgsxr_app::{CameraCommand, Hand, Intent, LibraryCommand, LoadedModel, ModelRef, PlayerRig};
+use ftgsxr_app::{
+    CameraCommand, Hand, InstanceAction, Intent, LibraryCommand, LoadedModel, ModelRef, PlayerRig,
+    Selected,
+};
 use ftgsxr_render::{SplatAsset, SplatModel};
 use ftgsxr_testkit::fixtures_dir;
 use support::{Setup, TestApp};
@@ -252,12 +255,8 @@ fn the_settings_reach_the_camera_and_the_speed_returns_to_them() {
     assert_eq!(fov, 90.0, "the settings' fov is left as it is");
 }
 
-/// §1.7 Orbit: while orbiting, selecting an instance moves the orbit's target to its
-/// box centre, the distance kept.
-#[test]
-fn the_orbit_follows_a_new_selection() {
-    use ftgsxr_app::InstanceAction;
-    let mut t = windowed("rig_orbit_follow");
+/// Loads P1 and places it off the origin, at x = 3 m.
+fn load_p1_off_the_origin(t: &mut TestApp) -> Entity {
     t.command(LibraryCommand::LoadRef(ModelRef::File(
         fixtures_dir().join("probes/P1.safetensors"),
     )));
@@ -283,24 +282,37 @@ fn the_orbit_follows_a_new_selection() {
         .get_mut::<Transform>(e)
         .unwrap()
         .translation = Vec3::new(3.0, 0.0, 0.0);
+    e
+}
+
+/// The stage-space center of the instance's posed box (E10's B_m).
+fn posed_box_center(t: &TestApp, e: Entity) -> Vec3 {
+    let w = t.app.world();
+    let m = w.get::<SplatModel>(e).unwrap();
+    let b = w.resource::<Assets<SplatAsset>>().get(&m.0).unwrap().bounds;
+    let g = w.get::<GlobalTransform>(e).unwrap();
+    g.transform_point((b.min + b.max) / 2.0)
+}
+
+fn select(e: Entity) -> Intent {
+    Intent::Instance {
+        instance: e,
+        action: InstanceAction::Select,
+    }
+}
+
+/// §1.7 Orbit: while orbiting, selecting an instance moves the orbit's target to its
+/// box center, the distance kept.
+#[test]
+fn the_orbit_follows_a_new_selection() {
+    let mut t = windowed("rig_orbit_follow");
+    let e = load_p1_off_the_origin(&mut t);
     send(&mut t, &[cam(CameraCommand::ToggleOrbit)]);
     let before = camera(&mut t).1.translation();
     let d0 = before.length();
-    send(
-        &mut t,
-        &[Intent::Instance {
-            instance: e,
-            action: InstanceAction::Select,
-        }],
-    );
+    send(&mut t, &[select(e)]);
     t.frames(1);
-    let center = {
-        let w = t.app.world();
-        let m = w.get::<SplatModel>(e).unwrap();
-        let b = w.resource::<Assets<SplatAsset>>().get(&m.0).unwrap().bounds;
-        let g = w.get::<GlobalTransform>(e).unwrap();
-        g.transform_point((b.min + b.max) / 2.0)
-    };
+    let center = posed_box_center(&t, e);
     let g = camera(&mut t).1;
     assert!(
         (g.translation().distance(center) - d0).abs() < 1e-3,
@@ -310,54 +322,37 @@ fn the_orbit_follows_a_new_selection() {
     let to = (center - g.translation()).normalize();
     assert!(
         g.forward().as_vec3().distance(to) < 1e-4,
-        "looks at the box centre"
+        "looks at the box center"
     );
 }
 
-/// Loads P1 off the origin, at x = 3 m, switches orbit on and selects it: the camera then
-/// orbits its box centre (§1.7 Orbit).
-fn orbit_a_selected_instance(t: &mut TestApp) -> Entity {
-    use ftgsxr_app::InstanceAction;
-    t.command(LibraryCommand::LoadRef(ModelRef::File(
-        fixtures_dir().join("probes/P1.safetensors"),
-    )));
-    assert!(
-        t.until(600, |app| app
-            .world_mut()
-            .query::<&LoadedModel>()
-            .iter(app.world())
-            .count()
-            == 1),
-        "P1 loads"
-    );
+/// Orbits P1, selected off the origin, then sends `action` to it and waits until
+/// `emptied` holds; the camera must then orbit the stage origin, at the distance it had
+/// from the box center before (§1.7 Orbit, #421). The rig stays at the identity, so the
+/// camera's stage position is its global translation.
+fn the_orbit_returns_to_the_origin_after(
+    name: &str,
+    action: InstanceAction,
+    emptied: impl Fn(&mut App) -> bool,
+) {
+    let mut t = windowed(name);
+    let e = load_p1_off_the_origin(&mut t);
+    send(&mut t, &[cam(CameraCommand::ToggleOrbit), select(e)]);
     t.frames(1);
-    let e = {
-        let mut q = t
-            .app
-            .world_mut()
-            .query_filtered::<Entity, With<LoadedModel>>();
-        q.single(t.app.world()).unwrap()
-    };
-    t.app
-        .world_mut()
-        .get_mut::<Transform>(e)
-        .unwrap()
-        .translation = Vec3::new(3.0, 0.0, 0.0);
-    send(t, &[cam(CameraCommand::ToggleOrbit)]);
+    let center = posed_box_center(&t, e);
+    assert!(center.length() > 1.0, "the box center is off the origin");
+    let d = camera(&mut t).1.translation().distance(center);
     send(
-        t,
+        &mut t,
         &[Intent::Instance {
             instance: e,
-            action: InstanceAction::Select,
+            action,
         }],
     );
+    assert!(t.until(600, emptied), "nothing is selected");
+    // One more frame: the controller reads the removal the frame after it is made.
     t.frames(1);
-    e
-}
-
-/// The camera orbits the stage origin at `d`: it stands `d` from the origin and looks at it.
-fn assert_orbits_the_origin_at(t: &mut TestApp, d: f32) {
-    let g = camera(t).1;
+    let g = camera(&mut t).1;
     assert!(
         (g.translation().length() - d).abs() < 1e-3,
         "the distance kept: {} vs {d}",
@@ -375,61 +370,18 @@ fn assert_orbits_the_origin_at(t: &mut TestApp, d: f32) {
 /// origin, the distance kept.
 #[test]
 fn the_orbit_returns_to_the_origin_on_a_deselect() {
-    use ftgsxr_app::InstanceAction;
-    let mut t = windowed("rig_orbit_deselect");
-    let e = orbit_a_selected_instance(&mut t);
-    let center = {
-        let w = t.app.world();
-        let m = w.get::<SplatModel>(e).unwrap();
-        let b = w.resource::<Assets<SplatAsset>>().get(&m.0).unwrap().bounds;
-        let g = w.get::<GlobalTransform>(e).unwrap();
-        g.transform_point((b.min + b.max) / 2.0)
-    };
-    assert!(center.length() > 1.0, "the box centre is off the origin");
-    let d = camera(&mut t).1.translation().distance(center);
-    send(
-        &mut t,
-        &[Intent::Instance {
-            instance: e,
-            action: InstanceAction::Deselect,
-        }],
-    );
-    t.frames(1);
-    assert_orbits_the_origin_at(&mut t, d);
+    the_orbit_returns_to_the_origin_after("rig_orbit_deselect", InstanceAction::Deselect, |app| {
+        let w = app.world_mut();
+        w.query_filtered::<(), With<Selected>>().iter(w).count() == 0
+    });
 }
 
 /// §1.7 Orbit (#421): while orbiting, unloading the selected instance leaves nothing
 /// selected, so the orbit's target moves to the stage origin, the distance kept.
 #[test]
 fn the_orbit_returns_to_the_origin_when_the_selected_instance_unloads() {
-    use ftgsxr_app::InstanceAction;
-    let mut t = windowed("rig_orbit_unload");
-    let e = orbit_a_selected_instance(&mut t);
-    let center = {
-        let w = t.app.world();
-        let m = w.get::<SplatModel>(e).unwrap();
-        let b = w.resource::<Assets<SplatAsset>>().get(&m.0).unwrap().bounds;
-        let g = w.get::<GlobalTransform>(e).unwrap();
-        g.transform_point((b.min + b.max) / 2.0)
-    };
-    assert!(center.length() > 1.0, "the box centre is off the origin");
-    let d = camera(&mut t).1.translation().distance(center);
-    send(
-        &mut t,
-        &[Intent::Instance {
-            instance: e,
-            action: InstanceAction::Unload,
-        }],
-    );
-    assert!(
-        t.until(600, |app| app
-            .world_mut()
-            .query::<&LoadedModel>()
-            .iter(app.world())
-            .count()
-            == 0),
-        "P1 unloads"
-    );
-    t.frames(2);
-    assert_orbits_the_origin_at(&mut t, d);
+    the_orbit_returns_to_the_origin_after("rig_orbit_unload", InstanceAction::Unload, |app| {
+        let w = app.world_mut();
+        w.query::<&LoadedModel>().iter(w).count() == 0
+    });
 }
