@@ -23,6 +23,7 @@ use openxr::EnvironmentBlendMode;
 
 use crate::display::DisplayPlugin;
 use crate::error::{XrError, log_runtime, log_warning};
+use crate::panel::PanelPlugin;
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
 use crate::tracking::{FREQUENCY_HINT_EXT, TrackingPlugin};
@@ -215,6 +216,8 @@ impl Plugin for XrTail {
         .add_plugins(TrackingPlugin { hands: self.hands })
         // Appendix D.2 and D.3 to intents (#460), after `tracking`'s `XrHands`.
         .add_plugins(XrInputPlugin)
+        // The panel and the wrist menu (#462), after `xr_input` (§2.1's module order).
+        .add_plugins(PanelPlugin)
         // After the events plugin and `session`, whose re-creation it uses (Q-124).
         .add_plugins(DisplayPlugin);
     }
