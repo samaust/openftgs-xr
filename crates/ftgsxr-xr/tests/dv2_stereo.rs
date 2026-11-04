@@ -11,7 +11,7 @@
 //! projection", Q-91's target format). It also checks the pixels: a screenshot while both
 //! eyes draw must show the probe in each eye (Q-141). Prerequisites: `dv_support`'s.
 
-mod dv_support;
+use crate::dv_support;
 
 use std::path::PathBuf;
 use std::time::Duration;

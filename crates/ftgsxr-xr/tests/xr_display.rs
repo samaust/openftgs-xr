@@ -5,7 +5,7 @@
 //! foveation and the recommended layer resolution are unsupported, and a request for
 //! either logs E-XR-UNSUPPORTED with the setting kept. Prerequisites: `xr_support`'s.
 
-mod xr_support;
+use crate::xr_support;
 
 use std::time::{Duration, Instant};
 

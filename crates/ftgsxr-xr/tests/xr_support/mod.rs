@@ -146,7 +146,9 @@ impl<S: Subscriber> Layer<S> for Collector {
     }
 }
 
-/// Installs the capturing subscriber (info and above) once per process.
+/// Installs the capturing subscriber (info and above) once per process, and empties the
+/// capture, so that a test reads its own lines only: the crate's tests share one test
+/// binary (#413), and the lane runs them one after another in its process.
 pub fn capture_log() {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
@@ -155,6 +157,7 @@ pub fn capture_log() {
             .try_init()
             .expect("the xr test's log capture holds the process's subscriber");
     });
+    LINES.lock().unwrap_or_else(PoisonError::into_inner).clear();
 }
 
 /// The lines captured so far.

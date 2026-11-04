@@ -5,7 +5,7 @@
 //! (Q-130: the permissions from the installed package's dump, the features from the
 //! APK's badging). Prerequisites: `dv_support`'s.
 
-mod dv_support;
+use crate::dv_support;
 
 use std::time::Duration;
 

@@ -9,7 +9,7 @@
 //! with `ftgsxr_app::sort_check` (Q-146): the order, the stability, `Depth16`'s top 16
 //! bits and the dispatch arguments, and prints the verdict. Prerequisites: `dv_support`'s.
 
-mod dv_support;
+use crate::dv_support;
 
 use std::time::Duration;
 
