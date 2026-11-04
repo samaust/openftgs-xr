@@ -5,8 +5,9 @@
 //! rays, the head and the floor are in stage space): picking and hover (E10), fit and
 //! snap to floor (§1.5, I-4's tolerance), grabs (E11), `Turn` and `Nudge` (Q-184, I-8's
 //! tolerance), the gizmo's stage axes (Q-186), the saved pose relative to the group
-//! (Q-245) and keep upright about stage +y (Q-246). Where an instance is drawn is read
-//! from its `GlobalTransform` after Bevy's transform propagation.
+//! (Q-245), keep upright about stage +y (Q-246) and the scale limits on the stage scale
+//! (Q-247). Where an instance is drawn is read from its `GlobalTransform` after Bevy's
+//! transform propagation.
 
 use crate::support::TestApp;
 
@@ -219,7 +220,7 @@ fn content_group_fit_and_snap_are_in_stage_space() {
 }
 
 #[test]
-fn content_group_a_one_hand_grab_moves_the_stage_pose_with_the_hand() {
+fn content_group_a_one_hand_grab_keeps_the_stage_pose_in_the_hand() {
     let (mut t, e) = under("cg_grab", moved_group());
     let c = stage(&t, e).transform_point(bounds(&t, e).center());
     let before = stage(&t, e);
@@ -234,18 +235,26 @@ fn content_group_a_one_hand_grab_moves_the_stage_pose_with_the_hand() {
             },
         ],
     );
-    // E11: P = H M, so a hand moved by Δ moves the instance's stage pose by Δ.
+    // E11: P = H M. The hand moved by Δ and turned by R about x through itself: the
+    // stage pose turns by R about the hand's start and moves by Δ, its scale kept.
     let delta = Vec3::new(0.3, 0.1, -0.2);
+    let r = Quat::from_rotation_x(20f32.to_radians());
+    let h1 = Pose {
+        translation: h0.translation + delta,
+        rotation: r,
+        scale: 1.0,
+    };
     send(
         &mut t,
         &[Intent::GrabMove {
             hand: Hand::Right,
-            pose: at(h0.translation + delta),
+            pose: h1,
         }],
     );
     let want = Pose {
-        translation: before.translation + delta,
-        ..before
+        translation: h1.translation + r * (before.translation - h0.translation),
+        rotation: r * before.rotation,
+        scale: before.scale,
     };
     assert!(near(stage(&t, e), want, TOL), "{:?}", stage(&t, e));
 }
@@ -377,18 +386,20 @@ fn content_group_upright_grab_turns_about_stage_y() {
             },
         ],
     );
-    // The hands' axis turned 90° about stage +y about their midpoint: (1, 0, 0) to
-    // (0, 0, −1), its length kept.
+    // The hands' axis twisted: from (1, 0, 0) to (0, sin 30°, −cos 30°), its length
+    // kept. Upright, only its horizontal part counts: a 90° turn about stage +y, the
+    // scale kept (a free rotation would also tilt the instance by 30°).
+    let d = 0.3 * Vec3::new(0.0, 30f32.to_radians().sin(), -30f32.to_radians().cos());
     send(
         &mut t,
         &[
             Intent::GrabMove {
                 hand: Hand::Left,
-                pose: at(m + Vec3::new(0.0, 0.0, 0.3)),
+                pose: at(m - d),
             },
             Intent::GrabMove {
                 hand: Hand::Right,
-                pose: at(m - Vec3::new(0.0, 0.0, 0.3)),
+                pose: at(m + d),
             },
         ],
     );
@@ -401,4 +412,48 @@ fn content_group_upright_grab_turns_about_stage_y() {
         "{turn:?}"
     );
     assert!((after.scale - before.scale).abs() < TOL);
+}
+
+#[test]
+fn content_group_scale_limits_bound_the_stage_scale() {
+    // Q-247: E11's limits (0.01 to 100, Q-185) apply to the stage scale.
+    let (mut t, e) = under("cg_limits", moved_group());
+    let c = stage(&t, e).transform_point(bounds(&t, e).center());
+    let m = c + Vec3::new(0.0, 0.0, 0.5);
+    let side = Vec3::new(0.3, 0.0, 0.0);
+    send(
+        &mut t,
+        &[
+            ray_at(Hand::Left, c),
+            ray_at(Hand::Right, c),
+            Intent::GrabBegin {
+                hand: Hand::Left,
+                pose: at(m - side),
+            },
+            Intent::GrabBegin {
+                hand: Hand::Right,
+                pose: at(m + side),
+            },
+        ],
+    );
+    // The hands 1000 times as far apart: the stage scale 2 · 1000 stops at 100.
+    send(
+        &mut t,
+        &[
+            Intent::GrabMove {
+                hand: Hand::Left,
+                pose: at(m - 1000.0 * side),
+            },
+            Intent::GrabMove {
+                hand: Hand::Right,
+                pose: at(m + 1000.0 * side),
+            },
+        ],
+    );
+    assert!(
+        (stage(&t, e).scale - 100.0).abs() < TOL,
+        "{}",
+        stage(&t, e).scale
+    );
+    assert!((local(&t, e).scale - 50.0).abs() < TOL);
 }

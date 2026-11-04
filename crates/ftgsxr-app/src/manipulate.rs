@@ -402,31 +402,36 @@ type Instances<'w, 's> = Query<
     ),
 >;
 
-/// The instances' parents: the content group (§2 `ContentGroup`, every instance's
+/// The instances' groups: the content group (§2 `ContentGroup`, every instance's
 /// parent), a root entity whose local transform is its stage pose.
-type Parents<'w, 's> = Query<'w, 's, &'static Transform, Without<LoadedModel>>;
+type GroupTransforms<'w, 's> = Query<'w, 's, &'static Transform, Without<LoadedModel>>;
 
 /// The transform §1.14's content group applies to an instance's pose: its parent's
 /// pose, the identity without one.
-fn group_pose(parent: Option<&ChildOf>, parents: &Parents) -> Pose {
+fn group_pose(parent: Option<&ChildOf>, groups: &GroupTransforms) -> Pose {
     parent
-        .and_then(|c| parents.get(c.parent()).ok())
+        .and_then(|c| groups.get(c.parent()).ok())
         .map(pose_of)
         .unwrap_or(Pose::IDENTITY)
 }
 
-/// An instance's stage pose: its pose relative to the content group followed by the
-/// group's transform (§1.14). Rays, the head and the floor are in stage space.
-fn stage_pose(q: &Instances, parents: &Parents, e: Entity) -> Option<Pose> {
+/// A stage pose: the pose relative to the content group, `t`, followed by the group's
+/// transform (§1.14). Rays, the head and the floor are in stage space.
+fn staged(t: &Transform, parent: Option<&ChildOf>, groups: &GroupTransforms) -> Pose {
+    pose_of(t).then(&group_pose(parent, groups))
+}
+
+/// An instance's stage pose.
+fn stage_pose(q: &Instances, groups: &GroupTransforms, e: Entity) -> Option<Pose> {
     let (_, t, .., parent) = q.get(e).ok()?;
-    Some(pose_of(t).then(&group_pose(parent, parents)))
+    Some(staged(t, parent, groups))
 }
 
 /// Places an instance at a stage pose, written back relative to the content group
 /// through the group's inverse (a similarity with uniform scale, E5).
-fn set_stage_pose(q: &mut Instances, parents: &Parents, e: Entity, pose: Pose) {
+fn set_stage_pose(q: &mut Instances, groups: &GroupTransforms, e: Entity, pose: Pose) {
     if let Ok((_, mut t, .., parent)) = q.get_mut(e) {
-        let group = group_pose(parent, parents);
+        let group = group_pose(parent, groups);
         *t = transform_of(pose.then(&group.inverse()));
     }
 }
@@ -435,13 +440,12 @@ fn set_stage_pose(q: &mut Instances, parents: &Parents, e: Entity, pose: Pose) {
 /// box.
 fn boxes(
     q: &Instances,
-    parents: &Parents,
+    groups: &GroupTransforms,
     assets: &Assets<SplatAsset>,
 ) -> Vec<(Entity, Pose, Aabb)> {
     q.iter()
         .filter_map(|(e, t, _, m, .., parent)| {
-            let pose = pose_of(t).then(&group_pose(parent, parents));
-            Some((e, pose, assets.get(&m?.0)?.bounds))
+            Some((e, staged(t, parent, groups), assets.get(&m?.0)?.bounds))
         })
         .collect()
 }
@@ -494,7 +498,7 @@ fn gizmo_size(center: Vec3, eye: Vec3) -> f32 {
 fn run_intents(
     mut intents: MessageReader<Intent>,
     mut q: Instances,
-    parents: Parents,
+    groups: GroupTransforms,
     selected: Query<Entity, With<Selected>>,
     assets: Res<Assets<SplatAsset>>,
     cameras: Query<(&Camera, &GlobalTransform)>,
@@ -522,7 +526,7 @@ fn run_intents(
     }
     let pick = |q: &Instances, ray: Option<(Vec3, Vec3)>| {
         let (o, d) = ray?;
-        pick_instance(o, d, &boxes(q, &parents, &assets), s.ray_max_m)
+        pick_instance(o, d, &boxes(q, &groups, &assets), s.ray_max_m)
     };
     for intent in intents.read() {
         match *intent {
@@ -531,8 +535,10 @@ fn run_intents(
                 if hand == Hand::Mouse
                     && let Some(d) = &gizmo.drag
                 {
+                    // The cube's scale limits are on the stage scale.
+                    // Q-247
                     let p = drag_pose(d, (origin, dir), &s.limits);
-                    set_stage_pose(&mut q, &parents, d.entity, p);
+                    set_stage_pose(&mut q, &groups, d.entity, p);
                 }
             }
             Intent::Select { hand, pressed } => {
@@ -547,7 +553,7 @@ fn run_intents(
                 if hand == Hand::Mouse
                     && let (mode, Some(e), Some(ray)) = (gizmo.mode, sel, ray)
                     && let Some(bounds) = bounds_of(&q, &assets, e)
-                    && let Some(pose) = stage_pose(&q, &parents, e)
+                    && let Some(pose) = stage_pose(&q, &groups, e)
                 {
                     let center = posed_center(&bounds, &pose);
                     let size = gizmo_size(center, ray.0);
@@ -578,7 +584,7 @@ fn run_intents(
                 let Some((e, dist)) = pick(&q, ray) else {
                     continue;
                 };
-                let Some(model) = stage_pose(&q, &parents, e) else {
+                let Some(model) = stage_pose(&q, &groups, e) else {
                     continue;
                 };
                 match hs.grabs.get(&e).copied() {
@@ -628,13 +634,14 @@ fn run_intents(
                         let (Some(pa), Some(pb)) = (pa, pb) else {
                             continue;
                         };
-                        // Upright about stage +y: the grab runs on the stage pose.
-                        // Q-246
+                        // Upright about stage +y, and the scale limits on the stage
+                        // scale: the grab runs on the stage pose.
+                        // Q-246, Q-247
                         grab.update(pa, pb, &s.limits, !s.keep_upright)
                     }
                     _ => continue,
                 };
-                set_stage_pose(&mut q, &parents, e, new);
+                set_stage_pose(&mut q, &groups, e, new);
             }
             Intent::GrabEnd { hand } => {
                 let Some((e, _)) = hs.hands.get_mut(&hand).and_then(|h| h.held.take()) else {
@@ -645,7 +652,7 @@ fn run_intents(
                     Some((Grabbed::Two { .. }, Some((a, b)))) => {
                         let other = if a == hand { b } else { a };
                         let po = hs.hands.get(&other).and_then(|h| h.pose);
-                        match (po, stage_pose(&q, &parents, e)) {
+                        match (po, stage_pose(&q, &groups, e)) {
                             (Some(po), Some(model)) => {
                                 let grab = Grab::begin(po, model);
                                 hs.grabs
@@ -673,11 +680,11 @@ fn run_intents(
                     continue;
                 }
                 let step = axis * s.push_pull_mps * dist * time.delta_secs();
-                let Some(mut p) = stage_pose(&q, &parents, e) else {
+                let Some(mut p) = stage_pose(&q, &groups, e) else {
                     continue;
                 };
                 p.translation += step * dir;
-                set_stage_pose(&mut q, &parents, e, p);
+                set_stage_pose(&mut q, &groups, e, p);
                 if let Some(h) = hs.hands.get_mut(&hand) {
                     h.held = Some((e, (dist + step).max(0.0)));
                 }
@@ -688,17 +695,17 @@ fn run_intents(
                 gizmo.drag = None;
             }
             Intent::Nudge { instance, delta } => {
-                if let Some(mut p) = stage_pose(&q, &parents, instance) {
+                if let Some(mut p) = stage_pose(&q, &groups, instance) {
                     p.translation += delta;
-                    set_stage_pose(&mut q, &parents, instance, p);
+                    set_stage_pose(&mut q, &groups, instance, p);
                     rebase(&mut hs, instance, p);
                 }
             }
             Intent::Turn { instance, yaw_deg } => {
                 // Q-184
-                if let Some(mut p) = stage_pose(&q, &parents, instance) {
+                if let Some(mut p) = stage_pose(&q, &groups, instance) {
                     p.rotation = Quat::from_rotation_y(yaw_deg.to_radians()) * p.rotation;
-                    set_stage_pose(&mut q, &parents, instance, p);
+                    set_stage_pose(&mut q, &groups, instance, p);
                     rebase(&mut hs, instance, p);
                 }
             }
@@ -756,45 +763,37 @@ fn run_intents(
                         poses.0.set(&id, saved);
                     }
                 }
-                InstanceAction::ResetPose | InstanceAction::Fit | InstanceAction::SnapToFloor => {
-                    let bounds = bounds_of(&q, &assets, instance);
-                    let head = head_pose(&cameras);
-                    let Some(current) = stage_pose(&q, &parents, instance) else {
-                        continue;
-                    };
-                    let Ok((_, mut t, m, _, x, ..)) = q.get_mut(instance) else {
-                        continue;
-                    };
-                    // The saved pose is relative to the content group; the fit and the
-                    // floor are in stage space.
+                InstanceAction::ResetPose => {
+                    // The saved pose is relative to the content group.
                     // Q-245
-                    let new = match action {
-                        InstanceAction::ResetPose => {
-                            let saved = poses
-                                .0
-                                .get(&m.identity)
-                                .map(|sp| sp.pose)
-                                .unwrap_or(Pose::IDENTITY);
-                            *t = transform_of(saved);
-                            if let Some(p) = stage_pose(&q, &parents, instance) {
-                                rebase(&mut hs, instance, p);
-                            }
-                            continue;
-                        }
-                        InstanceAction::Fit => {
-                            let Some(b) = bounds else { continue };
-                            let x = x.copied().unwrap_or(PoseExtras {
-                                preset: Preset::YUp,
-                                fit_size_m: 1.0,
-                            });
-                            fit_pose(&b, x.preset, x.fit_size_m, head, 1.5)
-                        }
-                        _ => {
-                            let Some(b) = bounds else { continue };
-                            snap_to_floor(&b, current, 0.0)
-                        }
+                    let Ok((_, mut t, m, ..)) = q.get_mut(instance) else {
+                        continue;
                     };
-                    set_stage_pose(&mut q, &parents, instance, new);
+                    let saved = poses.0.get(&m.identity).map(|sp| sp.pose);
+                    *t = transform_of(saved.unwrap_or(Pose::IDENTITY));
+                    if let Some(p) = stage_pose(&q, &groups, instance) {
+                        rebase(&mut hs, instance, p);
+                    }
+                }
+                InstanceAction::Fit | InstanceAction::SnapToFloor => {
+                    // The fit's head and the floor are in stage space.
+                    let (Some(b), Some(current), Ok((.., x, _, _, _))) = (
+                        bounds_of(&q, &assets, instance),
+                        stage_pose(&q, &groups, instance),
+                        q.get(instance),
+                    ) else {
+                        continue;
+                    };
+                    let new = if action == InstanceAction::Fit {
+                        let x = x.copied().unwrap_or(PoseExtras {
+                            preset: Preset::YUp,
+                            fit_size_m: 1.0,
+                        });
+                        fit_pose(&b, x.preset, x.fit_size_m, head_pose(&cameras), 1.5)
+                    } else {
+                        snap_to_floor(&b, current, 0.0)
+                    };
+                    set_stage_pose(&mut q, &groups, instance, new);
                     rebase(&mut hs, instance, new);
                 }
             },
@@ -816,7 +815,7 @@ fn run_intents(
     }
     // Hovered: each hand's last ray over the instances as they now stand; an instance
     // two rays hit carries the nearer (Q-182).
-    let all = boxes(&q, &parents, &assets);
+    let all = boxes(&q, &groups, &assets);
     let mut hovered: HashMap<Entity, Hovered> = HashMap::new();
     for (&hand, h) in &hs.hands {
         let Some((o, d)) = h.ray else { continue };
@@ -1018,7 +1017,7 @@ type DrawItem = (
 fn draw(
     mut gizmos: Gizmos,
     q: Query<DrawItem, With<LoadedModel>>,
-    parents: Parents,
+    groups: GroupTransforms,
     assets: Res<Assets<SplatAsset>>,
     cameras: Query<(&Camera, &GlobalTransform)>,
     gizmo: Res<GizmoState>,
@@ -1028,7 +1027,7 @@ fn draw(
         let Some(asset) = assets.get(&m.0) else {
             continue;
         };
-        let pose = pose_of(t).then(&group_pose(parent, &parents));
+        let pose = staged(t, parent, &groups);
         if selected {
             box_lines(&mut gizmos, &asset.bounds, &pose, ACCENT);
         } else if hovered {
