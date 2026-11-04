@@ -17,7 +17,7 @@ type Command = fn(&Path, &Path) -> Result<(), HeadlessError>;
 const COMMANDS: [(&str, Command); 2] = [("import", cmd_import), ("export", cmd_export)];
 
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// A quaternion normalized in float64 with the canonical sign (§1.2), as U-5 compares them.

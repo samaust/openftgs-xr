@@ -5,7 +5,7 @@
 //! extrapolating flag. The probes P1 and P2 span τ ∈ [0, 1.9] s, so r = 1 and τ = T − o
 //! under hold. The audio clause (the stub sink follows the clock) is #281's.
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{

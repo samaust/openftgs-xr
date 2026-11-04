@@ -4,7 +4,7 @@
 //! dropped non-model reports E-FILE-FORMAT, through `SplatEvent::Failed` since a drop
 //! has no library entry (Q-173).
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::sync::{Arc, Mutex};

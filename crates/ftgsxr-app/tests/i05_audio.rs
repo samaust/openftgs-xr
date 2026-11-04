@@ -6,7 +6,7 @@
 //! (r = 1), so the soundtrack's position is T − o. The stub has no clock: each frame the
 //! test moves its playing sinks by the frame's Δt, as a device would.
 
-mod support;
+use crate::support;
 
 use ftgsxr_app::{
     Intent, LibraryCommand, ModelRef, Playback, PlaybackCommand, Soundtrack, StubSink,

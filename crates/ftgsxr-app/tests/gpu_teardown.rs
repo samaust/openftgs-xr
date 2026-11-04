@@ -6,7 +6,7 @@
 //! the Vulkan driver (SIGSEGV after the tests passed). `TestApp`'s drop lets them finish.
 //! This binary's own exit, right after such a frame, is the crash's check.
 
-mod support;
+use crate::support;
 
 use support::TestApp;
 

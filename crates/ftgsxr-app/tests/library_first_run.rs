@@ -4,7 +4,7 @@
 //! empty source, with no toast and no directory created; any other missing directory is
 //! E-IO.
 
-mod support;
+use crate::support;
 
 use ftgsxr_app::{Library, LibraryCommand};
 use ftgsxr_io::SourceSpec;

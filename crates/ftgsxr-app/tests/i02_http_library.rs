@@ -5,7 +5,7 @@
 //! information is filled while the bytes the server sent for its file stay below the
 //! file's size. A listed directory lists on demand (Q-192).
 
-mod support;
+use crate::support;
 
 use ftgsxr_app::{EntryState, Library, LibraryCommand};
 use ftgsxr_io::{EntryKind, ListingFlavor, SourceSpec};

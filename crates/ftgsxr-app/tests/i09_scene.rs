@@ -5,7 +5,7 @@
 //! environment settings; a model under the models directory is written relative to it and
 //! one outside as given; a scene naming a missing model lists it as missing.
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{

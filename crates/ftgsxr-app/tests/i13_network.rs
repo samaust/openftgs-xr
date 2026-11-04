@@ -5,7 +5,7 @@
 //! own `LibraryFailure` message, with the code and the full text, for a fetch, read or
 //! upload failure alike (Q-173); an entry's load reports in its state.
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::net::TcpListener;

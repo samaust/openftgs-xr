@@ -3,7 +3,7 @@
 //! The dock's settings sections (§1.7 Panels, D-21, #286): an instance switched to
 //! centers takes `[display]`'s radius and colormap (Q-218).
 
-mod support;
+use crate::support;
 
 use ftgsxr_app::SettingsRes;
 use ftgsxr_render::{Colormap, RenderMode, SplatMode};

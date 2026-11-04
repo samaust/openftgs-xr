@@ -3,19 +3,42 @@
 //! I-19's paths clause (§1.11, §2.5, `cpu`): `AppPaths::linux` under a temporary XDG
 //! environment and `AppPaths::android` from given directories give §1.11's layout
 //! through `PlatformRes`, and the library's default source is the models directory.
-//! One test in this binary, as it sets the environment.
+//! The test sets the environment, which is process-wide, and the crate's other tests share
+//! this test binary and run in parallel with it (#413), so it runs again in a child process
+//! of the binary, alone, and sets the environment only there.
 
-mod support;
+use crate::support;
 
 use std::path::Path;
+use std::process::Command;
 
 use ftgsxr_app::{AppPaths, Library, PlatformRes};
 use support::{StubPlatform, TestApp};
 
+/// Set in the child's environment: run the test's clauses.
+const CHILD: &str = "FTGSXR_I19_PATHS_CHILD";
+
 fn set(key: &str, value: &Path) {
-    // SAFETY: this binary holds this one test and sets the environment before any
-    // other thread of it reads it.
+    // SAFETY: only the child sets the environment, and it runs this one test alone
+    // (`--exact`, one test thread) and sets it before any other thread of it reads it.
     unsafe { std::env::set_var(key, value) }
+}
+
+/// Runs the test `name` of this file again, alone, in a child process of this test binary
+/// with `CHILD` set, and fails unless the child ran it and it passed.
+fn run_in_child(name: &str) {
+    let path = format!("{}::{name}", crate::test_file_stem());
+    let out = Command::new(std::env::current_exe().expect("the test binary"))
+        .args([path.as_str(), "--exact", "--test-threads", "1"])
+        .env(CHILD, "1")
+        .output()
+        .expect("the child run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn through_platform(name: &str, paths: AppPaths) -> (AppPaths, String) {
@@ -28,6 +51,9 @@ fn through_platform(name: &str, paths: AppPaths) -> (AppPaths, String) {
 
 #[test]
 fn i19_paths_reach_the_world_through_the_platform() {
+    if std::env::var_os(CHILD).is_none() {
+        return run_in_child("i19_paths_reach_the_world_through_the_platform");
+    }
     let root = support::scratch("i19-xdg");
     set("HOME", &root.join("home"));
     set("XDG_CONFIG_HOME", &root.join("config"));

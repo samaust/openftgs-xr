@@ -7,7 +7,7 @@
 //! hints (Q-181). `poses.json` through `PersistCommand` and `Intent::Instance`, and a
 //! reload applying the file's pose, are `persist`'s (#285).
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{

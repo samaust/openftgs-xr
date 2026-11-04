@@ -35,9 +35,11 @@ use ftgsxr_testkit::{LocalServer, scratch_dir, serve_fixtures};
 /// The test's frame period: 60 Hz.
 pub const FRAME: Duration = Duration::from_micros(16_667);
 
-/// A scratch directory of this test binary (Q-62).
+/// A scratch directory of the calling test file (Q-62, #413): through the `#[track_caller]`
+/// constructors below, the file that builds the `TestApp`.
+#[track_caller]
 pub fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// The player's directories under `root` (§1.11's layout), none of them created.
@@ -169,38 +171,45 @@ impl Default for Setup {
 
 impl TestApp {
     /// The CPU app in the scratch directory `name`, without `RenderPlugin`.
+    #[track_caller]
     pub fn new(name: &str) -> TestApp {
         Self::with(name, Setup::default(), |_| {})
     }
 
     /// The CPU app, with `before` run on the `App` before `AppPlugin` is added (to insert
     /// `SettingsPath` or `SettingsRes`, say).
+    #[track_caller]
     pub fn with(name: &str, setup: Setup, before: impl FnOnce(&mut App)) -> TestApp {
         Self::build(name, setup, before, false)
     }
 
     /// The `gpu_` variant: the same app with `RenderPlugin` and the camera and pipeline
     /// plugins, no window (PRD #275's spike check 1). Its tests hold Q-105's layer guard.
+    #[track_caller]
     pub fn gpu(name: &str) -> TestApp {
         Self::build(name, Setup::default(), |_| {}, true)
     }
 
     /// The `gpu_` variant with a `Setup` (a tier with a small budget, say).
+    #[track_caller]
     pub fn gpu_with(name: &str, setup: Setup) -> TestApp {
         Self::build(name, setup, |_| {}, true)
     }
 
     /// The CPU app on a given platform (I-19).
+    #[track_caller]
     pub fn on(name: &str, platform: Arc<StubPlatform>) -> TestApp {
         Self::build_on(name, platform, Setup::default(), |_| {}, false)
     }
 
+    #[track_caller]
     fn build(name: &str, setup: Setup, before: impl FnOnce(&mut App), gpu: bool) -> TestApp {
         let dir = scratch(name);
         let platform = StubPlatform::new(&dir);
         Self::build_on(name, platform, setup, before, gpu)
     }
 
+    #[track_caller]
     fn build_on(
         name: &str,
         platform: Arc<StubPlatform>,

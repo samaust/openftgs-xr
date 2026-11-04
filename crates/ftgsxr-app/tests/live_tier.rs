@@ -8,7 +8,7 @@
 //! (#402); these switch the running tier as a pick does, by writing `SplatTierState`, and
 //! check what only the whole app shows.
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{QualityTier, SettingsRes};

@@ -5,7 +5,7 @@
 //! counts and order, one step per 10 statistics blocks; at 1,000 they step back up, one
 //! per 120.
 
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 

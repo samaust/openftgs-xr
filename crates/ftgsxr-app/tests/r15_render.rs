@@ -22,7 +22,7 @@ fn p1(extension: &str) -> PathBuf {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// The value of the metadata key `key` in a safetensors file's header, a JSON string

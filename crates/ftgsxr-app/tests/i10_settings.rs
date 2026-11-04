@@ -5,7 +5,7 @@
 //! second and at exit, to the `SettingsPath` given; a corrupt file is set aside and the
 //! defaults load; the audio values persist in the settings, in percent.
 
-mod support;
+use crate::support;
 
 use bevy::app::AppExit;
 use bevy::prelude::*;

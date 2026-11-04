@@ -5,7 +5,7 @@
 //! `Intent::Overlay` flips the `[display.overlays]` setting and every instance's
 //! `SplatOverlays` follows; a second one flips it back (Q-207).
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{Intent, LibraryCommand, LoadedModel, ModelRef, OverlayToggle, SettingsRes};
