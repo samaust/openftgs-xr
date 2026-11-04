@@ -46,8 +46,8 @@ pub use layout::{
     reduce_to_budget,
 };
 pub use loader::{
-    SAFETENSORS_PREFIX, header_len, hex, open_model, read_checkpoint, read_exchange, read_info,
-    read_ply, sha256,
+    SAFETENSORS_PREFIX, checkpoint_dir, header_len, hex, open_model, read_checkpoint,
+    read_exchange, read_info, read_ply, sha256,
 };
 
 /// glam's types, re-exported from the workspace pin so every crate uses the engine's glam (§2.1, §2.3).

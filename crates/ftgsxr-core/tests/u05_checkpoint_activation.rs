@@ -9,7 +9,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ftgsxr_core::{Model, ModelKind, hex, open_model, read_checkpoint, read_exchange, sha256};
+use ftgsxr_core::{
+    Model, ModelKind, checkpoint_dir, hex, open_model, read_checkpoint, read_exchange, sha256,
+};
 use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 use serde_json::Value;
 
@@ -262,4 +264,35 @@ fn u05_manifest_rules() {
     let dir = copy_tiny("missing-params");
     fs::remove_file(dir.join("params.safetensors")).unwrap();
     assert_eq!(read_checkpoint(&dir).unwrap_err().code(), "E-IO");
+}
+
+// Q-260
+#[test]
+fn u05_a_manifest_path_names_its_checkpoint() {
+    // Q-260: a path whose file name is `manifest.json` names the checkpoint directory that
+    // holds it, by name alone; any other path names no checkpoint.
+    let dir = fixtures_dir().join("checkpoint/tiny");
+    assert_eq!(
+        checkpoint_dir(&dir.join("manifest.json")),
+        Some(dir.clone())
+    );
+    assert_eq!(checkpoint_dir(&dir), None);
+    assert_eq!(checkpoint_dir(&dir.join("params.safetensors")), None);
+    assert_eq!(
+        checkpoint_dir(Path::new("manifest.json")),
+        Some(PathBuf::new())
+    );
+    // `open_model` of the manifest path reads the checkpoint, as of its directory.
+    let by_path = open_model(&dir.join("manifest.json")).expect("the manifest path reads");
+    assert_eq!(by_path, open_model(&dir).unwrap());
+    assert!(matches!(by_path.kind, ModelKind::Checkpoint { .. }));
+    // A `manifest.json` of another format is E-FILE-FORMAT, as for its directory.
+    let other = edited_tiny("other-format", |m| m["format"] = "ftgs-scene".into());
+    let err = open_model(&other.join("manifest.json")).unwrap_err();
+    assert_eq!(err.code(), "E-FILE-FORMAT");
+    assert_eq!(
+        err.code(),
+        open_model(&other).unwrap_err().code(),
+        "the manifest path fails as its directory does"
+    );
 }
