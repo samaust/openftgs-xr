@@ -420,7 +420,7 @@ impl Plugin for AudioPlugin {
                 (ui_bridge, run_intents, play_ui_sounds, attach, decode).chain(),
             )
             // After playback's `advance` (in `Update`): the clock of this frame; after
-            // egui's pass: this frame's scrub (Q-245).
+            // egui's pass: this frame's scrub (Q-246).
             .add_systems(
                 PostUpdate,
                 (apply_gains, follow_clock)
@@ -708,7 +708,7 @@ fn apply_gains(state: Res<AudioState>, slots: Res<Slots>, output: Res<AudioOutpu
 /// and T − o_m lies within the soundtrack and the model's span, and is moved to the
 /// clock's position when it starts again (a scrub's end included), or when it drifts by
 /// more than `DRIFT_S` (a one-off seek, a loop's wrap).
-// Q-190, Q-245
+// Q-190, Q-246
 fn follow_clock(
     playback: Res<Playback>,
     scrubbing: Res<Scrubbing>,
@@ -1089,7 +1089,7 @@ mod tests {
         *sinks.keys().next().unwrap()
     }
 
-    // Q-190, Q-245 (#416): while `Scrubbing` holds, a sink is silent with the clock at
+    // Q-190, Q-246 (#416): while `Scrubbing` holds, a sink is silent with the clock at
     // speed 1, and plays at the clock's position once it ends. `Scrubbing` is
     // crate-private, so this is a private test; `tests/i05_audio.rs` pins the rest of
     // I-5's audio clause.

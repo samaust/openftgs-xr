@@ -894,7 +894,7 @@ fn playback_tab(
     if bar.changed() {
         out.push(Out::Intent(Intent::Playback(PlaybackCommand::Seek(t))));
     }
-    // Q-245: a scrub lasts while the bar is dragged and egui has decided the press is a
+    // Q-246: a scrub lasts while the bar is dragged and egui has decided the press is a
     // drag, not the start of a click (moved past the click distance or held past the
     // click duration); the slider senses drags only, so `dragged` alone holds from the
     // press.
@@ -1219,7 +1219,7 @@ mod tests {
         (intents, world.resource::<crate::playback::Scrubbing>().0)
     }
 
-    // Q-245 (#416): a drag of the scrub bar is a scrub, from egui's drag decision (moved
+    // Q-246 (#416): a drag of the scrub bar is a scrub, from egui's drag decision (moved
     // past the click distance, or held past the click duration) to the release; a press
     // released without a drag is a one-off seek.
     #[test]

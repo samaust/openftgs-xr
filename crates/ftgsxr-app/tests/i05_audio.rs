@@ -6,7 +6,7 @@
 //! (r = 1), so the soundtrack's position is T − o. The stub has no clock: each frame the
 //! test moves its playing sinks by the frame's Δt, as a device would.
 //!
-//! A scrub while playing (silent until it ends, Q-190, Q-245, #416) is pinned by
+//! A scrub while playing (silent until it ends, Q-190, Q-246, #416) is pinned by
 //! `audio`'s and the dock's private tests, since the scrub state is crate-private; this
 //! file pins that a one-off seek while playing is not a scrub.
 
@@ -126,7 +126,7 @@ fn i05_audio_mutes_otherwise_and_seeks_on_resume() {
     follows(&mut t, 5);
 }
 
-// Q-190, Q-245: a seek while playing at speed 1 (the start and end keys, a click on the
+// Q-190, Q-246: a seek while playing at speed 1 (the start and end keys, a click on the
 // scrub bar) moves the sink to the clock's position and leaves it playing.
 #[test]
 fn i05_audio_a_one_off_seek_while_playing_keeps_playing() {

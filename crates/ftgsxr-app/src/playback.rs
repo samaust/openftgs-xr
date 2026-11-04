@@ -92,8 +92,8 @@ pub(crate) fn next_loop(m: LoopMode) -> LoopMode {
 /// silent"): the dock sets it while egui counts the press on the bar as a drag and clears
 /// it on release and in every frame the bar is not drawn; `audio` keeps the soundtracks
 /// silent while it holds. A click on the bar and every other seek are one-off seeks, not
-/// scrubs (Q-245).
-// Q-245
+/// scrubs (Q-246).
+// Q-246
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Scrubbing(pub(crate) bool);
 
