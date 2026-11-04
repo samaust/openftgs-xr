@@ -33,6 +33,15 @@ ftgsxr-render.workspace = true
 bevy_egui = { workspace = true, features = ["render"] }
 image = { workspace = true, features = ["png"] }
 tracing-subscriber.workspace = true # §2.1
+# M-4 (#277): the audio of §1.10's four formats (Q-149; `mp3` brings symphonia's MPL-2.0
+# crates, unmodified). On Android too since M-5 (PRD #452's spike check 1, #454): the
+# Quest build's `cargo ndk -P 32` (the NDK platform at minSdk 32) finds AAudio, which
+# kira's cpal backend links.
+bevy_kira_audio = { workspace = true, features = ["ogg", "wav", "flac", "mp3"] }
+# Q-187: the adapter drives kira (§2.3's row under bevy_kira_audio, at its pin) itself, since
+# bevy_kira_audio keeps its `AudioManager` crate-private and only logs a missing device;
+# bevy_kira_audio's features above choose kira's decoders.
+kira.workspace = true # §2.1
 
 [dev-dependencies]
 # #277: the test support's `gpu_` variant adds the camera and pipeline plugins, as
@@ -44,14 +53,3 @@ ftgsxr-testkit.workspace = true
 # An independent reader of the benchmark files `bench` writes (#122, Q-103), as
 # `ftgsxr-render` reads its fixture pose files.
 serde_json.workspace = true # Q-104
-
-# M-4 (#277): the audio of §1.10's four formats (Q-149; `mp3` brings symphonia's MPL-2.0
-# crates, unmodified). Not on Android until M-5 (PRD #275's spike check 3 and its
-# fallback): kira's cpal backend links AAudio, which the CI Quest build's `cargo ndk`
-# (API level 21 by default) cannot find.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-bevy_kira_audio = { workspace = true, features = ["ogg", "wav", "flac", "mp3"] }
-# Q-187: the adapter drives kira (§2.3's row under bevy_kira_audio, at its pin) itself, since
-# bevy_kira_audio keeps its `AudioManager` crate-private and only logs a missing device;
-# bevy_kira_audio's features above choose kira's decoders.
-kira.workspace = true # §2.1

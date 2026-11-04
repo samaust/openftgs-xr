@@ -22,7 +22,7 @@ use ftgsxr_render::SortMode;
 use openxr::EnvironmentBlendMode;
 
 use crate::display::DisplayPlugin;
-use crate::error::{XrError, log_runtime};
+use crate::error::{XrError, log_runtime, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
 use crate::tracking::TrackingPlugin;
@@ -31,21 +31,22 @@ use crate::tracking::TrackingPlugin;
 /// render, camera and action plugins with the player's app info, Appendix E.1's
 /// extensions where the runtime offers them, an OPAQUE (D-14) `Rgba8UnormSrgb` (Q-91)
 /// session, D-24's reference spaces and the eyes as `SplatCamera`s. Add it through
-/// [`add_xr`] (Q-120). `passthrough` and `hands` are carried and logged in M-3; `sort` is
-/// each eye's `SplatCamera.sort` (Q-121).
+/// [`add_xr`] (Q-120). `passthrough` is carried and logged (M-6); `hands` asks for §1.8's
+/// hand extensions (PRD #452, #454); `sort` is each eye's `SplatCamera.sort` (Q-121).
 #[derive(Clone, Copy, Debug)]
 pub struct XrPlugin {
     /// Whether passthrough is wanted (M-6).
     pub passthrough: bool,
-    /// Whether hand tracking is wanted (M-5).
+    /// Whether hand tracking is wanted: true on the Quest and for `play --xr` (PRD #452).
     pub hands: bool,
     /// What each eye's `SplatCamera` sorts with (Q-121).
     pub sort: SortMode,
 }
 
-/// The extensions of Appendix E.1 the milestone uses; the crate drops those the runtime
-/// lacks with a warning, and adds XR\_KHR\_vulkan\_enable2 itself.
-fn extensions() -> OxrExtensions {
+/// The extensions of Appendix E.1 the milestone uses, with §1.8's hand extensions when
+/// `hands` is set; the crate drops those the runtime lacks with a warning, and adds
+/// XR\_KHR\_vulkan\_enable2 itself.
+fn extensions(hands: bool) -> OxrExtensions {
     let mut exts = OxrExtensions::default();
     let raw = exts.raw_mut();
     raw.khr_vulkan_enable2 = true;
@@ -61,7 +62,26 @@ fn extensions() -> OxrExtensions {
     raw.meta_recommended_layer_resolution = true;
     // The Touch Plus profile (Appendix D.2) through `tracking`'s bindings.
     raw.meta_touch_controller_plus = true;
+    // §1.8 Hands (PRD #452, #454); the frequency hint is `tracking`'s (Q-275).
+    raw.ext_hand_tracking = hands;
+    raw.fb_hand_tracking_aim = hands;
+    raw.meta_simultaneous_hands_and_controllers = hands;
     exts
+}
+
+/// The hand extensions of §1.8 absent from `enabled`, in Appendix E.1's order.
+fn missing_hand_extensions(enabled: &openxr::ExtensionSet) -> Vec<&'static str> {
+    [
+        ("XR_EXT_hand_tracking", enabled.ext_hand_tracking),
+        ("XR_FB_hand_tracking_aim", enabled.fb_hand_tracking_aim),
+        (
+            "XR_META_simultaneous_hands_and_controllers",
+            enabled.meta_simultaneous_hands_and_controllers,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| (!on).then_some(name))
+    .collect()
 }
 
 /// The player's name and version for the OpenXR instance.
@@ -87,7 +107,7 @@ fn app_info() -> AppInfo {
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
         info!(
-            "XrPlugin: passthrough {} and hands {} wanted (M-6, M-5), sort {:?}",
+            "XrPlugin: passthrough {} (M-6) and hands {} wanted, sort {:?}",
             self.passthrough, self.hands, self.sort
         );
         app.add_plugins(XrSessionPlugin { auto_handle: true })
@@ -112,13 +132,23 @@ impl Plugin for XrPlugin {
             // Bevy's default render plugin when the instance fails.
             .add_plugins(OxrInitPlugin {
                 app_info: app_info(),
-                exts: extensions(),
+                exts: extensions(self.hands),
                 ..OxrInitPlugin::default()
             });
         if app.world().get_resource::<XrState>() == Some(&XrState::Unavailable) {
             // E-XR-RUNTIME: the desktop continues without XR, the Quest exits 2 (§1.15);
             // `play --xr` exits 2 through `runtime_unavailable` (Q-162).
             log_runtime(NO_INSTANCE);
+        }
+        // E-XR-UNSUPPORTED once per absent hand extension, as a warning with no toast
+        // (Q-134; Q-161: hands are not an explicit request). Without an instance there is
+        // no extension set, and E-XR-RUNTIME above says why.
+        if self.hands
+            && let Some(enabled) = app.world().get_resource::<OxrEnabledExtensions>()
+        {
+            for name in missing_hand_extensions(enabled.0.raw()) {
+                log_warning(&XrError::Unsupported(name));
+            }
         }
         let passthrough_available = app
             .world()
@@ -147,7 +177,7 @@ pub fn runtime_unavailable(app: &App) -> Option<XrError> {
 
 /// The plugins that follow Bevy's group (after `PipelinedRenderingPlugin`, which
 /// `OxrRenderPlugin` looks for). The hand-tracking and overlay plugins are left out
-/// (hands are M-5's; the overlay is not the player's).
+/// (`tracking` locates the hands itself, PRD #452; the overlay is not the player's).
 struct XrTail {
     sort: SortMode,
 }
@@ -183,4 +213,49 @@ pub fn add_xr(plugins: impl PluginGroup, xr: XrPlugin) -> PluginGroupBuilder {
         .disable::<RenderPlugin>()
         .add_before::<RenderPlugin>(xr)
         .add(XrTail { sort: xr.sort })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// §1.8 Hands, PRD #452's "What `XrPlugin.hands` means": the three hand extensions
+    /// are asked for only when `hands` is set.
+    #[test]
+    fn extensions_ask_for_the_hand_extensions_only_with_hands() {
+        let with = extensions(true);
+        let with = with.raw();
+        assert!(with.ext_hand_tracking);
+        assert!(with.fb_hand_tracking_aim);
+        assert!(with.meta_simultaneous_hands_and_controllers);
+        let without = extensions(false);
+        let without = without.raw();
+        assert!(!without.ext_hand_tracking);
+        assert!(!without.fb_hand_tracking_aim);
+        assert!(!without.meta_simultaneous_hands_and_controllers);
+        // The rest of the set is the same either way.
+        assert!(with.fb_passthrough && without.fb_passthrough);
+    }
+
+    /// The absent hand extensions, in Appendix E.1's order, each named once.
+    #[test]
+    fn missing_hand_extensions_names_each_absent_one() {
+        let mut enabled = OxrExtensions::default();
+        assert_eq!(
+            missing_hand_extensions(enabled.raw()),
+            vec![
+                "XR_EXT_hand_tracking",
+                "XR_FB_hand_tracking_aim",
+                "XR_META_simultaneous_hands_and_controllers",
+            ]
+        );
+        enabled.raw_mut().ext_hand_tracking = true;
+        enabled.raw_mut().meta_simultaneous_hands_and_controllers = true;
+        assert_eq!(
+            missing_hand_extensions(enabled.raw()),
+            vec!["XR_FB_hand_tracking_aim"]
+        );
+        enabled.raw_mut().fb_hand_tracking_aim = true;
+        assert!(missing_hand_extensions(enabled.raw()).is_empty());
+    }
 }

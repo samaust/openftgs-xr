@@ -42,7 +42,8 @@ if [ "$profile" = debug ] && [ ! -f "$vvl_dir/libVkLayer_khronos_validation.so" 
 fi
 
 cd "$root"
-# -P 32: the NDK platform at minSdk 32 (D-18), owner 2026-11-02 (#275).
+# -P 32: the NDK platform at minSdk 32 (D-18), owner 2026-11-02 (#275), whose libaaudio.so
+# kira's cpal backend links (#454).
 cargo ndk -t arm64-v8a -P 32 -o android/app/src/main/jniLibs build "${cargo_flags[@]}" -p ftgsxr-quest
 
 cd "$root/android"

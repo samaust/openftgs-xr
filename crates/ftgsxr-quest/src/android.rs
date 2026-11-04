@@ -139,7 +139,7 @@ fn main() {
     });
     let xr = XrPlugin {
         passthrough: false,
-        hands: false,
+        hands: true,
         // Q-121
         sort: SortMode::PerView,
     };
