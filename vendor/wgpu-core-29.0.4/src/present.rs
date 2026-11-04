@@ -276,6 +276,8 @@ impl Surface {
     pub fn present(&self) -> Result<Status, SurfaceError> {
         profiling::scope!("Surface::present");
 
+        self.ready_unused_for_present(); // openftgs-xr, Q-243
+
         let mut presentation = self.presentation.lock();
         let present = match presentation.as_mut() {
             Some(present) => present,
@@ -322,6 +324,72 @@ impl Surface {
                     Err(SurfaceError::Invalid)
                 }
             },
+        }
+    }
+
+    // openftgs-xr change (Q-243), to wgpu-core 29.0.4 (crates.io), file src/present.rs,
+    // MIT OR Apache-2.0: a surface texture presented with no submission having used it
+    // since its acquire was presented in the layout it was acquired in (on Vulkan
+    // `UNDEFINED`, VUID-VkPresentInfoKHR-pImageIndices-01430), and its acquire semaphore,
+    // which only a submission using the texture waits on, stayed signaled for the image's
+    // next acquire (VUID-vkAcquireNextImageKHR-semaphore-01286; gfx-rs/wgpu#9213, #9882).
+    // Bevy presents such frames while its pipelines compile. Such a texture is now cleared
+    // through the queue's pending writes and submitted before the present, so the
+    // submission waits on the acquire semaphore and moves the texture to the present
+    // state, as for any surface texture a submission uses; one that has pending writes not
+    // yet submitted is submitted the same way. A texture a submission used presents as
+    // before. Was: nothing before the present.
+    fn ready_unused_for_present(&self) {
+        let (device, texture) = match self.presentation.lock().as_ref() {
+            Some(present) => match present.acquired_texture.as_ref() {
+                Some(texture) => (present.device.clone(), texture.clone()),
+                None => return,
+            },
+            None => return,
+        };
+        if device.check_is_valid().is_err() {
+            return;
+        }
+        let Some(queue) = device.get_queue() else {
+            return;
+        };
+        let submit = {
+            let snatch_guard = device.snatchable_lock.read();
+            let mut pending_writes = queue.pending_writes.lock();
+            let mut trackers = device.trackers.lock();
+            if trackers.textures.is_uninitialized(&texture) {
+                let encoder = pending_writes.activate();
+                let layers = texture.initialization_status.write().mips[0]
+                    .drain(0..1)
+                    .collect::<Vec<_>>();
+                for layer_range in layers {
+                    if let Err(e) = crate::command::clear_texture(
+                        &texture,
+                        crate::init_tracker::TextureInitRange {
+                            mip_range: 0..1,
+                            layer_range,
+                        },
+                        encoder,
+                        &mut trackers.textures,
+                        &device.alignments,
+                        device.zero_buffer.as_ref(),
+                        &snatch_guard,
+                        device.instance_flags,
+                    ) {
+                        // The submission below still moves it to the present state.
+                        log::warn!("could not clear an unused surface texture: {e}");
+                    }
+                }
+                pending_writes.insert_texture(&texture);
+                true
+            } else {
+                pending_writes.contains_texture(&texture)
+            }
+        };
+        if submit {
+            if let Err((_, e)) = queue.submit(&[]) {
+                log::error!("could not submit an unused surface texture before presenting it: {e}");
+            }
         }
     }
 
