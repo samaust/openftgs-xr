@@ -364,16 +364,22 @@ pub(crate) fn grab(
         world_panel.image = image;
         quad.size_px = size_px;
     }
-    *transform = quad_transform(pose_of(&transform), quad.size_m);
+    let scale = Vec3::new(quad.size_m.x, quad.size_m.y, 1.0);
+    if transform.scale != scale {
+        transform.scale = scale;
+    }
     if let Some(surface) = surface.as_deref_mut()
         && let UiSurface::Panel { entity: e, .. } = *surface
         && e == entity
     {
-        *surface = UiSurface::Panel {
+        let now = UiSurface::Panel {
             entity,
             size_px: quad.size_px,
             size_m: quad.size_m,
         };
+        if *surface != now {
+            *surface = now;
+        }
     }
 }
 
