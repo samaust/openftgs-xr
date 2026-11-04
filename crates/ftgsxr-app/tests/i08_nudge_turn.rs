@@ -6,7 +6,7 @@
 //! the ground plane, 10 cm with Shift, PageUp 1 cm up, and `[` and `]` turn it 5° (Q-198's
 //! stage axes and turn sense).
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{Intent, LibraryCommand, LoadedModel, ModelRef, Selected};

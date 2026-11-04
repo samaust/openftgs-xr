@@ -6,7 +6,7 @@
 //! without a display (PRD #275's spike check 4 and its fallback). The `cpu` test: a
 //! request Bevy never answers ends with a warning (Q-213).
 
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 

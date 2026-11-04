@@ -8,6 +8,13 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+# #413: one integration-test binary, whose modules are the `tests/*.rs` files
+# (`tests/integration.rs`), not one executable per file.
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 # The workspace crates of §2.1's band table: `ftgsxr-core`, and `ftgsxr-render` for
 # `gpu_context` (M-2, Q-1); image joins when a helper needs it. sha2 (the fixtures'

@@ -6,7 +6,7 @@
 //! warning is logged and the tracking root stands 1.5 m up (PRD #221's Notes); the
 //! LOCAL\_FLOOR step is the device's. Prerequisites: `xr_support`'s.
 
-mod xr_support;
+use crate::xr_support;
 
 use std::time::{Duration, Instant};
 

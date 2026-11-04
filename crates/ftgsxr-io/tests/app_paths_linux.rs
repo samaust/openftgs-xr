@@ -5,16 +5,23 @@
 //! `XDG_PICTURES_DIR` pointed at temporary directories, `AppPaths::linux` yields exactly
 //! §1.11's six locations. The screenshots root's other sources are Q-14's.
 //!
-//! The environment is process-wide, so every clause that changes it is in the one test
-//! function of this test binary, which nothing else shares.
+//! The environment is process-wide, and the crate's other tests share this test binary
+//! and run in parallel with this one (#413), so every clause that changes it is in the one
+//! test function below, which runs again in a child process of the binary, alone, and sets
+//! the environment only there.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use ftgsxr_io::paths::AppPaths;
 
+/// Set in the child's environment: run the test's clauses.
+const CHILD: &str = "FTGSXR_APP_PATHS_LINUX_CHILD";
+
 fn set(key: &str, value: &Path) {
-    // SAFETY: this binary's only test is the one function below, so no other thread of
-    // this process reads or writes the environment while it runs.
+    // SAFETY: only the child sets the environment, and it runs this one test alone
+    // (`--exact`, one test thread), so no other thread of its process reads or writes the
+    // environment while it does.
     unsafe { std::env::set_var(key, value) }
 }
 
@@ -23,8 +30,28 @@ fn unset(key: &str) {
     unsafe { std::env::remove_var(key) }
 }
 
+/// Runs the test `name` of this file again, alone, in a child process of this test binary
+/// with `CHILD` set, and fails unless the child ran it and it passed.
+fn run_in_child(name: &str) {
+    let path = format!("{}::{name}", crate::test_file_stem());
+    let out = Command::new(std::env::current_exe().expect("the test binary"))
+        .args([path.as_str(), "--exact", "--test-threads", "1"])
+        .env(CHILD, "1")
+        .output()
+        .expect("the child run");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn linux_yields_the_six_xdg_locations_of_section_1_11() {
+    if std::env::var_os(CHILD).is_none() {
+        return run_in_child("linux_yields_the_six_xdg_locations_of_section_1_11");
+    }
     let root = std::env::temp_dir().join(format!("ftgsxr-app-paths-{}", std::process::id()));
     let home = root.join("home");
     let config = root.join("config");

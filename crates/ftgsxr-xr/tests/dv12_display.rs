@@ -5,7 +5,7 @@
 //! runner's `dv12` drives the settings; this driver reads `display`'s log lines (Q-124,
 //! Q-131, Q-132). Prerequisites: `dv_support`'s.
 
-mod dv_support;
+use crate::dv_support;
 
 use std::time::Duration;
 

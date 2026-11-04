@@ -4,7 +4,7 @@
 //! `EntryState::Failed` with its E-FILE code (`cpu`); a model over the budget fails with
 //! Q-117's text, and `Load { reduce: true }` then loads it reduced (`gpu`; Q-158).
 
-mod support;
+use crate::support;
 
 use std::fs;
 

@@ -7,7 +7,7 @@
 //! writes (bevy's `exit_on_all_closed`, in `Last`'s `ExitSystems`) is held the same way. An exit with nothing
 //! compiling passes within the frame after it.
 
-mod support;
+use crate::support;
 
 use std::time::{Duration, Instant};
 

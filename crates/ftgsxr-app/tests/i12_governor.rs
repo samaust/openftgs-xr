@@ -4,7 +4,7 @@
 //! desktop ladder (owner, 2026-11-02; Q-153): render scale 1.0 → 0.6, then the SH cap
 //! 3 → 1, and back in the reverse order; f_budget at the 60 Hz fallback, no window.
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{Governor, QualityTier, SettingsRes};

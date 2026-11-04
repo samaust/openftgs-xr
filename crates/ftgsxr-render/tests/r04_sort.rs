@@ -12,7 +12,7 @@
 //! float32's top byte changes once per factor of 4 in depth, so the 26 octaves give about
 //! 20 of its values, where a narrow range would give two.
 
-mod cull_support;
+use crate::cull_support;
 
 use cull_support::{Rng, draw, look_at, passes, prepare, sort_pose, upload, view};
 use ftgsxr_core::{Camera, Model, Pose, Quat, UVec2, Vec3, sort_key, sort_key16};

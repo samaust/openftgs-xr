@@ -4,7 +4,7 @@
 //! their code and text: an invalid file's E-FILE code and an unreachable URL's
 //! E-NET-FETCH (`cpu`), E-MEM-BUDGET with N (Q-117, `gpu_`).
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::net::TcpListener;

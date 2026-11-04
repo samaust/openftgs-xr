@@ -4,7 +4,7 @@
 //! instances with `LoadedModel`, each raising `SplatEvent::Uploaded`; `Unload` removes
 //! them and frees their bytes (PRD #275's reading of the row; Q-148).
 
-mod support;
+use crate::support;
 
 use std::sync::{Arc, Mutex};
 

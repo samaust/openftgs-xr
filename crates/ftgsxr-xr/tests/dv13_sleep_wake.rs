@@ -8,7 +8,7 @@
 //! page, Android's `KeyEvent`, source log 142 and 143). The sensor broadcasts make
 //! the run hold whether or not someone wears the headset. Prerequisites: `dv_support`'s.
 
-mod dv_support;
+use crate::dv_support;
 
 use std::time::{Duration, Instant};
 

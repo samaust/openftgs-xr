@@ -7,7 +7,7 @@
 //! two-hand grab that scales with the hands' distance, and releasing one returns to the
 //! other; push and pull move along the ray; `Unload` reaches the library.
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{

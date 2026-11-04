@@ -4,7 +4,7 @@
 //! selects it on a left click, through the mouse ray from the active camera (E10);
 //! a click over nothing deselects.
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::Selected;

@@ -5,7 +5,7 @@
 //! without an OpenXR error, and `XrHands` exists with each hand `None` or of source
 //! `Controller` (Q-128). Not I-16 (M-5). Prerequisites: `xr_support`'s.
 
-mod xr_support;
+use crate::xr_support;
 
 use std::time::{Duration, Instant};
 

@@ -4,7 +4,7 @@
 //! `poll_pick` returns two files loads both from `Pick(Files)`; a picked folder joins as
 //! a source. Without a GPU "loads" means `LoadedModel` (Q-148).
 
-mod support;
+use crate::support;
 
 use std::fs;
 

@@ -6,7 +6,7 @@
 //! the pose in `merged/R8_poses.json`, the reference `probes/R8_merged`, its 32-item ring).
 //! E15's tier.
 
-mod probe_support;
+use crate::probe_support;
 
 use ftgsxr_core::Quat;
 use ftgsxr_render::{HeadlessRenderer, QualityTier};

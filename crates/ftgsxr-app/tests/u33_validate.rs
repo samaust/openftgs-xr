@@ -133,7 +133,7 @@ fn u33_validate_every_model_fixture() {
 fn u33_validate_refuses_an_invalid_file_with_exit_2() {
     let dir = scratch_dir(
         env!("CARGO_TARGET_TMPDIR"),
-        env!("CARGO_CRATE_NAME"),
+        crate::test_file_stem(),
         "invalid",
     );
     let mut model = random_model(7, 8, 1);

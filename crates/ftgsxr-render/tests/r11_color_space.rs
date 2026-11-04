@@ -6,7 +6,7 @@
 //! by more. The background (VR mode) and passthrough forms of the resolve are both checked
 //! against E7's C + (1 − A)·c_bg, formed from the layer (Q-94).
 
-mod display_support;
+use crate::display_support;
 
 use display_support::{
     Run, center_block, draw, flat_probe, linear_to_srgb, probe_camera, render, upload,

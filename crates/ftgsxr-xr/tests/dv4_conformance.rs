@@ -8,7 +8,7 @@
 //! The bundled validation layer is enabled for the run (§1.13, Q-123), as for Dv-2, and
 //! the run fails on any of its messages. Prerequisites: `dv_support`'s.
 
-mod dv_support;
+use crate::dv_support;
 
 use std::time::Duration;
 

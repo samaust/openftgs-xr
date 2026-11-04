@@ -4,7 +4,7 @@
 //! (`ftgsxr-poses` v1, §1.5 Poses, §1.11, D-23): get, set, forget; a save and load round
 //! trip; the version rules. The shape is Q-52's, the refusals Q-53's.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 
@@ -13,10 +13,10 @@ use ftgsxr_core::{CoreError, Pose, Preset, Quat, Vec3};
 use ftgsxr_io::{IoError, PoseStore, SavedPose};
 use ftgsxr_testkit::scratch_dir;
 
-/// A fresh, empty directory of this test binary's own under the target directory.
-/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
+/// A fresh, empty directory of this test file's own under the target directory.
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test file and process (#94, #413, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// A model identity of 64 lowercase hex digits.

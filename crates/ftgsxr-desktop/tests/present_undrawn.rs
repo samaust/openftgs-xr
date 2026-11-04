@@ -15,36 +15,11 @@
 //!
 //! Prerequisites: a desktop session (`DISPLAY` or `WAYLAND_DISPLAY`) and a Vulkan GPU.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use ftgsxr_testkit::layer_messages;
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::platform::pump_events::EventLoopExtPumpEvents;
-use winit::platform::wayland::EventLoopBuilderExtWayland;
-use winit::platform::x11::EventLoopBuilderExtX11;
-use winit::window::{Window, WindowId};
 
-/// The window, once winit has made it.
-#[derive(Default)]
-struct Opened(Option<Arc<Window>>);
-
-impl ApplicationHandler for Opened {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.0.is_none() {
-            let attributes = Window::default_attributes()
-                .with_title("ftgsxr present_undrawn")
-                .with_inner_size(winit::dpi::PhysicalSize::new(320, 240));
-            self.0 = Some(Arc::new(
-                event_loop.create_window(attributes).expect("a window"),
-            ));
-        }
-    }
-
-    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
-}
+use crate::winit_support::{pump, window};
 
 /// One frame: acquire the surface texture, clear it in a render pass when `draw`, present.
 fn frame(surface: &wgpu::Surface, device: &wgpu::Device, queue: &wgpu::Queue, draw: bool) {
@@ -84,19 +59,8 @@ fn gpu_frames_presented_without_a_draw_leave_no_validation_message() {
         "the gpu lane's window tests need a desktop session (DISPLAY or WAYLAND_DISPLAY)"
     );
 
-    // The test harness runs tests off the main thread.
-    let mut builder = EventLoop::builder();
-    EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
-    EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
-    let mut event_loop = builder.build().expect("an event loop");
-    let mut opened = Opened::default();
-    for _ in 0..100 {
-        let _ = event_loop.pump_app_events(Some(Duration::from_millis(10)), &mut opened);
-        if opened.0.is_some() {
-            break;
-        }
-    }
-    let window = opened.0.clone().expect("winit made the window");
+    // The process's one event loop, on a thread of its own (#413).
+    let window = window("ftgsxr present_undrawn", (320, 240));
 
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     desc.backends = wgpu::Backends::VULKAN;
@@ -124,7 +88,7 @@ fn gpu_frames_presented_without_a_draw_leave_no_validation_message() {
     // Each image of the swapchain more than once: undrawn, drawn, then undrawn again.
     let plan = [false; 8].into_iter().chain([true; 4]).chain([false; 8]);
     for draw in plan {
-        let _ = event_loop.pump_app_events(Some(Duration::ZERO), &mut opened);
+        pump(Duration::ZERO);
         frame(&surface, &device, &queue, draw);
     }
     device

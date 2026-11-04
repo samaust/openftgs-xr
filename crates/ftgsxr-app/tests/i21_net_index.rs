@@ -4,7 +4,7 @@
 //! certificate from a public authority, validates with the WebPki roots and lists. The
 //! index is the owner's, named by `FTGSXR_NET_INDEX` (Q-156).
 
-mod support;
+use crate::support;
 
 use ftgsxr_app::{Library, LibraryCommand};
 use ftgsxr_io::{ListingFlavor, SourceSpec};

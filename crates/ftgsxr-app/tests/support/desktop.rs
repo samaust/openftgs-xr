@@ -25,6 +25,7 @@ fn collect(mut r: MessageReader<Intent>, mut seen: ResMut<Seen>) {
 
 /// A CPU app with a primary window (1280 × 720 logical pixels, so the desktop camera
 /// exists, Q-194) and the intent collector.
+#[track_caller]
 pub fn windowed(name: &str) -> TestApp {
     let mut t = TestApp::with(name, Setup::default(), |app| {
         app.world_mut().spawn((Window::default(), PrimaryWindow));

@@ -5,7 +5,7 @@
 //! second request in the same session triggers no second one (owner, #306), and a launch
 //! with the defaults triggers none. Prerequisites: `xr_support`'s.
 
-mod xr_support;
+use crate::xr_support;
 
 use std::time::{Duration, Instant};
 

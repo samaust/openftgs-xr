@@ -23,7 +23,11 @@ fn bench_refuses_a_benchmark_the_desktop_does_not_run() {
 
 #[test]
 fn bench_refuses_an_invalid_model_before_the_gpu() {
-    let dir = ftgsxr_testkit::scratch_dir(env!("CARGO_TARGET_TMPDIR"), "b_benchmarks", "invalid");
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "invalid",
+    );
     let path = dir.join("broken.ftgs-if");
     std::fs::write(&path, b"not a safetensors file").unwrap();
     let e = cmd_bench("B-6", None, Some(&path)).expect_err("an invalid model");
@@ -34,7 +38,8 @@ fn bench_refuses_an_invalid_model_before_the_gpu() {
 /// A tiny model of `n` rows at `degree`, written as a `ftgs-if` file in its own scratch
 /// directory (`--model`'s input).
 fn tiny_model(name: &str, n: usize, degree: u8) -> (PathBuf, ftgsxr_core::Model) {
-    let dir = ftgsxr_testkit::scratch_dir(env!("CARGO_TARGET_TMPDIR"), "b_benchmarks", name);
+    let dir =
+        ftgsxr_testkit::scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name);
     let model = ftgsxr_testkit::random_model(17, n, degree);
     let path = dir.join("tiny.ftgs-if");
     std::fs::write(&path, ftgsxr_testkit::exchange_bytes(&model)).unwrap();
@@ -44,7 +49,11 @@ fn tiny_model(name: &str, n: usize, degree: u8) -> (PathBuf, ftgsxr_core::Model)
 /// Runs `name` on `model` with `--out`, checks the report is the file and Q-103's
 /// top level, and returns the parsed file.
 fn run(name: &str, model: Option<&Path>, dir_name: &str) -> Value {
-    let dir = ftgsxr_testkit::scratch_dir(env!("CARGO_TARGET_TMPDIR"), "b_benchmarks", dir_name);
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        dir_name,
+    );
     let out = dir.join("bench.json");
     let report = cmd_bench(name, Some(&out), model).expect("the benchmark runs");
     let text = std::fs::read_to_string(&out).expect("the file is written");

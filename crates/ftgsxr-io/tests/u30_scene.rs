@@ -15,10 +15,10 @@ use ftgsxr_io::{
 };
 use ftgsxr_testkit::scratch_dir;
 
-/// A fresh, empty directory of this test binary's own under the target directory.
-/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test binary and process (#94, Q-62).
+/// A fresh, empty directory of this test file's own under the target directory.
+/// Its folder is `ftgsxr_testkit::scratch_dir`'s, one per test file and process (#94, #413, Q-62).
 fn scratch(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// A pose away from the identity, its rotation (x, y, z, w) a unit quaternion.

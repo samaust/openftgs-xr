@@ -6,7 +6,7 @@
 //! direction; a bookmark recalls its pose. The camera exists only with a primary
 //! window (Q-194).
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;

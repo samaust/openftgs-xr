@@ -4,7 +4,7 @@
 //! every sink; each volume scales its channel's gain; the per-sound switches. The
 //! persistence clause (the values in `Settings.audio`) is `persist`'s (#285).
 
-mod support;
+use crate::support;
 
 use ftgsxr_app::{
     AudioState, Feature, Intent, LibraryCommand, ModelRef, PlayUiSound, PlaybackCommand,

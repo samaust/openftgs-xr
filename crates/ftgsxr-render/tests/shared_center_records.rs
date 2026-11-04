@@ -5,7 +5,7 @@
 //! 48-byte half-Σ^S records alike. Their contents are measured from M-8 (R-9); here the
 //! count against the oracle and a clean validation run.
 
-mod cull_support;
+use crate::cull_support;
 
 use cull_support::{draw, look_at, oracle, passes, prepare, test_pose, upload, view};
 use ftgsxr_core::{UVec2, Vec3};

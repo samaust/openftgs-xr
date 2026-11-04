@@ -7,7 +7,7 @@
 //! model from inside it and from outside it, with the tolerances scaled to float32's
 //! propagation (Q-82).
 
-mod cull_support;
+use crate::cull_support;
 
 use cull_support::{
     Rng, draw, look_at, oracle, passes, prepare, row_at, sort_pose, test_pose, upload, view,

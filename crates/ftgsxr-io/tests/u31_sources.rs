@@ -25,14 +25,14 @@ use ftgsxr_testkit::{
 };
 use url::Url;
 
-/// This test binary's per-process folder under Cargo's temporary directory (#94, Q-62).
-fn binary_dir() -> PathBuf {
-    process_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"))
+/// This test file's per-process folder under Cargo's temporary directory (#94, #413, Q-62).
+fn file_dir() -> PathBuf {
+    process_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem())
 }
 
-/// A fresh, empty directory in this binary's folder.
+/// A fresh, empty directory in this test file's folder.
 fn fresh_dir(name: &str) -> PathBuf {
-    scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), name)
+    scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), name)
 }
 
 /// The listing fixture's models directory (tests/fixtures/README.md, Layout).
@@ -299,10 +299,10 @@ fn u31_local_dir_fetch_of_a_checkpoint_returns_its_directory() {
     );
 }
 
-/// The cache directory of `test`'s client in this binary's folder, its `cache-` prefix keeping it
+/// The cache directory of `test`'s client in this test file's folder, its `cache-` prefix keeping it
 /// apart from the directories of `fresh_dir`.
 fn cache_dir(test: &str) -> PathBuf {
-    binary_dir().join(format!("cache-{test}"))
+    file_dir().join(format!("cache-{test}"))
 }
 
 /// A client over a fresh cache directory for one test.

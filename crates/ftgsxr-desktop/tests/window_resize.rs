@@ -43,7 +43,7 @@ use bevy::window::{PresentMode, PrimaryWindow, WindowResolution};
 use bevy::winit::{WINIT_WINDOWS, WinitPlugin};
 use ftgsxr_testkit::{layer_messages, scratch_dir};
 
-mod common;
+use crate::common;
 use common::{layer_log, layer_settings};
 
 /// Set in the child's environment: run the resized app.
@@ -277,22 +277,23 @@ fn resized_app(resizes: &'static [Resize]) {
     drop(layer);
 }
 
-/// One child run of the test `test`: its exit status, its output, and the layer's log as
-/// `layer_log` reads it (whether the layer reported itself active, and its errors and
-/// warnings).
+/// One child run of the test `test` of this file, named by its full path in the crate's one
+/// test binary (#413): its exit status, its output, and the layer's log as `layer_log`
+/// reads it (whether the layer reported itself active, and its errors and warnings).
 fn run_child(test: &str) -> (Option<ExitStatus>, String, (bool, Vec<String>)) {
     assert!(
         std::env::var_os("DISPLAY").is_some(),
         "the resize tests need an X11 display (DISPLAY; XWayland on a Wayland session)"
     );
-    let home = scratch_dir(env!("CARGO_TARGET_TMPDIR"), env!("CARGO_CRATE_NAME"), test);
+    let home = scratch_dir(env!("CARGO_TARGET_TMPDIR"), crate::test_file_stem(), test);
     let log = home.join("validation.log");
     let settings = layer_settings(&home, &log);
     let output = home.join("child-output.txt");
     let file = File::create(&output).expect("the child's output file");
+    let path = format!("{}::{test}", crate::test_file_stem());
     let mut child = Command::new(std::env::current_exe().expect("the test binary's path"))
         .args([
-            test,
+            path.as_str(),
             "--exact",
             "--ignored",
             "--nocapture",
@@ -323,13 +324,15 @@ fn run_child(test: &str) -> (Option<ExitStatus>, String, (bool, Vec<String>)) {
     (status, text, layer_log(&log))
 }
 
-/// The failures of a child run, given the layer's messages that count: the child's exit,
-/// and, R-16, §1.13 (Q-105, Q-113), the layer's messages and, in a debug build, its status
-/// message.
+/// The failures of a child run, given the layer's messages that count: the child's exit
+/// and whether it ran its test, and, R-16, §1.13 (Q-105, Q-113), the layer's messages and,
+/// in a debug build, its status message.
 fn failures(status: Option<ExitStatus>, text: &str, active: bool, messages: &[String]) -> String {
     let mut failures = Vec::new();
     if !status.is_some_and(|s| s.success()) {
         failures.push(format!("the child failed ({status:?}):\n{text}"));
+    } else if !text.contains("test result: ok. 1 passed") {
+        failures.push(format!("the child ran no test:\n{text}"));
     }
     if cfg!(debug_assertions) && !active {
         failures.push("the Khronos validation layer did not report itself active".into());

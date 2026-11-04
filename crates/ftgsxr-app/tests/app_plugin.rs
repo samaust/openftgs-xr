@@ -6,7 +6,7 @@
 //! loads the settings into `SettingsRes` from `SettingsPath`, else the platform's
 //! `settings.toml`, leaving a caller's `SettingsRes` alone (Q-163).
 
-mod support;
+use crate::support;
 
 use std::fs;
 

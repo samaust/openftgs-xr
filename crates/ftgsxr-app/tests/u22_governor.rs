@@ -4,7 +4,7 @@
 //! order after 10 frames over and up after 120 under, over E16's full ladder (Q-153); a
 //! manual tier disables the governor.
 
-mod support;
+use crate::support;
 
 use ftgsxr_app::{Governor, GovernorCounters, HEADSET_LADDER, Knob, QualityTier, govern};
 use ftgsxr_render::{Foveation, SortMode, SplatTierState};

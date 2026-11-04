@@ -5,7 +5,7 @@
 //! `Settings.desktop.keys` takes effect (Q-152, Q-197). Delete's row asks `ui` for a
 //! confirmation (Q-199) and writes no intent; Quit is the window's close action.
 
-mod support;
+use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{

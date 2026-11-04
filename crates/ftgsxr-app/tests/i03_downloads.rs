@@ -7,7 +7,7 @@
 //! and the cache's pruning after a load (Q-4, Q-45, Q-56). Progress and cancel are seen
 //! through a test-local server that holds its body after a first part.
 
-mod support;
+use crate::support;
 
 use std::fs;
 

@@ -7,7 +7,7 @@
 //! coordinates to the expected pixel (1 px), and pointer events at that pixel click a
 //! button in a second egui context.
 
-mod support;
+use crate::support;
 
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::camera::{Camera, Camera3d, RenderTarget};

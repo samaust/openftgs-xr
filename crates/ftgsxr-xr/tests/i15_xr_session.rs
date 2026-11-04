@@ -5,7 +5,7 @@
 //! the mode stays VR. Through `add_xr` (Q-120), `XrPlugin`, `SplatPlugin`, `SplatCamera`
 //! and `Environment` (PRD #221). Prerequisites: `xr_support`'s.
 
-mod xr_support;
+use crate::xr_support;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

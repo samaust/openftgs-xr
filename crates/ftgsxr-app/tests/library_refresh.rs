@@ -10,7 +10,7 @@
 //!
 //! Added for #400: the ETag of the `HEAD` sent before a load (Q-242).
 
-mod support;
+use crate::support;
 
 use bevy::asset::Handle;
 use ftgsxr_app::{Library, LibraryCommand, LibraryEntry, LoadedModel};

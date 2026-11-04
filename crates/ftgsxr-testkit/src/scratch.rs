@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Scratch directories of one test binary in one process (#94, Q-62).
+//! Scratch directories of one test file in one process (#94, #413, Q-62).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// `<tmp>/<binary>-<pid>`: the folder of the test binary `binary` in this process, under the
+/// `<tmp>/<binary>-<pid>`: the folder of the test file `binary` in this process, under the
 /// temporary directory `tmp` (an integration test passes `env!("CARGO_TARGET_TMPDIR")` and
-/// `env!("CARGO_CRATE_NAME")`). No other binary and no overlapping run, in this worktree or
-/// another sharing the target directory, uses it. Only the path: nothing is created (Q-62).
+/// its file's stem, `u31_sources` for `tests/u31_sources.rs`, since a crate's test files are
+/// modules of one test binary, #413). No other test file and no overlapping run, in this
+/// worktree or another sharing the target directory, uses it. Only the path: nothing is
+/// created (Q-62).
 pub fn process_dir(tmp: impl AsRef<Path>, binary: &str) -> PathBuf {
     tmp.as_ref()
         .join(format!("{binary}-{}", std::process::id()))
