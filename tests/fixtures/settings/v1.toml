@@ -54,6 +54,7 @@ centers_radius = 5.5
 colormap = "time"
 background = [0.2, 0.3, 0.4]   # VR mode's background (the environment's, Q-49)
 grid = false
+high_contrast = true           # Q-278
 
 [display.overlays]
 boxes = true
