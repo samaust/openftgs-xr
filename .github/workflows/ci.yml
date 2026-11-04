@@ -90,9 +90,9 @@ jobs:
           df -h "$GITHUB_WORKSPACE"
           du -sh target || true
 
-      # U-35's skeleton test (§2.7), through the workspace and the settings of the `cpu
-      # lane` step, so that it reuses that step's build: `-p ftgsxr-core` unifies features
-      # differently and built a second set of dependencies (#413).
+      # U-35's skeleton test (§2.7), through the workspace and with the settings of the
+      # `cpu lane` step, so that it reuses that step's build: `-p ftgsxr-core` unifies
+      # features differently and built a second set of dependencies (#413).
       - name: skeleton test
         run: cargo --config "$CARGO_DEPS_OPT_LEVEL" test --workspace skeleton
 
