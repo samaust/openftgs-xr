@@ -29,6 +29,7 @@ enum Out {
     Intent(Intent),
     Library(LibraryCommand),
     Locate(usize),
+    // Q-256
     Replace(usize),
     Answer(bool),
     Cue(UiCue),

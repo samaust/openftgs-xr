@@ -541,11 +541,17 @@ fn i09_the_right_file_after_another_identity_clears_the_entry() {
     assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
 }
 
+/// The soundtrack the scene of `p1_missing_with_attributes` names.
+fn track(t: &TestApp) -> std::path::PathBuf {
+    t.dir.join("track.ogg")
+}
+
 /// A scene naming P1 at a gone path as "moved", posed at x = 0.5, with a time offset,
-/// end rule, mode, visibility and lighting of its own; loaded, P1 listed as missing.
-/// The missing model's identity.
+/// end rule, mode, visibility, lighting and soundtrack of its own; loaded, P1 listed as
+/// missing. The missing model's identity.
 fn p1_missing_with_attributes(t: &mut TestApp, name: &str) -> String {
     let id = identity_of(&fixtures_dir().join("probes/P1.safetensors"));
+    let audio = serde_json::to_string(&track(t).to_string_lossy()).unwrap();
     let model = format!(
         r#"{{"source": {{"kind": "dir", "location": "moved.safetensors"}},
             "identity": "{id}", "name": "moved",
@@ -553,7 +559,7 @@ fn p1_missing_with_attributes(t: &mut TestApp, name: &str) -> String {
             "visible": false, "mode": "centers", "time_offset_s": 0.125,
             "end_rule": "extrapolate",
             "lighting": {{"exposure_ev": 0.5, "temperature": 0.25, "tint": -0.25}},
-            "audio": null}}"#
+            "audio": {audio}}}"#
     );
     write_scene_file(t, name, &[model], 0.0, None);
     t.frames(2);
@@ -619,6 +625,11 @@ fn i09_replacing_a_missing_model_gives_the_file_the_scenes_attributes() {
     assert_eq!(m.identity, identity_of(&p2), "the file's own identity");
     assert_eq!(m.time.offset_s, 0.125);
     assert_eq!(m.time.end_rule, EndRule::Extrapolate);
+    assert_eq!(
+        m.audio,
+        Some(ModelRef::File(track(&t))),
+        "the scene's soundtrack"
+    );
     assert!((w.get::<Transform>(e).unwrap().translation.x - 0.5).abs() < 1e-6);
     assert!(
         matches!(
@@ -673,6 +684,22 @@ fn i09_a_checkpoint_replaces_a_missing_model() {
     t.app.world_mut().write_message(ReplaceEntry {
         identity: old,
         file: ModelRef::File(fixtures_dir().join("checkpoint/tiny")),
+    });
+    wait_for(&mut t, 1);
+    assert_eq!(missing_entries(&t), 0);
+    let e = entity_named(&mut t, "moved");
+    let tf = t.app.world().get::<Transform>(e).unwrap();
+    assert!((tf.translation.x - 0.5).abs() < 1e-6, "the scene's pose");
+}
+
+// Q-257
+#[test]
+fn i09_a_ply_replaces_a_missing_model() {
+    let mut t = TestApp::new("i09_replace_ply");
+    let old = p1_missing_with_attributes(&mut t, "ply");
+    t.app.world_mut().write_message(ReplaceEntry {
+        identity: old,
+        file: ModelRef::File(fixtures_dir().join("checkpoint/tiny.tau0.ply")),
     });
     wait_for(&mut t, 1);
     assert_eq!(missing_entries(&t), 0);

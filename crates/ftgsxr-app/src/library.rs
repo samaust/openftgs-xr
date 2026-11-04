@@ -351,6 +351,7 @@ struct Expected {
     identity: String,
     scene: Option<MissingModel>,
     /// A `ReplaceEntry`'s load: kept whatever its identity.
+    // Q-255
     replace: bool,
 }
 
@@ -580,7 +581,7 @@ fn kind_hint(kind: EntryKind) -> Option<ModelKind> {
 }
 
 /// The name of a reference: its file stem (§1.5 Instances).
-pub(crate) fn ref_name(r: &ModelRef) -> String {
+fn ref_name(r: &ModelRef) -> String {
     let last = match r {
         ModelRef::File(p) => return stem(p),
         ModelRef::Http(url) => url
@@ -593,7 +594,7 @@ pub(crate) fn ref_name(r: &ModelRef) -> String {
     stem(Path::new(&last))
 }
 
-pub(crate) fn stem(p: &Path) -> String {
+fn stem(p: &Path) -> String {
     p.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()

@@ -41,7 +41,7 @@ use ftgsxr_render::{
 
 use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
 use crate::library::{
-    EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel, ReplaceEntry, ref_name, stem,
+    EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel, ReplaceEntry,
 };
 use crate::manipulate::Selected;
 use crate::platform::{PickHandle, PickKind, PlatformRes};
@@ -363,6 +363,7 @@ pub(crate) enum Confirm {
     LoadScene(Option<PathBuf>),
     /// Put the picked `file` in the place of the missing scene model `model` of `identity`
     /// (§1.5 Library, Q-256).
+    // Q-256
     Replace {
         identity: String,
         model: String,
@@ -372,10 +373,16 @@ pub(crate) enum Confirm {
 
 impl Confirm {
     /// A replacement's question, naming both models (Q-256): the missing entry's name and
-    /// the picked file's stem.
+    /// the picked file's path or URL, which tells the two apart even when the file has the
+    /// model's name (a model retrained in place).
     // Q-256
     pub(crate) fn replace_text(model: &str, file: &ModelRef) -> String {
-        format!("Replace {model} with {}?", ref_name(file))
+        let at = match file {
+            ModelRef::File(p) => p.display().to_string(),
+            ModelRef::Http(url) => url.to_string(),
+            ModelRef::Document(uri) => uri.clone(),
+        };
+        format!("Replace {model} with {at}?")
     }
 }
 
@@ -386,6 +393,7 @@ impl Confirm {
 pub(crate) struct ReplaceRequest(pub(crate) usize);
 
 /// The open "Replace with…" pickers, each with the missing entry's identity and name.
+// Q-256
 #[derive(Resource, Default)]
 struct ReplacePicks(Vec<(String, String, PickHandle)>);
 
@@ -480,6 +488,7 @@ pub(crate) struct Answered {
     pub(crate) intent: Option<Intent>,
     pub(crate) scene: Option<PathBuf>,
     /// A confirmed replacement (Q-255).
+    // Q-255
     pub(crate) replace: Option<ReplaceEntry>,
     pub(crate) cue: UiCue,
 }
@@ -655,7 +664,7 @@ fn replace_picks(
         let Some(id) = e.identity.clone() else {
             continue;
         };
-        let name = stem(Path::new(&e.entry.name));
+        let name = e.entry.name.clone();
         let h = platform.0.pick(PickKind::Files);
         picks.0.push((id, name, h));
     }
@@ -952,14 +961,25 @@ pub(crate) fn load_system_font(ctx: &egui::Context) -> bool {
 mod tests {
     use super::*;
 
-    // Q-256: the question names the missing model and the picked file; no drops it.
+    // Q-256: the question names the missing model and the picked file's path.
     #[test]
-    fn a_replacement_asks_naming_both_models_and_no_drops_it() {
-        let file = ModelRef::File(PathBuf::from("/m/retrained.safetensors"));
+    fn replace_text_names_the_model_and_the_files_path() {
+        let file = ModelRef::File(PathBuf::from("/m/moved.safetensors"));
         assert_eq!(
             Confirm::replace_text("moved", &file),
-            "Replace moved with retrained?"
+            "Replace moved with /m/moved.safetensors?"
         );
+        let url = ModelRef::Http(ftgsxr_io::Url::parse("http://h/m/v1.2.safetensors").unwrap());
+        assert_eq!(
+            Confirm::replace_text("v1.2", &url),
+            "Replace v1.2 with http://h/m/v1.2.safetensors?"
+        );
+    }
+
+    // Q-256: yes gives the replacement; no drops it.
+    #[test]
+    fn answer_to_a_replacement_replaces_only_on_yes() {
+        let file = ModelRef::File(PathBuf::from("/m/retrained.safetensors"));
         let ask = Confirm::Replace {
             identity: "ab".repeat(32),
             model: "moved".into(),
@@ -1066,7 +1086,7 @@ mod tests {
 
     // Q-256, Q-257: "Replace with…" opens the files picker; its first file is the question.
     #[test]
-    fn replace_with_picks_a_file_then_asks() {
+    fn replace_picks_open_the_files_picker_then_ask() {
         let file = ModelRef::File(PathBuf::from("/m/retrained.safetensors"));
         let other = ModelRef::File(PathBuf::from("/m/other.safetensors"));
         let (mut app, platform) = replace_app(vec![file.clone(), other]);
@@ -1085,7 +1105,7 @@ mod tests {
 
     // Q-256: an empty pick asks nothing.
     #[test]
-    fn an_empty_replace_pick_asks_nothing() {
+    fn replace_picks_ask_nothing_for_an_empty_pick() {
         let (mut app, _) = replace_app(Vec::new());
         app.world_mut().write_message(ReplaceRequest(0));
         app.update();
