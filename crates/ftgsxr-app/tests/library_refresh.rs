@@ -3,8 +3,12 @@
 //! Added for #375 (`cpu`): a library refresh keeps an entry's information only while its
 //! file is unchanged, the ETag of an HTTP entry included (§1.5 Library: "entries whose file
 //! changed (size, ETag or SHA-256) lose their cached information"; Q-230, Q-232). No §3 row
-//! pins a refresh; §1.5's sentence is the source of truth. #400 adds the ETag of the `HEAD`
-//! sent before a load (Q-242).
+//! pins a refresh; §1.5's sentence is the source of truth.
+//!
+//! Added for #389: the listing's `mtime` (Q-231) and the two 200 answers to the ETag check,
+//! another ETag and the same one (Q-230), served by a server private to these tests.
+//!
+//! Added for #400: the ETag of the `HEAD` sent before a load (Q-242).
 
 mod support;
 
@@ -12,6 +16,7 @@ use bevy::asset::Handle;
 use ftgsxr_app::{Library, LibraryCommand, LibraryEntry, LoadedModel};
 use ftgsxr_io::{EntryKind, ListingFlavor, SourceSpec};
 use ftgsxr_testkit::{RequestRecord, ServedListing, fixtures_dir};
+use std::sync::{Arc, Mutex};
 use support::TestApp;
 
 /// The probe's path on the server, as sent.
@@ -342,5 +347,279 @@ fn an_entry_without_an_etag_is_compared_as_before() {
     assert!(
         t.server.requests().is_empty(),
         "no request for a local source"
+    );
+}
+
+/// The probe's file name on the refresh server.
+const REFRESH_FILE: &str = "probe.safetensors";
+
+/// What the refresh server answers with, changed by the test between two refreshes.
+struct Served {
+    /// The probe's `mtime` in the nginx JSON listing.
+    mtime: String,
+    /// The probe's ETag.
+    etag: String,
+    /// Whether a `HEAD` whose `If-None-Match` names the ETag is answered 304; when false,
+    /// the server ignores `If-None-Match` and answers 200 with the ETag.
+    honour_none_match: bool,
+}
+
+/// A request the refresh server answered for the probe.
+#[derive(Clone, Debug)]
+struct Seen {
+    method: String,
+    none_match: Option<String>,
+    status: u16,
+}
+
+/// Added for #389: an HTTP server private to these tests, whose answers change between two
+/// refreshes, which the testkit's `LocalServer` does not offer (Q-39). It serves nginx's JSON
+/// listing of the probe at `/m/` (its size and `mtime`), and the probe at `/m/probe.safetensors`:
+/// a `HEAD` gets the probe's ETag (or 304, see `Served`), a `GET` the bytes asked for.
+struct RefreshServer {
+    base: String,
+    served: Arc<Mutex<Served>>,
+    seen: Arc<Mutex<Vec<Seen>>>,
+}
+
+impl RefreshServer {
+    fn start() -> RefreshServer {
+        let body = std::fs::read(fixtures_dir().join("listing/models/probe p1.safetensors"))
+            .expect("the probe fixture");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let served = Arc::new(Mutex::new(Served {
+            mtime: "Thu, 29 Oct 2026 12:00:00 GMT".into(),
+            etag: "\"v1\"".into(),
+            honour_none_match: true,
+        }));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (shared, log, body) = (served.clone(), seen.clone(), Arc::new(body));
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let (served, log, body) = (shared.clone(), log.clone(), body.clone());
+                std::thread::spawn(move || answer(stream, &body, &served, &log));
+            }
+        });
+        RefreshServer {
+            base: format!("http://127.0.0.1:{port}/m/"),
+            served,
+            seen,
+        }
+    }
+
+    fn change(&self, f: impl FnOnce(&mut Served)) {
+        f(&mut self.served.lock().unwrap());
+    }
+
+    fn seen(&self) -> Vec<Seen> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+/// Answers the requests of one connection (`RefreshServer`).
+fn answer(
+    mut stream: std::net::TcpStream,
+    body: &[u8],
+    served: &Mutex<Served>,
+    seen: &Mutex<Vec<Seen>>,
+) {
+    use std::io::{BufRead, BufReader, Write};
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            return;
+        }
+        let mut parts = line.split(' ');
+        let method = parts.next().unwrap_or("").to_owned();
+        let path = parts.next().unwrap_or("").to_owned();
+        let (mut range, mut none_match) = (None, None);
+        loop {
+            let mut h = String::new();
+            if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                break;
+            }
+            let Some((name, value)) = h.split_once(':') else {
+                continue;
+            };
+            let value = value.trim();
+            match name.trim().to_ascii_lowercase().as_str() {
+                "range" => {
+                    let (a, b) = value
+                        .strip_prefix("bytes=")
+                        .and_then(|v| v.split_once('-'))
+                        .unwrap();
+                    let a: usize = a.parse().unwrap();
+                    let b = b
+                        .parse::<usize>()
+                        .map_or(body.len() - 1, |b| b.min(body.len() - 1));
+                    range = Some((a, b));
+                }
+                "if-none-match" => none_match = Some(value.to_owned()),
+                _ => {}
+            }
+        }
+        let s = served.lock().unwrap();
+        let head = |status: &str, len: usize, extra: &str| {
+            format!("HTTP/1.1 {status}\r\nContent-Length: {len}\r\n{extra}\r\n")
+        };
+        let etag = format!("ETag: {}\r\n", s.etag);
+        if path == "/m/" && method == "GET" {
+            let listing = format!(
+                r#"[{{ "name":"{REFRESH_FILE}", "type":"file", "mtime":"{}", "size":{} }}]"#,
+                s.mtime,
+                body.len()
+            );
+            let _ = write!(stream, "{}{listing}", head("200 OK", listing.len(), ""));
+        } else if path == format!("/m/{REFRESH_FILE}") {
+            let status = if method == "HEAD" {
+                if s.honour_none_match && none_match.as_deref() == Some(s.etag.as_str()) {
+                    let _ = write!(stream, "{}", head("304 Not Modified", 0, &etag));
+                    304
+                } else {
+                    let _ = write!(stream, "{}", head("200 OK", body.len(), &etag));
+                    200
+                }
+            } else if let Some((a, b)) = range {
+                let extra = format!("{etag}Content-Range: bytes {a}-{b}/{}\r\n", body.len());
+                let _ = write!(stream, "{}", head("206 Partial Content", b + 1 - a, &extra));
+                let _ = stream.write_all(&body[a..=b]);
+                206
+            } else {
+                let _ = write!(stream, "{}", head("200 OK", body.len(), &etag));
+                let _ = stream.write_all(body);
+                200
+            };
+            seen.lock().unwrap().push(Seen {
+                method,
+                none_match,
+                status,
+            });
+        } else {
+            let _ = write!(stream, "{}", head("404 Not Found", 0, ""));
+        }
+        drop(s);
+        let _ = stream.flush();
+    }
+}
+
+/// Adds the refresh server's nginx JSON listing as source 1 and waits for the probe's
+/// information, read with the ETag kept beside it (Q-230).
+fn nginx_source(t: &mut TestApp, server: &RefreshServer) {
+    add_and_wait(
+        t,
+        SourceSpec {
+            kind: "http".into(),
+            location: server.base.clone(),
+            name: "refresh".into(),
+            flavor: Some(ListingFlavor::NginxJson),
+        },
+    );
+}
+
+/// Refreshes source 1 and advances frames until `done` holds of the probe's requests from
+/// record `from` on, at most 2000 frames.
+fn refresh_until(
+    t: &mut TestApp,
+    server: &RefreshServer,
+    from: usize,
+    done: impl Fn(&[Seen]) -> bool,
+) -> bool {
+    t.command(LibraryCommand::Refresh(1));
+    pump_until(t, 2000, |_| done(&server.seen()[from..]))
+}
+
+/// A header read: a `GET` of the probe.
+fn header_read(seen: &[Seen]) -> bool {
+    seen.iter().any(|s| s.method == "GET")
+}
+
+/// The refresh's ETag check: a `HEAD` sent with `If-None-Match` (Q-230).
+fn etag_check(seen: &[Seen]) -> Option<&Seen> {
+    seen.iter()
+        .find(|s| s.method == "HEAD" && s.none_match.is_some())
+}
+
+// Q-231
+#[test]
+fn a_changed_nginx_mtime_drops_the_information_and_reads_it_again() {
+    let server = RefreshServer::start();
+    let mut t = TestApp::new("refresh-mtime");
+    nginx_source(&mut t, &server);
+    // The same listing: the entry keeps its information and is checked, not read.
+    let before = server.seen().len();
+    assert!(refresh_until(&mut t, &server, before, |s| etag_check(s).is_some()));
+    t.until(200, |_| false);
+    assert!(probe_has_info(t.app.world().resource::<Library>()));
+    assert!(
+        !header_read(&server.seen()[before..]),
+        "{:?}",
+        server.seen()
+    );
+    // A new mtime, the size, the ETag and the bytes unchanged: the information is dropped
+    // and the header read again, with no ETag check of the old information.
+    server.change(|s| s.mtime = "Fri, 30 Oct 2026 12:00:00 GMT".into());
+    let before = server.seen().len();
+    assert!(
+        refresh_until(&mut t, &server, before, header_read),
+        "the header is read again: {:?}",
+        server.seen()
+    );
+    let seen = server.seen()[before..].to_vec();
+    assert!(etag_check(&seen).is_none(), "{seen:?}");
+    assert!(
+        t.until(2000, |app| probe_has_info(
+            app.world().resource::<Library>()
+        )),
+        "the new read's information arrives"
+    );
+}
+
+// Q-230
+#[test]
+fn a_200_with_another_etag_drops_the_information_and_reads_it_again() {
+    let server = RefreshServer::start();
+    let mut t = TestApp::new("refresh-other-etag");
+    nginx_source(&mut t, &server);
+    server.change(|s| s.etag = "\"v2\"".into());
+    let before = server.seen().len();
+    assert!(
+        refresh_until(&mut t, &server, before, header_read),
+        "the header is read again: {:?}",
+        server.seen()
+    );
+    let seen = server.seen()[before..].to_vec();
+    let head = etag_check(&seen).expect("the refresh checks the ETag");
+    assert_eq!(head.none_match.as_deref(), Some("\"v1\""));
+    assert_eq!(head.status, 200);
+    assert!(
+        t.until(2000, |app| probe_has_info(
+            app.world().resource::<Library>()
+        )),
+        "the new read's information arrives"
+    );
+}
+
+// Q-230
+#[test]
+fn a_200_with_the_same_etag_keeps_the_information() {
+    let server = RefreshServer::start();
+    let mut t = TestApp::new("refresh-same-etag-200");
+    nginx_source(&mut t, &server);
+    // A server that ignores `If-None-Match`: 200 with the ETag the entry was kept with.
+    server.change(|s| s.honour_none_match = false);
+    let before = server.seen().len();
+    assert!(refresh_until(&mut t, &server, before, |s| etag_check(s).is_some()));
+    let head = etag_check(&server.seen()[before..]).cloned().unwrap();
+    assert_eq!(head.status, 200, "{head:?}");
+    assert_eq!(head.none_match.as_deref(), Some("\"v1\""), "the ETag kept");
+    t.until(200, |_| false);
+    assert!(probe_has_info(t.app.world().resource::<Library>()));
+    assert!(
+        !header_read(&server.seen()[before..]),
+        "no header read: {:?}",
+        server.seen()
     );
 }
