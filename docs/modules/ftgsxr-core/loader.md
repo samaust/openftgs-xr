@@ -26,7 +26,7 @@ An exchange model and a checkpoint's parameters are safetensors containers (§1.
 
 The `safetensors` crate parses the header and checks that the offsets cover the data section without holes, each with the size its dtype and shape imply; the loader adds the `{` rule and the 100 MB header limit's message, and maps every container fault to E-FILE-FORMAT.
 
-`open_model` reads the file into memory and passes the bytes to the reader its kind selects (a directory holding `manifest.json`, a `.ply` suffix, anything else). §2.1 describes that step as a memory map, which `ftgsxr-core` cannot make without `unsafe` (§2.6); the readers take a byte slice, so a mapping can replace the read without touching them once the owner settles Q-30.
+`open_model` reads the file into memory and passes the bytes to the reader its kind selects (a directory holding `manifest.json`, a `.ply` suffix, anything else). A path whose file name is `manifest.json` names the checkpoint directory that holds it: `checkpoint_dir` maps it by name alone, without reading it, and `open_model` reads that directory, so a checkpoint may be given as its directory or as its manifest (Q-260); the same helper serves `ftgsxr_io::open_ref` and the application's loads, so every opener follows one rule. §2.1 describes that step as a memory map, which `ftgsxr-core` cannot make without `unsafe` (§2.6); the readers take a byte slice, so a mapping can replace the read without touching them once the owner settles Q-30.
 
 ## Where the identity is computed
 
