@@ -28,4 +28,4 @@ A model over the memory budget is refused with E-MEM-BUDGET and the reduce-to-bu
 
 ## Q-n rows relied on
 
-Q-148, Q-158, Q-166 (messages), Q-172, Q-173, Q-174, Q-192, Q-193, Q-202, Q-203 (missing entries from a scene, `persist.md`), Q-216, Q-230, Q-231, Q-232, Q-238, Q-242; with Q-99, Q-117 and Q-14 from earlier milestones.
+Q-148, Q-158, Q-166 (messages), Q-172, Q-173, Q-174, Q-192, Q-193, Q-202, Q-203 (missing entries from a scene, `persist.md`), Q-216, Q-230, Q-231, Q-232, Q-238, Q-242, Q-245 (a scene model's file of another identity, `persist.md`); with Q-99, Q-117 and Q-14 from earlier milestones.

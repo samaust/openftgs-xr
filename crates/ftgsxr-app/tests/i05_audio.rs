@@ -5,6 +5,10 @@
 //! clock's position when playback at speed 1 resumes. The probe P1 spans τ ∈ [0, 1.9] s
 //! (r = 1), so the soundtrack's position is T − o. The stub has no clock: each frame the
 //! test moves its playing sinks by the frame's Δt, as a device would.
+//!
+//! A scrub while playing (silent until it ends, Q-190, Q-246, #416) is pinned by
+//! `audio`'s and the dock's private tests, since the scrub state is crate-private; this
+//! file pins that a one-off seek while playing is not a scrub.
 
 use crate::support;
 
@@ -118,6 +122,22 @@ fn i05_audio_mutes_otherwise_and_seeks_on_resume() {
     intent(&mut t, PlaybackCommand::Play);
     frame(&mut t);
     assert!((sink(&t).position - clock_t(&t)).abs() < TOL);
+    assert!((clock_t(&t) - 1.2 - FRAME.as_secs_f64()).abs() < TOL);
+    follows(&mut t, 5);
+}
+
+// Q-190, Q-246: a seek while playing at speed 1 (the start and end keys, a click on the
+// scrub bar) moves the sink to the clock's position and leaves it playing.
+#[test]
+fn i05_audio_a_one_off_seek_while_playing_keeps_playing() {
+    let mut t = with_soundtrack("i05-audio-one-off-seek");
+    intent(&mut t, PlaybackCommand::Play);
+    follows(&mut t, 5);
+    intent(&mut t, PlaybackCommand::Seek(1.2));
+    frame(&mut t);
+    let s = sink(&t);
+    assert!(s.playing, "plays on after the seek");
+    assert!((s.position - clock_t(&t)).abs() < TOL);
     assert!((clock_t(&t) - 1.2 - FRAME.as_secs_f64()).abs() < TOL);
     follows(&mut t, 5);
 }
