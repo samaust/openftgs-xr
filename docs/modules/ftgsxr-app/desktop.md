@@ -12,6 +12,8 @@ How `ftgsxr-desktop`'s `play` command and `LinuxPlatform` (§1.7 Command line, �
 
 **The window's first frames.** While Bevy's pipelines compile, it presents the window's surface texture with nothing drawn to it. The vendored wgpu-core clears and submits such a texture before presenting it, so those frames leave the validation layer nothing to report (§1.13, R-16; D-52, `ftgsxr-xr/session.md`), which `present_undrawn`'s `gpu_` test pins without Bevy. When the window is resized or changes present mode, Bevy drops a surface texture it holds unpresented (wgpu discards it) and reconfigures the surface. That sequence leaves no message, so the vendored wgpu-core leaves the discard unchanged; `discard_undrawn`'s `gpu_` test guards it (D-52, #408).
 
+**Resizing the window.** When the window system resizes the window, its surface goes out of date before Bevy's render world sees the new size. The vendored bevy\_render reconfigures the surface at its current extent, both when it finds it out of date and when the window's size or present mode changes, so the window swapchain is created at the window's size (§1.13, R-16; D-53, `ftgsxr-xr/session.md`). For a frame or two afterwards the camera and the passes still size themselves from the old size. No pass of `play` outruns the window swapchain meanwhile: egui and the splats render into the camera's main texture, and the upscaling pass that writes the window swapchain sets a scissor only for an explicit camera viewport, which `play` doesn't set. A camera viewport added later would need checking against that lag. A resize that lands while wgpu configures the surface may still give one swapchain extent message, the race D-53 accepts. `window_resize`'s two `gpu_` tests pin both behaviours, resizing a Bevy window through winit and reading the layer's own log through a child run (Q-113).
+
 ## `LinuxPlatform`
 
 The platform port's Linux adapter: `LinuxPlatform::new` takes the XDG locations of §1.11 (`AppPaths::linux`) and is E-IO without a home directory (Q-169). Pickers are rfd's default dialogs on a helper thread, polled by `poll_pick`; a dialog that closes or cannot open answers an empty pick, and the Library tab's path field is the fallback (Q-160). Every permission is granted; there are no documents and no camera.
@@ -26,4 +28,4 @@ The platform port's Linux adapter: `LinuxPlatform::new` takes the XDG locations 
 
 ## Q-n rows relied on
 
-`play` and `LinuxPlatform`: Q-154, Q-157, Q-160, Q-162, Q-163, Q-168 (the re-exported `ModelRef`, `Url` and `DocumentProvider`), Q-169, Q-170, Q-220, D-52; with Q-120, Q-121 and Q-14. The log: Q-151, Q-167. `desktop_input`: Q-152, Q-180, Q-196, Q-197, Q-198, Q-199; with Q-50.
+`play` and `LinuxPlatform`: Q-154, Q-157, Q-160, Q-162, Q-163, Q-168 (the re-exported `ModelRef`, `Url` and `DocumentProvider`), Q-169, Q-170, Q-220, D-52, D-53; with Q-120, Q-121 and Q-14. The log: Q-151, Q-167. `desktop_input`: Q-152, Q-180, Q-196, Q-197, Q-198, Q-199; with Q-50.
