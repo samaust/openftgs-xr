@@ -126,7 +126,9 @@ fn uploads(events: &std::sync::Mutex<Vec<ftgsxr_app::SplatEvent>>, entity: Entit
         .unwrap()
         .iter()
         .filter_map(|e| match e {
-            ftgsxr_app::SplatEvent::Uploaded { entity: x, bytes } if *x == entity => Some(*bytes),
+            ftgsxr_app::SplatEvent::Uploaded {
+                entity: x, bytes, ..
+            } if *x == entity => Some(*bytes),
             _ => None,
         })
         .collect()
