@@ -331,8 +331,19 @@ fn ask(platform: Option<&PlatformRes>) -> Flow {
     }
 }
 
-/// At session creation, with `hands` and XR\_EXT\_hand\_tracking: asks for the permission
-/// the first time, creates the trackers once it is granted (Q-276).
+/// Whether the runtime offers hands as §1.8 uses them: XR\_EXT\_hand\_tracking for the
+/// joints and XR\_FB\_hand\_tracking\_aim for the aim pose and the pinches. Without the
+/// second (Monado, `play --xr`) hands are unavailable (§1.1): no permission is asked
+/// and no tracker created, the missing extension's E-XR-UNSUPPORTED warning at plugin
+/// build being the report (Q-285).
+// Q-285
+pub(crate) fn hands_available(exts: &OxrEnabledExtensions) -> bool {
+    exts.ext_hand_tracking && exts.fb_hand_tracking_aim
+}
+
+/// At session creation, with `hands` and the hand extensions (`hands_available`): asks
+/// for the permission the first time, creates the trackers once it is granted (Q-276).
+// Q-285
 pub(crate) fn on_session_created(
     wanted: Res<HandsWanted>,
     exts: Option<Res<OxrEnabledExtensions>>,
@@ -341,7 +352,7 @@ pub(crate) fn on_session_created(
     mut permission: ResMut<HandsPermission>,
     mut commands: Commands,
 ) {
-    if !wanted.0 || !exts.as_ref().is_some_and(|e| e.ext_hand_tracking) {
+    if !wanted.0 || !exts.as_deref().is_some_and(hands_available) {
         return;
     }
     if permission.flow == Flow::Idle {
