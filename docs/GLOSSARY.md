@@ -565,7 +565,7 @@ One loaded model placed in the stage with its own pose, visibility, render mode 
 _Avoid_: model (unqualified, where the file is meant), object, asset, splat cloud
 
 **Pose P_m**:
-A model instance's placement, a translation, a rotation and a uniform scale, saved per model identity. It is kept relative to the content group, whose transform places it in stage space; the composed placement is the instance's stage pose, which rays, grabs, the fit and the floor work on. E5, §1.5, §1.14, D-11, Q-245
+A model instance's placement, a translation, a rotation and a uniform scale, saved per model identity. It is kept relative to the content group, whose transform places it in stage space; the composed placement is the instance's stage pose, which rays, grabs, the fit and the floor work on. E5, §1.5, §1.14, D-11, Q-247
 _Avoid_: transform (the engine's component), placement, anchor (reserved for spatial anchors)
 
 **Stage space**:

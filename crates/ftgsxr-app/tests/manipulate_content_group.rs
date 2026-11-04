@@ -5,8 +5,8 @@
 //! rays, the head and the floor are in stage space): picking and hover (E10), fit and
 //! snap to floor (§1.5, I-4's tolerance), grabs (E11), `Turn` and `Nudge` (Q-184, I-8's
 //! tolerance), the gizmo's stage axes (Q-186), the saved pose relative to the group
-//! (Q-245), keep upright about stage +y (Q-246) and the scale limits on the stage scale
-//! (Q-247). Where an instance is drawn is read from its `GlobalTransform` after Bevy's
+//! (Q-247), keep upright about stage +y (Q-248) and the scale limits on the stage scale
+//! (Q-249). Where an instance is drawn is read from its `GlobalTransform` after Bevy's
 //! transform propagation.
 
 use crate::support::TestApp;
@@ -319,7 +319,7 @@ fn content_group_a_gizmo_arrow_moves_along_stage_x() {
 
 #[test]
 fn content_group_saved_pose_is_relative_to_the_group() {
-    // Q-245
+    // Q-247
     let (mut t, e) = under("cg_saved", moved_group());
     let l = Pose {
         translation: Vec3::new(0.3, 0.2, -1.0),
@@ -360,7 +360,7 @@ fn content_group_saved_pose_is_relative_to_the_group() {
 
 #[test]
 fn content_group_upright_grab_turns_about_stage_y() {
-    // Q-246: keep upright (on by default) yaws about stage +y under a tilted group.
+    // Q-248: keep upright (on by default) yaws about stage +y under a tilted group.
     let tilted = Transform {
         translation: Vec3::new(0.0, 1.0, -1.0),
         rotation: Quat::from_rotation_x(30f32.to_radians()),
@@ -416,7 +416,7 @@ fn content_group_upright_grab_turns_about_stage_y() {
 
 #[test]
 fn content_group_scale_limits_bound_the_stage_scale() {
-    // Q-247: E11's limits (0.01 to 100, Q-185) apply to the stage scale.
+    // Q-249: E11's limits (0.01 to 100, Q-185) apply to the stage scale.
     let (mut t, e) = under("cg_limits", moved_group());
     let c = stage(&t, e).transform_point(bounds(&t, e).center());
     let m = c + Vec3::new(0.0, 0.0, 0.5);

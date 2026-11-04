@@ -536,7 +536,7 @@ fn run_intents(
                     && let Some(d) = &gizmo.drag
                 {
                     // The cube's scale limits are on the stage scale.
-                    // Q-247
+                    // Q-249
                     let p = drag_pose(d, (origin, dir), &s.limits);
                     set_stage_pose(&mut q, &groups, d.entity, p);
                 }
@@ -636,7 +636,7 @@ fn run_intents(
                         };
                         // Upright about stage +y, and the scale limits on the stage
                         // scale: the grab runs on the stage pose.
-                        // Q-246, Q-247
+                        // Q-248, Q-249
                         grab.update(pa, pb, &s.limits, !s.keep_upright)
                     }
                     _ => continue,
@@ -747,7 +747,7 @@ fn run_intents(
                 }
                 InstanceAction::SavePose => {
                     // The pose relative to the content group.
-                    // Q-245
+                    // Q-247
                     if let Ok((_, t, m, _, x, ..)) = q.get(instance) {
                         let x = x.copied().unwrap_or(PoseExtras {
                             preset: Preset::YUp,
@@ -765,7 +765,7 @@ fn run_intents(
                 }
                 InstanceAction::ResetPose => {
                     // The saved pose is relative to the content group.
-                    // Q-245
+                    // Q-247
                     let Ok((_, mut t, m, ..)) = q.get_mut(instance) else {
                         continue;
                     };
