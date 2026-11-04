@@ -18,13 +18,14 @@ bevy\_mod\_openxr 0.6.0 runs the session: its init, session, events and render p
 
 ## The vendored crates
 
-Three crates are vendored under `vendor/` and used through `[patch.crates-io]`, each with its changes marked in place, with attribution:
+Four crates are vendored under `vendor/` and used through `[patch.crates-io]`, each with its changes marked in place, with attribution:
 
 - **bevy\_mod\_openxr 0.6.0** (Q-139, D-30): on Android, the Vulkan instance targets 1.3, the Quest 3 device's version, instead of 1.1, so the features and SPIR-V version wgpu enables are ones the instance allows; and the HAL instance's flags drop wgpu's `VALIDATION_INDIRECT_CALL`, the Android rule of D-30 kept in this one place.
 - **wgpu-hal 29.0.4** (D-30): a public `flags()` getter on the Vulkan instance.
 - **wgpu-core 29.0.4** (D-30): `Instance::from_hal_instance` keeps a Vulkan HAL instance's flags instead of taking the defaults, which had made the removal above ineffective. A second change serves the desktop window, not the headset (D-52, #401): `Surface::present` first clears and submits a surface texture that no submission used since its acquire, which Bevy presents while its pipelines compile, so the image reaches the present layout and its acquire semaphore is waited on; R-16 stays at zero messages for windowed `play`. The XR swapchain is bevy\_mod\_openxr's and doesn't go through it.
+- **bevy\_render 0.19.1** (D-53, #409): it too serves the desktop window, not the headset. A window surface reconfigured when it is found out of date, or when its window's size or present mode changed, takes the surface's current extent instead of a size the window has already left, so a resize creates the window swapchain at the window's size. The XR session presents no window surface, so its swapchain doesn't go through it.
 
-With all three, the XR path's device has no indirect-call validation on the Quest, and its indirect draws draw (D-30, `ftgsxr-render/pipeline.md`). The wgpu patches are platform-neutral; the copies are dropped once a wgpu release that Bevy's pin takes carries both the flags fix and D-52's.
+With the first three, the XR path's device has no indirect-call validation on the Quest, and its indirect draws draw (D-30, `ftgsxr-render/pipeline.md`). The wgpu patches are platform-neutral; the copies are dropped once a wgpu release that Bevy's pin takes carries both the flags fix and D-52's. bevy\_render's change applies on Linux and Android only, and its copy is dropped once a Bevy release that the workspace takes fixes it (D-53).
 
 ## The reference-space chain
 

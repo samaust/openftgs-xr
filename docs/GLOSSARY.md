@@ -609,8 +609,12 @@ The OpenXR frame the session locates views and spaces in, chosen at session crea
 _Avoid_: tracking origin, play area, world origin
 
 **Swapchain**:
-The runtime's array of eye images the projection layer is submitted from, sized at the runtime's recommended size times the render scale and re-created when the scale changes by 0.1 or more. §1.12, D-27
+The runtime's array of eye images the projection layer is submitted from, sized at the runtime's recommended size times the render scale and re-created when the scale changes by 0.1 or more; the desktop window's images are the window swapchain. §1.12, D-27
 _Avoid_: framebuffer, eye buffer (the runtime's recommended size, not the images), render target
+
+**Window swapchain**:
+The images the desktop window presents, belonging to the window's surface and sized at the surface's current extent each time the surface is configured; the swapchain of R-16's resize tests and of D-52's and D-53's validation messages. §1.7 Window, D-52, D-53
+_Avoid_: swapchain (unqualified, where the XR runtime's eye images could be meant), back buffer, framebuffer, surface (the window's surface, which the images belong to)
 
 **Action set `player`**:
 The one OpenXR action set of the player, holding every action of Appendix D.2 with suggested bindings for the Touch Plus, Touch and simple-controller profiles, attached once per session. §1.8, Appendix D.2
