@@ -5,11 +5,13 @@
 //! and 2 on an invalid input, printing §1.7's output (Q-77).
 
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use ftgsxr_app::cmd_info;
 use ftgsxr_testkit::{fixtures_dir, probe, scratch_dir};
+
+mod common;
+use common::{layer_log, layer_settings};
 
 fn ftgsxr(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
@@ -261,46 +263,6 @@ fn render_tier_names() {
     let o = args("ultra");
     assert_eq!(o.status.code(), Some(2));
     assert!(!String::from_utf8(o.stderr).unwrap().contains("E-REQ-UNIT"));
-}
-
-/// A Khronos validation layer settings file in `dir` that sends the layer's errors,
-/// warnings (performance ones too) and information to `log`; the directory holding it, the
-/// one `VK_LAYER_SETTINGS_PATH` names, is returned. The layer writes its log even beside
-/// wgpu's own messenger.
-fn layer_settings(dir: &Path, log: &Path) -> PathBuf {
-    let settings = dir.join("layer-settings");
-    fs::create_dir_all(&settings).unwrap();
-    let _ = fs::remove_file(log);
-    fs::write(
-        settings.join("vk_layer_settings.txt"),
-        format!(
-            "khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG\n\
-             khronos_validation.report_flags = error,warn,perf,info\n\
-             khronos_validation.log_filename = {}\n",
-            log.display()
-        ),
-    )
-    .unwrap();
-    settings
-}
-
-/// The layer's log: whether it reported itself active (its status message at instance
-/// creation) and the header line of each error or warning, the lines that read
-/// `<message id>(ERROR / <type>): …` or `<message id>(WARNING / <type>): …`.
-fn layer_log(log: &Path) -> (bool, Vec<String>) {
-    let text = fs::read_to_string(log).unwrap_or_default();
-    let active = text.contains("Khronos Validation Layer Active");
-    let messages = text
-        .lines()
-        .filter(|line| {
-            line.split_once('(').is_some_and(|(id, rest)| {
-                !id.contains(' ')
-                    && (rest.starts_with("ERROR / ") || rest.starts_with("WARNING / "))
-            })
-        })
-        .map(str::to_owned)
-        .collect();
-    (active, messages)
 }
 
 /// The safetensors header of `bytes`, its JSON text.

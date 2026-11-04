@@ -13,6 +13,10 @@
 //! in the render frame that runs after the release could still race; pipelines queue
 //! when something first draws, which a quiet scene doesn't do in that frame.
 //!
+//! Each run's validation layer writes its own log, chosen by a settings file in the run's
+//! home, which the test reads after the run exits (R-16, §1.13, Q-105, Q-113): no error or
+//! warning and, in a debug build, the layer's status message.
+//!
 //! Prerequisites: a desktop session (`DISPLAY` or `WAYLAND_DISPLAY`) and a Vulkan GPU.
 
 use std::io::{BufRead, BufReader};
@@ -25,6 +29,9 @@ use std::time::{Duration, Instant};
 
 use ftgsxr_testkit::{fixtures_dir, scratch_dir};
 
+mod common;
+use common::{layer_log, layer_settings};
+
 /// The line bevy_winit logs once the window exists.
 const WINDOW_LINE: &str = "Creating new window";
 
@@ -36,8 +43,9 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// `ftgsxr play model` with its home and XDG directories under `home`, on the session's
-/// display, standard error piped.
-fn spawn_play(home: &Path, model: &Path) -> Child {
+/// display, standard error piped, its validation layer configured by the settings
+/// directory `layer_settings_dir`.
+fn spawn_play(home: &Path, model: &Path, layer_settings_dir: &Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_ftgsxr"))
         .arg("play")
         .arg(model)
@@ -46,6 +54,7 @@ fn spawn_play(home: &Path, model: &Path) -> Child {
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_CACHE_HOME", home.join("cache"))
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("VK_LAYER_SETTINGS_PATH", layer_settings_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -66,9 +75,17 @@ fn wait_bounded(child: &mut Child) -> Option<ExitStatus> {
     None
 }
 
-/// One run: SIGINT `delay` after the window line; the exit status and standard error.
-fn run_once(home: &Path, model: &Path, delay: Duration) -> (Option<ExitStatus>, String) {
-    let mut child = spawn_play(home, model);
+/// One run: SIGINT `delay` after the window line; the exit status, standard error, and
+/// the validation layer's log as `layer_log` reads it (whether the layer reported itself
+/// active, and its errors and warnings).
+fn run_once(
+    home: &Path,
+    model: &Path,
+    delay: Duration,
+) -> (Option<ExitStatus>, String, (bool, Vec<String>)) {
+    let layer_log_path = home.join("validation.log");
+    let settings = layer_settings(home, &layer_log_path);
+    let mut child = spawn_play(home, model, &settings);
     let stderr = child.stderr.take().expect("standard error is piped");
     let (tx, rx) = mpsc::channel::<String>();
     let reader = thread::spawn(move || {
@@ -111,11 +128,12 @@ fn run_once(home: &Path, model: &Path, delay: Duration) -> (Option<ExitStatus>, 
         window,
         "the player showed no window within {LIMIT:?} (status {status:?}):\n{log}"
     );
-    (status, log)
+    (status, log, layer_log(&layer_log_path))
 }
 
 /// #376 (§1.7 Command line, Q-236, Q-237): `play` asked to exit in its first frames, while
-/// its render pipelines compile, exits by its own code (130 for Ctrl-C), never by a signal.
+/// its render pipelines compile, exits by its own code (130 for Ctrl-C), never by a signal,
+/// with no validation layer message (R-16, §1.13, Q-105, Q-113).
 #[test]
 #[ignore = "gpu"]
 fn gpu_play_interrupted_in_its_first_frames_exits_by_its_code() {
@@ -128,7 +146,22 @@ fn gpu_play_interrupted_in_its_first_frames_exits_by_its_code() {
     let mut failures = Vec::new();
     for (i, ms) in delays_ms.iter().enumerate() {
         let home = scratch(&format!("interrupted-{i}"));
-        let (status, log) = run_once(&home, &model, Duration::from_millis(*ms));
+        let (status, log, (active, messages)) = run_once(&home, &model, Duration::from_millis(*ms));
+        // R-16, §1.13 (Q-105, Q-113): the child's layer reported nothing and, in a debug
+        // build, reported itself active.
+        if cfg!(debug_assertions) && !active {
+            failures.push(format!(
+                "run {i} (SIGINT {ms} ms after the window): the Khronos validation layer did \
+                 not report itself active"
+            ));
+        }
+        if !messages.is_empty() {
+            failures.push(format!(
+                "run {i} (SIGINT {ms} ms after the window): {} validation layer message(s): \
+                 {messages:#?}",
+                messages.len()
+            ));
+        }
         // Q-237
         let ok = status.is_some_and(|s| s.signal().is_none() && s.code() == Some(130));
         if !ok {
@@ -141,7 +174,8 @@ fn gpu_play_interrupted_in_its_first_frames_exits_by_its_code() {
     }
     assert!(
         failures.is_empty(),
-        "{} of {} runs did not exit by code 130:\n{}",
+        "{} failure(s) over {} runs (an exit by another code than 130, or the validation \
+         layer's log):\n{}",
         failures.len(),
         delays_ms.len(),
         failures.join("\n\n")
