@@ -16,8 +16,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * The shim (§2.5, D-49): the static methods Rust calls through JNI, and nothing else of
  * that surface. Kotlin never calls into Rust: a pick's URIs and a permission's answer wait
  * in this object's maps, filled by `MainActivity`'s result callbacks, until Rust polls
- * them. The camera methods are M-7's.
+ * them. The camera methods are M-7's. The `internal` methods (`attach`, `detach`,
+ * `onPickResult`, `onPermissionResult`) are not that surface: they are `MainActivity`'s
+ * hooks, neither static nor reachable by name from JNI.
  */
+// Q-T452.10
 object Shim {
     private const val TAG = "ftgsxr"
 
@@ -32,8 +35,9 @@ object Shim {
     private val permissions = ConcurrentHashMap<Int, Int>()
 
     /**
-     * Android's request codes (AppCompat takes the lower 16 bits only) mapped to Rust's
-     * request ids, so the ids may grow past 16 bits.
+     * Android's request codes, kept small and positive (`ActivityCompat.requestPermissions`
+     * asks for a code of at least 0; no documentation page gives an upper bound), mapped to
+     * Rust's request ids, so the ids may take any value.
      */
     private val nextCode = AtomicInteger(0)
     private val pickCodes = ConcurrentHashMap<Int, Int>()
@@ -99,6 +103,7 @@ object Shim {
      * it), one `name\tsize\tmime\turi` per entry; each `uri` is built on the tree's, so a
      * directory's lists its children. A failure (a grant revoked) is thrown to the caller.
      */
+    // Q-297
     @JvmStatic
     fun listTree(treeUri: String): Array<String> {
         val a = activity ?: throw IllegalStateException("no activity")
