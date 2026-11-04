@@ -1,0 +1,34 @@
+# Intents from the hands in `ftgsxr-xr`
+
+How `ftgsxr_xr::xr_input` turns `XrHands` into the player's intents on the headset: the pure `hands_to_intents` and its per-hand state, the ray arbitration between the panel quads and the instances, the rays drawn, the haptic pulses, and the teleport arc. Built in M-5 (#460). The spec items are §1.8 Controllers, Hands, Rays, selection and grabbing, Locomotion and User interface, Appendix D.2 and D.3, E10–E12, D-17, D-44 and §2.1's `xr_input` entry (`XrInputConfig`, `XrInputState`, `hands_to_intents`); this doc explains them and never overrides them. The controllers and hands themselves are `tracking.md`'s subject, the quads `panel.md`'s.
+
+## `hands_to_intents`
+
+The pure function of §2.1, given the state and one frame's `XrHands` (U-32). Per hand, left then right, it writes the hand's `Pointer` (the aim pose's origin and −z) only while the hand is tracked, the `Select` edge, the grab (`GrabBegin` with the aim pose on the rising edge, `GrabMove` with it each later frame while tracked, `GrabEnd` on release; `manipulate` makes the one-to-two-hand transitions from them), and, for a grabbing controller, `PushPull` from its stick's y after E12's response, its stick then moving and turning nothing (§1.8 Controllers). Then `Locomote` and `SnapTurn`, none while `locomotion_enabled` is false (D-17); then the menu toggle and the face buttons (Q-302).
+
+- **Thresholds.** A controller's trigger and squeeze both use `XrInputConfig`'s grab pair, §1.8 giving the same values for each, and begin above the begin value and end below the end value; an index pinch begins at or above the pinch pair's begin value (Appendix D.3) and is `select` and `grab` at once; the middle pinch is `play_pause` with the same pair. `XrInputConfig::default()` holds §1.8's, D.3's and D-44's values with snap turn and locomotion on (Q-302).
+- **Tracking.** An untracked hand casts no ray and begins nothing, but may still release; a hand that becomes `None` releases what it held (Q-302, Q-285).
+- **Locomotion.** E12's response with D-44's dead zone, the `move` and `turn` sticks swapped in left-handed mode. `Locomote` is written only when it is nonzero, its `turn` 0 with snap on (Q-195); the snap trigger reads x\_t after the response, through `SnapTurnState`'s arming (E12's "flick").
+- **Buttons.** The menu button and MENU\_PRESSED toggle the main panel on their rising edge. A and B stay on the right, X and Y on the left, whatever the handedness (§1.8 Comfort): A plays or pauses, B resets the selected instance's pose, X fits it, Y sets its next render mode. `XrInputState::set_selected` gives the function the selected instance and the mode Y sets, the next of Q-198's cycle; with nothing selected B, X and Y do nothing (Q-302).
+
+## The module's systems
+
+`XrInputPlugin` follows `tracking` in the XR tail (`session.md`). Its `write_intents` runs in PreUpdate on the `XrHands` that `tracking` wrote in the previous frame's PostUpdate, so `manipulate`, `ui` and `rig` read this frame's intents in Update. It builds `XrInputConfig` from `Locomotion` (`snap`, `enabled`) and sets the selection from the first `Selected` instance and its `SplatMode`.
+
+**The arbitration** (§1.8 Rays and User interface, Q-263, Q-304). Before `hands_to_intents`, each tracked hand's ray is tested against the visible quads that carry `PanelQuad` (the main panel and the wrist menu, `panel.md`), the nearest front hit winning (`panel_hit`'s mapping, Q-210). A hand whose `Grabbed` holds an instance is not tested: its ray stays with the instance. On a hit:
+
+- the hand's `Pointer`, `Select`, `GrabBegin`, `GrabMove` and `PushPull` are dropped from the frame's intents, and its select and grab presses and releases go into one `PanelPointer` for that quad instead, with the hit's pixel. `GrabEnd` is always passed on as well, so `manipulate` and `panel` both see a release; `manipulate` ignores a grab it never began;
+- a controller's stick scrolls the quad at Q-304's rate, the sign of Q-279 (pushed up shows what is above), and moves and turns nothing that frame.
+
+A `PanelPointer` is written every frame the ray is on a quad, even with nothing pressed, since `ui` takes the pointer off a context that gets none (Q-279). Off the quads, the intents go out as `hands_to_intents` wrote them.
+
+**The teleport** (§1.8 Locomotion, Q-269, Q-303). While `Locomotion.teleport` is on and locomotion is enabled, every `Locomote`'s move is zeroed (the turn kept, the intent dropped when both are zero). The arc's hand is the `move` stick's: a tracked controller that holds no instance and is not on a quad. Its raw stick y past Q-269's show value starts the aim, each frame redraws the ballistic arc from its aim pose to the floor, and a release below the release value writes `Teleport { target }` with the arc's end, none when the arc has none (an aim from at or below the floor). The hand going away, untracked, grabbing or on a quad cancels the aim without a teleport. `rig` applies the teleport (`ftgsxr-app/manipulate.md`), `session`'s comfort fades it (`session.md`).
+
+**The rays** (§1.8 Rays, Q-304, Q-278). In PostUpdate, with Bevy's gizmos, each tracked hand's ray is drawn to its first hit: the nearer of its panel hit and its `Hovered` distance, else E10's 10 m, with a dot only at a hit; the teleport arc likewise. The colors are Q-304's light grey and white, both yellow under `[display] high_contrast` (Q-278). The rays are drawn in every environment mode: §1.8's passthrough rule (only the origin dot) waits for M-6's passthrough.
+
+**The haptics** (§1.8 Controllers, D-44, Q-270). In PostUpdate, while the session runs, `select_pulses` compares the frame's `Hovered` and `Grabbed` with the previous frame's: hover enter is an instance's `Hovered` appearing for a hand or switching to it; grab start and end are a hand joining or leaving an instance's `Grabbed` (one hand, two, none), so a squeeze on nothing pulses nothing; a snap turn pulses the turn stick's hand; a `PanelPointer` select press pulses its hand. A hand gets at most one pulse a frame, the strongest, with D-44's durations and amplitudes, sent through `tracking`'s haptic action at the runtime's frequency. Only a side a controller owns is pulsed: a tracked hand has no output. A failed call is E-XR-RUNTIME's warning.
+
+## Tests
+
+U-32's `hands_to_intents` clauses run on the pure function (`cpu`). I-16's controller clause injects `XrHands` with a controller's rising trigger and an aim pose into the adapter's system and checks `Select` and `Pointer`, since Monado's simulated controllers produce no input (Q-271); the OpenXR binding itself is M-3's attach test's and Dv-8's (`tracking.md`).
+

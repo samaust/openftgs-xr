@@ -693,7 +693,7 @@ A folder granted through Android's picker, listed and read through the shim as a
 _Avoid_: folder (unqualified), SAF tree
 
 **Listener**:
-The point a spatialized soundtrack is heard from, the midpoint of the splat cameras. §1.10
+The point a spatialized soundtrack is heard from, the midpoint of the splat cameras. §1.10, Q-281
 _Avoid_: receiver, audio camera
 
 ### Files
