@@ -4,8 +4,6 @@
 //! its seven tabs, the toast line and the confirmation dialogs. Drawn by one exclusive
 //! system, which collects what the user did and sends it after the frame.
 
-use std::path::PathBuf;
-
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::prelude::*;
 use bevy::math::{EulerRot, Quat};
@@ -16,11 +14,13 @@ use ftgsxr_io::{EntryKind, SourceSpec, Url};
 use ftgsxr_render::{ColorTransform, Colormap, RenderMode, SplatMode, SplatTime, SplatTransform};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
-use super::{Confirm, DockHooks, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState};
+use super::{
+    Confirm, DockHooks, RecentScenes, SceneLoadConfirmed, Tab, ToastLevel, UiCue, UiState,
+};
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
 use crate::manipulate::{FIT_RANGE_M, PoseExtras, SetPoseExtras};
-use crate::platform::{PickKind, PlatformRes};
+use crate::platform::PickKind;
 use crate::playback::{Playback, RangeSetting};
 
 /// What the user did this frame.
@@ -998,7 +998,7 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
         return;
     };
     let scenes = match &q {
-        Confirm::LoadScene(_) => scene_files(world),
+        Confirm::LoadScene(_) => load_choices(world),
         Confirm::Unload(_) => Vec::new(),
     };
     egui::Window::new("Confirm")
@@ -1043,33 +1043,22 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
         });
 }
 
-/// The scene files under the platform's scenes directory, newest first.
-fn scene_files(world: &World) -> Vec<PathBuf> {
-    let Some(p) = world.get_resource::<PlatformRes>() else {
-        return Vec::new();
-    };
-    let Ok(dir) = std::fs::read_dir(&p.0.paths().scenes) else {
-        return Vec::new();
-    };
-    let mut files: Vec<_> = dir
-        .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .ends_with(".ftgsxr-scene.json")
-        })
-        .map(|e| (e.metadata().and_then(|m| m.modified()).ok(), e.path()))
-        .collect();
-    files.sort_by_key(|f| std::cmp::Reverse(f.0));
-    files.into_iter().map(|(_, p)| p).collect()
+/// The scenes the load dialog offers (§1.5 Scene files, Q-200, #417): the eight most
+/// recent, as `persist` keeps them in `RecentScenes`; none without it.
+// Q-200
+fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
+    world
+        .get_resource::<RecentScenes>()
+        .map(|r| r.0.clone())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         Colormap, Entity, InstanceAction, Intent, LoadedModel, Out, RenderMode, SplatMode,
-        Transform, Visibility, World, display_tab, egui, replay_lines, replay_loaded_degree,
-        scene_tab, source_from_input,
+        Transform, Visibility, World, display_tab, egui, load_choices, replay_lines,
+        replay_loaded_degree, scene_tab, source_from_input,
     };
     use crate::SplatEvent;
     use crate::manipulate::Selected;
@@ -1382,5 +1371,19 @@ mod tests {
         assert!(source_from_input("relative/dir").is_none());
         assert!(source_from_input("ftp://x/").is_none());
         assert!(source_from_input("").is_none());
+    }
+
+    // §1.5 Scene files, Q-200 (#417): the dialog offers exactly `RecentScenes`, in its
+    // order, and nothing without it.
+    #[test]
+    fn load_choices_are_the_recent_scenes() {
+        let mut world = bevy::ecs::world::World::new();
+        assert!(load_choices(&world).is_empty());
+        let recent = vec![
+            std::path::PathBuf::from("/c/scenes/b.ftgsxr-scene.json"),
+            std::path::PathBuf::from("/c/scenes/a.ftgsxr-scene.json"),
+        ];
+        world.insert_resource(crate::ui::RecentScenes(recent.clone()));
+        assert_eq!(load_choices(&world), recent);
     }
 }
