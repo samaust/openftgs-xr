@@ -180,6 +180,7 @@ impl Plugin for LibraryPlugin {
             .add_message::<LibraryFailure>()
             .add_message::<FileDragAndDrop>()
             .add_message::<LocateEntry>()
+            .add_message::<ReplaceEntry>()
             .add_message::<SceneLoad>()
             .init_resource::<Pending>()
             .add_observer(on_model)
@@ -189,6 +190,7 @@ impl Plugin for LibraryPlugin {
                 (
                     read_drops,
                     run_locates,
+                    run_replaces,
                     run_scene_loads,
                     run_commands.in_set(LibraryCommands),
                     poll_tasks,
@@ -269,6 +271,56 @@ fn run_locates(
     }
 }
 
+/// "Replace" on a missing entry, confirmed (§1.5 Library, spec revision 26): `file` takes
+/// the place of the scene's model of `identity` (64 hex digits), the missing entry's.
+/// The library loads `file`; the model read, of any identity, is kept, clears that one
+/// missing entry and takes the scene's attributes of `identity` (name, pose, visibility,
+/// mode, time offset and end rule, color transform, audio). A message naming no missing
+/// entry of that identity does nothing; a load that fails leaves the entry missing
+/// (Q-259). The dock writes it once the user confirms (Q-256).
+// Q-255
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct ReplaceEntry {
+    /// The missing entry's identity, the scene model's.
+    pub identity: String,
+    /// The picked file.
+    pub file: ModelRef,
+}
+
+/// The scene model's identity whose attributes a replacement takes (Q-255): on the
+/// instance a `ReplaceEntry` loaded, when its own identity is another; `persist` reads it.
+// Q-255
+#[derive(Component, Clone, Debug, PartialEq)]
+pub(crate) struct Replaces(pub(crate) String);
+
+/// Loads each `ReplaceEntry`'s file for its missing entry (Q-255).
+// Q-255
+fn run_replaces(
+    mut reader: MessageReader<ReplaceEntry>,
+    library: Res<Library>,
+    mut pending: ResMut<Pending>,
+    mut commands: MessageWriter<LibraryCommand>,
+) {
+    for r in reader.read() {
+        let listed = library
+            .entries
+            .iter()
+            .any(|e| e.state == EntryState::Missing && e.identity.as_ref() == Some(&r.identity));
+        if !listed {
+            continue;
+        }
+        pending.locating.push((
+            r.file.clone(),
+            Expected {
+                identity: r.identity.clone(),
+                scene: None,
+                replace: true,
+            },
+        ));
+        commands.write(LibraryCommand::LoadRef(r.file.clone()));
+    }
+}
+
 /// A scene model's load (§1.5 Scene files): its reference, the identity the scene names
 /// and the missing entry the model takes when the file read is of another identity.
 /// `persist` writes it (Q-245).
@@ -291,11 +343,16 @@ pub(crate) struct MissingModel {
 }
 
 /// The identity a load must have (Q-225): a "Locate…" pick's, or a scene model's with
-/// the entry it is listed as when the file is of another identity (Q-245).
+/// the entry it is listed as when the file is of another identity (Q-245); or, for a
+/// replacement, the missing entry's that the load takes the place of, whatever its own
+/// (Q-255).
 #[derive(Clone, Debug)]
 struct Expected {
     identity: String,
     scene: Option<MissingModel>,
+    /// A `ReplaceEntry`'s load: kept whatever its identity.
+    // Q-255
+    replace: bool,
 }
 
 /// Each scene model's `LoadRef`, with the identity it must have (Q-245).
@@ -310,6 +367,7 @@ fn run_scene_loads(
             Expected {
                 identity: l.identity.clone(),
                 scene: Some(l.model.clone()),
+                replace: false,
             },
         ));
         commands.write(LibraryCommand::LoadRef(l.reference.clone()));
@@ -1370,6 +1428,7 @@ fn poll_picks(
                         Expected {
                             identity: id,
                             scene: None,
+                            replace: false,
                         },
                     ));
                     commands.write(LibraryCommand::LoadRef(r));
@@ -1506,8 +1565,16 @@ fn on_model(
     // Q-225: a located file of another identity is refused; a load of a missing
     // entry's identity, located or not, clears the entry. Q-245: so is a scene model's,
     // which is listed as missing.
+    // Q-255, Q-258: a replacement of another identity clears only the entry it replaces,
+    // and its instance takes that scene model's attributes.
+    let replaces = ctx
+        .locate
+        .as_ref()
+        .filter(|w| w.replace && w.identity != identity)
+        .map(|w| w.identity.clone());
     if let Some(want) = &ctx.locate
         && want.identity != identity
+        && !want.replace
     {
         let listed = library
             .entries
@@ -1533,9 +1600,13 @@ fn on_model(
         commands.entity(add.entity).despawn();
         return;
     }
+    let cleared = replaces.as_ref().unwrap_or(&identity);
     library
         .entries
-        .retain(|e| !(e.state == EntryState::Missing && e.identity.as_ref() == Some(&identity)));
+        .retain(|e| !(e.state == EntryState::Missing && e.identity.as_ref() == Some(cleared)));
+    if let Some(r) = replaces {
+        commands.entity(add.entity).insert(Replaces(r));
+    }
     let mut filled = false;
     if let Some(e) = entry_of(&mut library, &pending, ctx) {
         e.identity = Some(identity.clone());

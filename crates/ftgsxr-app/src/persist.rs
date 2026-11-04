@@ -30,8 +30,8 @@ use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 use crate::audio::AudioState;
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{
-    Library, LibraryCommand, LibraryFailure, LoadedModel, MissingModel, SceneLoad, ShowOnUpload,
-    list_missing,
+    Library, LibraryCommand, LibraryFailure, LoadedModel, MissingModel, Replaces, SceneLoad,
+    ShowOnUpload, list_missing,
 };
 use crate::manipulate::{Poses, now_rfc3339, pose_of, transform_of};
 use crate::platform::PlatformRes;
@@ -848,7 +848,10 @@ fn apply_pending_instances(
     mut pending: ResMut<ScenePending>,
     mut failures: MessageReader<LibraryFailure>,
     settings: Res<SettingsRes>,
-    mut fresh: Query<(Entity, &mut LoadedModel, &mut Transform), Added<LoadedModel>>,
+    mut fresh: Query<
+        (Entity, &mut LoadedModel, &mut Transform, Option<&Replaces>),
+        Added<LoadedModel>,
+    >,
     mut commands: Commands,
 ) {
     // A scene model whose load failed waits no more (Q-203, Q-173); one whose file was
@@ -867,15 +870,20 @@ fn apply_pending_instances(
         }
     }
     let display = &settings.0.display;
-    for (e, mut m, mut t) in &mut fresh {
-        let at = pending.models.iter().position(|p| p.identity == m.identity);
+    for (e, mut m, mut t, replaces) in &mut fresh {
+        // Q-255: a replacement takes the attributes of the scene model it replaces.
+        let at = match replaces {
+            Some(_) => None,
+            None => pending.models.iter().position(|p| p.identity == m.identity),
+        };
+        let key = replaces.map_or(&m.identity, |r| &r.0);
         // Q-225: a located model takes its scene attributes too.
         let p = match at {
             Some(at) => Some(pending.models.remove(at)),
             None => pending
                 .located
                 .iter()
-                .position(|p| p.identity == m.identity)
+                .position(|p| &p.identity == key)
                 .map(|at| pending.located.remove(at)),
         };
         let Some(p) = p else {
