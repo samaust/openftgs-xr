@@ -1273,12 +1273,44 @@ mod tests {
         out
     }
 
+    /// Whether the text `label` sits on a selected selectable label: a rectangle filled
+    /// with the style's selection color under it.
+    fn shown_selected(world: &mut World, tab: Tab, label: &str) -> bool {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput::default();
+        let (mut out, mut hv) = (Vec::new(), None);
+        let mut full = ctx.run_ui(input, |ui| tab(world, ui, &mut out, &mut hv));
+        full.textures_delta.clear();
+        let fill = ctx.global_style().visuals.selection.bg_fill;
+        let (mut at, mut rects) = (None, Vec::new());
+        fn walk(
+            s: &egui::Shape,
+            label: &str,
+            at: &mut Option<egui::Pos2>,
+            rects: &mut Vec<(egui::Rect, egui::Color32)>,
+        ) {
+            match s {
+                egui::Shape::Text(t) if t.galley.text() == label => *at = Some(t.pos),
+                egui::Shape::Rect(r) => rects.push((r.rect, r.fill)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, label, at, rects)),
+                _ => {}
+            }
+        }
+        for c in &full.shapes {
+            walk(&c.shape, label, &mut at, &mut rects);
+        }
+        let at = at.unwrap_or_else(|| panic!("{label} is drawn")) + egui::vec2(4.0, 4.0);
+        rects.iter().any(|(r, f)| *f == fill && r.contains(at))
+    }
+
     // #426: §1.5's render modes include hidden, and §1.7 Panels puts the mode in the
     // Scene tab beside visibility: the tab offers Hidden, which sets the mode alone.
     #[test]
-    fn the_scene_tab_offers_hidden_and_it_leaves_visibility_alone() {
+    fn scene_tab_offers_hidden_and_it_leaves_visibility_alone() {
         let mut world = World::new();
         let e = instance(&mut world, RenderMode::Splats, false);
+        assert!(shown_selected(&mut world, scene_tab, "Splats"));
+        assert!(!shown_selected(&mut world, scene_tab, "Hidden"));
         let out = click(&mut world, scene_tab, "Hidden");
         assert_eq!(
             actions(&out),
@@ -1286,18 +1318,27 @@ mod tests {
         );
     }
 
-    // #426: an instance in Hidden mode shows Hidden as its current mode (choosing it
-    // again sends nothing), can leave it from the tab, and its Visible checkbox leaves
-    // the mode alone.
+    // #426: an instance in Hidden mode shows Hidden as its current mode, and choosing it
+    // again sends nothing; another mode takes it out of Hidden.
     #[test]
-    fn the_scene_tab_shows_hidden_as_the_current_mode() {
+    fn scene_tab_shows_hidden_as_the_current_mode() {
         let mut world = World::new();
         let e = instance(&mut world, RenderMode::Hidden, false);
+        assert!(shown_selected(&mut world, scene_tab, "Hidden"));
+        assert!(!shown_selected(&mut world, scene_tab, "Splats"));
         assert_eq!(actions(&click(&mut world, scene_tab, "Hidden")), vec![]);
         assert_eq!(
             actions(&click(&mut world, scene_tab, "Splats")),
             vec![(e, InstanceAction::SetMode(RenderMode::Splats))]
         );
+    }
+
+    // #426: §1.5 lists visibility apart from the render mode: the Visible checkbox of an
+    // instance in Hidden mode sets its visibility alone.
+    #[test]
+    fn scene_tab_visible_leaves_the_hidden_mode_alone() {
+        let mut world = World::new();
+        let e = instance(&mut world, RenderMode::Hidden, false);
         assert_eq!(
             actions(&click(&mut world, scene_tab, "Visible")),
             vec![(e, InstanceAction::SetVisible(false))]
@@ -1307,7 +1348,7 @@ mod tests {
     // #426, Q-218: the Display tab sets the selected instances' render mode, Hidden
     // included, and leaves the others alone.
     #[test]
-    fn the_display_tab_offers_hidden_for_the_selected_instances() {
+    fn display_tab_offers_hidden_for_the_selected_instances() {
         let mut world = World::new();
         let a = instance(&mut world, RenderMode::Splats, true);
         let b = instance(
