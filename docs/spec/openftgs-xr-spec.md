@@ -92,7 +92,7 @@ openftgs-xr is one workspace with two builds \[R: two apps, one codebase\]:
 
 Both builds share every feature that does not need a headset or a window: loading and validating models (§1.2), rendering (§1.3, §1.4), the library and its sources (§1.5), playback (§1.6), settings and files (§1.11), diagnostics (§1.13). The desktop build adds its camera, keyboard and mouse (§1.7) and the headless commands (§1.7); the Quest build adds XR interaction (§1.8), passthrough and the environment features (§1.9), and the Android platform layer (§2.5). A feature that one build cannot offer (passthrough on the desktop, a mouse on the headset) is absent from that build's UI rather than disabled.
 
-**XR on the desktop.** The desktop binary started with `--xr` runs the XR build's session, rendering and interaction against whatever OpenXR runtime the loader finds (§2.5). With Monado's simulated or qwerty driver it serves the integration tests I-n and development without a headset. Passthrough, environment depth, hand tracking and anchors need the headset's runtime and are reported as unavailable on the desktop (§1.9, §1.15 E-XR-UNSUPPORTED).
+**XR on the desktop.** The desktop binary started with `--xr` runs the XR build's session, rendering and interaction against whatever OpenXR runtime the loader finds (§2.5). With Monado's simulated or qwerty driver it serves the integration tests I-n and development without a headset. It keeps the desktop's interface and audio: the dock (§1.8), stereo audio (§1.10) and no auto-fit (§1.5); the main panel, spatial audio and the auto-fit are the headset's (Q-266). Passthrough, environment depth, hand tracking and anchors need the headset's runtime and are reported as unavailable on the desktop (§1.9, §1.15 E-XR-UNSUPPORTED).
 
 **Non-goals.** Training or editing primitives (openftgs trains); other headsets as tested targets (any OpenXR runtime may work through the same code, but only the Quest 3 is tested, see the reference hardware below); Windows and macOS (not forbidden, not tested); WebXR; multi-user sessions; video recording (screenshots only, §1.7).
 
@@ -1493,6 +1493,7 @@ Performed by a person on the headset after each XR milestone, each with a pass s
 | A-8 | legibility | the panel's text is readable at the default size from the summon distance |
 | A-9 | audio synchronization | a soundtrack's transient aligns with its visual event within one frame at speed 1 |
 | A-10 | sustained use | twenty minutes in `quest-balanced` without a thermal warning or a frame-rate drop below 72 Hz |
+| A-11 | hands and controllers | with the Touch Plus controllers, pressing the trigger past halfway selects and releasing it ends the select, and the squeeze does the same for the grab (§1.8's 0.6 and 0.4 thresholds); with the controllers set down, a hand in view shows its tracked ray, an index pinch selects the instance under the ray, and a grab on a controller is felt as a short pulse |
 
 ## Appendix A — Source log
 
