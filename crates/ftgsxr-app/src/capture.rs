@@ -79,8 +79,8 @@ impl Plugin for CapturePlugin {
 }
 
 /// `Intent::Screenshot` (F12) asks for the desktop camera, else the lowest-order active
-/// camera, one that renders to no image (a window, the headset's views) before one that
-/// does, so the headset's panel cameras are never taken over an eye while a camera
+/// camera, one that may be the head (a window, the headset's views) before one that may
+/// not, so the headset's panel cameras are never taken over an eye while a camera
 /// rendering only to an image is still captured (Q-212, Q-310).
 // Q-212, Q-310
 fn screenshot_intents(
