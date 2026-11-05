@@ -669,7 +669,7 @@ fn run_camera(
 }
 
 /// `Locomote`, `SnapTurn` and `Teleport` move the rig (E12, §1.8 Locomotion); the head is
-/// manipulate's (Q-180, Q-310: no image-target camera), else the rig itself.
+/// manipulate's (Q-180, Q-310: a window or the headset's views), else the rig itself.
 // Q-180, Q-310
 fn run_locomotion(
     mut intents: MessageReader<Intent>,

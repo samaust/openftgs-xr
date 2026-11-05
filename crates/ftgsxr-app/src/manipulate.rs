@@ -275,10 +275,15 @@ pub(crate) fn transform_of(p: Pose) -> Transform {
 pub(crate) const AHEAD_M: f32 = 1.5;
 
 /// Whether a camera may be the head (Q-180, Q-310): active, and rendering to a window
-/// or the headset's views, not to an image (the panels' cameras, a bench's target).
+/// or the headset's views (texture views). An image target (the panels' cameras, a
+/// bench's target), a camera without a color target and any other target are not.
 // Q-310
 pub(crate) fn head_candidate(camera: &Camera, target: &RenderTarget) -> bool {
-    camera.is_active && !matches!(target, RenderTarget::Image(_))
+    camera.is_active
+        && matches!(
+            target,
+            RenderTarget::Window(_) | RenderTarget::TextureView(_)
+        )
 }
 
 /// The cameras the head is picked from.
@@ -1170,6 +1175,33 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// Q-310 (#530): a camera without a color target (`RenderTarget::None`) is never the
+    /// head, even at a lower order than the window camera, which is the head.
+    #[test]
+    fn head_pose_skips_a_camera_without_a_color_target() {
+        let mut world = World::new();
+        world.spawn((
+            Camera {
+                order: -2,
+                ..Default::default()
+            },
+            RenderTarget::None {
+                size: bevy::math::UVec2::ONE,
+            },
+            GlobalTransform::from_xyz(5.0, 0.0, 0.0),
+        ));
+        world.spawn((
+            Camera::default(),
+            RenderTarget::Window(Default::default()),
+            GlobalTransform::from_xyz(0.0, 1.6, 2.0),
+        ));
+        let head = world
+            .run_system_once(|q: HeadCameras| head_pose(&q))
+            .expect("the system runs");
+        assert_eq!(head.map(|p| p.translation), Some(Vec3::new(0.0, 1.6, 2.0)));
+    }
 
     /// Q-278, Q-312 (§1.8 Comfort: "the ray and highlight colors have a high-contrast
     /// alternative"): under high contrast the hovered and selected boxes are fully
