@@ -170,3 +170,105 @@ fn gpu_panel_mode_a_ray_click_on_the_playback_tabs_play_button_toggles_the_clock
     let after = t.app.world().resource::<Playback>().clock.state();
     assert_ne!(after, before, "the click toggled the clock");
 }
+
+/// #269, Q-324: a hidden quad's panel camera is inactive and its egui pass draws
+/// nothing, so the headset spends no frame time on a panel no one sees; the frame the
+/// quad shows again, its camera is active and the tab row draws.
+#[test]
+#[ignore = "gpu"]
+fn gpu_panel_mode_a_hidden_quad_idles_its_camera_until_shown() {
+    use bevy::camera::Camera;
+    use bevy::camera::visibility::Visibility;
+
+    let _layer = layer_messages(); // R-16, Q-105
+    let mut t = TestApp::gpu_before("panel_mode_hidden", |app| {
+        app.insert_resource(Headset);
+    });
+    let size_px = UVec2::new(1024, 768);
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: size_px.x,
+            height: size_px.y,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0, 0, 0, 0],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    image.texture_descriptor.usage |= TextureUsages::RENDER_ATTACHMENT;
+    let image = t.app.world_mut().resource_mut::<Assets<Image>>().add(image);
+    let pose = Transform::from_xyz(0.0, 1.4, -1.0);
+    let panel = t
+        .app
+        .world_mut()
+        .spawn((
+            WorldPanel {
+                image: image.clone(),
+            },
+            pose,
+            GlobalTransform::from(pose),
+            Visibility::Visible,
+        ))
+        .id();
+    t.app.insert_resource(UiSurface::Panel {
+        entity: panel,
+        size_px,
+        size_m: Vec2::new(0.56, 0.42),
+    });
+    t.app.init_resource::<Drawn>().add_systems(
+        PostUpdate,
+        record_texts
+            .after(EguiPostUpdateSet::EndPass)
+            .before(EguiPostUpdateSet::ProcessOutput),
+    );
+    // The panel camera: the one rendering to the quad's image.
+    let active = |t: &mut TestApp| {
+        let mut q = t.app.world_mut().query::<(&Camera, &RenderTarget)>();
+        let found: Vec<bool> = q
+            .iter(t.app.world())
+            .filter(|(_, r)| matches!(r, RenderTarget::Image(i) if i.handle == image))
+            .map(|(c, _)| c.is_active)
+            .collect();
+        assert_eq!(found.len(), 1, "one camera renders to the quad's image");
+        found[0]
+    };
+    let drawn = |t: &TestApp, label: &str| {
+        t.app
+            .world()
+            .resource::<Drawn>()
+            .0
+            .iter()
+            .any(|(s, _)| s == label)
+    };
+
+    t.frames(5);
+    assert!(active(&mut t), "a shown quad's camera is active");
+    assert!(drawn(&t, "Library"), "a shown quad draws its tab row");
+
+    *t.app
+        .world_mut()
+        .get_mut::<Visibility>(panel)
+        .expect("the quad") = Visibility::Hidden;
+    t.frames(1);
+    assert!(!active(&mut t), "a hidden quad's camera is inactive");
+    assert!(
+        t.app.world().resource::<Drawn>().0.is_empty(),
+        "a hidden quad's pass draws nothing: {:?}",
+        t.app.world().resource::<Drawn>().0
+    );
+
+    *t.app
+        .world_mut()
+        .get_mut::<Visibility>(panel)
+        .expect("the quad") = Visibility::Visible;
+    t.frames(1);
+    assert!(
+        active(&mut t),
+        "the camera is active the frame the quad shows"
+    );
+    assert!(
+        drawn(&t, "Library"),
+        "the tab row draws the frame the quad shows"
+    );
+}

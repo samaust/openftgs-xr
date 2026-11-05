@@ -691,6 +691,11 @@ impl Plugin for UiPlugin {
                 .add_systems(PreUpdate, panel_pointer)
                 .add_systems(Update, panel::follow_surfaces)
                 .add_systems(PostUpdate, end_scrub.before(EguiPostUpdateSet::EndPass))
+                // Q-324: after `Update`'s visibility rules, before the panels' passes.
+                .add_systems(
+                    PostUpdate,
+                    panel::idle_hidden.before(EguiPostUpdateSet::EndPass),
+                )
                 .add_systems(
                     EguiPrimaryContextPass,
                     dock::draw.run_if(any_with_component::<PrimaryWindow>),

@@ -10,7 +10,7 @@
 //! replay); nothing draws a hover tooltip. The wrist menu shows five buttons. Both take
 //! the pointer from `PanelPointer` (Q-263, Q-279).
 
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::visibility::{RenderLayers, Visibility};
 use bevy::camera::{Camera, Camera3d, RenderTarget};
 use bevy::ecs::prelude::*;
 use bevy::ecs::schedule::ScheduleLabel;
@@ -137,13 +137,34 @@ pub(super) fn follow_surfaces(
     }
 }
 
-/// The context of the main panel's (or the wrist menu's) camera.
+/// Idles the panel cameras whose quads are hidden (#269): a camera is active exactly when
+/// its quad's `Visibility` is not `Hidden` (a quad without one counts as shown), so a
+/// hidden panel renders no view and its pass draws nothing. Run in `PostUpdate` before
+/// egui's pass, after `Update`'s summon and wrist-menu rules, so a quad that shows draws
+/// in that frame.
+// Q-324
+pub(super) fn idle_hidden(
+    mut cameras: Query<(&PanelCamera, &mut Camera)>,
+    quads: Query<&Visibility>,
+) {
+    for (pc, mut camera) in &mut cameras {
+        let shown = quads
+            .get(pc.quad)
+            .map_or(true, |v| *v != Visibility::Hidden);
+        if camera.is_active != shown {
+            camera.is_active = shown;
+        }
+    }
+}
+
+/// The context of the main panel's (or the wrist menu's) camera, while it is active
+/// (Q-324: an idle camera's pass draws nothing).
 fn context(world: &mut World, wrist: bool) -> Option<(Entity, egui::Context)> {
     world
-        .query::<(Entity, &PanelCamera, &mut EguiContext)>()
+        .query::<(Entity, &PanelCamera, &Camera, &mut EguiContext)>()
         .iter_mut(world)
-        .find(|(_, p, _)| p.wrist == wrist)
-        .map(|(e, _, mut c)| (e, c.get_mut().clone()))
+        .find(|(_, p, c, _)| p.wrist == wrist && c.is_active)
+        .map(|(e, _, _, mut c)| (e, c.get_mut().clone()))
 }
 
 /// Installs the system font in a new context once (Q-211); whether it has one.
