@@ -451,7 +451,7 @@ pub(crate) fn run(
             let done = match applied {
                 Some(Ok(())) => {
                     test.parts.push(format!(
-                        "pulse: a grab start gave {} ms at {} on the {name} controller,                          applied",
+                        "pulse: a grab start gave {} ms at {} on the {name} controller, applied",
                         GRAB.duration_ms, GRAB.amplitude
                     ));
                     true
@@ -462,7 +462,7 @@ pub(crate) fn run(
                 }
                 None if frames >= PULSE_FRAMES => {
                     test.fail(format!(
-                        "pulse: a grab start on the {name} controller {} after                          {PULSE_FRAMES} frames",
+                        "pulse: a grab start on the {name} controller {} after {PULSE_FRAMES} frames",
                         if wanted {
                             "reached the haptics but no pulse was applied (no running \
                              session)"
