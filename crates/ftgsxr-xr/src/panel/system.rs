@@ -7,7 +7,7 @@
 
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
-use bevy::ecs::message::MessageReader;
+use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::image::Image;
 use bevy::math::primitives::Rectangle;
 use bevy::math::{UVec2, Vec2, Vec3};
@@ -23,23 +23,21 @@ use ftgsxr_app::{Feature, Hand, Headset, Intent, PanelPointer, UiSurface, WorldP
 use ftgsxr_core::{Grab, Pose, Quat, ScaleLimits, TwoHandGrab};
 
 use super::{MainPanel, PanelFollow, summon_pose, wrist_menu_pose, wrist_menu_visible};
-use crate::tracking::{HandSource, TrackedHand, XrHands};
-use crate::xr_input::PanelQuad;
+use crate::tracking::{HandSource, TrackedHand, XrHands, pose_of};
+use crate::xr_input::{PanelGrabEdge, PanelQuad, TITLE_FRACTION};
 
 /// The main panel's default size (§1.8): 0.56 m × 0.42 m at 1024 × 768 px.
 const PANEL_M: Vec2 = Vec2::new(0.56, 0.42);
 const PANEL_PX: UVec2 = UVec2::new(1024, 768);
-/// The texture's resolution after a resize, pixels per metre of width (PRD #452: 1024 px
-/// for 0.56 m), and the panel's 4:3 aspect, height over width.
+/// The texture's resolution after a resize, pixels per metre of width (PRD #452's
+/// geometry: 1024 px for 0.56 m), and the panel's 4:3 aspect, height over width.
+// Q-316
 const PX_PER_M: f32 = 1829.0;
 const ASPECT: f32 = 0.75;
 /// The width a two-hand grab keeps the panel between (§1.8: 0.3–1.2 m).
 const WIDTH_LIMITS: ScaleLimits = ScaleLimits { min: 0.3, max: 1.2 };
-/// The title bar: the top strip of the texture, as a fraction of its height (48 px of
-/// 768).
-// Q-306
-const TITLE_FRACTION: f32 = 1.0 / 16.0;
 /// The wrist menu (Q-265): 0.16 m × 0.05 m at 640 × 200 px.
+// Q-265
 const WRIST_M: Vec2 = Vec2::new(0.16, 0.05);
 const WRIST_PX: UVec2 = UVec2::new(640, 200);
 
@@ -52,6 +50,7 @@ impl Plugin for PanelPlugin {
             .init_resource::<XrHands>()
             .add_message::<Intent>()
             .add_message::<PanelPointer>()
+            .add_message::<PanelGrabEdge>()
             .add_systems(XrSessionCreated, spawn_quads)
             .add_systems(Update, (toggle, grab, place_wrist).chain());
     }
@@ -140,6 +139,7 @@ pub(crate) fn spawn_quads(
             PanelQuad {
                 size_m: PANEL_M,
                 size_px: PANEL_PX,
+                title_bar: true,
             },
             quad(&mut meshes, &mut materials, &image),
             quad_transform(Pose::IDENTITY, PANEL_M),
@@ -155,6 +155,7 @@ pub(crate) fn spawn_quads(
         PanelQuad {
             size_m: WRIST_M,
             size_px: WRIST_PX,
+            title_bar: false,
         },
         quad(&mut meshes, &mut materials, &wrist),
         quad_transform(Pose::IDENTITY, WRIST_M),
@@ -168,15 +169,6 @@ pub(crate) fn spawn_quads(
     match surface {
         Some(mut s) => *s = surface_now,
         None => commands.insert_resource(surface_now),
-    }
-}
-
-/// The pose of a quad's transform (its scale is its size, not the pose's).
-fn pose_of(t: &Transform) -> Pose {
-    Pose {
-        translation: t.translation,
-        rotation: t.rotation,
-        scale: 1.0,
     }
 }
 
@@ -253,12 +245,14 @@ pub(crate) fn resized_px(width_m: f32) -> UVec2 {
 /// 1.2 m (yaw only, keep upright); a release (`GrabEnd`, which `xr_input` always passes
 /// on) of either returns to the other hand, re-creating the image at the new width
 /// (1829 px per metre) and updating `PanelQuad` and `UiSurface::Panel`. The pose follows
-/// while the holding hands are tracked.
-// Q-306
+/// while the holding hands are tracked. Each hand that joins or leaves the grab sends a
+/// `PanelGrabEdge`, D-44's grab pulse (Q-313).
+// Q-306, Q-313
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn grab(
     mut pointers: MessageReader<PanelPointer>,
     mut intents: MessageReader<Intent>,
+    mut edges: MessageWriter<PanelGrabEdge>,
     hands: Res<XrHands>,
     mut held: ResMut<PanelGrab>,
     mut surface: Option<ResMut<UiSurface>>,
@@ -281,15 +275,22 @@ pub(crate) fn grab(
             continue;
         };
         match &*held {
-            PanelGrab::One { hand: h, .. } if *h == hand => *held = PanelGrab::Free,
+            PanelGrab::One { hand: h, .. } if *h == hand => {
+                *held = PanelGrab::Free;
+                edges.write(PanelGrabEdge(hand));
+            }
             PanelGrab::Two { .. } => {
                 let Some(rest) = other(hand) else { continue };
+                edges.write(PanelGrabEdge(hand));
                 *held = match aim(rest) {
                     Some(a) => PanelGrab::One {
                         hand: rest,
                         grab: Grab::begin(a, pose_of(&transform)),
                     },
-                    None => PanelGrab::Free,
+                    None => {
+                        edges.write(PanelGrabEdge(rest));
+                        PanelGrab::Free
+                    }
                 };
                 ended_two = true;
             }
@@ -307,6 +308,7 @@ pub(crate) fn grab(
                     hand: p.hand,
                     grab: Grab::begin(a, pose_of(&transform)),
                 };
+                edges.write(PanelGrabEdge(p.hand));
             }
             PanelGrab::One { hand, .. } if *hand != p.hand => {
                 if let Some(b) = aim(*hand) {
@@ -322,6 +324,7 @@ pub(crate) fn grab(
                             },
                         ),
                     };
+                    edges.write(PanelGrabEdge(p.hand));
                 }
             }
             _ => {}
@@ -634,6 +637,52 @@ mod tests {
         );
         app.update();
         assert_eq!(main_panel(&mut app).1.translation, t1.translation);
+    }
+
+    #[derive(Resource, Default)]
+    struct Edges(Vec<Hand>);
+
+    fn collect_edges(mut r: MessageReader<PanelGrabEdge>, mut seen: ResMut<Edges>) {
+        seen.0.extend(r.read().map(|e| e.0));
+    }
+
+    /// D-44 ("at the start and the end of a grab"), Q-313: a title-bar grab and its
+    /// release each send the hand's `PanelGrabEdge`; a press below the strip sends none.
+    #[test]
+    fn a_title_bar_grab_and_its_release_send_grab_edges() {
+        let mut app = app(at(Vec3::new(0.0, 1.6, 0.0), Quat::IDENTITY));
+        app.init_resource::<Edges>()
+            .add_systems(Update, collect_edges.after(grab));
+        toggle_panel(&mut app);
+        let (panel, _, _) = main_panel(&mut app);
+        let aim0 = at(Vec3::new(0.2, 1.2, -0.3), Quat::IDENTITY);
+        set_hand(
+            &mut app,
+            Hand::Right,
+            Some(hand(aim0, aim0, HandSource::Controller)),
+        );
+        press(&mut app, Hand::Right, panel, Vec2::new(500.0, 60.0));
+        app.update();
+        assert!(
+            app.world().resource::<Edges>().0.is_empty(),
+            "below the strip"
+        );
+        release(&mut app, Hand::Right);
+        app.update();
+        press(&mut app, Hand::Right, panel, Vec2::new(500.0, 20.0));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Edges>().0,
+            [Hand::Right],
+            "the start"
+        );
+        release(&mut app, Hand::Right);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Edges>().0,
+            [Hand::Right, Hand::Right],
+            "the end"
+        );
     }
 
     /// §1.8: two hands resize the panel between 0.3 m and 1.2 m wide (E11's ratio of the

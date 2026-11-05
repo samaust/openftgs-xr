@@ -23,7 +23,7 @@ use image::codecs::png::PngEncoder;
 
 use crate::intent::Intent;
 use crate::library::LoadedModel;
-use crate::manipulate::now_rfc3339;
+use crate::manipulate::{head_candidate, now_rfc3339};
 use crate::platform::PlatformRes;
 use crate::playback::Playback;
 use crate::rig::{CameraController, DesktopCamera};
@@ -79,13 +79,15 @@ impl Plugin for CapturePlugin {
 }
 
 /// `Intent::Screenshot` (F12) asks for the desktop camera, else the lowest-order active
-/// camera (Q-212, Q-180's head).
-// Q-212
+/// camera, one that renders to no image (a window, the headset's views) before one that
+/// does, so the headset's panel cameras are never taken over an eye while a camera
+/// rendering only to an image is still captured (Q-212, Q-310).
+// Q-212, Q-310
 fn screenshot_intents(
     mut intents: MessageReader<Intent>,
     mut out: MessageWriter<ScreenshotRequest>,
     desktop: Query<Entity, With<DesktopCamera>>,
-    cameras: Query<(Entity, &Camera)>,
+    cameras: Query<(Entity, &Camera, &RenderTarget)>,
 ) {
     for i in intents.read() {
         if !matches!(i, Intent::Screenshot) {
@@ -94,9 +96,9 @@ fn screenshot_intents(
         let camera = desktop.iter().next().or_else(|| {
             cameras
                 .iter()
-                .filter(|(_, c)| c.is_active)
-                .min_by_key(|(_, c)| c.order)
-                .map(|(e, _)| e)
+                .filter(|(_, c, _)| c.is_active)
+                .min_by_key(|(_, c, t)| (!head_candidate(c, t), c.order))
+                .map(|(e, ..)| e)
         });
         if let Some(camera) = camera {
             out.write(ScreenshotRequest { camera });

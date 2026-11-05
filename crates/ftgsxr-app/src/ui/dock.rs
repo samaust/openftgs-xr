@@ -402,8 +402,14 @@ pub(super) fn tab_body(
         Tab::Display => display_tab(world, ui, out, hv),
         // §1.1, §1.7 Panels, §1.15 E-XR-UNSUPPORTED: no passthrough control on
         // the desktop (absent, not disabled); `persist` adds the background
-        // and the grid.
-        Tab::Environment => {}
+        // and the grid. On the main panel, §1.8's recenter (D-17, D-24), which has
+        // no desktop binding (Appendix D.1).
+        // Q-311
+        Tab::Environment => {
+            if panel && button(ui, "Recenter", out, hv) {
+                out.push(Out::Intent(Intent::Recenter));
+            }
+        }
         Tab::Settings => {
             ui.label("Settings (§1.11)");
         }

@@ -6,7 +6,7 @@
 use std::ptr;
 use std::task::Poll;
 
-use bevy::ecs::message::{Message, MessageReader};
+use bevy::ecs::message::MessageReader;
 use bevy::log::{info, warn};
 use bevy::math::Vec2;
 use bevy::prelude::{Commands, Res, ResMut, Resource, Transform};
@@ -15,11 +15,14 @@ use bevy_mod_openxr::resources::{OxrFrameState, Pipelined};
 use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_openxr::spaces::OxrSpaceExt;
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
-use ftgsxr_app::{Permission, PermissionHandle, PlatformRes, Toast, ToastLevel};
+use ftgsxr_app::{
+    AskPermissionAgain, DeniedPermissions, Permission, PermissionHandle, PlatformRes, Toast,
+    ToastLevel,
+};
 use ftgsxr_core::Pose;
 use openxr::sys;
 
-use super::{HandSource, TrackedHand};
+use super::{HandSource, TrackedHand, pose_of};
 use crate::XrError;
 
 /// The joint count of XR\_EXT\_hand\_tracking's default set (source-log 276).
@@ -52,20 +55,6 @@ pub(crate) fn transform_of(p: &sys::Posef) -> Transform {
         translation: bevy::math::Vec3::new(p.position.x, p.position.y, p.position.z),
         rotation: bevy::math::Quat::from_xyzw(o.x, o.y, o.z, o.w),
         scale: bevy::math::Vec3::ONE,
-    }
-}
-
-/// A transform as a `Pose` (scale 1).
-pub(crate) fn pose_of(t: &Transform) -> Pose {
-    Pose {
-        translation: ftgsxr_core::Vec3::new(t.translation.x, t.translation.y, t.translation.z),
-        rotation: ftgsxr_core::Quat::from_xyzw(
-            t.rotation.x,
-            t.rotation.y,
-            t.rotation.z,
-            t.rotation.w,
-        ),
-        scale: 1.0,
     }
 }
 
@@ -113,8 +102,10 @@ pub(crate) fn hand_state(raw: &RawHand) -> TrackedHand {
 }
 
 /// An aim moved farther than this counts as input for ownership, metres (Q-262).
+// Q-262
 const MOVED_M: f32 = 0.01;
 /// A pinch strength changed by more than this counts as input for ownership (Q-262).
+// Q-262
 const PINCH_STEP: f32 = 0.05;
 
 /// One side's ownership between its controller and its hand (§1.8 Hands, Q-262): the
@@ -261,15 +252,6 @@ pub(crate) struct HandsPermission {
     pub(crate) flow: Flow,
 }
 
-/// Asks for the hand-tracking permission again after a denial (Q-276's "ask again"). Read
-/// by `tracking`; the Comfort tab's button that would write it lives in `ftgsxr_app::ui`,
-/// which cannot name this crate: the public message it needs is an open question to the
-/// owner (#459's report), so nothing writes it outside the tests yet.
-// Q-276
-#[derive(Message, Clone, Copy, Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct AskHandsAgain;
-
 /// E-XR-PERMISSION's user text with the feature that asked (Q-261): "Permission p denied;
 /// feature Y unavailable".
 // Q-261
@@ -343,8 +325,19 @@ fn ask(platform: Option<&PlatformRes>) -> Flow {
     }
 }
 
-/// At session creation, with `hands` and XR\_EXT\_hand\_tracking: asks for the permission
-/// the first time, creates the trackers once it is granted (Q-276).
+/// Whether the runtime offers hands as §1.8 uses them: XR\_EXT\_hand\_tracking for the
+/// joints and XR\_FB\_hand\_tracking\_aim for the aim pose and the pinches. Without the
+/// second (Monado, `play --xr`) hands are unavailable (§1.1): no permission is asked
+/// and no tracker created, the missing extension's E-XR-UNSUPPORTED warning at plugin
+/// build being the report (Q-285).
+// Q-285
+pub(crate) fn hands_available(exts: &OxrEnabledExtensions) -> bool {
+    exts.ext_hand_tracking && exts.fb_hand_tracking_aim
+}
+
+/// At session creation, with `hands` and the hand extensions (`hands_available`): asks
+/// for the permission the first time, creates the trackers once it is granted (Q-276).
+// Q-285
 pub(crate) fn on_session_created(
     wanted: Res<HandsWanted>,
     exts: Option<Res<OxrEnabledExtensions>>,
@@ -353,7 +346,7 @@ pub(crate) fn on_session_created(
     mut permission: ResMut<HandsPermission>,
     mut commands: Commands,
 ) {
-    if !wanted.0 || !exts.as_ref().is_some_and(|e| e.ext_hand_tracking) {
+    if !wanted.0 || !exts.as_deref().is_some_and(hands_available) {
         return;
     }
     if permission.flow == Flow::Idle {
@@ -368,19 +361,39 @@ pub(crate) fn on_session_created(
 
 /// Polls a pending request each frame: a grant creates the trackers in the running
 /// session, a denial leaves hands off with the warning and the toast naming "hands"
-/// (Q-261, Q-221); an `AskHandsAgain` after a denial asks again.
+/// (Q-261, Q-221), and the permission listed in `DeniedPermissions` until it is asked
+/// again; an `AskPermissionAgain(HandTracking)` after a denial (the Comfort tab's "ask
+/// again") asks again (Q-276, Q-322).
+// Q-276, Q-322
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn poll_permission(
     exts: Option<Res<OxrEnabledExtensions>>,
     session: Option<Res<OxrSession>>,
     platform: Option<Res<PlatformRes>>,
     trackers: Option<Res<HandTrackers>>,
-    mut again: MessageReader<AskHandsAgain>,
+    mut again: MessageReader<AskPermissionAgain>,
     mut permission: ResMut<HandsPermission>,
+    mut denied: Option<ResMut<DeniedPermissions>>,
     mut commands: Commands,
 ) {
-    if again.read().count() > 0 && permission.flow == Flow::Denied {
+    let mut listed = |on: bool| {
+        if let Some(d) = denied.as_deref_mut() {
+            let has = d.0.contains(&Permission::HandTracking);
+            if on && !has {
+                d.0.push(Permission::HandTracking);
+            } else if !on && has {
+                d.0.retain(|p| *p != Permission::HandTracking);
+            }
+        }
+    };
+    let asked_again = again
+        .read()
+        .filter(|a| a.0 == Permission::HandTracking)
+        .count()
+        > 0;
+    if asked_again && permission.flow == Flow::Denied {
         permission.flow = ask(platform.as_deref());
+        listed(false);
     }
     if let Flow::Asking(h) = permission.flow {
         let Some(platform) = platform.as_deref() else {
@@ -391,6 +404,7 @@ pub(crate) fn poll_permission(
             Poll::Ready(true) => permission.flow = Flow::Granted,
             Poll::Ready(false) => {
                 permission.flow = Flow::Denied;
+                listed(true);
                 let text = denied_text(Permission::HandTracking, "hands");
                 warn!("{text}");
                 commands.trigger(Toast {
@@ -911,7 +925,8 @@ mod tests {
                 flow: Flow::Asking(PermissionHandle(1)),
             })
             .init_resource::<Toasts>()
-            .add_message::<AskHandsAgain>()
+            .init_resource::<DeniedPermissions>()
+            .add_message::<AskPermissionAgain>()
             .add_observer(|t: On<Toast>, mut toasts: ResMut<Toasts>| {
                 toasts.0.push(t.event().text.clone());
             })
@@ -937,7 +952,18 @@ mod tests {
             "one toast per denial"
         );
         assert!(platform.asked.lock().unwrap().is_empty());
-        app.world_mut().write_message(AskHandsAgain);
+        // Q-322: the denial is listed for the Comfort tab's "ask again".
+        assert_eq!(
+            app.world().resource::<DeniedPermissions>().0,
+            [Permission::HandTracking]
+        );
+        // Another permission's "ask again" is not this one's.
+        app.world_mut()
+            .write_message(AskPermissionAgain(Permission::Camera));
+        app.update();
+        assert!(platform.asked.lock().unwrap().is_empty());
+        app.world_mut()
+            .write_message(AskPermissionAgain(Permission::HandTracking));
         app.update();
         assert_eq!(
             *platform.asked.lock().unwrap(),

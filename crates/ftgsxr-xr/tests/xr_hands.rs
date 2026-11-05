@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `tracking`'s hands on Monado (`xr` lane, #459): with `XrPlugin.hands` set, the session
-//! runs as in I-15 and the M-3 controller test, the hand trackers are created (no
-//! platform: Q-287) and located each frame through the raw locate, the hand
-//! extensions Monado lacks each log one E-XR-UNSUPPORTED warning (Q-134), and nothing is
-//! logged at error level.
+//! runs as in I-15 and the M-3 controller test; Monado lacks XR\_FB\_hand\_tracking\_aim,
+//! so hands are unavailable (§1.1, Q-285): no hand tracker is created and every side
+//! stays a controller's; the hand extensions Monado lacks each log one E-XR-UNSUPPORTED
+//! warning (Q-134), and nothing is logged at error level.
 
 use std::time::{Duration, Instant};
 
@@ -46,15 +46,15 @@ fn xr_hands_requested_on_monado_keeps_controllers_and_logs_no_error() {
         .get_resource::<XrHands>()
         .expect("XrHands exists");
     for hand in [&hands.left, &hands.right].into_iter().flatten() {
-        // Monado has no aim extension: a located hand is untracked (Q-285).
-        assert!(hand.source == HandSource::Controller || !hand.tracked);
+        // Monado has no aim extension: hands are unavailable (Q-285).
+        assert_eq!(hand.source, HandSource::Controller);
     }
 
     let log = lines();
     assert!(
-        log.iter()
+        !log.iter()
             .any(|l| l.message.contains("hand trackers created")),
-        "the trackers were created"
+        "no hand tracker without XR_FB_hand_tracking_aim"
     );
     for name in [
         "XR_FB_hand_tracking_aim",

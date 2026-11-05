@@ -12,13 +12,20 @@
 
 // Dv-8's device side (#463, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
-mod dv8;
+pub(crate) mod dv8;
 mod hands;
 mod meshes;
 
 pub(crate) use hands::FREQUENCY_HINT_EXT;
+pub(crate) use meshes::DevicesDrawn;
+
+/// The set of the system that places the hands' and controllers' meshes, which
+/// `passthrough`'s mode check runs before.
+#[derive(bevy::prelude::SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DrawDevices;
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate, Update};
 use bevy::ecs::message::MessageWriter;
@@ -37,8 +44,8 @@ use bevy_mod_openxr::resources::{OxrInstance, OxrViews};
 use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrTrackingRoot};
 use bevy_mod_xr::spaces::XrSpaceLocationFlags;
-use ftgsxr_app::{HudData, SettingsRes};
-use ftgsxr_core::{Pose, Quat, Vec3};
+use ftgsxr_app::{HudData, HudHandSource, SettingsRes};
+use ftgsxr_core::Pose;
 use openxr::{Action, ActionSet, Haptic, Path, Posef};
 
 use crate::XrError;
@@ -146,11 +153,14 @@ pub(crate) struct TrackingPlugin {
 impl Plugin for TrackingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<XrHands>()
+            .init_resource::<HapticLog>()
+            .init_resource::<DevicesDrawn>()
             .insert_resource(hands::HandsWanted(self.hands))
             .init_resource::<hands::HandsPermission>()
             .init_resource::<hands::LocatedHands>()
             .init_resource::<hands::Ownership>()
-            .add_message::<hands::AskHandsAgain>();
+            .init_resource::<ftgsxr_app::DeniedPermissions>()
+            .add_message::<ftgsxr_app::AskPermissionAgain>();
         let Some(instance) = app.world().get_resource::<OxrInstance>() else {
             return;
         };
@@ -186,7 +196,7 @@ impl Plugin for TrackingPlugin {
                     hands::locate_hands,
                     write_hands,
                     hands::send_hint,
-                    meshes::draw_hands_and_controllers,
+                    meshes::draw_hands_and_controllers.in_set(DrawDevices),
                 )
                     .chain()
                     .after(locate_views)
@@ -217,6 +227,89 @@ impl Actions {
             .amplitude(amplitude);
         self.haptic
             .apply_feedback(session, self.hands[side], &event)
+    }
+}
+
+/// One of D-44's pulses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Pulse {
+    pub(crate) duration_ms: u32,
+    pub(crate) amplitude: f32,
+}
+
+/// §1.8 Controllers, D-44: hover enter, a grab's start and end, a snap turn and a UI
+/// click. `xr_input`'s haptics apply them through `Actions::pulse`.
+pub(crate) const HOVER: Pulse = Pulse {
+    duration_ms: 10,
+    amplitude: 0.3,
+};
+pub(crate) const GRAB: Pulse = Pulse {
+    duration_ms: 20,
+    amplitude: 0.6,
+};
+pub(crate) const TICK: Pulse = Pulse {
+    duration_ms: 15,
+    amplitude: 0.5,
+};
+
+#[cfg(test)]
+mod hud_tests {
+    use super::*;
+    use ftgsxr_core::Pose;
+
+    /// Q-274: a side's HUD line is its device and whether its aim is tracked; none
+    /// without an active device.
+    #[test]
+    fn hud_hand_maps_the_device_and_its_tracking() {
+        let t = TrackedHand {
+            aim: Pose::IDENTITY,
+            grip: Pose::IDENTITY,
+            pinch: 0.0,
+            pinch_middle: 0.0,
+            squeeze: 0.0,
+            trigger: 0.0,
+            stick: Vec2::ZERO,
+            primary: false,
+            secondary: false,
+            menu: false,
+            source: HandSource::Hand,
+            tracked: false,
+        };
+        assert_eq!(hud_hand(Some(&t)), Some((HudHandSource::Hand, false)));
+        let c = TrackedHand {
+            source: HandSource::Controller,
+            tracked: true,
+            ..t
+        };
+        assert_eq!(hud_hand(Some(&c)), Some((HudHandSource::Controller, true)));
+        assert_eq!(hud_hand(None), None);
+    }
+}
+
+/// The haptics' record (D-44), which Dv-8 reads (Q-272): the pulses `xr_input` wanted on
+/// a controller-owned side this frame, and the last calls of `Actions::pulse` it made,
+/// numbered, with their outcomes.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct HapticLog {
+    /// This frame's pulses, by side (0 the left hand), before they are applied.
+    pub(crate) wanted: Vec<(usize, Pulse)>,
+    /// The next call's number.
+    pub(crate) next: u64,
+    /// The last `HAPTIC_LOG_LEN` calls: (number, side, pulse, outcome).
+    pub(crate) applied: VecDeque<(u64, usize, Pulse, Result<(), String>)>,
+}
+
+/// How many applied pulses `HapticLog` keeps.
+const HAPTIC_LOG_LEN: usize = 32;
+
+impl HapticLog {
+    /// Records one call of `Actions::pulse`.
+    pub(crate) fn record(&mut self, side: usize, pulse: Pulse, result: Result<(), String>) {
+        if self.applied.len() == HAPTIC_LOG_LEN {
+            self.applied.pop_front();
+        }
+        self.applied.push_back((self.next, side, pulse, result));
+        self.next += 1;
     }
 }
 
@@ -363,36 +456,51 @@ fn despawn_spaces(spaces: Query<Entity, With<HandSpace>>, mut commands: Commands
 /// stage space, the rig the root is bound to and the LOCAL fallback's lift included;
 /// Q-128, #461).
 fn to_pose(root: &GlobalTransform, t: &Transform) -> Pose {
-    let (_, r, p) = root.mul_transform(*t).to_scale_rotation_translation();
+    let (_, rotation, translation) = root.mul_transform(*t).to_scale_rotation_translation();
     Pose {
-        translation: Vec3::new(p.x, p.y, p.z),
-        rotation: Quat::from_xyzw(r.x, r.y, r.z, r.w),
+        translation,
+        rotation,
+        scale: 1.0,
+    }
+}
+
+/// A transform's translation and rotation as a `Pose` of scale 1 (a quad's scale is its
+/// size, a located space's 1); the crate's one conversion.
+pub(crate) fn pose_of(t: &Transform) -> Pose {
+    Pose {
+        translation: t.translation,
+        rotation: t.rotation,
         scale: 1.0,
     }
 }
 
 /// A located hand's poses taken into the tracking root's frame, as the controllers'.
 fn rooted(root: &GlobalTransform, mut hand: TrackedHand) -> TrackedHand {
-    let t = |p: &Pose| Transform {
-        translation: bevy::math::Vec3::new(p.translation.x, p.translation.y, p.translation.z),
-        rotation: bevy::math::Quat::from_xyzw(
-            p.rotation.x,
-            p.rotation.y,
-            p.rotation.z,
-            p.rotation.w,
-        ),
-        scale: bevy::math::Vec3::ONE,
-    };
+    let t = |p: &Pose| Transform::from_translation(p.translation).with_rotation(p.rotation);
     hand.aim = to_pose(root, &t(&hand.aim));
     hand.grip = to_pose(root, &t(&hand.grip));
     hand
 }
 
-/// `HudData`'s head field is false without a session (Q-274).
+/// `HudData`'s XR fields without a session (Q-274): the head untracked, no hands.
 fn clear_hud(hud: Option<ResMut<HudData>>) {
     if let Some(mut hud) = hud {
         hud.head_tracked = false;
+        hud.left_hand = None;
+        hud.right_hand = None;
     }
+}
+
+/// A side's HUD line (Q-274): its device and whether its aim is tracked.
+// Q-274
+pub(crate) fn hud_hand(hand: Option<&TrackedHand>) -> Option<(HudHandSource, bool)> {
+    hand.map(|t| {
+        let source = match t.source {
+            HandSource::Controller => HudHandSource::Controller,
+            HandSource::Hand => HudHandSource::Hand,
+        };
+        (source, t.tracked)
+    })
 }
 
 /// Writes `XrHands` from the synced actions, the located spaces, the located hands and
@@ -500,8 +608,15 @@ fn write_hands(
     }
     // Q-274, Q-289: the head counts as tracked once the views are located (the crate keeps the
     // last views and drops the view-state flags, source-log 273).
-    if let Some(mut hud) = hud {
-        hud.head_tracked = views_located;
-    }
     hands.left_handed = settings.is_some_and(|s| s.0.locomotion.left_handed);
+    if let Some(mut hud) = hud {
+        let now = (
+            views_located,
+            hud_hand(hands.left.as_ref()),
+            hud_hand(hands.right.as_ref()),
+        );
+        if (hud.head_tracked, hud.left_hand, hud.right_hand) != now {
+            (hud.head_tracked, hud.left_hand, hud.right_hand) = now;
+        }
+    }
 }

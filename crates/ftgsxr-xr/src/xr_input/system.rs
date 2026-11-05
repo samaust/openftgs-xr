@@ -8,29 +8,30 @@
 //! D-44's haptic pulses from what the frame changed (Q-270).
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate};
+use bevy::asset::Assets;
 use bevy::color::Color;
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::gizmos::config::GizmoConfigStore;
 use bevy::gizmos::gizmos::Gizmos;
 use bevy::math::{Isometry3d, UVec2, Vec2, Vec3};
 use bevy::prelude::{
-    Component, Entity, GlobalTransform, InheritedVisibility, IntoScheduleConfigs, Query, Res,
-    ResMut, Resource, With, resource_exists,
+    ChildOf, Component, Entity, GlobalTransform, InheritedVisibility, IntoScheduleConfigs, Query,
+    Res, ResMut, Resource, Transform, With, Without, resource_exists,
 };
 use bevy::time::Time;
 use bevy_mod_openxr::openxr_session_running;
 use bevy_mod_openxr::session::OxrSession;
 use ftgsxr_app::{
-    Grabbed, Hand, Hovered, Intent, Locomotion, PanelPointer, Selected, SettingsRes, panel_hit,
-    stick_response,
+    Grabbed, Hand, Hovered, Intent, LoadedModel, Locomotion, ManipulateSettings, PanelPointer,
+    PlayUiSound, Selected, SettingsRes, UiSound, panel_hit, pick_instance, stick_response,
 };
-use ftgsxr_core::Pose;
-use ftgsxr_render::{Colormap, RenderMode, SplatMode};
+use ftgsxr_core::{Aabb, Pose};
+use ftgsxr_render::{Colormap, RenderMode, SplatAsset, SplatMode, SplatModel};
 
-use super::{XrInputConfig, XrInputState, aim_ray, hands_to_intents};
+use super::{SIDES, XrInputConfig, XrInputState, aim_ray, hands_to_intents};
 use crate::XrError;
 use crate::error::log_warning;
-use crate::tracking::{Actions, HandSource, XrHands};
+use crate::tracking::{Actions, GRAB, HOVER, HandSource, HapticLog, Pulse, TICK, XrHands};
 
 /// A panel quad's size for the ray test (Q-265): declared here, inserted by `panel` on
 /// the main panel and the wrist menu, each with `WorldPanel` and a `GlobalTransform`
@@ -42,19 +43,31 @@ pub(crate) struct PanelQuad {
     pub(crate) size_m: Vec2,
     /// Its texture's size in pixels.
     pub(crate) size_px: UVec2,
+    /// Whether its texture's top `TITLE_FRACTION` is a title bar (the main panel's,
+    /// Q-306), where a grab press is the panel's and no click (Q-315).
+    pub(crate) title_bar: bool,
 }
+
+/// The title bar: the top strip of a quad's texture, as a fraction of its height (48 px
+/// of 768); `panel` grabs by it.
+// Q-306
+pub(crate) const TITLE_FRACTION: f32 = 1.0 / 16.0;
 
 /// The ray's length without a hit (§1.8 Rays, E10's t\_max).
 const RAY_M: f32 = 10.0;
-/// The dot at the hit: 1 cm across (PRD #452).
+/// The dot at the hit: 1 cm across (PRD #452's geometry).
+// Q-316
 const DOT_RADIUS_M: f32 = 0.005;
 /// The stick's scroll on a panel at full deflection, in pixels per second (Q-304).
+// Q-304
 const SCROLL_PX_PER_S: f32 = 600.0;
 /// The teleport arc's launch speed, gravity and samples (Q-269).
+// Q-269
 const ARC_SPEED_MPS: f32 = 5.0;
 const ARC_GRAVITY: f32 = 9.8;
 const ARC_SAMPLES: usize = 64;
 /// The move stick's forward value that shows the arc, and the release (Q-269).
+// Q-269
 const ARC_SHOW: f32 = 0.7;
 const ARC_RELEASE: f32 = 0.3;
 
@@ -69,11 +82,14 @@ impl Plugin for XrInputPlugin {
             .init_resource::<InputState>()
             .init_resource::<Frame>()
             .init_resource::<HapticMemory>()
+            .init_resource::<HapticLog>()
+            .add_message::<PanelGrabEdge>()
+            .add_message::<PlayUiSound>()
             .add_systems(PreUpdate, write_intents)
             .add_systems(
                 PostUpdate,
                 (
-                    haptics.run_if(openxr_session_running),
+                    (haptics, apply_pulses.run_if(openxr_session_running)).chain(),
                     draw.run_if(resource_exists::<GizmoConfigStore>),
                 ),
             );
@@ -84,6 +100,9 @@ impl Plugin for XrInputPlugin {
 #[derive(Resource, Default)]
 struct InputState {
     input: XrInputState,
+    /// Per side, a select press withheld from a title bar's grab, whose release is
+    /// withheld too (Q-315).
+    withheld: [bool; 2],
     /// The arc's end while the `move` stick is held forward (Q-269), `None` while not
     /// aiming; `Some(None)` aiming at nothing.
     aiming: Option<Option<Vec3>>,
@@ -181,6 +200,33 @@ pub(crate) fn teleport_arc(aim: &Pose) -> Option<Vec<Vec3>> {
     Some(points)
 }
 
+/// Every instance's (entity, stage pose, B_m) for E10, as `manipulate` picks them: its
+/// pose relative to the content group followed by the group's (§1.14), the scale from
+/// x; an instance whose asset is not loaded has none.
+fn instance_boxes(
+    instances: &Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    groups: &Query<&Transform, Without<LoadedModel>>,
+    assets: Option<&Assets<SplatAsset>>,
+) -> Vec<(Entity, Pose, Aabb)> {
+    let Some(assets) = assets else {
+        return Vec::new();
+    };
+    let pose = |t: &Transform| Pose {
+        translation: t.translation,
+        rotation: t.rotation,
+        scale: t.scale.x,
+    };
+    instances
+        .iter()
+        .filter_map(|(e, t, m, parent)| {
+            let group = parent
+                .and_then(|c| groups.get(c.parent()).ok())
+                .map_or(Pose::IDENTITY, pose);
+            Some((e, pose(t).then(&group), assets.get(&m.0)?.bounds))
+        })
+        .collect()
+}
+
 /// The hands that hold an instance (a `Grabbed` names them): their rays stay with the
 /// instances (Q-304).
 fn holding(grabbed: &Query<&Grabbed>) -> Vec<Hand> {
@@ -194,8 +240,6 @@ fn holding(grabbed: &Query<&Grabbed>) -> Vec<Hand> {
     out
 }
 
-const SIDES: [Hand; 2] = [Hand::Left, Hand::Right];
-
 /// One frame of input: the arbitration (Q-263), `hands_to_intents`, the teleport
 /// (Q-269), and the frame's record for the drawing.
 // Q-263, Q-269, Q-303, Q-304
@@ -207,6 +251,10 @@ fn write_intents(
     time: Option<Res<Time>>,
     selected: Query<(Entity, Option<&SplatMode>), With<Selected>>,
     grabbed: Query<&Grabbed>,
+    instances: Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    groups: Query<&Transform, Without<LoadedModel>>,
+    assets: Option<Res<Assets<SplatAsset>>>,
+    manipulate: Option<Res<ManipulateSettings>>,
     quads: Query<(
         Entity,
         &PanelQuad,
@@ -243,8 +291,11 @@ fn write_intents(
         })
         .collect();
     let dt = time.map_or(0.0, |t| t.delta_secs());
+    let boxes = instance_boxes(&instances, &groups, assets.as_deref());
+    let ray_max_m = manipulate.map_or(RAY_M, |m| m.ray_max_m);
 
-    // The arbitration: a tracked hand that holds no instance and points at a quad.
+    // The arbitration: a tracked hand that holds no instance and points at a quad nearer
+    // than any instance (§1.8 Rays' first hit, Q-317).
     let mut now = *hands;
     let mut on_panel: [Option<(Entity, Vec2, f32)>; 2] = [None, None];
     let mut scroll = [0.0f32; 2];
@@ -263,7 +314,9 @@ fn write_intents(
         let hit = if held.contains(&side) {
             None
         } else {
-            nearest_panel(origin, dir, &quads)
+            nearest_panel(origin, dir, &quads).filter(|(_, _, d)| {
+                pick_instance(origin, dir, &boxes, ray_max_m).is_none_or(|(_, t)| *d <= t)
+            })
         };
         frame.rays[i] = Some(RayDraw {
             origin,
@@ -312,6 +365,31 @@ fn write_intents(
         presses[i].1.extend(grab);
         false
     });
+    // Q-315: a grab press on a title bar is the panel's; the select press that comes
+    // with it (a pinch is both, Appendix D.3) is withheld, and so is its release.
+    for (i, side) in SIDES.into_iter().enumerate() {
+        let on_strip = on_panel[i].is_some_and(|(panel, pixel, _)| {
+            quads.iter().any(|(e, _, q)| {
+                *e == panel && q.title_bar && pixel.y < q.size_px.y as f32 * TITLE_FRACTION
+            })
+        });
+        let (select, grab) = &mut presses[i];
+        if on_strip && grab.contains(&true) && select.contains(&true) {
+            select.retain(|p| !*p);
+            state.withheld[i] = true;
+        }
+        if state.withheld[i] && select.contains(&false) {
+            select.retain(|p| *p);
+            state.withheld[i] = false;
+        }
+        if out
+            .iter()
+            .any(|x| matches!(x, Intent::Select { hand, pressed: false } if *hand == side))
+        {
+            // Released off the quads: nothing is withheld any more.
+            state.withheld[i] = false;
+        }
+    }
     for (i, side) in SIDES.into_iter().enumerate() {
         if let Some((panel, pixel, _)) = on_panel[i] {
             let (select, grab) = std::mem::take(&mut presses[i]);
@@ -416,27 +494,6 @@ fn draw(
     }
 }
 
-/// One of D-44's pulses.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Pulse {
-    pub(crate) duration_ms: u32,
-    pub(crate) amplitude: f32,
-}
-
-/// §1.8 Controllers, D-44.
-pub(crate) const HOVER: Pulse = Pulse {
-    duration_ms: 10,
-    amplitude: 0.3,
-};
-pub(crate) const GRAB: Pulse = Pulse {
-    duration_ms: 20,
-    amplitude: 0.6,
-};
-pub(crate) const TICK: Pulse = Pulse {
-    duration_ms: 15,
-    amplitude: 0.5,
-};
-
 /// What the haptics compare frame to frame: each hovered instance with its hand, each
 /// grabbed instance with the hands holding it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -445,21 +502,39 @@ pub(crate) struct Touches {
     pub(crate) grabbed: Vec<(Entity, Vec<Hand>)>,
 }
 
-#[derive(Resource, Default)]
-struct HapticMemory(Touches);
+/// A start or an end of the main panel's grab by its title bar (§1.8: "Grabbing a UI
+/// panel by its title bar moves it the same way"), for D-44's grab pulse: `panel` writes
+/// one per hand that joins or leaves its grab, `haptics` reads them.
+// Q-313
+#[derive(bevy::prelude::Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PanelGrabEdge(pub(crate) Hand);
 
-/// The pulses a frame gives (Q-270), one per hand at most (the strongest): hover enter
-/// when an instance's `Hovered` appears for a hand or switches to it; grab start and
-/// end when a hand joins or leaves an instance's `Grabbed` (one hand, two, none), so a
-/// squeeze on nothing pulses nothing; a snap turn on the turn stick's hand (the right,
-/// the left in left-handed mode); a panel click on each hand of a `PanelPointer`
-/// select press.
-// Q-270
+/// The haptics' memory: the touches of the last frame, and the hand whose ray last
+/// released `select` on a panel quad with the frames since, which a UI click arriving
+/// within `CLICK_FRAMES` after it is credited to (egui clicks on the release, Q-314).
+#[derive(Resource, Default)]
+struct HapticMemory {
+    touches: Touches,
+    released: Option<(Hand, u32)>,
+}
+
+/// How many frames after a release its click may arrive: egui's pass runs in the
+/// release's frame and `audio` raises the sound in the next (Q-314).
+const CLICK_FRAMES: u32 = 3;
+
+/// The pulses a frame gives (Q-270, Q-313, Q-314), one per hand at most (the
+/// strongest): hover enter when an instance's `Hovered` appears for a hand or switches to
+/// it; grab start and end when a hand joins or leaves an instance's `Grabbed` (one hand,
+/// two, none), so a squeeze on nothing pulses nothing, and on each of the main panel's
+/// grab edges in `panel_grabs`; a snap turn on the turn stick's hand (the right, the left
+/// in left-handed mode); a UI click on each hand of `clicks`.
+// Q-270, Q-313, Q-314
 pub(crate) fn select_pulses(
     prev: &Touches,
     now: &Touches,
     snap_turned: bool,
     clicks: &[Hand],
+    panel_grabs: &[Hand],
     left_handed: bool,
 ) -> Vec<(Hand, Pulse)> {
     let mut out: Vec<(Hand, Pulse)> = Vec::new();
@@ -504,6 +579,9 @@ pub(crate) fn select_pulses(
             }
         }
     }
+    for &hand in panel_grabs {
+        add(hand, GRAB);
+    }
     if snap_turned {
         add(if left_handed { Hand::Left } else { Hand::Right }, TICK);
     }
@@ -513,8 +591,12 @@ pub(crate) fn select_pulses(
     out
 }
 
-/// The frame's pulses on the controllers that own their side; a tracked hand has no
-/// output and gets none (PRD #452's "Haptics").
+/// The frame's pulses into `HapticLog.wanted`, kept to the sides a controller owns (a
+/// tracked hand has no output, PRD #452's "Haptics"). A UI click is a `PlayUiSound` of
+/// the click or the confirmation, which `audio` raises from a widget's click, credited to
+/// the hand that last released `select` on a panel quad; a press on empty panel area
+/// clicks nothing and pulses nothing (Q-314).
+// Q-270, Q-313, Q-314
 #[allow(clippy::too_many_arguments)]
 fn haptics(
     hands: Res<XrHands>,
@@ -522,9 +604,10 @@ fn haptics(
     grabbed: Query<(Entity, &Grabbed)>,
     mut intents: MessageReader<Intent>,
     mut pointers: MessageReader<PanelPointer>,
+    mut sounds: MessageReader<PlayUiSound>,
+    mut panel_grabs: MessageReader<PanelGrabEdge>,
     mut memory: ResMut<HapticMemory>,
-    session: Option<Res<OxrSession>>,
-    actions: Option<Res<Actions>>,
+    mut log: ResMut<HapticLog>,
 ) {
     let now = Touches {
         hovered: hovered.iter().map(|(e, h)| (e, h.hand)).collect(),
@@ -542,25 +625,61 @@ fn haptics(
     let snap_turned = intents
         .read()
         .any(|i| matches!(i, Intent::SnapTurn { steps } if *steps != 0));
-    let clicks: Vec<Hand> = pointers
+    let clicked = sounds
         .read()
-        .filter(|p| p.select.contains(&true))
-        .map(|p| p.hand)
-        .collect();
-    let pulses = select_pulses(&memory.0, &now, snap_turned, &clicks, hands.left_handed);
-    memory.0 = now;
-    let (Some(session), Some(actions)) = (session, actions) else {
-        return;
-    };
+        .any(|PlayUiSound(s)| matches!(s, UiSound::Click | UiSound::Confirm));
+    let mut clicks = Vec::new();
+    if clicked && let Some((hand, _)) = memory.released.take() {
+        clicks.push(hand);
+    }
+    memory.released = memory
+        .released
+        .map(|(h, n)| (h, n + 1))
+        .filter(|(_, n)| *n <= CLICK_FRAMES);
+    for p in pointers.read() {
+        if p.select.contains(&false) {
+            memory.released = Some((p.hand, 0));
+        }
+    }
+    let grabs: Vec<Hand> = panel_grabs.read().map(|e| e.0).collect();
+    let pulses = select_pulses(
+        &memory.touches,
+        &now,
+        snap_turned,
+        &clicks,
+        &grabs,
+        hands.left_handed,
+    );
+    memory.touches = now;
+    log.wanted.clear();
     for (hand, p) in pulses {
         let side = usize::from(hand == Hand::Right);
         let owner = if side == 0 { hands.left } else { hands.right };
-        if owner.is_none_or(|t| t.source != HandSource::Controller) {
-            continue;
+        if owner.is_some_and(|t| t.source == HandSource::Controller) {
+            log.wanted.push((side, p));
         }
-        if let Err(e) = actions.pulse(&session, side, p.duration_ms, p.amplitude) {
+    }
+}
+
+/// Plays the frame's pulses on the controllers while the session runs, recording each
+/// call's outcome in `HapticLog`.
+fn apply_pulses(
+    session: Option<Res<OxrSession>>,
+    actions: Option<Res<Actions>>,
+    mut log: ResMut<HapticLog>,
+) {
+    let (Some(session), Some(actions)) = (session, actions) else {
+        return;
+    };
+    let wanted = std::mem::take(&mut log.wanted);
+    for (side, p) in wanted {
+        let result = actions
+            .pulse(&session, side, p.duration_ms, p.amplitude)
+            .map_err(|e| e.to_string());
+        if let Err(e) = &result {
             log_warning(&XrError::Runtime(format!("a haptic pulse: {e}")));
         }
+        log.record(side, p, result);
     }
 }
 
@@ -625,16 +744,16 @@ mod tests {
             ..Touches::default()
         };
         assert_eq!(
-            select_pulses(&none, &hover_l, false, &[], false),
+            select_pulses(&none, &hover_l, false, &[], &[], false),
             [(Hand::Left, HOVER)]
         );
-        assert!(select_pulses(&hover_l, &hover_l, false, &[], false).is_empty());
+        assert!(select_pulses(&hover_l, &hover_l, false, &[], &[], false).is_empty());
         let hover_r = Touches {
             hovered: vec![(e(1), Hand::Right)],
             ..Touches::default()
         };
         assert_eq!(
-            select_pulses(&hover_l, &hover_r, false, &[], false),
+            select_pulses(&hover_l, &hover_r, false, &[], &[], false),
             [(Hand::Right, HOVER)]
         );
         // The mouse never pulses.
@@ -642,7 +761,7 @@ mod tests {
             hovered: vec![(e(1), Hand::Mouse)],
             ..Touches::default()
         };
-        assert!(select_pulses(&none, &mouse, false, &[], false).is_empty());
+        assert!(select_pulses(&none, &mouse, false, &[], &[], false).is_empty());
 
         // Grabs: one hand, a second, one released, the last released.
         let one = |h: Hand| Touches {
@@ -654,36 +773,41 @@ mod tests {
             ..Touches::default()
         };
         assert_eq!(
-            select_pulses(&none, &one(Hand::Left), false, &[], false),
+            select_pulses(&none, &one(Hand::Left), false, &[], &[], false),
             [(Hand::Left, GRAB)]
         );
         assert_eq!(
-            select_pulses(&one(Hand::Left), &two, false, &[], false),
+            select_pulses(&one(Hand::Left), &two, false, &[], &[], false),
             [(Hand::Right, GRAB)]
         );
         assert_eq!(
-            select_pulses(&two, &one(Hand::Right), false, &[], false),
+            select_pulses(&two, &one(Hand::Right), false, &[], &[], false),
             [(Hand::Left, GRAB)]
         );
         assert_eq!(
-            select_pulses(&one(Hand::Right), &none, false, &[], false),
+            select_pulses(&one(Hand::Right), &none, false, &[], &[], false),
             [(Hand::Right, GRAB)]
         );
         // A squeeze on nothing changes no `Grabbed`: nothing.
-        assert!(select_pulses(&none, &none, false, &[], false).is_empty());
+        assert!(select_pulses(&none, &none, false, &[], &[], false).is_empty());
 
         // A snap turn: the turn stick's hand, the left one in left-handed mode.
         assert_eq!(
-            select_pulses(&none, &none, true, &[], false),
+            select_pulses(&none, &none, true, &[], &[], false),
             [(Hand::Right, TICK)]
         );
         assert_eq!(
-            select_pulses(&none, &none, true, &[], true),
+            select_pulses(&none, &none, true, &[], &[], true),
             [(Hand::Left, TICK)]
+        );
+        // A start or an end of the main panel's grab (Q-313).
+        assert_eq!(
+            select_pulses(&none, &none, false, &[], &[Hand::Right], false),
+            [(Hand::Right, GRAB)]
         );
         // A panel click on the hand that clicked.
         assert_eq!(
-            select_pulses(&none, &none, false, &[Hand::Left], false),
+            select_pulses(&none, &none, false, &[Hand::Left], &[], false),
             [(Hand::Left, TICK)]
         );
         // One pulse per hand, the strongest: a grab start with a hover enter.
@@ -692,7 +816,7 @@ mod tests {
             grabbed: vec![(e(2), vec![Hand::Left])],
         };
         assert_eq!(
-            select_pulses(&none, &both, false, &[Hand::Left], false),
+            select_pulses(&none, &both, false, &[Hand::Left], &[], false),
             [(Hand::Left, GRAB)]
         );
     }
@@ -703,6 +827,7 @@ mod tests {
         let q = PanelQuad {
             size_m: Vec2::new(0.56, 0.42),
             size_px: UVec2::new(1024, 768),
+            title_bar: true,
         };
         let at = |z: f32| Pose {
             translation: Vec3::new(0.0, 0.0, z),
@@ -849,6 +974,7 @@ mod tests {
                 PanelQuad {
                     size_m: Vec2::new(0.56, 0.42),
                     size_px: UVec2::new(1024, 768),
+                    title_bar: true,
                 },
                 Transform::from_xyz(0.0, 0.0, 1.5),
                 GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 1.5)),
@@ -887,5 +1013,205 @@ mod tests {
         aiming(&mut app, 1.0);
         app.update();
         assert!(app.world().get::<Selected>(instance).is_some(), "selected");
+    }
+
+    /// Dv-8's pinch clause through this module's own system (kept here, after `tracking`
+    /// in §2.1's order, #452): the synthetic 0.8 pinch writes `Select`, and the test
+    /// passes with no session (no pulse: no controller).
+    #[test]
+    fn run_pinch_writes_select_through_xr_input() {
+        use crate::tracking::dv8::{Dv8, Phase, run};
+        let mut app = App::new();
+        app.add_plugins(XrInputPlugin)
+            .insert_resource(Dv8::new(Phase::Pulse))
+            .add_systems(PostUpdate, run);
+        for _ in 0..10 {
+            app.update();
+        }
+        let test = app.world().resource::<Dv8>();
+        let (pass, detail) = test.verdict.clone().expect("a verdict");
+        assert!(pass, "{detail}");
+        assert!(detail.contains("pulse: no controller"), "{detail}");
+        assert!(
+            detail.contains("wrote Select on the right hand"),
+            "{detail}"
+        );
+    }
+
+    /// Q-314 (D-44: "on a UI click"): the click pulse waits for a widget's click
+    /// (`PlayUiSound` of the click), credited to the hand that released `select` on the
+    /// panel; a press and release on empty panel area pulses nothing. Q-313: a panel
+    /// grab edge gives the grab pulse. Only a controller-owned side gets one.
+    #[test]
+    fn haptics_pulse_a_ui_click_only_for_a_widget_click() {
+        let mut app = App::new();
+        app.add_plugins(XrInputPlugin);
+        aiming(&mut app, 0.0);
+        let pointer = |select: Vec<bool>| PanelPointer {
+            hand: Hand::Right,
+            panel: e(9),
+            pixel: Vec2::ZERO,
+            select,
+            grab: Vec::new(),
+            scroll_px: 0.0,
+        };
+        let wanted = |app: &mut App| app.world().resource::<HapticLog>().wanted.clone();
+        app.update();
+        // On empty panel area: a press and a release, and no click.
+        app.world_mut().write_message(pointer(vec![true]));
+        app.update();
+        assert!(wanted(&mut app).is_empty(), "a press is no click");
+        app.world_mut().write_message(pointer(vec![false]));
+        app.update();
+        app.update();
+        assert!(wanted(&mut app).is_empty(), "no widget clicked");
+        for _ in 0..CLICK_FRAMES {
+            app.update();
+        }
+        app.world_mut().write_message(PlayUiSound(UiSound::Click));
+        app.update();
+        assert!(
+            wanted(&mut app).is_empty(),
+            "a late click is not the release's"
+        );
+        // On a widget: the click's sound a frame after the release.
+        app.world_mut().write_message(pointer(vec![true]));
+        app.update();
+        app.world_mut().write_message(pointer(vec![false]));
+        app.update();
+        app.world_mut().write_message(PlayUiSound(UiSound::Click));
+        app.update();
+        assert_eq!(wanted(&mut app), [(1, TICK)]);
+        app.update();
+        assert!(wanted(&mut app).is_empty(), "one pulse per click");
+        // A panel grab edge.
+        app.world_mut().write_message(PanelGrabEdge(Hand::Right));
+        app.update();
+        assert_eq!(wanted(&mut app), [(1, GRAB)]);
+        // A tracked hand has no output.
+        app.world_mut()
+            .resource_mut::<XrHands>()
+            .right
+            .as_mut()
+            .unwrap()
+            .source = HandSource::Hand;
+        app.world_mut().write_message(PanelGrabEdge(Hand::Right));
+        app.update();
+        assert!(wanted(&mut app).is_empty());
+    }
+
+    /// Dv-8's pulse clause through the haptics (Dv-8: "a grab start sends the 20 ms
+    /// pulse"; Q-272): with the right controller active, the clause injects a grab start
+    /// on its side, which reaches `haptics` as D-44's grab pulse; with no session nothing
+    /// is applied, and the clause says so and fails, while the pinch clause still runs.
+    #[test]
+    fn run_pulse_drives_a_grab_start_through_the_haptics() {
+        use crate::tracking::dv8::{Dv8, Phase, run};
+        let mut app = App::new();
+        app.add_plugins(XrInputPlugin)
+            .insert_resource(Dv8::new(Phase::Pulse))
+            .add_systems(PostUpdate, run);
+        aiming(&mut app, 0.0);
+        for _ in 0..60 {
+            app.update();
+            if app.world().resource::<Dv8>().verdict.is_some() {
+                break;
+            }
+        }
+        let (pass, detail) = app
+            .world()
+            .resource::<Dv8>()
+            .verdict
+            .clone()
+            .expect("a verdict");
+        assert!(!pass, "{detail}");
+        assert!(
+            detail.contains("a grab start on the right controller reached the haptics"),
+            "{detail}"
+        );
+        assert!(detail.contains("wrote Select"), "{detail}");
+        let mut q = app.world_mut().query::<&Grabbed>();
+        assert_eq!(q.iter(app.world()).count(), 0, "the injected grab is gone");
+    }
+
+    /// §1.8 Rays ("to the first hit"), Q-317: a panel behind the instance does not
+    /// take the ray; the instance, the nearer hit, is hovered and selected.
+    #[test]
+    fn arbitration_an_instance_in_front_of_a_panel_takes_the_ray() {
+        use bevy::prelude::Transform;
+        let (mut app, instance) = app_with_p1();
+        // The main panel 1 m behind P1, seen from the hand through it.
+        app.world_mut().spawn((
+            PanelQuad {
+                size_m: Vec2::new(0.56, 0.42),
+                size_px: UVec2::new(1024, 768),
+                title_bar: true,
+            },
+            Transform::from_xyz(0.0, 0.0, -1.0),
+            GlobalTransform::from(Transform::from_xyz(0.0, 0.0, -1.0)),
+        ));
+        aiming(&mut app, 0.0);
+        app.update();
+        app.update();
+        let hovered = app.world().get::<Hovered>(instance).copied();
+        assert_eq!(hovered.map(|h| h.hand), Some(Hand::Right), "hovered");
+        aiming(&mut app, 1.0);
+        app.update();
+        assert!(app.world().get::<Selected>(instance).is_some(), "selected");
+        assert!(
+            app.world().resource::<Seen>().0.is_empty(),
+            "nothing went to the panel"
+        );
+    }
+
+    /// Q-315 (Q-306's side effect removed): a pinch on the main panel's title bar is
+    /// its grab and no click: the panel gets the grab press and release and no select;
+    /// a pinch below the strip clicks.
+    #[test]
+    fn a_pinch_on_the_title_bar_grabs_and_does_not_click() {
+        use bevy::app::Update;
+        use bevy::prelude::Transform;
+        let mut app = App::new();
+        app.add_plugins(XrInputPlugin)
+            .init_resource::<Seen>()
+            .add_systems(Update, collect);
+        app.world_mut().spawn((
+            PanelQuad {
+                size_m: Vec2::new(0.56, 0.42),
+                size_px: UVec2::new(1024, 768),
+                title_bar: true,
+            },
+            Transform::default(),
+            GlobalTransform::default(),
+        ));
+        // Pixel row 20 (of the 48 px strip) and row 300, from 3 m in front.
+        let pinch = |app: &mut App, row: f32, strength: f32| {
+            let y = 0.21 - row / 768.0 * 0.42;
+            let aim = aim_at(0.0, y, 3.0, Quat::IDENTITY);
+            app.world_mut().resource_mut::<XrHands>().right = Some(crate::TrackedHand {
+                aim,
+                grip: aim,
+                pinch: strength,
+                pinch_middle: 0.0,
+                squeeze: 0.0,
+                trigger: 0.0,
+                stick: Vec2::ZERO,
+                primary: false,
+                secondary: false,
+                menu: false,
+                source: HandSource::Hand,
+                tracked: true,
+            });
+            app.update();
+            let seen = std::mem::take(&mut app.world_mut().resource_mut::<Seen>().0);
+            let select: Vec<bool> = seen.iter().flat_map(|p| p.select.clone()).collect();
+            let grab: Vec<bool> = seen.iter().flat_map(|p| p.grab.clone()).collect();
+            (select, grab)
+        };
+        pinch(&mut app, 20.0, 0.0);
+        assert_eq!(pinch(&mut app, 20.0, 0.9), (vec![], vec![true]));
+        assert_eq!(pinch(&mut app, 20.0, 0.0), (vec![], vec![false]));
+        assert_eq!(pinch(&mut app, 300.0, 0.9), (vec![true], vec![true]));
+        assert_eq!(pinch(&mut app, 300.0, 0.0), (vec![false], vec![false]));
     }
 }

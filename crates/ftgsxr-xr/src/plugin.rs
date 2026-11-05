@@ -2,8 +2,9 @@
 
 //! `XrPlugin` and its composition with Bevy's plugins (§2.1, Q-120).
 
-use bevy::app::{App, Plugin, PluginGroup, PluginGroupBuilder};
+use bevy::app::{App, Plugin, PluginGroup, PluginGroupBuilder, PostUpdate};
 use bevy::log::info;
+use bevy::prelude::IntoScheduleConfigs;
 use bevy::render::RenderPlugin;
 use bevy::render::render_resource::TextureFormat;
 use bevy_mod_openxr::action_binding::OxrActionBindingPlugin;
@@ -24,9 +25,9 @@ use openxr::EnvironmentBlendMode;
 use crate::display::DisplayPlugin;
 use crate::error::{XrError, log_runtime, log_warning};
 use crate::panel::PanelPlugin;
-use crate::passthrough::{Environment, EnvironmentMode, PassthroughStyle};
+use crate::passthrough::{self, Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
-use crate::tracking::{FREQUENCY_HINT_EXT, TrackingPlugin};
+use crate::tracking::{self, FREQUENCY_HINT_EXT, TrackingPlugin};
 use crate::xr_input::XrInputPlugin;
 
 /// The XR build's plugin (§2.1, §1.8): bevy\_mod\_openxr's session, init, events,
@@ -216,6 +217,12 @@ impl Plugin for XrTail {
         .add_plugins(TrackingPlugin { hands: self.hands })
         // Appendix D.2 and D.3 to intents (#460), after `tracking`'s `XrHands`.
         .add_plugins(XrInputPlugin)
+        // `passthrough`'s mode check of the hand and controller meshes, before `tracking`
+        // places them (§2.1's module order: `tracking` cannot read `Environment`).
+        .add_systems(
+            PostUpdate,
+            passthrough::devices_drawn.before(tracking::DrawDevices),
+        )
         // The panel and the wrist menu (#462), after `xr_input` (§2.1's module order).
         .add_plugins(PanelPlugin)
         // After the events plugin and `session`, whose re-creation it uses (Q-124).

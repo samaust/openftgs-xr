@@ -43,9 +43,17 @@ fn hud_data_s_head_tracking_is_left_to_the_xr_crate() {
     let mut t = TestApp::new("hud-xr");
     t.frames(2);
     assert!(!t.app.world().resource::<HudData>().head_tracked);
+    assert_eq!(t.app.world().resource::<HudData>().left_hand, None);
+    assert_eq!(t.app.world().resource::<HudData>().right_hand, None);
     t.app.world_mut().resource_mut::<HudData>().head_tracked = true;
+    t.app.world_mut().resource_mut::<HudData>().right_hand =
+        Some((ftgsxr_app::HudHandSource::Hand, true));
     t.frames(2);
     assert!(t.app.world().resource::<HudData>().head_tracked);
+    assert_eq!(
+        t.app.world().resource::<HudData>().right_hand,
+        Some((ftgsxr_app::HudHandSource::Hand, true))
+    );
 }
 
 #[test]

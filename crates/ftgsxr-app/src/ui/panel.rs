@@ -14,13 +14,12 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{Camera, Camera3d, RenderTarget};
 use bevy::ecs::prelude::*;
 use bevy::ecs::schedule::ScheduleLabel;
-use bevy::log::warn;
 use bevy::math::Vec2;
 use bevy_egui::{EguiContext, EguiSchedule, egui};
 use ftgsxr_core::PlayState;
 
 use super::dock::{self, Out};
-use super::{Page, Tab, ToastRequest, UiCue, UiState, UiSurface, WorldPanel, WristMenu};
+use super::{Page, Tab, UiCue, UiState, UiSurface, WorldPanel, WristMenu};
 use crate::intent::{Feature, InstanceAction, Intent, PlaybackCommand};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
@@ -244,21 +243,23 @@ pub(super) fn panel_layout(
     });
 }
 
-/// The wrist menu's buttons (§1.8 User interface).
+/// The wrist menu's buttons (§1.8 User interface). The passthrough button is hidden
+/// until M-6 builds passthrough (§1.15 E-XR-UNSUPPORTED: "the control is hidden",
+/// Q-292), so M-5 shows four.
+// Q-292
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WristButton {
     PlayPause,
-    Passthrough,
     Panel,
     ResetPose,
     Fit,
 }
 
 impl WristButton {
-    /// §1.8's order, left to right.
-    pub(crate) const ALL: [WristButton; 5] = [
+    /// §1.8's order, left to right, without the hidden passthrough button.
+    // Q-291, Q-292
+    pub(crate) const ALL: [WristButton; 4] = [
         WristButton::PlayPause,
-        WristButton::Passthrough,
         WristButton::Panel,
         WristButton::ResetPose,
         WristButton::Fit,
@@ -269,7 +270,6 @@ impl WristButton {
         match self {
             WristButton::PlayPause if playing => "Pause",
             WristButton::PlayPause => "Play",
-            WristButton::Passthrough => "Pass-\nthrough",
             WristButton::Panel => "Panel",
             WristButton::ResetPose => "Reset\npose",
             WristButton::Fit => "Fit",
@@ -282,13 +282,14 @@ impl WristButton {
 // Q-291
 const WRIST_BUTTON_SHARE: f32 = 0.03 / 0.16;
 
-/// The wrist menu's buttons in a texture of `size_px` pixels: five squares in a row,
-/// each 3 cm of the quad's 0.16 m (120 px of 640) or the texture's height if smaller,
-/// spaced evenly and centred vertically.
-// Q-291
-pub(crate) fn wrist_buttons(size_px: Vec2) -> [(WristButton, egui::Rect); 5] {
+/// The wrist menu's buttons in a texture of `size_px` pixels: the shown buttons (four in
+/// M-5) as squares in a row, each 3 cm of the quad's 0.16 m (120 px of 640) or the
+/// texture's height if smaller, spaced evenly and centred vertically (Q-291, Q-292).
+// Q-291, Q-292
+pub(crate) fn wrist_buttons(size_px: Vec2) -> [(WristButton, egui::Rect); 4] {
+    let n = WristButton::ALL.len() as f32;
     let side = (WRIST_BUTTON_SHARE * size_px.x).min(size_px.y);
-    let gap = (size_px.x - 5.0 * side) / 6.0;
+    let gap = (size_px.x - n * side) / (n + 1.0);
     let top = (size_px.y - side) / 2.0;
     WristButton::ALL.map(|b| {
         let i = WristButton::ALL.iter().position(|&x| x == b).unwrap_or(0) as f32;
@@ -316,9 +317,8 @@ pub(crate) fn wrist_ui(ui: &mut egui::Ui, playing: bool) -> Option<WristButton> 
     clicked
 }
 
-/// A wrist button's intents (§1.8 User interface): play or pause the clock, passthrough
-/// on or off, the main panel, and the selected instances' reset pose and fit (none with
-/// nothing selected).
+/// A wrist button's intents (§1.8 User interface): play or pause the clock, the main
+/// panel, and the selected instances' reset pose and fit (none with nothing selected).
 pub(crate) fn wrist_intents(b: WristButton, selected: &[Entity]) -> Vec<Intent> {
     let each = |action| {
         selected
@@ -328,25 +328,14 @@ pub(crate) fn wrist_intents(b: WristButton, selected: &[Entity]) -> Vec<Intent> 
     };
     match b {
         WristButton::PlayPause => vec![Intent::Playback(PlaybackCommand::Toggle)],
-        WristButton::Passthrough => vec![Intent::Toggle(Feature::Passthrough)],
         WristButton::Panel => vec![Intent::Toggle(Feature::Panel)],
         WristButton::ResetPose => each(InstanceAction::ResetPose),
         WristButton::Fit => each(InstanceAction::Fit),
     }
 }
 
-/// Passthrough's E-XR-UNSUPPORTED until M-6 builds it (§1.15: "Not available on this
-/// runtime"), toasted once per run when its button is pressed (Q-161), logged each time.
-// Q-292
-pub(crate) const PASSTHROUGH_UNSUPPORTED: &str =
-    "E-XR-UNSUPPORTED: Not available on this runtime (XR_FB_passthrough)";
-
 /// The wrist menu on its context, run in `WristPass`: a pressed button's intents.
-pub(super) fn draw_wrist(
-    world: &mut World,
-    mut font: Local<Option<(Entity, bool)>>,
-    mut told: Local<bool>,
-) {
+pub(super) fn draw_wrist(world: &mut World, mut font: Local<Option<(Entity, bool)>>) {
     let Some((entity, ctx)) = context(world, true) else {
         return;
     };
@@ -369,15 +358,6 @@ pub(super) fn draw_wrist(
         world.write_message(i);
     }
     world.write_message(UiCue::Click);
-    // Q-292
-    if b == WristButton::Passthrough {
-        if *told {
-            warn!("{PASSTHROUGH_UNSUPPORTED}");
-        } else {
-            *told = true;
-            world.write_message(ToastRequest::warning(PASSTHROUGH_UNSUPPORTED));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -430,7 +410,6 @@ mod tests {
         let selected = Entity::from_raw_u32(7).expect("an entity");
         let expected = [
             ("Play", Intent::Playback(PlaybackCommand::Toggle)),
-            ("Pass-\nthrough", Intent::Toggle(Feature::Passthrough)),
             ("Panel", Intent::Toggle(Feature::Panel)),
             (
                 "Reset\npose",
@@ -489,11 +468,15 @@ mod tests {
         assert!(wrist_intents(WristButton::Fit, &[]).is_empty());
     }
 
-    /// The five buttons are 3 cm squares (120 px of the 640 × 200 texture), inside it and
-    /// apart (Q-265, Q-291), above Q-267's 60 px.
+    /// The four shown buttons (the passthrough button hidden until M-6, Q-292) are 3 cm
+    /// squares (120 px of the 640 × 200 texture), inside it, apart and evenly spaced
+    /// (Q-265, Q-291), above Q-267's 60 px.
     #[test]
-    fn wrist_buttons_are_five_120_px_squares_in_a_row() {
+    fn wrist_buttons_are_four_120_px_squares_in_a_row() {
         let b = wrist_buttons(Vec2::new(640.0, 200.0));
+        assert_eq!(b.map(|(w, _)| w), WristButton::ALL);
+        // (640 − 4 × 120) / 5 = 32 px around each.
+        assert!((b[0].1.min.x - 32.0).abs() < 1e-3 && (b[3].1.max.x - 608.0).abs() < 1e-3);
         let tex = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 200.0));
         for (i, (_, r)) in b.iter().enumerate() {
             assert!((r.width() - 120.0).abs() < 1e-3 && (r.height() - 120.0).abs() < 1e-3);
@@ -625,5 +608,32 @@ mod tests {
         click(&mut world, "◀ Back");
         assert_eq!(world.resource::<UiState>().page, None);
         assert_eq!(world.resource::<UiState>().tab, Tab::Scene);
+    }
+
+    /// The main panel's Environment tab has §1.8's Recenter (Q-311): a click writes
+    /// `Intent::Recenter` with the click's sound.
+    #[test]
+    fn panel_environment_tab_recenters() {
+        let mut world = panel_world(Tab::Environment);
+        let ctx = egui::Context::default();
+        panel_frame(&ctx, &mut world, Vec::new());
+        let (texts, _) = panel_frame(&ctx, &mut world, Vec::new());
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == "Recenter")
+            .map(|(_, p)| *p + egui::vec2(4.0, 4.0))
+            .unwrap_or_else(|| panic!("Recenter is drawn: {texts:?}"));
+        let mut out = Vec::new();
+        for select in [vec![], vec![true], vec![false]] {
+            let at = Vec2::new(at.x, at.y);
+            let events = pointer_events(Some(at), Some(at), &select, 0.0);
+            out.extend(panel_frame(&ctx, &mut world, events).1);
+        }
+        assert!(
+            out.iter()
+                .any(|o| matches!(o, Out::Intent(Intent::Recenter))),
+            "a recenter"
+        );
+        assert!(out.iter().any(|o| matches!(o, Out::Cue(UiCue::Click))));
     }
 }

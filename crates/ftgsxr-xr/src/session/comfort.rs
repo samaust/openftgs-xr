@@ -2,8 +2,9 @@
 
 //! Locomotion's comfort options on the headset (§1.8 Locomotion, Comfort and
 //! accessibility; Q-269): the vignette during smooth movement or turning, the 150 ms fade
-//! on `Intent::Teleport`, both skipped under `[locomotion] reduced_motion`, and the seated
-//! height offset added to the rig's y.
+//! on `Intent::Teleport`, the fade skipped and the vignette's ramps dropped (it shows and
+//! clears at once) under `[locomotion] reduced_motion`, and the seated height offset
+//! added to the rig's y.
 //!
 //! Each eye gets two child quads, the vignette (a generated radial alpha texture) and the
 //! fade (plain black), on a render layer only that eye sees, so the left eye's quads never
@@ -29,7 +30,7 @@ use bevy::time::Time;
 use bevy_mod_openxr::render::locate_views;
 use bevy_mod_openxr::resources::OxrViews;
 use bevy_mod_xr::camera::XrCamera;
-use ftgsxr_app::{Intent, Locomotion, PlayerRig, SettingsRes};
+use ftgsxr_app::{Headset, Intent, Locomotion, PlayerRig, SettingsRes};
 
 // Q-269
 /// The vignette's darkest alpha, at and beyond the edge of the half field of view.
@@ -51,17 +52,19 @@ const FADE_DISTANCE_M: f32 = 0.04;
 const VIGNETTE_TEXELS: u32 = 128;
 
 /// The vignette's ramp: its level in [0, 1] moves toward 1 while smooth motion is on and
-/// toward 0 otherwise, over `VIGNETTE_RAMP_S`.
+/// toward 0 otherwise, over `VIGNETTE_RAMP_S`, or at once under reduced motion (§1.8:
+/// "removes the animated transitions").
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct VignetteRamp {
     pub(crate) level: f32,
 }
 
 impl VignetteRamp {
-    /// One frame of `dt` seconds; the quad's alpha after it.
+    /// One frame of `dt` seconds, `instant` under reduced motion; the quad's alpha after
+    /// it.
     // Q-269
-    pub(crate) fn step(&mut self, moving: bool, dt: f32) -> f32 {
-        let d = dt / VIGNETTE_RAMP_S;
+    pub(crate) fn step(&mut self, moving: bool, dt: f32, instant: bool) -> f32 {
+        let d = if instant { 1.0 } else { dt / VIGNETTE_RAMP_S };
         self.level = if moving {
             (self.level + d).min(1.0)
         } else {
@@ -176,14 +179,20 @@ fn reduced_motion(settings: Option<&SettingsRes>) -> bool {
 }
 
 /// Adds the change of the wanted height offset to the rig's y (§1.8 Locomotion's seated
-/// option), so E12's motion, which keeps the rig's height, carries it.
-// Q-299
+/// option), so E12's motion, which keeps the rig's height, carries it. Only on the
+/// headset (the `Headset` marker, Q-266): the desktop, `play --xr` included, has no
+/// offset (Q-299, Q-318).
+// Q-299, Q-318
 fn apply_height_offset(
     loco: Option<Res<Locomotion>>,
+    headset: Option<Res<Headset>>,
     mut comfort: ResMut<Comfort>,
     mut rigs: Query<&mut Transform, With<PlayerRig>>,
 ) {
-    let wanted = loco.as_deref().map_or(0.0, height_offset);
+    let wanted = match (headset, loco.as_deref()) {
+        (Some(_), Some(l)) => height_offset(l),
+        _ => 0.0,
+    };
     let delta = wanted - comfort.applied_offset_m;
     if delta == 0.0 {
         return;
@@ -196,7 +205,8 @@ fn apply_height_offset(
 }
 
 /// Steps the vignette and the fade from the frame's intents and writes the shared
-/// materials' alphas; both stay at 0 under reduced motion, and the vignette while
+/// materials' alphas; under reduced motion the fade stays at 0 and the vignette shows
+/// and clears without its ramps (Q-269); the vignette stays at 0 while
 /// `Locomotion.vignette` is off.
 fn run_ramps(
     mut intents: MessageReader<Intent>,
@@ -210,11 +220,11 @@ fn run_ramps(
     let loco = loco.as_deref().unwrap_or(&default);
     let frame: Vec<Intent> = intents.read().copied().collect();
     let reduced = reduced_motion(settings.as_deref());
-    let moving = !reduced && loco.vignette && smooth_motion(&frame, loco);
+    let moving = loco.vignette && smooth_motion(&frame, loco);
     let teleported =
         !reduced && loco.enabled && frame.iter().any(|i| matches!(i, Intent::Teleport { .. }));
     let dt = time.delta_secs();
-    let vignette = comfort.vignette.step(moving, dt);
+    let vignette = comfort.vignette.step(moving, dt, reduced);
     let fade = comfort.fade.step(teleported, dt);
     let (Some(mut materials), Some(assets)) = (materials, comfort.assets.clone()) else {
         return;
@@ -388,12 +398,25 @@ mod tests {
     #[test]
     fn vignette_ramp_reaches_0_8_in_100_ms_and_clears_in_100_ms() {
         let mut v = VignetteRamp::default();
-        assert!((v.step(true, 0.05) - 0.4).abs() <= 1e-6);
-        assert!((v.step(true, 0.05) - 0.8).abs() <= 1e-6);
-        assert!((v.step(true, 0.05) - 0.8).abs() <= 1e-6, "held at 0.8");
-        assert!((v.step(false, 0.05) - 0.4).abs() <= 1e-6);
-        assert_eq!(v.step(false, 0.05), 0.0);
-        assert_eq!(v.step(false, 0.05), 0.0);
+        assert!((v.step(true, 0.05, false) - 0.4).abs() <= 1e-6);
+        assert!((v.step(true, 0.05, false) - 0.8).abs() <= 1e-6);
+        assert!(
+            (v.step(true, 0.05, false) - 0.8).abs() <= 1e-6,
+            "held at 0.8"
+        );
+        assert!((v.step(false, 0.05, false) - 0.4).abs() <= 1e-6);
+        assert_eq!(v.step(false, 0.05, false), 0.0);
+        assert_eq!(v.step(false, 0.05, false), 0.0);
+    }
+
+    // Q-269 (owner, 2026-11-04): under reduced motion the vignette stays, without its
+    // ramps: full at the first frame of smooth motion, clear at the first frame without.
+    #[test]
+    fn vignette_under_reduced_motion_shows_and_clears_at_once() {
+        let mut v = VignetteRamp::default();
+        assert_eq!(v.step(true, 0.011, true), 0.8);
+        assert_eq!(v.step(true, 0.011, true), 0.8);
+        assert_eq!(v.step(false, 0.011, true), 0.0);
     }
 
     // Q-269, Q-301: black at the teleport, clear 150 ms later, linear between.
@@ -463,6 +486,7 @@ mod tests {
         let mut l = loco();
         l.height_offset_m = 0.4;
         app.insert_resource(l)
+            .insert_resource(Headset)
             .init_resource::<Comfort>()
             .add_systems(Update, apply_height_offset);
         let rig = app
@@ -482,6 +506,26 @@ mod tests {
             (y(&app).y - 0.2).abs() <= 1e-6,
             "removed in passthrough mode"
         );
+    }
+
+    // Q-299 ("the desktop has no offset"), Q-318: without the `Headset` marker
+    // (`play --xr`) the rig keeps its height.
+    #[test]
+    fn apply_height_offset_needs_the_headset_marker() {
+        let mut app = App::new();
+        let mut l = loco();
+        l.height_offset_m = 0.4;
+        app.insert_resource(l)
+            .init_resource::<Comfort>()
+            .add_systems(Update, apply_height_offset);
+        let rig = app
+            .world_mut()
+            .spawn((PlayerRig, Transform::from_xyz(1.0, 0.2, -2.0)))
+            .id();
+        app.update();
+        app.update();
+        let t = app.world().get::<Transform>(rig).unwrap().translation;
+        assert_eq!(t, Vec3::new(1.0, 0.2, -2.0));
     }
 
     #[test]

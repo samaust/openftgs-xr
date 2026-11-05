@@ -13,7 +13,7 @@ Everything reaches the system's output through the `AudioOutput` trait (Q-149, Q
 
 `AudioState` holds the mute, the master, UI and soundtrack gains in \[0, 1\], `spatial` and the per-sound switches, Q-50's defaults; `persist` maps the settings' percent to and from them (Q-188), and `Intent::Volume` and `Toggle(Feature::Sound)` change them. A UI sound plays at master × UI, nothing when muted or when its switch is off. The clips are synthesized at startup, short sine tones under a decay, the player's own (Q-191).
 
-`ui` comes before `audio` in §2.1's order, so `ui` raises `UiCue`s and `audio`'s bridge turns them into `PlayUiSound`, and audio's failures into ui's toasts (Q-189). The cues map to hover, select, click, error and confirmation. On the headset the main panel's and the wrist menu's clicks and hovers arrive the same way (`ui.md`). Grab start and end and snap turn have their clips and switches, but nothing plays them yet.
+`ui` comes before `audio` in §2.1's order, so `ui` raises `UiCue`s and `audio`'s bridge turns them into `PlayUiSound`, and audio's failures into ui's toasts (Q-189). The cues map to hover, select, click, error and confirmation. On the headset the main panel's and the wrist menu's clicks and hovers arrive the same way (`ui.md`). `audio` reads the rest itself (it comes after `manipulate` and `rig`): grab start when a hand joins an instance's `Grabbed` (it appears, or turns two-handed) and grab end when one leaves it (a hand released, or the component gone), the edges the haptics take (Q-270, `ftgsxr-xr/xr_input.md`), and the snap turn on `Intent::SnapTurn`; each at most once a frame, a squeeze on nothing sounding nothing.
 
 ## Soundtracks
 
@@ -31,4 +31,4 @@ Without a camera, or for an instance whose asset is not loaded, the sink gets pa
 
 ## Q-n rows relied on
 
-`audio`: Q-149, Q-187, Q-188, Q-189, Q-190, Q-191, Q-218, Q-246, Q-266, Q-268, Q-280, Q-281; with Q-50 (the defaults).
+`audio`: Q-149, Q-187, Q-270, Q-188, Q-189, Q-190, Q-191, Q-218, Q-246, Q-266, Q-268, Q-280, Q-281; with Q-50 (the defaults).

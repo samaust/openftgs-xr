@@ -11,7 +11,7 @@ use crate::support::TestApp;
 
 use bevy::prelude::*;
 use ftgsxr_app::{
-    ContentGroup, Intent, LibraryCommand, LoadedModel, ModelRef, PlayerRig, Selected,
+    ContentGroup, Headset, Intent, LibraryCommand, LoadedModel, ModelRef, PlayerRig, Selected,
 };
 use ftgsxr_render::{SplatAsset, SplatModel};
 use ftgsxr_testkit::fixtures_dir;
@@ -227,4 +227,50 @@ fn recenter_works_in_passthrough_mode() {
     let c0 = center(&t, es[0]);
     send(&mut t, Intent::Recenter);
     assert!(close(center(&t, es[0]), ahead(head, yaw, c0.y)));
+}
+
+#[test]
+fn recenter_ignores_a_panel_camera_under_headset() {
+    // Q-310: a panel's camera (order −1, an image target) is never the head, so the
+    // order-0 head camera still places the content.
+    let (mut t, es, head, yaw) = scene("recenter_panel_camera");
+    t.app.world_mut().insert_resource(Headset);
+    t.app.world_mut().spawn((
+        Camera3d::default(),
+        Camera {
+            order: -1,
+            ..Default::default()
+        },
+        bevy::camera::RenderTarget::Image(Handle::<Image>::default().into()),
+        Transform::from_xyz(9.0, 1.0, 9.0).with_rotation(Quat::from_rotation_y(2.0)),
+    ));
+    t.frames(1);
+    t.app.world_mut().entity_mut(es[0]).insert(Selected);
+    let c0 = center(&t, es[0]);
+    send(&mut t, Intent::Recenter);
+    let c = center(&t, es[0]);
+    assert!(close(c, ahead(head, yaw, c0.y)), "{c}");
+}
+
+#[test]
+fn recenter_scene_center_counts_only_loaded_instances() {
+    // Q-283: "the mean of every loaded instance's"; a splat model under the group that is
+    // no library instance (no `LoadedModel`) does not move the center.
+    let (mut t, es, head, yaw) = scene("recenter_loaded_only");
+    let handle = t.app.world().get::<SplatModel>(es[0]).unwrap().0.clone();
+    let mut q = t
+        .app
+        .world_mut()
+        .query_filtered::<Entity, With<ContentGroup>>();
+    let g = q.single(t.app.world()).unwrap();
+    t.app.world_mut().spawn((
+        SplatModel(handle),
+        Transform::from_xyz(40.0, 0.0, 40.0),
+        ChildOf(g),
+    ));
+    t.frames(1);
+    let mean0 = (center(&t, es[0]) + center(&t, es[1])) / 2.0;
+    send(&mut t, Intent::Recenter);
+    let mean = (center(&t, es[0]) + center(&t, es[1])) / 2.0;
+    assert!(close(mean, ahead(head, yaw, mean0.y)), "{mean}");
 }

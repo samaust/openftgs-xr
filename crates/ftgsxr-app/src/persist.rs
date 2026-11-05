@@ -33,8 +33,8 @@ use crate::library::{
     Library, LibraryCommand, LibraryFailure, LoadedModel, MissingModel, Replaces, SceneLoad,
     ShowOnUpload, list_missing,
 };
-use crate::manipulate::{Poses, now_rfc3339, pose_of, transform_of};
-use crate::platform::PlatformRes;
+use crate::manipulate::{HighContrast, Poses, now_rfc3339, pose_of, transform_of};
+use crate::platform::{AskPermissionAgain, DeniedPermissions, PlatformRes};
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
@@ -328,6 +328,8 @@ impl Plugin for PersistPlugin {
             .add_message::<PersistFailure>()
             .add_message::<SceneLoadConfirmed>()
             .add_message::<ToastRequest>()
+            .add_message::<AskPermissionAgain>()
+            .init_resource::<DeniedPermissions>()
             .add_message::<Intent>()
             .add_message::<LibraryCommand>()
             .init_resource::<Saver>()
@@ -344,6 +346,7 @@ impl Plugin for PersistPlugin {
                     sync_settings,
                     dock_into_settings.run_if(dock_on_screen),
                     centers_follow_settings,
+                    high_contrast_follows_settings,
                     save_settings_debounced,
                     save_poses,
                 )
@@ -410,6 +413,15 @@ fn ui_bridge(
 fn raise_startup(mut startup: ResMut<StartupFailures>, mut out: MessageWriter<PersistFailure>) {
     for f in startup.0.drain(..) {
         out.write(f);
+    }
+}
+
+/// `[display] high_contrast` into `manipulate`'s highlight (Q-278, Q-312).
+// Q-278, Q-312
+fn high_contrast_follows_settings(settings: Res<SettingsRes>, mut hc: ResMut<HighContrast>) {
+    let want = HighContrast(settings.0.display.high_contrast);
+    if *hc != want {
+        *hc = want;
     }
 }
 
@@ -1334,6 +1346,32 @@ pub(crate) fn save_at_exit(world: &mut World, mut cursor: Local<MessageCursor<Ap
 
 #[cfg(test)]
 mod tests {
+
+    /// Q-278, Q-312: `[display] high_contrast` reaches `manipulate`'s highlight, and
+    /// back off.
+    #[test]
+    fn high_contrast_follows_the_display_setting() {
+        let mut app = App::new();
+        app.insert_resource(SettingsRes(Settings::default()))
+            .init_resource::<HighContrast>()
+            .add_systems(Update, high_contrast_follows_settings);
+        app.update();
+        assert_eq!(*app.world().resource::<HighContrast>(), HighContrast(false));
+        app.world_mut()
+            .resource_mut::<SettingsRes>()
+            .0
+            .display
+            .high_contrast = true;
+        app.update();
+        assert_eq!(*app.world().resource::<HighContrast>(), HighContrast(true));
+        app.world_mut()
+            .resource_mut::<SettingsRes>()
+            .0
+            .display
+            .high_contrast = false;
+        app.update();
+        assert_eq!(*app.world().resource::<HighContrast>(), HighContrast(false));
+    }
     use super::*;
 
     #[test]

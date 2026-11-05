@@ -14,8 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::Assets;
-use bevy::camera::Camera;
 use bevy::camera::visibility::Visibility;
+use bevy::camera::{Camera, RenderTarget};
 use bevy::color::Color;
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::prelude::*;
@@ -132,6 +132,7 @@ impl Plugin for ManipulatePlugin {
             .add_message::<LibraryCommand>()
             .init_resource::<HandStates>()
             .init_resource::<GizmoState>()
+            .init_resource::<HighContrast>()
             .add_observer(on_loaded)
             .add_message::<SetPoseExtras>()
             .add_systems(
@@ -269,15 +270,38 @@ pub(crate) fn transform_of(p: Pose) -> Transform {
     }
 }
 
-/// The head pose the desktop fit places the instance ahead of: the active camera of the
-/// lowest order, the stage origin facing −z when there is none.
-// Q-180
-fn head_pose(cameras: &Query<(&Camera, &GlobalTransform)>) -> Pose {
+/// The distance ahead of the head that the fit (§1.5 Poses), the headset's auto-fit and
+/// `rig`'s recenter (§1.8 Session and spaces) place the content at, metres.
+pub(crate) const AHEAD_M: f32 = 1.5;
+
+/// Whether a camera may be the head (Q-180, Q-310): active, and rendering to a window
+/// or the headset's views, not to an image (the panels' cameras, a bench's target).
+// Q-310
+pub(crate) fn head_candidate(camera: &Camera, target: &RenderTarget) -> bool {
+    camera.is_active && !matches!(target, RenderTarget::Image(_))
+}
+
+/// The cameras the head is picked from.
+pub(crate) type HeadCameras<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Camera,
+        &'static RenderTarget,
+        &'static GlobalTransform,
+    ),
+>;
+
+/// The head (Q-180, Q-310): the candidate camera of the lowest order (rotation and
+/// translation, scale 1); `None` without one. The fit, the auto-fit, locomotion and
+/// recenter share it.
+// Q-180, Q-310
+pub(crate) fn head_pose(cameras: &HeadCameras) -> Option<Pose> {
     cameras
         .iter()
-        .filter(|(c, _)| c.is_active)
-        .min_by_key(|(c, _)| c.order)
-        .map(|(_, g)| {
+        .filter(|(c, t, _)| head_candidate(c, t))
+        .min_by_key(|(c, ..)| c.order)
+        .map(|(.., g)| {
             let (_, rotation, translation) = g.to_scale_rotation_translation();
             Pose {
                 translation,
@@ -285,7 +309,6 @@ fn head_pose(cameras: &Query<(&Camera, &GlobalTransform)>) -> Pose {
                 scale: 1.0,
             }
         })
-        .unwrap_or(Pose::IDENTITY)
 }
 
 /// §1.5's hints for a local model: the preset from the first `ftgs-scene` manifest in
@@ -355,7 +378,7 @@ fn on_loaded(
     poses: Res<Poses>,
     headset: Option<Res<Headset>>,
     assets: Option<Res<Assets<SplatAsset>>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     mut commands: Commands,
 ) {
     let Ok((m, mut t, model, parent)) = q.get_mut(add.entity) else {
@@ -379,7 +402,13 @@ fn on_loaded(
                 && let Some(b) = bounds
                 && !(AUTO_FIT_RANGE_M.0..=AUTO_FIT_RANGE_M.1).contains(&b.size().max_element())
             {
-                let fitted = fit_pose(&b, x.preset, x.fit_size_m, head_pose(&cameras), 1.5);
+                let fitted = fit_pose(
+                    &b,
+                    x.preset,
+                    x.fit_size_m,
+                    head_pose(&cameras).unwrap_or(Pose::IDENTITY),
+                    AHEAD_M,
+                );
                 *t = transform_of(fitted.then(&group_pose(parent, &groups).inverse()));
             }
             x
@@ -536,7 +565,7 @@ fn run_intents(
     groups: GroupTransforms,
     selected: Query<Entity, With<Selected>>,
     assets: Res<Assets<SplatAsset>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     settings: Res<ManipulateSettings>,
     mut poses: ResMut<Poses>,
     mut hs: ResMut<HandStates>,
@@ -829,7 +858,13 @@ fn run_intents(
                             preset: Preset::YUp,
                             fit_size_m: 1.0,
                         });
-                        fit_pose(&b, x.preset, x.fit_size_m, head_pose(&cameras), 1.5)
+                        fit_pose(
+                            &b,
+                            x.preset,
+                            x.fit_size_m,
+                            head_pose(&cameras).unwrap_or(Pose::IDENTITY),
+                            AHEAD_M,
+                        )
                     } else {
                         snap_to_floor(&b, current, 0.0)
                     };
@@ -1042,6 +1077,24 @@ fn box_lines(gizmos: &mut Gizmos, b: &Aabb, pose: &Pose, color: Color) {
 
 const HOVER: Color = Color::srgb(0.85, 0.85, 0.85);
 const ACCENT: Color = Color::srgb(1.0, 0.6, 0.1);
+
+/// `[display] high_contrast` (Q-278) as `manipulate` reads it: `persist` sets it from the
+/// settings, since `manipulate` comes before `persist` in §2.1's order.
+// Q-278, Q-312
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HighContrast(pub(crate) bool);
+
+/// The hovered and the selected boxes' colors (§1.4, §1.8 Comfort and accessibility):
+/// light grey and the orange accent, or under high contrast the ray's yellow (Q-304) and
+/// cyan, both fully saturated.
+// Q-278, Q-312
+pub(crate) fn highlight_colors(high_contrast: bool) -> (Color, Color) {
+    if high_contrast {
+        (Color::srgb(1.0, 1.0, 0.0), Color::srgb(0.0, 1.0, 1.0))
+    } else {
+        (HOVER, ACCENT)
+    }
+}
 const AXIS_COLORS: [Color; 3] = [
     Color::srgb(0.9, 0.2, 0.2),
     Color::srgb(0.2, 0.9, 0.2),
@@ -1063,19 +1116,21 @@ fn draw(
     q: Query<DrawItem, With<LoadedModel>>,
     groups: GroupTransforms,
     assets: Res<Assets<SplatAsset>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     gizmo: Res<GizmoState>,
+    contrast: Res<HighContrast>,
 ) {
-    let eye = head_pose(&cameras).translation;
+    let (hover, accent) = highlight_colors(contrast.0);
+    let eye = head_pose(&cameras).unwrap_or(Pose::IDENTITY).translation;
     for (t, m, hovered, selected, parent) in &q {
         let Some(asset) = assets.get(&m.0) else {
             continue;
         };
         let pose = staged(t, parent, &groups);
         if selected {
-            box_lines(&mut gizmos, &asset.bounds, &pose, ACCENT);
+            box_lines(&mut gizmos, &asset.bounds, &pose, accent);
         } else if hovered {
-            box_lines(&mut gizmos, &asset.bounds, &pose, HOVER);
+            box_lines(&mut gizmos, &asset.bounds, &pose, hover);
         }
         if !selected {
             continue;
@@ -1107,7 +1162,7 @@ fn draw(
                 min: c - Vec3::splat(h),
                 max: c + Vec3::splat(h),
             };
-            box_lines(&mut gizmos, &cube, &Pose::IDENTITY, ACCENT);
+            box_lines(&mut gizmos, &cube, &Pose::IDENTITY, accent);
         }
     }
 }
@@ -1115,6 +1170,19 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q-278, Q-312 (§1.8 Comfort: "the ray and highlight colors have a high-contrast
+    /// alternative"): under high contrast the hovered and selected boxes are fully
+    /// saturated yellow and cyan, distinct from each other and from the defaults.
+    #[test]
+    fn highlight_colors_have_a_high_contrast_alternative() {
+        assert_eq!(highlight_colors(false), (HOVER, ACCENT));
+        let (hover, selected) = highlight_colors(true);
+        assert_eq!(hover, Color::srgb(1.0, 1.0, 0.0));
+        assert_eq!(selected, Color::srgb(0.0, 1.0, 1.0));
+        assert_ne!(hover, selected);
+        assert_ne!((hover, selected), highlight_colors(false));
+    }
 
     fn ray(o: Vec3, d: Vec3) -> (Vec3, Vec3) {
         (o, d.normalize())

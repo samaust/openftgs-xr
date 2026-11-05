@@ -13,15 +13,20 @@ use bevy::math::{Quat, Vec3};
 use bevy::mesh::{Mesh, Mesh3d};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::prelude::{
-    ChildOf, Commands, Component, Entity, Handle, Local, Query, Res, ResMut, Transform, Visibility,
-    With, Without,
+    ChildOf, Commands, Component, Entity, Handle, Local, Query, Res, ResMut, Resource, Transform,
+    Visibility, With, Without,
 };
 use bevy_mod_xr::session::XrTrackingRoot;
 
 use super::HandSpace;
 use super::hands::{LocatedHands, Ownership, WRIST, located, transform_of};
 use crate::HandSource;
-use crate::passthrough::{Environment, EnvironmentMode};
+
+/// Whether the hands and controllers are drawn: in VR mode, not in passthrough mode
+/// (§1.8). `passthrough`, after `tracking` in §2.1's order, sets it from `Environment`
+/// each frame before the meshes are placed; false until then.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DevicesDrawn(pub(crate) bool);
 
 /// The bones drawn as capsules, as joint pairs of XR\_EXT\_hand\_tracking's default set
 /// (source-log 276): the wrist to each metacarpal, then along each finger to its tip
@@ -54,10 +59,12 @@ pub(crate) const BONES: [(usize, usize); 24] = [
     (24, 25),
 ];
 
-/// The controller's box, metres: 3 × 3 cm across, 10 cm along the grip's −z (PRD #452).
+/// The controller's box, metres: 3 × 3 cm across, 10 cm along the grip's −z (PRD #452's
+/// geometry).
+// Q-316
 const BOX_M: Vec3 = Vec3::new(0.03, 0.03, 0.10);
 /// The ring around the box's front end: its radius and its tube's radius, metres.
-// Q-288
+// Q-288, Q-316
 const RING_M: (f32, f32) = (0.04, 0.004);
 /// The neutral grey (§1.8 "a neutral material").
 // Q-288
@@ -146,7 +153,7 @@ fn spawn(
 /// side's owner, in VR mode only; skipped in an app without meshes and materials.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn draw_hands_and_controllers(
-    env: Option<Res<Environment>>,
+    drawn: Option<Res<DevicesDrawn>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
     root: Query<Entity, With<XrTrackingRoot>>,
@@ -183,7 +190,7 @@ pub(crate) fn draw_hands_and_controllers(
         spawn(&mut commands, &mut meshes, &grey, root);
         return;
     }
-    let vr = env.is_some_and(|e| e.mode == EnvironmentMode::Vr);
+    let vr = drawn.is_some_and(|d| d.0);
     let shown = |side: usize, source: HandSource| vr && ownership.owners[side] == Some(source);
     for (e, mut capsule, mut t, mut vis) in &mut capsules {
         let (a, b) = BONES[capsule.bone];

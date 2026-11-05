@@ -12,7 +12,7 @@
 use bevy::app::{App, Plugin, Startup, Update};
 use bevy::asset::{Assets, RenderAssetUsages};
 use bevy::camera::visibility::Visibility;
-use bevy::camera::{Camera, Camera3d, PerspectiveProjection, Projection};
+use bevy::camera::{Camera3d, PerspectiveProjection, Projection};
 use bevy::color::Color;
 use bevy::ecs::prelude::*;
 use bevy::input::ButtonInput;
@@ -21,7 +21,7 @@ use bevy::math::{Quat, Vec2, Vec3};
 use bevy::mesh::{Mesh, Mesh3d, PrimitiveTopology};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::time::Time;
-use bevy::transform::components::{GlobalTransform, Transform};
+use bevy::transform::components::Transform;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use ftgsxr_core::{Aabb, Pose};
 use ftgsxr_io::{
@@ -30,7 +30,8 @@ use ftgsxr_io::{
 use ftgsxr_render::{OutputSpace, SortMode, SplatAsset, SplatCamera, SplatLoad, SplatModel};
 
 use crate::intent::{CameraCommand, Intent};
-use crate::manipulate::{Selected, pose_of, transform_of};
+use crate::library::LoadedModel;
+use crate::manipulate::{AHEAD_M, HeadCameras, Selected, head_pose, pose_of, transform_of};
 
 /// The user's origin: the desktop camera's parent, the XR tracking space (§2.1).
 #[derive(Component)]
@@ -667,13 +668,14 @@ fn run_camera(
     }
 }
 
-/// `Locomote`, `SnapTurn` and `Teleport` move the rig (E12, §1.8 Locomotion); the head is the active camera of the
-/// lowest order, as manipulate's fit (Q-180), else the rig itself.
+/// `Locomote`, `SnapTurn` and `Teleport` move the rig (E12, §1.8 Locomotion); the head is
+/// manipulate's (Q-180, Q-310: no image-target camera), else the rig itself.
+// Q-180, Q-310
 fn run_locomotion(
     mut intents: MessageReader<Intent>,
     loco: Res<Locomotion>,
     mut rigs: Query<&mut Transform, With<PlayerRig>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     time: Res<Time>,
 ) {
     let Ok(mut rig_t) = rigs.single_mut() else {
@@ -682,21 +684,7 @@ fn run_locomotion(
     };
     let dt = time.delta_secs();
     let mut rig = pose_of(&rig_t);
-    let head0 = cameras
-        .iter()
-        .filter(|(c, _)| c.is_active)
-        .min_by_key(|(c, _)| c.order)
-        .map(|(_, g)| {
-            let (_, r, t) = g.to_scale_rotation_translation();
-            (
-                rig.inverse(),
-                Pose {
-                    translation: t,
-                    rotation: r,
-                    scale: 1.0,
-                },
-            )
-        });
+    let head0 = head_pose(&cameras).map(|h| (rig.inverse(), h));
     for intent in intents.read() {
         if !matches!(
             intent,
@@ -739,9 +727,6 @@ fn teleport(rig: Pose, head: Pose, target: Vec3, loco: &Locomotion) -> Pose {
     }
 }
 
-/// §1.8 Session and spaces' distance of the recentered content ahead of the head.
-const RECENTER_AHEAD_M: f32 = 1.5;
-
 /// The head's horizontal forward, a unit vector: the horizontal part of its −z axis, or,
 /// when it looks straight up or down, of the direction its top points (negated when it
 /// looks up), as the fit's (Q-17).
@@ -758,11 +743,12 @@ fn horizontal_forward(head: &Pose) -> Vec3 {
 }
 
 /// `Intent::Recenter` (§1.8 Session and spaces): the content group translated so the
-/// selected instance's posed box center, else the mean of every instance's, stands 1.5 m
-/// ahead of the head along its yaw at the height it has; the group's rotation and scale
-/// are kept, so it stays yaw-only (Q-254). The head is the fit's (Q-180). It works in
-/// passthrough mode too (D-17), and moves nothing without an instance.
-// Q-283, Q-180, Q-254
+/// selected instance's posed box center, else the mean of every loaded instance's
+/// (`LoadedModel`), stands 1.5 m ahead of the head along its yaw at the height it has; the
+/// group's rotation and scale are kept, so it stays yaw-only (Q-254). The head is the
+/// fit's (Q-180, Q-310). It works in passthrough mode too (D-17), and moves nothing
+/// without an instance.
+// Q-283, Q-180, Q-254, Q-310
 #[allow(clippy::type_complexity)]
 fn recenter(
     mut intents: MessageReader<Intent>,
@@ -770,9 +756,9 @@ fn recenter(
     mut groups: Query<&mut Transform, (With<ContentGroup>, Without<SplatModel>)>,
     instances: Query<
         (&Transform, &SplatModel, Has<Selected>, Option<&ChildOf>),
-        Without<ContentGroup>,
+        (With<LoadedModel>, Without<ContentGroup>),
     >,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: HeadCameras,
     assets: Option<Res<Assets<SplatAsset>>>,
 ) {
     if intents
@@ -803,20 +789,8 @@ fn recenter(
         None if centers.is_empty() => return,
         None => centers.iter().map(|(c, _)| *c).sum::<Vec3>() / centers.len() as f32,
     };
-    let head = cameras
-        .iter()
-        .filter(|(c, _)| c.is_active)
-        .min_by_key(|(c, _)| c.order)
-        .map(|(_, g)| {
-            let (_, rotation, translation) = g.to_scale_rotation_translation();
-            Pose {
-                translation,
-                rotation,
-                scale: 1.0,
-            }
-        })
-        .unwrap_or(Pose::IDENTITY);
-    let target = head.translation + RECENTER_AHEAD_M * horizontal_forward(&head);
+    let head = head_pose(&cameras).unwrap_or(Pose::IDENTITY);
+    let target = head.translation + AHEAD_M * horizontal_forward(&head);
     let step = Vec3::new(target.x - center.x, 0.0, target.z - center.z);
     if step != Vec3::ZERO {
         group_t.translation += step;
