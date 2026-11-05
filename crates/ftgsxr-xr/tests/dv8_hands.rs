@@ -73,7 +73,7 @@ fn dv_dv8_joints_and_aim_state_arrive_a_pinch_selects_a_grab_pulses() {
         "the pinch selected: {detail}"
     );
     assert!(
-        detail.contains("pulse: no controller") || detail.contains("succeeded"),
+        detail.contains("pulse: no controller") || detail.contains("controller, applied"),
         "the pulse clause: {detail}"
     );
 }
