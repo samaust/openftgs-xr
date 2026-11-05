@@ -24,6 +24,7 @@ use ::bevy::render::renderer::{RenderContext, ViewQuery};
 use ::bevy::render::sync_world::RenderEntity;
 use ::bevy::render::view::{ExtractedView, Msaa, ViewDepthTexture, ViewTarget};
 use ::bevy::render::{Extract, ExtractSchedule, Render, RenderSystems};
+use ::bevy::tasks::{AsyncComputeTaskPool, Task};
 use ::bevy::transform::components::GlobalTransform;
 use ftgsxr_core::Pose;
 
@@ -40,7 +41,7 @@ use crate::gpu::headless::sort_pose;
 use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
 use crate::gpu::{
     Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, Overlays, QualityTier,
-    RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
+    RenderError, RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
 };
 
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
@@ -150,6 +151,10 @@ struct ViewState {
 struct Views {
     dev: Option<Arc<SplatDevice>>,
     passes: HashMap<(TextureFormat, bool), Arc<SplatPasses>>,
+    /// The `LinearOver` passes compiling ahead on a task, by the same key (Q-325).
+    warming: HashMap<(TextureFormat, bool), Task<Result<SplatPasses, RenderError>>>,
+    /// Whether this device's and tier's warm-up has started (Q-325).
+    warm_started: bool,
     /// The depth copy's pipeline (Q-164), made on first use.
     depth_copy: Option<Arc<DepthCopy>>,
     states: HashMap<Entity, ViewState>,
@@ -306,6 +311,10 @@ fn prepare_views(
             ..Views::default()
         };
     }
+    if !views.warm_started {
+        views.warm_started = true;
+        warm_up(&mut views, &dev, &tier.0);
+    }
     let live: HashSet<Entity> = extracted.cameras.keys().copied().collect();
     views.states.retain(|e, _| live.contains(e));
     for (&entity, &camera) in &extracted.cameras {
@@ -331,6 +340,27 @@ fn prepare_views(
                 views.states.remove(&entity);
             }
         }
+    }
+}
+
+/// Starts compiling the `LinearOver` passes of both sort modes on the async compute pool
+/// (Q-325): the 0.3 s of pipeline compiles on the Quest 3 then run while the session
+/// starts, not in the first frame a splat camera draws, nor in the frame the governor
+/// first switches the sort mode. `prepare_view` takes a key's result, waiting for it if
+/// it is not ready, so the first frame still draws.
+// Q-325
+fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
+    let pool = AsyncComputeTaskPool::get();
+    for sort in [SortMode::PerView, SortMode::SharedCenter] {
+        let dev = Arc::clone(dev);
+        let mut view_tier = tier.clone();
+        view_tier.sort_mode = sort;
+        let task = pool.spawn(async move {
+            SplatPasses::new(&dev, LAYER_FORMAT, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
+        });
+        views
+            .warming
+            .insert((LAYER_FORMAT, sort == SortMode::SharedCenter), task);
     }
 }
 
@@ -429,11 +459,15 @@ fn prepare_view(
     let passes = match views.passes.get(&key) {
         Some(p) => Arc::clone(p),
         None => {
-            let p = SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
-                .map_err(|e| {
-                    error!("splat passes: {}: {}", e.code(), e.user_text());
-                    "the splat passes did not compile"
-                })?;
+            // Q-325: the warm-up's passes when it compiled this key.
+            let made = match views.warming.remove(&key) {
+                Some(task) => ::bevy::tasks::block_on(task),
+                None => SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier),
+            };
+            let p = made.map_err(|e| {
+                error!("splat passes: {}: {}", e.code(), e.user_text());
+                "the splat passes did not compile"
+            })?;
             let p = Arc::new(p);
             views.passes.insert(key, Arc::clone(&p));
             p
