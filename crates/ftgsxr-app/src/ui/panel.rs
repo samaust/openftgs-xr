@@ -147,9 +147,9 @@ pub(super) fn idle_hidden(
     mut cameras: Query<(&PanelCamera, &mut Camera)>,
     quads: Query<&Visibility>,
 ) {
-    for (pc, mut camera) in &mut cameras {
+    for (panel, mut camera) in &mut cameras {
         let shown = quads
-            .get(pc.quad)
+            .get(panel.quad)
             .map_or(true, |v| *v != Visibility::Hidden);
         if camera.is_active != shown {
             camera.is_active = shown;
@@ -157,14 +157,15 @@ pub(super) fn idle_hidden(
     }
 }
 
-/// The context of the main panel's (or the wrist menu's) camera, while it is active
-/// (Q-324: an idle camera's pass draws nothing).
-fn context(world: &mut World, wrist: bool) -> Option<(Entity, egui::Context)> {
+/// The context of the main panel's (or the wrist menu's) camera, and whether the camera
+/// is active (Q-324: an idle camera's pass draws nothing, but its font is installed, so
+/// the first frame a quad shows has it).
+fn context(world: &mut World, wrist: bool) -> Option<(Entity, egui::Context, bool)> {
     world
         .query::<(Entity, &PanelCamera, &Camera, &mut EguiContext)>()
         .iter_mut(world)
-        .find(|(_, p, c, _)| p.wrist == wrist && c.is_active)
-        .map(|(e, _, _, mut c)| (e, c.get_mut().clone()))
+        .find(|(_, p, _, _)| p.wrist == wrist)
+        .map(|(e, _, cam, mut c)| (e, c.get_mut().clone(), cam.is_active))
 }
 
 /// Installs the system font in a new context once (Q-211); whether it has one.
@@ -192,10 +193,11 @@ pub(super) fn draw_panel(
     mut font: Local<Option<(Entity, bool)>>,
     mut hovered: Local<Option<egui::Id>>,
 ) {
-    let Some((entity, ctx)) = context(world, false) else {
+    let Some((entity, ctx, active)) = context(world, false) else {
         return;
     };
-    if !font_for(&mut font, entity, &ctx) {
+    // Q-324: the font first, so a summoned panel's first frame has it.
+    if !font_for(&mut font, entity, &ctx) || !active {
         return;
     }
     let mut ui = root(&ctx, "ftgsxr-panel");
@@ -357,10 +359,11 @@ pub(crate) fn wrist_intents(b: WristButton, selected: &[Entity]) -> Vec<Intent> 
 
 /// The wrist menu on its context, run in `WristPass`: a pressed button's intents.
 pub(super) fn draw_wrist(world: &mut World, mut font: Local<Option<(Entity, bool)>>) {
-    let Some((entity, ctx)) = context(world, true) else {
+    let Some((entity, ctx, active)) = context(world, true) else {
         return;
     };
-    if !font_for(&mut font, entity, &ctx) {
+    // Q-324: the font first, so the wrist menu's first frame has it.
+    if !font_for(&mut font, entity, &ctx) || !active {
         return;
     }
     let playing = world

@@ -174,7 +174,8 @@ fn gpu_panel_mode_a_ray_click_on_the_playback_tabs_play_button_toggles_the_clock
 
 /// #269, Q-324: a hidden quad's panel camera is inactive and its egui pass draws
 /// nothing, so the headset spends no frame time on a panel no one sees; the frame the
-/// quad shows again, its camera is active and the tab row draws.
+/// quad shows, its camera is active and the tab row draws. The quad starts hidden, as
+/// `xr::panel` spawns it (§1.8: hidden until summoned), so its first summon is checked.
 #[test]
 #[ignore = "gpu"]
 fn gpu_panel_mode_a_hidden_quad_idles_its_camera_until_shown() {
@@ -206,7 +207,7 @@ fn gpu_panel_mode_a_hidden_quad_idles_its_camera_until_shown() {
             },
             pose,
             GlobalTransform::from(pose),
-            Visibility::Visible,
+            Visibility::Hidden,
         ))
         .id();
     t.app.insert_resource(UiSurface::Panel {
@@ -239,34 +240,31 @@ fn gpu_panel_mode_a_hidden_quad_idles_its_camera_until_shown() {
             .iter()
             .any(|(s, _)| s == label)
     };
+    let show = |t: &mut TestApp, v: Visibility| {
+        *t.app
+            .world_mut()
+            .get_mut::<Visibility>(panel)
+            .expect("the quad") = v;
+        t.frames(1);
+    };
+    let nothing_drawn = |t: &TestApp| t.app.world().resource::<Drawn>().0.is_empty();
 
     t.frames(5);
-    assert!(active(&mut t), "a shown quad's camera is active");
-    assert!(drawn(&t, "Library"), "a shown quad draws its tab row");
-
-    *t.app
-        .world_mut()
-        .get_mut::<Visibility>(panel)
-        .expect("the quad") = Visibility::Hidden;
-    t.frames(1);
     assert!(!active(&mut t), "a hidden quad's camera is inactive");
-    assert!(
-        t.app.world().resource::<Drawn>().0.is_empty(),
-        "a hidden quad's pass draws nothing: {:?}",
-        t.app.world().resource::<Drawn>().0
-    );
+    assert!(nothing_drawn(&t), "a hidden quad's pass draws nothing");
 
-    *t.app
-        .world_mut()
-        .get_mut::<Visibility>(panel)
-        .expect("the quad") = Visibility::Visible;
-    t.frames(1);
+    show(&mut t, Visibility::Visible);
     assert!(
         active(&mut t),
-        "the camera is active the frame the quad shows"
+        "the camera is active the frame the quad first shows"
     );
     assert!(
         drawn(&t, "Library"),
-        "the tab row draws the frame the quad shows"
+        "the tab row draws the frame the quad first shows: {:?}",
+        t.app.world().resource::<Drawn>().0
     );
+
+    show(&mut t, Visibility::Hidden);
+    assert!(!active(&mut t), "a quad hidden again idles its camera");
+    assert!(nothing_drawn(&t), "a quad hidden again draws nothing");
 }
