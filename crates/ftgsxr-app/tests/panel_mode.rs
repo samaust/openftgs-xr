@@ -11,7 +11,8 @@ use crate::support;
 
 use bevy::app::PostUpdate;
 use bevy::asset::{Assets, RenderAssetUsages};
-use bevy::camera::RenderTarget;
+use bevy::camera::visibility::Visibility;
+use bevy::camera::{Camera, RenderTarget};
 use bevy::ecs::prelude::*;
 use bevy::image::Image;
 use bevy::math::{Quat, UVec2, Vec2, Vec3};
@@ -177,9 +178,6 @@ fn gpu_panel_mode_a_ray_click_on_the_playback_tabs_play_button_toggles_the_clock
 #[test]
 #[ignore = "gpu"]
 fn gpu_panel_mode_a_hidden_quad_idles_its_camera_until_shown() {
-    use bevy::camera::Camera;
-    use bevy::camera::visibility::Visibility;
-
     let _layer = layer_messages(); // R-16, Q-105
     let mut t = TestApp::gpu_before("panel_mode_hidden", |app| {
         app.insert_resource(Headset);
