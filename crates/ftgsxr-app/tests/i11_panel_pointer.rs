@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! I-11 through bevy_egui's render-to-image path (§1.8, D-21; PRD #275's spike check 2,
-//! `gpu_`): a second egui context renders to `WorldPanel.image`; a ray at known quad
-//! coordinates moves its pointer to the expected pixel (1 px) and a select press and
-//! release toggle a test button. The `cpu` clause: `panel_hit` maps a ray at known quad
+//! `gpu_`): a second egui context renders to `WorldPanel.image`; `PanelPointer` messages
+//! at a ray's hit on the quad (Q-263: the XR adapter tests the ray against the panel and
+//! writes the hit pixel) move its pointer to the expected pixel (1 px) and a select press
+//! and release toggle a test button. The `cpu` clause: `panel_hit` maps a ray at known quad
 //! coordinates to the expected pixel (1 px), and pointer events at that pixel click a
 //! button in a second egui context.
 
@@ -18,7 +19,7 @@ use bevy::math::{Quat, UVec2, Vec2, Vec3};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::transform::components::{GlobalTransform, Transform};
 use bevy_egui::{EguiContext, EguiGlobalSettings, EguiSchedule, egui};
-use ftgsxr_app::{Hand, Intent, UiSurface, WorldPanel, panel_hit};
+use ftgsxr_app::{Hand, PanelPointer, WorldPanel, panel_hit};
 use ftgsxr_core::Pose;
 use ftgsxr_testkit::layer_messages;
 use support::TestApp;
@@ -88,11 +89,6 @@ fn gpu_i11_a_ray_clicks_a_button_in_the_panel_context() {
         .world_mut()
         .spawn((WorldPanel { image }, pose, GlobalTransform::from(pose)))
         .id();
-    t.app.insert_resource(UiSurface::Panel {
-        entity: panel,
-        size_px,
-        size_m,
-    });
     t.frames(3);
     // The ray aims at pixel (640.5, 320.25).
     let target = Vec2::new(640.5, 320.25);
@@ -102,20 +98,24 @@ fn gpu_i11_a_ray_clicks_a_button_in_the_panel_context() {
     );
     let origin = Vec3::new(0.0, 1.6, 0.0);
     let dir = (pose.translation + pose.rotation * local.extend(0.0) - origin).normalize();
-    let aim = Intent::Pointer {
-        hand: Hand::Right,
-        origin,
-        dir,
+    let at = Pose {
+        translation: pose.translation,
+        rotation: pose.rotation,
+        scale: 1.0,
     };
-    for pressed in [None, Some(true), Some(false), None] {
-        t.app.world_mut().write_message(aim);
-        if let Some(pressed) = pressed {
-            t.app.world_mut().write_message(Intent::Select {
-                hand: Hand::Right,
-                pressed,
-            });
-        }
-        t.frames(2);
+    let pixel = panel_hit(origin, dir, at, size_m, size_px).expect("the ray hits the quad");
+    // Q-263: the adapter writes one every frame the ray is on the quad; the presses
+    // in their own frames.
+    for select in [vec![], vec![true], vec![], vec![false], vec![], vec![]] {
+        t.app.world_mut().write_message(PanelPointer {
+            hand: Hand::Right,
+            panel,
+            pixel,
+            select,
+            grab: vec![],
+            scroll_px: 0.0,
+        });
+        t.frames(1);
     }
     let mut q = t
         .app

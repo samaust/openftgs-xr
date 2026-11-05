@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::task::Poll;
 
-use bevy::prelude::Resource;
+use bevy::prelude::{Message, Resource};
 use ftgsxr_core::Camera;
 use ftgsxr_io::{AppPaths, DocumentProvider, ModelRef};
 
@@ -32,6 +32,19 @@ pub enum Permission {
     /// Spatial anchors.
     Anchors,
 }
+
+/// Asks for a denied permission again (Q-276's "ask again", Q-322): the main panel's
+/// Comfort tab writes it, and the code that asked for the permission (the XR crate's
+/// hands for `HandTracking`) asks once more.
+// Q-322
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AskPermissionAgain(pub Permission);
+
+/// The permissions denied in this run and not asked again since, kept by the code that
+/// asks for them; the Comfort tab offers "ask again" for each it knows (Q-322).
+// Q-322
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeniedPermissions(pub Vec<Permission>);
 
 /// A pending pick, polled with `Platform::poll_pick`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -91,3 +104,11 @@ pub trait CameraFrames: Send + Sync {
 /// The platform in the world.
 #[derive(Resource, Clone)]
 pub struct PlatformRes(pub Arc<dyn Platform>);
+
+/// The headset marker: present when the app runs on the headset, so panel mode, spatial
+/// audio and D-11's auto-fit apply (§1.5 Poses, §1.8 User interface, §1.10). The Quest's
+/// `main` inserts it before `AppPlugin`, as do the tests that need it; `play` never does,
+/// so `play --xr` keeps the dock, stereo audio and no auto-fit.
+// Q-266
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Headset;

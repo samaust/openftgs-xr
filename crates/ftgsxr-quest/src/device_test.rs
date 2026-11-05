@@ -9,11 +9,13 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 
 mod dv1;
+mod dv10;
 mod dv12;
 mod dv13;
 mod dv2;
 mod dv3;
 mod dv4;
+mod dv8;
 
 /// The intent extra naming the test (§3.4).
 pub(crate) const EXTRA: &str = "ftgsxr-test";
@@ -53,9 +55,11 @@ pub(crate) fn verdict(name: &str, pass: bool, detail: &str) {
 pub(crate) fn add(app: &mut App, name: &str) {
     match name {
         dv1::NAME => dv1::add(app),
+        dv10::NAME => dv10::add(app),
         dv2::NAME => dv2::add(app),
         dv12::NAME => dv12::add(app),
         dv13::NAME => dv13::add(app),
+        dv8::NAME => dv8::add(app),
         _ => verdict(name, false, "unknown test"),
     }
 }

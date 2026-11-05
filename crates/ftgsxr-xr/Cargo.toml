@@ -24,8 +24,14 @@ path = "tests/integration.rs"
 # the render crate for `SplatCamera`.
 # #227: the core crate for `Pose` (`TrackedHand`, `XrHands`).
 [dependencies]
-# §2.1
-bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log"] }
+# #454: `bevy_pbr` for the hand capsules, the controller meshes, the comfort quads and the
+# panel's quad (PRD #452; the rays are gizmos), as Q-154's precedent allows a band row's
+# features.
+# #460: `bevy_gizmos` and `bevy_color` for `xr_input`'s rays and teleport arc, as
+# `ftgsxr-app` has them (Q-154's precedent).
+# §2.1; Q-321: bevy_pbr, bevy_gizmos and bevy_color, approved by the owner.
+# Q-321
+bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log", "bevy_pbr", "bevy_gizmos", "bevy_color"] }
 bevy_mod_openxr.workspace = true
 bevy_mod_xr.workspace = true
 ftgsxr-app.workspace = true

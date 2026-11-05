@@ -182,7 +182,7 @@ impl HttpClient {
 
 /// Reuses the complete cached file of `entry`, whose record is `record`: refreshes its
 /// fetch time, the entry's last use (Q-42), and reports its size once.
-fn reuse(
+pub(super) fn reuse(
     entry: &Entry,
     mut record: Record,
     progress: &mut dyn FnMut(Progress),

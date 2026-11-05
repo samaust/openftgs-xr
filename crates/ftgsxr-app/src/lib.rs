@@ -55,9 +55,11 @@ pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick
 pub use rig::{
     ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
 };
-// §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`.
+// §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`; Q-274:
+// `HudHandSource`.
 pub use ui::{
-    HudData, HudInstance, Toast, ToastLevel, UiSurface, WorldPanel, WristMenu, panel_hit,
+    HudData, HudHandSource, HudInstance, PanelPointer, Toast, ToastLevel, UiSurface, WorldPanel,
+    WristMenu, panel_hit,
 };
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;
@@ -66,10 +68,11 @@ pub use capture::ScreenshotRequest;
 pub use persist::{
     PersistCommand, SettingsPath, SettingsRes, SettingsWarnings, apply_scene, scene_from_world,
 };
-// §2.1 `ftgsxr_app::platform`.
+// §2.1 `ftgsxr_app::platform`; Q-266: `Headset`; Q-322: `AskPermissionAgain`,
+// `DeniedPermissions`.
 pub use platform::{
-    CameraFrames, CameraThumb, Permission, PermissionHandle, PickHandle, PickKind, Platform,
-    PlatformRes,
+    AskPermissionAgain, CameraFrames, CameraThumb, DeniedPermissions, Headset, Permission,
+    PermissionHandle, PickHandle, PickKind, Platform, PlatformRes,
 };
 // §2.1 `ftgsxr_app::plugin`; Q-151: `init_desktop_log` and the `IoError` it returns.
 pub use ftgsxr_io::IoError;
@@ -77,6 +80,10 @@ pub use plugin::{AppPlugin, init_desktop_log};
 // Q-168: what `ftgsxr-desktop` names for `AppPlugin.initial` and `LinuxPlatform`, for
 // callers that depend on the app alone (§2.1's `ftgsxr-desktop`), as Q-129.
 pub use ftgsxr_io::{DocumentProvider, ModelRef, Url};
+// Q-296: what `ftgsxr_quest::QuestPlatform`'s `DocumentProvider` returns and classifies
+// with, and the source Dv-10's runner adds (§2.1's `ftgsxr-quest` depends on the app
+// alone), as Q-168.
+pub use ftgsxr_io::{Entry, EntryKind, SourceSpec, classify_name};
 // Q-89: the tier `cmd_render` (and M-4's `AppPlugin`) takes, for callers that depend on
 // the app alone (§2.1's `ftgsxr-desktop`).
 pub use ftgsxr_render::QualityTier;

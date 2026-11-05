@@ -25,7 +25,7 @@ use crate::platform::PickKind;
 use crate::playback::{Playback, RangeSetting, Scrubbing};
 
 /// What the user did this frame.
-enum Out {
+pub(super) enum Out {
     Intent(Intent),
     Library(LibraryCommand),
     Locate(usize),
@@ -120,6 +120,11 @@ pub(super) fn draw(
         out.push(Out::Cue(UiCue::Hover));
     }
     *hovered = now_hovered;
+    send(world, out);
+}
+
+/// Sends what the user did, after the frame's drawing.
+pub(super) fn send(world: &mut World, out: Vec<Out>) {
     for o in out {
         match o {
             Out::Intent(i) => {
@@ -161,7 +166,7 @@ pub(super) fn draw(
 }
 
 /// A button that reports its hover and its click's sound.
-fn button(
+pub(super) fn button(
     ui: &mut egui::Ui,
     text: &str,
     out: &mut Vec<Out>,
@@ -180,15 +185,7 @@ fn button(
 
 /// The bar above the viewport: the dock's toggle, play and pause, the time readout.
 fn bar(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Option<egui::Id>) {
-    let (t, len, playing) = world
-        .get_resource::<Playback>()
-        .map_or((0.0, 0.0, false), |p| {
-            (
-                p.clock.time(),
-                p.clock.length(),
-                p.clock.state() == PlayState::Playing,
-            )
-        });
+    let (t, len, playing) = clock_state(world);
     let readout = selected_readout(world, t);
     egui::Panel::top("ftgsxr-bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
@@ -196,29 +193,54 @@ fn bar(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Optio
             if button(ui, if open { "◀" } else { "▶" }, out, hv) {
                 world.resource_mut::<UiState>().dock_open = !open;
             }
-            if button(ui, if playing { "Pause" } else { "Play" }, out, hv) {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::Toggle)));
-            }
-            if button(ui, "−1", out, hv) {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::StepFrames(
-                    -1,
-                ))));
-            }
-            if button(ui, "+1", out, hv) {
-                out.push(Out::Intent(Intent::Playback(PlaybackCommand::StepFrames(
-                    1,
-                ))));
-            }
-            ui.label(format!("T = {t:.3} s / {len:.3} s"));
-            if let Some((text, italic)) = readout {
-                let mut r = egui::RichText::new(text);
-                if italic {
-                    r = r.italics();
-                }
-                ui.label(r);
-            }
+            play_items(ui, (t, len, playing), readout, out, hv);
         });
     });
+}
+
+/// The clock's playing state: (T, the length, playing).
+fn clock_state(world: &World) -> (f64, f64, bool) {
+    world
+        .get_resource::<Playback>()
+        .map_or((0.0, 0.0, false), |p| {
+            (
+                p.clock.time(),
+                p.clock.length(),
+                p.clock.state() == PlayState::Playing,
+            )
+        })
+}
+
+/// The play controls and the time readout: the screen's bar and the main panel's
+/// Playback tab (§1.7 Panels, §1.8 User interface).
+fn play_items(
+    ui: &mut egui::Ui,
+    (t, len, playing): (f64, f64, bool),
+    readout: Option<(String, bool)>,
+    out: &mut Vec<Out>,
+    hv: &mut Option<egui::Id>,
+) {
+    if button(ui, if playing { "Pause" } else { "Play" }, out, hv) {
+        out.push(Out::Intent(Intent::Playback(PlaybackCommand::Toggle)));
+    }
+    if button(ui, "−1", out, hv) {
+        out.push(Out::Intent(Intent::Playback(PlaybackCommand::StepFrames(
+            -1,
+        ))));
+    }
+    if button(ui, "+1", out, hv) {
+        out.push(Out::Intent(Intent::Playback(PlaybackCommand::StepFrames(
+            1,
+        ))));
+    }
+    ui.label(format!("T = {t:.3} s / {len:.3} s"));
+    if let Some((text, italic)) = readout {
+        let mut r = egui::RichText::new(text);
+        if italic {
+            r = r.italics();
+        }
+        ui.label(r);
+    }
 }
 
 /// The selected instance's time in its unit (three decimals) and frame number (§1.6),
@@ -241,8 +263,8 @@ fn selected_readout(world: &mut World, t: f64) -> Option<(String, bool)> {
     ))
 }
 
-/// The toast line at the bottom of the window.
-fn toast_line(world: &mut World, ctx: &mut egui::Ui) {
+/// The toast line at the bottom of the window or the main panel.
+pub(super) fn toast_line(world: &mut World, ctx: &mut egui::Ui) {
     let line = world.resource::<UiState>().line.clone();
     if line.is_empty() {
         return;
@@ -332,42 +354,92 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
             }
         });
         ui.separator();
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            match tab {
-                Tab::Library => {
-                    library_tab(world, ui, out, hv);
-                    request_replay(world, ui, out, hv);
-                }
-                Tab::Scene => scene_tab(world, ui, out, hv),
-                Tab::Playback => playback_tab(world, ui, out, hv),
-                Tab::Display => display_tab(world, ui, out, hv),
-                // §1.1, §1.7 Panels, §1.15 E-XR-UNSUPPORTED: no passthrough control on
-                // the desktop (absent, not disabled); `persist` adds the background
-                // and the grid.
-                Tab::Environment => {}
-                Tab::Settings => {
-                    ui.label("Settings (§1.11)");
-                }
-                Tab::Help => {
-                    ui.label(format!("openftgs-xr {}", env!("CARGO_PKG_VERSION")));
-                    ui.label("F1 Help · F2 hide the UI · F3 HUD · F11 fullscreen");
-                }
-            }
-            let hooks = world
-                .resource::<DockHooks>()
-                .0
-                .get(&tab)
-                .cloned()
-                .unwrap_or_default();
-            for h in hooks {
-                ui.separator();
-                h(world, ui);
-            }
-        });
+        egui::ScrollArea::vertical().show(ui, |ui| tab_body(world, ui, tab, out, hv, false));
     });
     if let Some(w) = dragged {
         world.resource_mut::<UiState>().dock_width = w;
     }
+}
+
+/// A tab's content on the screen's dock or, with `panel`, on the main panel (§1.8 User
+/// interface): there the play controls join the Playback tab, the training cameras and
+/// the request replay are sub-pages opened by a button, and the mouse-only items (Help's
+/// keyboard shortcuts) are left out.
+// Q-294
+pub(super) fn tab_body(
+    world: &mut World,
+    ui: &mut egui::Ui,
+    tab: Tab,
+    out: &mut Vec<Out>,
+    hv: &mut Option<egui::Id>,
+    panel: bool,
+) {
+    match tab {
+        Tab::Library => {
+            library_tab(world, ui, out, hv);
+            if !panel {
+                request_replay(world, ui, out, hv);
+            } else if has_requests(world) && button(ui, "Render requests…", out, hv) {
+                world.resource_mut::<UiState>().page = Some(super::Page::Replay);
+            }
+        }
+        Tab::Scene => {
+            scene_tab(world, ui, out, hv);
+            if !panel {
+                training_cameras(world, ui, out, hv);
+            } else if has_training_cameras(world) && button(ui, "Training cameras…", out, hv) {
+                world.resource_mut::<UiState>().page = Some(super::Page::Cameras);
+            }
+        }
+        Tab::Playback => {
+            if panel {
+                let clock = clock_state(world);
+                let readout = selected_readout(world, clock.0);
+                ui.horizontal_wrapped(|ui| play_items(ui, clock, readout, out, hv));
+            }
+            playback_tab(world, ui, out, hv);
+        }
+        Tab::Display => display_tab(world, ui, out, hv),
+        // §1.1, §1.7 Panels, §1.15 E-XR-UNSUPPORTED: no passthrough control on
+        // the desktop (absent, not disabled); `persist` adds the background
+        // and the grid. On the main panel, §1.8's recenter (D-17, D-24), which has
+        // no desktop binding (Appendix D.1).
+        // Q-311
+        Tab::Environment => {
+            if panel && button(ui, "Recenter", out, hv) {
+                out.push(Out::Intent(Intent::Recenter));
+            }
+        }
+        Tab::Settings => {
+            ui.label("Settings (§1.11)");
+        }
+        Tab::Help => {
+            ui.label(format!("openftgs-xr {}", env!("CARGO_PKG_VERSION")));
+            if !panel {
+                ui.label("F1 Help · F2 hide the UI · F3 HUD · F11 fullscreen");
+            }
+        }
+        // §1.8 Comfort and accessibility: `persist`'s section.
+        Tab::Comfort => {}
+    }
+    let hooks = world.resource::<DockHooks>().sections(tab, panel);
+    for h in hooks {
+        ui.separator();
+        h(world, ui);
+    }
+}
+
+/// Whether an instance offers training cameras (the Scene tab's sub-page).
+fn has_training_cameras(world: &mut World) -> bool {
+    let mut q = world.query::<(&LoadedModel, &TrainingCameras)>();
+    q.iter(world).next().is_some()
+}
+
+/// Whether a render request can be opened or is open (the Library tab's sub-page).
+fn has_requests(world: &World) -> bool {
+    world
+        .get_resource::<TrainingView>()
+        .is_some_and(|v| !v.requests.is_empty() || v.replay.is_some())
 }
 
 /// The source a Library tab entry names: an `http(s)` URL is an HTTP index, an absolute
@@ -747,7 +819,6 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
     for x in extras_out {
         world.write_message(x);
     }
-    training_cameras(world, ui, out, hv);
     for (e, l) in lightings {
         if let Ok(mut ec) = world.get_entity_mut(e) {
             ec.insert(InstanceLighting::bundle(l));
@@ -760,7 +831,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
 
 /// §1.7 Training cameras: each instance's manifest images by split, a jump per image,
 /// the frustums toggle.
-fn training_cameras(
+pub(super) fn training_cameras(
     world: &mut World,
     ui: &mut egui::Ui,
     out: &mut Vec<Out>,
@@ -831,7 +902,7 @@ fn training_cameras(
 
 /// §1.7: a `ftgs-render-request` found in a directory source, replayed item by item on
 /// the selected instance, else the first loaded one (Q-219).
-fn request_replay(
+pub(super) fn request_replay(
     world: &mut World,
     ui: &mut egui::Ui,
     out: &mut Vec<Out>,
@@ -1073,6 +1144,19 @@ fn display_tab(
 
 /// The open question as a dialog.
 fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
+    if world.resource::<UiState>().confirm.is_none() {
+        return;
+    }
+    egui::Window::new("Confirm")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| confirm_body(world, ui, out));
+}
+
+/// The open question and its Yes and No: the screen's dialog, the main panel's
+/// sub-page (§1.8 User interface).
+pub(super) fn confirm_body(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>) {
     let Some(q) = world.resource::<UiState>().confirm.clone() else {
         return;
     };
@@ -1080,11 +1164,8 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
         Confirm::LoadScene(_) => load_choices(world),
         Confirm::Unload(_) | Confirm::Replace { .. } => Vec::new(),
     };
-    egui::Window::new("Confirm")
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .show(ctx, |ui| {
+    {
+        {
             match &q {
                 Confirm::Unload(e) => {
                     let name = world
@@ -1122,7 +1203,8 @@ fn dialog(world: &mut World, ctx: &egui::Context, out: &mut Vec<Out>) {
                     out.push(Out::Answer(false));
                 }
             });
-        });
+        }
+    }
 }
 
 /// The scenes the load dialog offers (§1.5 Scene files, Q-200, #417): the eight most

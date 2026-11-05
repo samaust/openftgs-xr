@@ -5,23 +5,31 @@
 //! played on `PlayUiSound`, and a `Soundtrack` for every instance whose `LoadedModel`
 //! names one, decoded off the main thread and kept in step with the clock. Everything
 //! reaches the system's output through the `AudioOutput` port (Q-149, Q-187): the kira
-//! adapter on the desktop, `StubAudioOutput` in the tests. Stereo only; spatialization is
-//! M-5's.
+//! adapter on the desktop and the Quest, `StubAudioOutput` in the tests. On the headset
+//! (the `Headset` marker, Q-266) with `spatial` on, each soundtrack's gain and pan follow
+//! the listener and its instance's box every frame (Q-268, Q-281); elsewhere stereo.
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
+use bevy::asset::Assets;
+use bevy::camera::Camera;
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
+use bevy::math::Vec3;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, poll_once};
+use bevy::transform::TransformSystems;
+use bevy::transform::components::GlobalTransform;
 use ftgsxr_core::PlayState;
 use ftgsxr_io::{IoError, ModelBytes, ModelRef, SoundSwitches, open_ref};
+use ftgsxr_render::{SplatAsset, SplatCamera, SplatModel};
 
-use crate::intent::{Feature, Intent, VolumeChannel};
+use crate::intent::{Feature, Hand, Intent, VolumeChannel};
 use crate::library::LoadedModel;
-use crate::platform::PlatformRes;
+use crate::manipulate::Grabbed;
+use crate::platform::{Headset, PlatformRes};
 use crate::playback::{Playback, Scrubbing};
 use crate::ui::{DockHooks, Tab, ToastRequest, UiCue};
 
@@ -39,7 +47,7 @@ pub struct AudioState {
     pub ui: f32,
     /// The soundtracks' gain.
     pub soundtrack: f32,
-    /// Spatialized soundtracks on the headset (M-5); the desktop plays stereo.
+    /// Spatialized soundtracks on the headset (Q-266, Q-268); the desktop plays stereo.
     pub spatial: bool,
     /// The per-sound switches.
     pub sounds: SoundSwitches,
@@ -171,6 +179,10 @@ pub trait AudioOutput: Send + Sync {
     fn position(&self, sink: SinkId) -> Option<f64>;
     /// Sets a sink's gain.
     fn set_gain(&self, sink: SinkId, gain: f32);
+    /// Sets a sink's stereo pan: −1 the left speaker only, 0 centered, 1 the right
+    /// speaker only (§1.10's spatial soundtracks on the headset).
+    // Q-268
+    fn set_panning(&self, sink: SinkId, pan: f32);
 }
 
 /// The audio output in use. `AppPlugin` inserts the kira adapter unless the resource
@@ -187,6 +199,9 @@ pub struct StubSink {
     pub playing: bool,
     /// Its gain.
     pub gain: f32,
+    /// Its pan in \[−1, 1\], as last set; 0 until then (Q-268).
+    // Q-280
+    pub pan: f32,
     /// The size of the file it was made from.
     pub bytes: usize,
 }
@@ -303,6 +318,7 @@ impl AudioOutput for StubAudioOutput {
                 position: 0.0,
                 playing: false,
                 gain: 0.0,
+                pan: 0.0,
                 bytes: bytes.len(),
             },
         );
@@ -338,6 +354,12 @@ impl AudioOutput for StubAudioOutput {
     fn set_gain(&self, sink: SinkId, gain: f32) {
         if let Some(s) = self.lock().sinks.get_mut(&sink) {
             s.gain = gain;
+        }
+    }
+
+    fn set_panning(&self, sink: SinkId, pan: f32) {
+        if let Some(s) = self.lock().sinks.get_mut(&sink) {
+            s.pan = pan;
         }
     }
 }
@@ -417,15 +439,26 @@ impl Plugin for AudioPlugin {
             .add_systems(Startup, start)
             .add_systems(
                 Update,
-                (ui_bridge, run_intents, play_ui_sounds, attach, decode).chain(),
+                (
+                    ui_bridge,
+                    run_intents,
+                    grab_sounds,
+                    play_ui_sounds,
+                    attach,
+                    decode,
+                )
+                    .chain(),
             )
             // After playback's `advance` (in `Update`): the clock of this frame; after
             // egui's pass: this frame's scrub (Q-246).
             .add_systems(
                 PostUpdate,
-                (apply_gains, follow_clock)
+                // `spatialize` last: `apply_gains` and `follow_clock` set the plain gain,
+                // which it attenuates; after the propagation: this frame's poses.
+                (apply_gains, follow_clock, spatialize)
                     .chain()
-                    .after(bevy_egui::EguiPostUpdateSet::EndPass),
+                    .after(bevy_egui::EguiPostUpdateSet::EndPass)
+                    .after(TransformSystems::Propagate),
             );
     }
 }
@@ -531,16 +564,10 @@ fn ui_bridge(
     }
 }
 
-/// The kira adapter on the desktop (PRD #275's spike check 3: not on Android until M-5).
-#[cfg(not(target_os = "android"))]
+/// The kira adapter, on the desktop and, since M-5, on Android (PRD #452's spike check 1,
+/// #454).
 fn default_output() -> Arc<dyn AudioOutput> {
     Arc::new(kira_output::KiraOutput::new())
-}
-
-/// A silent output on Android until M-5 (PRD #275's spike check 3's fallback).
-#[cfg(target_os = "android")]
-fn default_output() -> Arc<dyn AudioOutput> {
-    Arc::new(StubAudioOutput::without_device())
 }
 
 /// Reports a missing device and loads the UI clips.
@@ -560,10 +587,18 @@ fn start(output: Res<AudioOutputRes>, mut failed: MessageWriter<AudioFailed>) {
     }
 }
 
-/// `Intent::Volume` and `Intent::Toggle(Feature::Sound)` (§1.10, Appendix D.1).
-fn run_intents(mut reader: MessageReader<Intent>, mut state: ResMut<AudioState>) {
+/// `Intent::Volume` and `Intent::Toggle(Feature::Sound)` (§1.10, Appendix D.1), and the
+/// snap turn's sound on `Intent::SnapTurn` (§1.10, Q-270's event), once per frame.
+// Q-270
+fn run_intents(
+    mut reader: MessageReader<Intent>,
+    mut state: ResMut<AudioState>,
+    mut sounds: MessageWriter<PlayUiSound>,
+) {
+    let mut turned = false;
     for intent in reader.read() {
         match *intent {
+            Intent::SnapTurn { steps } if steps != 0 => turned = true,
             Intent::Toggle(Feature::Sound) => state.muted = !state.muted,
             Intent::Volume { channel, value } => {
                 if !value.is_finite() {
@@ -580,6 +615,45 @@ fn run_intents(mut reader: MessageReader<Intent>, mut state: ResMut<AudioState>)
             _ => {}
         }
     }
+    if turned {
+        sounds.write(PlayUiSound(UiSound::SnapTurn));
+    }
+}
+
+/// The hands holding each grabbed instance.
+fn grab_hands(g: &Grabbed) -> Vec<Hand> {
+    match g {
+        Grabbed::One { hand, .. } => vec![*hand],
+        Grabbed::Two { .. } => vec![Hand::Left, Hand::Right],
+    }
+}
+
+/// The grab sounds (§1.10) from `Grabbed`'s edges, as the haptics take them (Q-270): grab
+/// start when a hand joins an instance's `Grabbed` (it appears, or turns two-handed),
+/// grab end when a hand leaves it (one hand released, or the component gone); each at
+/// most once a frame. A squeeze on nothing changes no `Grabbed` and sounds nothing.
+// Q-270
+fn grab_sounds(
+    grabbed: Query<(Entity, &Grabbed)>,
+    mut last: Local<HashMap<Entity, Vec<Hand>>>,
+    mut sounds: MessageWriter<PlayUiSound>,
+) {
+    let now: HashMap<Entity, Vec<Hand>> = grabbed.iter().map(|(e, g)| (e, grab_hands(g))).collect();
+    let joined = now.iter().any(|(e, hands)| {
+        let before = last.get(e);
+        hands.iter().any(|h| before.is_none_or(|b| !b.contains(h)))
+    });
+    let left = last.iter().any(|(e, hands)| {
+        let after = now.get(e);
+        hands.iter().any(|h| after.is_none_or(|a| !a.contains(h)))
+    });
+    if joined {
+        sounds.write(PlayUiSound(UiSound::GrabBegin));
+    }
+    if left {
+        sounds.write(PlayUiSound(UiSound::GrabEnd));
+    }
+    *last = now;
 }
 
 /// Plays each `PlayUiSound` whose switch is on, at the UI gain; nothing when muted.
@@ -758,6 +832,89 @@ fn follow_clock(
     }
 }
 
+/// §1.10 Soundtracks on the headset: with the `Headset` marker and `spatial` on, every
+/// ready soundtrack's gain is the soundtrack gain × min(1, 1/d) and its pan the sine of
+/// the emitter's horizontal azimuth from the listener's forward, every frame (Q-268). The
+/// listener is the midpoint of the active splat cameras, the emitter the instance's posed
+/// box center (Q-281). Otherwise, or with no camera or no box, pan 0 and the plain
+/// gain: the stereo of the desktop.
+// Q-266, Q-268, Q-281
+#[allow(clippy::too_many_arguments)]
+fn spatialize(
+    headset: Option<Res<Headset>>,
+    state: Res<AudioState>,
+    cameras: Query<(&Camera, &GlobalTransform), With<SplatCamera>>,
+    instances: Query<(&GlobalTransform, &SplatModel)>,
+    assets: Option<Res<Assets<SplatAsset>>>,
+    slots: Res<Slots>,
+    output: Res<AudioOutputRes>,
+    mut spatial_last: Local<bool>,
+) {
+    let listener = if headset.is_some() && state.spatial {
+        listener(
+            cameras
+                .iter()
+                .filter(|(c, _)| c.is_active)
+                .map(|(_, g)| (g.translation(), g.forward().as_vec3())),
+        )
+    } else {
+        None
+    };
+    // Stereo needs a call only on leaving the spatial mode; `apply_gains` and
+    // `follow_clock` keep the plain gain.
+    if listener.is_none() && !*spatial_last {
+        return;
+    }
+    *spatial_last = listener.is_some();
+    let gain = state.soundtrack_gain();
+    for (e, slot) in &slots.0 {
+        let Slot::Ready { sink, .. } = slot else {
+            continue;
+        };
+        let emitter = instances.get(*e).ok().and_then(|(g, m)| {
+            let b = assets.as_ref()?.get(&m.0)?.bounds;
+            Some(g.transform_point(b.center()))
+        });
+        let (factor, pan) = match (listener, emitter) {
+            (Some((at, forward)), Some(emitter)) => spatial_mix(at, forward, emitter),
+            _ => (1.0, 0.0),
+        };
+        output.0.set_gain(*sink, gain * factor);
+        output.0.set_panning(*sink, pan);
+    }
+}
+
+/// The listener from the splat cameras' positions and forwards: the midpoint of the
+/// positions and the sum of the forwards; `None` without a camera (Q-281).
+// Q-281
+fn listener(cameras: impl Iterator<Item = (Vec3, Vec3)>) -> Option<(Vec3, Vec3)> {
+    let (mut at, mut forward, mut n) = (Vec3::ZERO, Vec3::ZERO, 0u32);
+    for (p, f) in cameras {
+        at += p;
+        forward += f;
+        n += 1;
+    }
+    (n > 0).then(|| (at / n as f32, forward))
+}
+
+/// The attenuation factor and the pan of an emitter for a listener at `at` facing
+/// `forward` (Q-268): min(1, 1/d) over the distance d, and the sine of the horizontal
+/// azimuth from the forward, positive right, in \[−1, 1\]. The pan is 0 for an emitter
+/// straight above or below the listener, or a forward without a horizontal part
+/// (Q-281).
+// Q-268, Q-281
+fn spatial_mix(at: Vec3, forward: Vec3, emitter: Vec3) -> (f32, f32) {
+    let v = emitter - at;
+    let d = v.length();
+    let factor = if d > 1.0 { 1.0 / d } else { 1.0 };
+    let horizontal = |w: Vec3| Vec3::new(w.x, 0.0, w.z).normalize_or_zero();
+    let (f, v) = (horizontal(forward), horizontal(v));
+    // The right of a forward on the floor: forward × up.
+    let right = Vec3::new(-f.z, 0.0, f.x);
+    let pan = v.dot(right).clamp(-1.0, 1.0);
+    (factor, if pan.is_finite() { pan } else { 0.0 })
+}
+
 /// A UI sound's clip, mono at `rate` Hz, peak at most 0.5 (Q-191): sine tones under
 /// an exponential decay, a pitch sweep for the grabs, two tones for the error and the
 /// confirmation.
@@ -794,7 +951,6 @@ fn synthesize(sound: UiSound, rate: u32) -> Vec<f32> {
 /// The kira adapter (Q-187): one `kira::AudioManager` on the default (cpal) backend;
 /// a missing device leaves it absent and the output unavailable.
 // Q-187
-#[cfg(not(target_os = "android"))]
 mod kira_output {
     use std::collections::HashMap;
     use std::io::Cursor;
@@ -942,6 +1098,17 @@ mod kira_output {
         fn set_gain(&self, sink: SinkId, gain: f32) {
             self.with_sink(sink, |h| h.set_volume(decibels(gain), NOW));
         }
+
+        // Q-268, Q-280: kira's `Panning` runs from −1 (left) to 1 (right), as the port's
+        // pan; a non-finite pan centers.
+        fn set_panning(&self, sink: SinkId, pan: f32) {
+            let pan = if pan.is_finite() {
+                pan.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            self.with_sink(sink, |h| h.set_panning(pan, NOW));
+        }
     }
 }
 
@@ -967,6 +1134,81 @@ mod tests {
         assert!(!world.resource_ref::<AudioState>().is_changed());
     }
 
+    /// Worked by hand: listener at the origin facing −z (right is +x), 1/d beyond 1 m,
+    /// the pan the sine of the horizontal azimuth (Q-268, Q-281).
+    // Q-268, Q-281
+    #[test]
+    fn spatial_mix_attenuates_beyond_a_metre_and_pans_by_the_azimuth() {
+        let close = |(g, p): (f32, f32), (eg, ep): (f32, f32)| {
+            assert!((g - eg).abs() < 1e-6 && (p - ep).abs() < 1e-6, "{g} {p}");
+        };
+        let fwd = Vec3::NEG_Z;
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(2.0, 0.0, 0.0)),
+            (0.5, 1.0),
+        );
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(-4.0, 0.0, 0.0)),
+            (0.25, -1.0),
+        );
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(0.0, 0.0, -0.5)),
+            (1.0, 0.0),
+        );
+        // Behind: the azimuth 180°, sine 0.
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(0.0, 0.0, 3.0)),
+            (1.0 / 3.0, 0.0),
+        );
+        // 30° to the right at 2 m, 1 m up: d = √5, the height leaves the azimuth.
+        let (s, c) = 30f32.to_radians().sin_cos();
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(2.0 * s, 1.0, -2.0 * c)),
+            (1.0 / 5f32.sqrt(), 0.5),
+        );
+        // Straight above, and a forward straight down: centered.
+        close(
+            spatial_mix(Vec3::ZERO, fwd, Vec3::new(0.0, 2.0, 0.0)),
+            (0.5, 0.0),
+        );
+        close(
+            spatial_mix(Vec3::ZERO, Vec3::NEG_Y, Vec3::new(2.0, 0.0, 0.0)),
+            (0.5, 0.0),
+        );
+        // A listener turned to face +x: an emitter at −z is on its left.
+        close(
+            spatial_mix(Vec3::ONE, Vec3::X, Vec3::new(1.0, 1.0, -1.0)),
+            (0.5, -1.0),
+        );
+    }
+
+    /// The midpoint of the cameras and the sum of their forwards; none without one.
+    #[test]
+    fn listener_is_the_cameras_midpoint() {
+        assert_eq!(listener(std::iter::empty()), None);
+        let eyes = [
+            (Vec3::new(-0.032, 1.6, 0.0), Vec3::NEG_Z),
+            (Vec3::new(0.032, 1.6, 0.0), Vec3::NEG_Z),
+        ];
+        let (at, forward) = listener(eyes.into_iter()).unwrap();
+        assert!(at.distance(Vec3::new(0.0, 1.6, 0.0)) < 1e-6);
+        assert!(forward.normalize().distance(Vec3::NEG_Z) < 1e-6);
+    }
+
+    /// The stub records each sink's pan, centered until set (Q-268).
+    // Q-268
+    #[test]
+    fn stub_audio_output_records_the_pan() {
+        let out = StubAudioOutput::new();
+        let (sink, _) = out.add_soundtrack(b"x").unwrap();
+        assert_eq!(out.sinks()[&sink].pan, 0.0);
+        out.set_panning(sink, -0.25);
+        assert_eq!(out.sinks()[&sink].pan, -0.25);
+        // An unknown sink is ignored.
+        out.set_panning(SinkId(sink.0 + 1), 1.0);
+        assert_eq!(out.sinks().len(), 1);
+    }
+
     #[test]
     fn every_clip_is_short_bounded_and_finite() {
         for sound in UiSound::ALL {
@@ -989,6 +1231,49 @@ mod tests {
         let near = |a: usize, b: usize| clip[a..b].iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(near(half - 50, half) < 0.01);
         assert!(near(half + 100, half + 1000) > 0.2);
+    }
+
+    /// §1.10's grab start and end and snap turn sounds (Q-270's events), on the stub:
+    /// `Grabbed` appearing, turning two-handed, back to one hand and gone, and a
+    /// `SnapTurn`; a frame without a change sounds nothing.
+    #[test]
+    fn grab_edges_and_snap_turns_play_their_sounds() {
+        use ftgsxr_core::{Grab, Pose, TwoHandGrab};
+        let out = Arc::new(StubAudioOutput::new());
+        let mut app = app(out.clone());
+        app.update();
+        out.take_played();
+        let played = |app: &mut App| {
+            app.update();
+            out.take_played()
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect::<Vec<_>>()
+        };
+        let one = |hand| Grabbed::One {
+            hand,
+            grab: Grab::begin(Pose::IDENTITY, Pose::IDENTITY),
+        };
+        let e = app.world_mut().spawn(one(Hand::Left)).id();
+        assert_eq!(played(&mut app), [UiSound::GrabBegin]);
+        assert!(played(&mut app).is_empty(), "no change, no sound");
+        app.world_mut().entity_mut(e).insert(Grabbed::Two {
+            grab: TwoHandGrab::begin(Pose::IDENTITY, Pose::IDENTITY, Pose::IDENTITY),
+        });
+        assert_eq!(
+            played(&mut app),
+            [UiSound::GrabBegin],
+            "the second hand joins"
+        );
+        app.world_mut().entity_mut(e).insert(one(Hand::Right));
+        assert_eq!(played(&mut app), [UiSound::GrabEnd], "the left hand leaves");
+        app.world_mut().entity_mut(e).remove::<Grabbed>();
+        assert_eq!(played(&mut app), [UiSound::GrabEnd]);
+        app.world_mut()
+            .write_message(Intent::SnapTurn { steps: -1 });
+        assert_eq!(played(&mut app), [UiSound::SnapTurn]);
+        app.world_mut().write_message(Intent::SnapTurn { steps: 0 });
+        assert!(played(&mut app).is_empty());
     }
 
     /// A headless app with the audio plugin alone on `output`.

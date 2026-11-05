@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr_quest::main` (§2.1, §2.5): logcat under `ftgsxr` (§1.13), the paths (Q-15),
-//! the settings, a Bevy `App` with no window driven by the XR session, `SplatPlugin` at
-//! the settings' tier and `XrPlugin` through `add_xr` (Q-120).
+//! the settings, the headless device tests, then a Bevy `App` with no window driven by the
+//! XR session: `XrPlugin` through `add_xr` (Q-120), the `Headset` marker (Q-266) and
+//! `AppPlugin` over `QuestPlatform` at the settings' tier (#458; Q-129's harness retired).
 
-use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bevy::android::ANDROID_APP;
@@ -14,11 +15,12 @@ use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_mod_xr::session::{XrSessionCreatedMessage, XrState};
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
 use ftgsxr_app::{
-    AppPaths, ModelBytes, QualityTier, SettingsRes, SortMode, SplatLoad, SplatPlugin, SplatTime,
-    load_settings,
+    AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SettingsRes, SortMode, SplatLoad, Toast,
+    ToastLevel, load_settings,
 };
 use ftgsxr_xr::{XrPlugin, add_xr};
 
+use crate::platform::QuestPlatform;
 use crate::{device_test, jni_calls};
 
 /// The logcat tag (§1.13).
@@ -39,8 +41,8 @@ fn init_log(level: &str) {
     );
 }
 
-/// The Quest's locations (§2.5, Q-15).
-fn paths() -> AppPaths {
+/// The Quest's locations (§2.5, Q-15), and whether the app-external directory exists.
+fn paths() -> (AppPaths, bool) {
     let app = ANDROID_APP
         .get()
         .expect("invariant: #[bevy_main] sets the AndroidApp before main");
@@ -49,7 +51,23 @@ fn paths() -> AppPaths {
         .expect("invariant: Android gives every app its internal files directory");
     let external = app.external_data_path();
     let cache = jni_calls::cache_dir().unwrap_or_else(|| internal.join("cache"));
-    AppPaths::android(&internal, external.as_deref(), &cache)
+    (
+        AppPaths::android(&internal, external.as_deref(), &cache),
+        external.is_some(),
+    )
+}
+
+/// Q-15 (owner, #36): without the app-external directory, the models and screenshots stay
+/// in internal storage; the platform layer says so in the log and a toast.
+// Q-15
+const NO_EXTERNAL: &str = "shared storage is unavailable: models and screenshots stay in \
+     internal storage, out of adb and MTP reach, and are not moved when it returns";
+
+fn toast_no_external(mut toasts: MessageWriter<Toast>) {
+    toasts.write(Toast {
+        text: NO_EXTERNAL.into(),
+        level: ToastLevel::Warning,
+    });
 }
 
 /// A model's bytes to load as they are (no kind hint, no reduction).
@@ -58,34 +76,6 @@ pub(crate) fn splat_load(bytes: Vec<u8>) -> SplatLoad {
         bytes: ModelBytes::Owned(bytes),
         kind_hint: None,
         reduce_to: None,
-    }
-}
-
-/// The provisional harness M-4's `AppPlugin` replaces: every exchange file of the models
-/// directory as a model instance at the identity pose (#224; D-11's fit is not claimed).
-fn spawn_models(app: &mut App, models: &Path) {
-    let Ok(entries) = std::fs::read_dir(models) else {
-        info!("no models directory at {}", models.display());
-        return;
-    };
-    for path in entries.flatten().map(|e| e.path()) {
-        if path.extension().is_none_or(|e| e != "safetensors") {
-            continue;
-        }
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                info!("loading {}", path.display());
-                app.world_mut().spawn((
-                    splat_load(bytes),
-                    SplatTime {
-                        tau: 0.0,
-                        extrapolating: false,
-                    },
-                    Transform::IDENTITY,
-                ));
-            }
-            Err(e) => warn!("E-IO: {}: {e}", path.display()),
-        }
     }
 }
 
@@ -105,7 +95,7 @@ fn exit_without_session(
 #[bevy_main]
 fn main() {
     let test = jni_calls::intent_extra(device_test::EXTRA);
-    let paths = paths();
+    let (paths, external) = paths();
     let (settings, warnings) = match load_settings(&paths.config.join("settings.toml")) {
         Ok(s) => s,
         Err(e) => (Default::default(), vec![format!("{}: {e}", e.code())]),
@@ -118,6 +108,9 @@ fn main() {
     init_log(level);
     for w in &warnings {
         warn!("{w}");
+    }
+    if !external {
+        warn!("{NO_EXTERNAL}");
     }
     info!(
         "openftgs-xr {} on the Quest: {paths:?}",
@@ -139,7 +132,7 @@ fn main() {
     });
     let xr = XrPlugin {
         passthrough: false,
-        hands: false,
+        hands: true,
         // Q-121
         sort: SortMode::PerView,
     };
@@ -161,14 +154,24 @@ fn main() {
             focused_mode: UpdateMode::reactive(Duration::ZERO),
             unfocused_mode: UpdateMode::reactive(Duration::ZERO),
         })
-        .add_plugins(add_xr(group, xr))
-        .add_plugins(SplatPlugin { tier });
+        .add_plugins(add_xr(group, xr));
     if app.world().get_resource::<XrState>() == Some(&XrState::Unavailable) {
         // E-XR-RUNTIME, which `XrPlugin` logged: the Quest exits 2 (§1.15).
         std::process::exit(EXIT_ENVIRONMENT);
     }
+    // Q-266: before `AppPlugin`, so panel mode, spatial audio and D-11's auto-fit apply.
+    app.insert_resource(Headset);
+    // Q-163: `SettingsRes` above is left alone by `AppPlugin`.
+    app.add_plugins(AppPlugin {
+        platform: Arc::new(QuestPlatform::new(paths)),
+        tier,
+        initial: Vec::new(),
+        scene: None,
+    });
     app.add_systems(Update, exit_without_session);
-    spawn_models(&mut app, &paths.models);
+    if !external {
+        app.add_systems(Startup, toast_no_external);
+    }
     if let Some(name) = test {
         info!("device test {name}");
         device_test::add(&mut app, &name);

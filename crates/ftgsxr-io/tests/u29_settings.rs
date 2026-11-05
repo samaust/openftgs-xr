@@ -60,6 +60,8 @@ fn u29_defaults_are_section_1s() {
             centers_radius: 3.0,
             colormap: "dc".into(),
             grid: true,
+            // Q-278
+            high_contrast: false,
             overlays: OverlaySettings {
                 boxes: false,
                 velocities: false,
@@ -221,6 +223,7 @@ fn non_default() -> Settings {
             centers_radius: 5.5,
             colormap: "time".into(),
             grid: false,
+            high_contrast: true,
             overlays: OverlaySettings {
                 boxes: true,
                 velocities: true,
@@ -405,6 +408,7 @@ log_level = "debug"
 centers_radius = 6
 background = [0.5, 0.5]
 grid = false
+high_contrast = 1
 
 [audio]
 master = 150
@@ -447,6 +451,7 @@ help = "F1"
         "`general.governor`",
         "`general.tier`",
         "`display.background`",
+        "`display.high_contrast`",
         "`audio.master`",
         "`sources[0].kind`",
         "`sources[1].flavor`",

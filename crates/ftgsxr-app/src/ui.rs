@@ -16,6 +16,9 @@
 
 mod cameras;
 mod dock;
+mod panel;
+
+pub(crate) use panel::{PanelCamera, panel_zoom};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,10 +31,11 @@ use bevy::image::Image;
 use bevy::log::warn;
 use bevy::math::{UVec2, Vec2, Vec3};
 use bevy::time::Time;
-use bevy::transform::components::GlobalTransform;
 use bevy::window::{MonitorSelection, PrimaryWindow, Window, WindowMode};
 use bevy_egui::input::EguiInputEvent;
-use bevy_egui::{EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, egui};
+use bevy_egui::{
+    EguiGlobalSettings, EguiOutput, EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, egui,
+};
 use ftgsxr_core::Pose;
 use ftgsxr_io::{DesktopSettings, ManualLighting, ModelRef};
 use ftgsxr_render::{
@@ -39,12 +43,12 @@ use ftgsxr_render::{
     SplatTierState, SplatTime, SplatTransform,
 };
 
-use crate::intent::{Feature, InstanceAction, Intent, UiCommand, UnloadRequest};
+use crate::intent::{Feature, Hand, InstanceAction, Intent, UiCommand, UnloadRequest};
 use crate::library::{
     EntryState, Library, LibraryCommand, LibraryFailure, LoadedModel, ReplaceEntry,
 };
 use crate::manipulate::Selected;
-use crate::platform::{PickHandle, PickKind, PlatformRes};
+use crate::platform::{Headset, PickHandle, PickKind, PlatformRes};
 use crate::playback::{Playback, PlaybackWarning, Scrubbing};
 
 /// Where the UI is drawn (§1.8): on the window (the desktop), or on a world quad whose
@@ -110,13 +114,53 @@ pub fn panel_hit(
     Some(Vec2::new(u * size_px.x as f32, v * size_px.y as f32))
 }
 
-/// The pointer events of one frame for a context at one pixel per point (I-11): the
-/// move to `hit`, then the select button's changes there; `PointerGone` when the ray left
-/// the quad. `last` is the previous frame's hit.
+/// A hand's ray on a panel quad for one frame (§1.8 User interface, I-11): the XR
+/// adapter tests each hand's ray against the main panel and the wrist menu first and, on
+/// a hit, writes this instead of that hand's `Intent::Pointer` and `Intent::Select`
+/// (Q-263). `panel` is the quad's entity (it carries `WorldPanel`), `pixel` the hit in
+/// the texture's pixels (`panel_hit`), `select` and `grab` the frame's presses (`true`)
+/// and releases (`false`) of the select and grab inputs in order, and `scroll_px` the
+/// frame's scroll in pixels: positive moves the content down, revealing what is above
+/// (egui's wheel convention; Q-279). A frame without one for a panel takes the
+/// pointer off it.
+// Q-263, Q-279
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct PanelPointer {
+    /// The hand whose ray hits the panel.
+    pub hand: Hand,
+    /// The panel quad's entity.
+    pub panel: Entity,
+    /// The hit in the panel texture's pixels, (0, 0) its top-left corner.
+    pub pixel: Vec2,
+    /// The select input's presses and releases this frame, in order.
+    pub select: Vec<bool>,
+    /// The grab input's presses and releases this frame, in order.
+    pub grab: Vec<bool>,
+    /// The scroll this frame in pixels, positive moving the content down.
+    pub scroll_px: f32,
+}
+
+/// A panel texture's pixel (or a scroll in pixels) in the points of a context drawing
+/// `ppp` pixels per point (its zoom, Q-267), as bevy_egui sizes an image target's
+/// screen: one pixel per point at zoom 1 (Q-279); a `ppp` not positive and finite counts
+/// as 1.
+// Q-290
+pub(crate) fn panel_point(pixel: Vec2, ppp: f32) -> Vec2 {
+    if ppp.is_finite() && ppp > 0.0 {
+        pixel / ppp
+    } else {
+        pixel
+    }
+}
+
+/// The pointer events of one frame for a context, in its points (I-11): the
+/// move to `hit`, then the select button's changes there, then the scroll as a wheel
+/// event; `PointerGone` when the ray left the quad. `last` is the previous frame's hit.
 pub(crate) fn pointer_events(
     last: Option<Vec2>,
     hit: Option<Vec2>,
     select: &[bool],
+    scroll_px: f32,
 ) -> Vec<egui::Event> {
     let mut out = Vec::new();
     match hit {
@@ -131,6 +175,15 @@ pub(crate) fn pointer_events(
                     modifiers: egui::Modifiers::NONE,
                 });
             }
+            // Q-279
+            if scroll_px != 0.0 && scroll_px.is_finite() {
+                out.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, scroll_px),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
         }
         None if last.is_some() => out.push(egui::Event::PointerGone),
         None => {}
@@ -139,8 +192,9 @@ pub(crate) fn pointer_events(
 }
 
 /// The HUD's data (§1.13 HUD), filled every frame as far as the app can; the overlay
-/// that draws it is M-9's, the "active" count and the XR fields join in M-9 and M-5.
-// Q-159
+/// that draws it is M-9's, the "active" count joins in M-9. The XR fields are the XR
+/// crate's to write each frame, untracked without a session (Q-274).
+// Q-159, Q-274
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct HudData {
     /// Frames per second, from the frame time.
@@ -177,6 +231,27 @@ pub struct HudData {
     pub tier: String,
     /// The governor's current knobs: render scale, SH cap, sort mode, foveation.
     pub knobs: (f32, u8, Option<SortMode>, Option<Foveation>),
+    /// Whether the head is tracked this frame; false without an XR session.
+    // Q-274
+    pub head_tracked: bool,
+    /// The left side's device and whether its aim is tracked this frame; `None` while
+    /// no device is active for the side and without an XR session.
+    // Q-274
+    pub left_hand: Option<(HudHandSource, bool)>,
+    /// The right side's device and whether its aim is tracked; as `left_hand`.
+    // Q-274
+    pub right_hand: Option<(HudHandSource, bool)>,
+}
+
+/// Which device a side's HUD line shows (Q-274): the XR crate's `HandSource`, which the
+/// app cannot name, mapped by the XR crate.
+// Q-274
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HudHandSource {
+    /// A controller.
+    Controller,
+    /// Hand tracking.
+    Hand,
 }
 
 /// One instance's line of the HUD (Q-159).
@@ -304,7 +379,8 @@ pub(crate) fn recent_scenes(dir: &Path) -> Vec<PathBuf> {
 /// governor's knobs, `audio`'s volumes), so ui names none of their types.
 pub(crate) type DockHook = fn(&mut World, &mut egui::Ui);
 
-/// The dock's tabs (§1.7 Panels).
+/// The dock's tabs (§1.7 Panels), and the main panel's Comfort tab (§1.8 User
+/// interface), shown in panel mode only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
     #[default]
@@ -315,9 +391,11 @@ pub(crate) enum Tab {
     Environment,
     Settings,
     Help,
+    Comfort,
 }
 
 impl Tab {
+    /// The screen's tabs (§1.7 Panels).
     pub(crate) const ALL: [Tab; 7] = [
         Tab::Library,
         Tab::Scene,
@@ -327,15 +405,44 @@ impl Tab {
         Tab::Settings,
         Tab::Help,
     ];
+    /// The main panel's tabs (§1.8 User interface): the desktop's and Comfort.
+    pub(crate) const PANEL: [Tab; 8] = [
+        Tab::Library,
+        Tab::Scene,
+        Tab::Playback,
+        Tab::Display,
+        Tab::Environment,
+        Tab::Comfort,
+        Tab::Settings,
+        Tab::Help,
+    ];
 }
 
-/// The later modules' sections, per tab.
+/// The later modules' sections, per tab, each with whether it is the screen's only (a
+/// mouse-only or keyboard item, hidden on the main panel, §1.8 User interface).
 #[derive(Resource, Default)]
-pub(crate) struct DockHooks(pub(crate) HashMap<Tab, Vec<DockHook>>);
+pub(crate) struct DockHooks(pub(crate) HashMap<Tab, Vec<(DockHook, bool)>>);
 
 impl DockHooks {
+    /// A section drawn on both surfaces.
     pub(crate) fn add(&mut self, tab: Tab, hook: DockHook) {
-        self.0.entry(tab).or_default().push(hook);
+        self.0.entry(tab).or_default().push((hook, false));
+    }
+
+    /// A section drawn on the screen only (Help's keyboard shortcuts).
+    // Q-294
+    pub(crate) fn add_screen_only(&mut self, tab: Tab, hook: DockHook) {
+        self.0.entry(tab).or_default().push((hook, true));
+    }
+
+    /// The sections of `tab` drawn on the main panel (`panel`) or the screen.
+    pub(crate) fn sections(&self, tab: Tab, panel: bool) -> Vec<DockHook> {
+        self.0.get(&tab).map_or_else(Vec::new, |v| {
+            v.iter()
+                .filter(|(_, screen_only)| !(panel && *screen_only))
+                .map(|(h, _)| *h)
+                .collect()
+        })
     }
 }
 
@@ -407,6 +514,18 @@ pub(crate) struct UiState {
     /// The Library tab's new source: an HTTP index URL or a local folder path (§1.5
     /// Sources; the path field is Q-160's fallback for the picker).
     pub(crate) new_source: String,
+    /// The main panel's open sub-page, if any (§1.8 User interface); an open question
+    /// is the panel's sub-page too.
+    pub(crate) page: Option<Page>,
+}
+
+/// A sub-page of the main panel, with a Back button at its top (§1.8 User interface).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Page {
+    /// The Scene tab's training cameras (§1.7).
+    Cameras,
+    /// The Library tab's request replay (§1.7).
+    Replay,
 }
 
 impl Default for UiState {
@@ -425,6 +544,7 @@ impl Default for UiState {
             filter_kinds: [true; 4],
             reduce: false,
             new_source: String::new(),
+            page: None,
         }
     }
 }
@@ -507,10 +627,10 @@ struct Upload {
 #[derive(Resource, Default)]
 struct Uploads(HashMap<Entity, Upload>);
 
-/// The panel pointer's last hit and the select changes waiting for it.
+/// Each panel context's last pointer position, by the context's entity.
 #[derive(Resource, Default)]
-struct PanelPointer {
-    last: Option<Vec2>,
+struct PanelPointerState {
+    last: HashMap<Entity, Vec2>,
 }
 
 /// The ui systems that turn state into toasts and commands, ordered after the modules
@@ -531,6 +651,7 @@ impl Plugin for UiPlugin {
             .add_message::<ReplaceRequest>()
             .add_message::<ReplaceEntry>()
             .add_message::<Intent>()
+            .add_message::<PanelPointer>()
             .add_message::<LibraryCommand>()
             .add_message::<LibraryFailure>()
             .add_message::<PlaybackWarning>()
@@ -555,11 +676,27 @@ impl Plugin for UiPlugin {
         // §1.7 Training cameras and requests.
         cameras::build(app);
         if app.is_plugin_added::<EguiPlugin>() {
-            app.init_resource::<PanelPointer>()
+            // §1.8 User interface, Q-266: on the headset bevy_egui's primary context
+            // would latch onto the first eye camera, so it is off; the panels have their
+            // own contexts, and the dock draws only with a primary window.
+            if app.world().contains_resource::<Headset>()
+                && let Some(mut g) = app.world_mut().get_resource_mut::<EguiGlobalSettings>()
+            {
+                g.auto_create_primary_context = false;
+            }
+            app.init_resource::<PanelPointerState>()
                 .init_resource::<Scrubbing>()
+                .init_schedule(panel::PanelPass)
+                .init_schedule(panel::WristPass)
                 .add_systems(PreUpdate, panel_pointer)
+                .add_systems(Update, panel::follow_surfaces)
                 .add_systems(PostUpdate, end_scrub.before(EguiPostUpdateSet::EndPass))
-                .add_systems(EguiPrimaryContextPass, dock::draw);
+                .add_systems(
+                    EguiPrimaryContextPass,
+                    dock::draw.run_if(any_with_component::<PrimaryWindow>),
+                )
+                .add_systems(panel::PanelPass, panel::draw_panel)
+                .add_systems(panel::WristPass, panel::draw_wrist);
         }
     }
 }
@@ -849,63 +986,52 @@ fn fill_hud(
         .collect();
 }
 
-/// The panel pointer (§1.8, I-11): the rays' hits on the panel quad become pointer
-/// events of the context rendering to its image. The intents are the last frame's,
-/// read before egui takes its input.
+/// The panel pointer (§1.8, I-11): each `PanelPointer` becomes pointer events of the
+/// context rendering to its panel's image, in order; a context that had the pointer and
+/// gets none this frame sees it leave (Q-263). The messages are the last frame's, read
+/// before egui takes its input, and their pixels reach the context as its points
+/// (Q-290).
+// Q-263, Q-290
 fn panel_pointer(
-    surface: Res<UiSurface>,
-    mut intents: MessageReader<Intent>,
-    panels: Query<(&WorldPanel, &GlobalTransform)>,
-    contexts: Query<(Entity, &RenderTarget)>,
-    mut pointer: ResMut<PanelPointer>,
+    mut pointers: MessageReader<PanelPointer>,
+    panels: Query<&WorldPanel>,
+    contexts: Query<(Entity, &RenderTarget, Option<&EguiOutput>)>,
+    mut state: ResMut<PanelPointerState>,
     mut out: MessageWriter<EguiInputEvent>,
 ) {
-    let UiSurface::Panel {
-        entity,
-        size_px,
-        size_m,
-    } = *surface
-    else {
-        intents.clear();
-        return;
-    };
-    let Ok((panel, at)) = panels.get(entity) else {
-        intents.clear();
-        return;
-    };
-    let Some(context) = contexts.iter().find_map(|(e, t)| match t {
-        RenderTarget::Image(i) if i.handle == panel.image => Some(e),
-        _ => None,
-    }) else {
-        intents.clear();
-        return;
-    };
-    let (scale, rotation, translation) = at.to_scale_rotation_translation();
-    let pose = Pose {
-        translation,
-        rotation,
-        scale: scale.x,
-    };
-    let mut hit = pointer.last;
-    let mut select = Vec::new();
-    let mut moved = false;
-    for i in intents.read() {
-        match i {
-            Intent::Pointer { origin, dir, .. } => {
-                hit = panel_hit(*origin, *dir, pose, size_m, size_px);
-                moved = true;
+    let mut seen: HashMap<Entity, Vec2> = HashMap::new();
+    for p in pointers.read() {
+        let Ok(panel) = panels.get(p.panel) else {
+            continue;
+        };
+        let Some((context, ppp)) = contexts.iter().find_map(|(e, t, o)| match t {
+            RenderTarget::Image(i) if i.handle == panel.image => {
+                Some((e, o.map_or(1.0, |o| o.pixels_per_point)))
             }
-            Intent::Select { pressed, .. } => select.push(*pressed),
-            _ => {}
+            _ => None,
+        }) else {
+            continue;
+        };
+        let last = seen
+            .get(&context)
+            .or_else(|| state.last.get(&context))
+            .copied();
+        // Q-290: the texture's pixels in the context's points.
+        let at = panel_point(p.pixel, ppp);
+        let scroll = panel_point(Vec2::new(0.0, p.scroll_px), ppp).y;
+        for event in pointer_events(last, Some(at), &p.select, scroll) {
+            out.write(EguiInputEvent { context, event });
+        }
+        seen.insert(context, at);
+    }
+    for (&context, &last) in &state.last {
+        if !seen.contains_key(&context) {
+            for event in pointer_events(Some(last), None, &[], 0.0) {
+                out.write(EguiInputEvent { context, event });
+            }
         }
     }
-    if !moved && select.is_empty() {
-        return;
-    }
-    for event in pointer_events(pointer.last, hit, &select) {
-        out.write(EguiInputEvent { context, event });
-    }
-    pointer.last = hit;
+    state.last = seen;
 }
 
 /// The first readable system font: egui's bundled fonts are off (#277), so the desktop
@@ -1161,17 +1287,49 @@ mod tests {
     #[test]
     fn pointer_events_move_then_press_and_leave() {
         let p = Vec2::new(3.0, 4.0);
-        let ev = pointer_events(None, Some(p), &[true]);
+        let ev = pointer_events(None, Some(p), &[true], 0.0);
         assert_eq!(ev[0], egui::Event::PointerMoved(egui::pos2(3.0, 4.0)));
         assert!(matches!(
             ev[1],
             egui::Event::PointerButton { pressed: true, .. }
         ));
         assert_eq!(
-            pointer_events(Some(p), None, &[]),
+            pointer_events(Some(p), None, &[], 0.0),
             vec![egui::Event::PointerGone]
         );
-        assert!(pointer_events(None, None, &[true]).is_empty());
+        assert!(pointer_events(None, None, &[true], 0.0).is_empty());
+    }
+
+    /// A panel pixel is a point divided by the context's pixels per point (its zoom),
+    /// one to one at zoom 1 or a bad zoom (Q-290).
+    // Q-290
+    #[test]
+    fn panel_point_divides_by_the_pixels_per_point() {
+        let p = Vec2::new(700.0, 350.0);
+        assert_eq!(panel_point(p, 1.75), Vec2::new(400.0, 200.0));
+        assert_eq!(panel_point(p, 1.0), p);
+        assert_eq!(panel_point(p, 0.0), p);
+        assert_eq!(panel_point(p, f32::NAN), p);
+    }
+
+    /// A panel scroll is a wheel event in points after the move, egui's sign kept
+    /// (Q-279); no scroll, or one off the quad, adds none.
+    // Q-279
+    #[test]
+    fn pointer_events_scroll_as_a_wheel_event() {
+        let p = Vec2::new(3.0, 4.0);
+        let ev = pointer_events(None, Some(p), &[], 12.5);
+        assert_eq!(ev.len(), 2);
+        assert!(matches!(
+            ev[1],
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta,
+                ..
+            } if delta == egui::vec2(0.0, 12.5)
+        ));
+        assert_eq!(pointer_events(None, Some(p), &[], 0.0).len(), 1);
+        assert!(pointer_events(None, None, &[], 12.5).is_empty());
     }
 
     /// `pointer_events` from a ray's hit drive a second egui context: the pointer at the
@@ -1203,7 +1361,7 @@ mod tests {
         let mut last = None;
         let mut pointer = None;
         for select in [vec![], vec![true], vec![false], vec![]] {
-            let events = pointer_events(last, Some(hit), &select);
+            let events = pointer_events(last, Some(hit), &select, 0.0);
             last = Some(hit);
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

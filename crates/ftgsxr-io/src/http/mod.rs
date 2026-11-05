@@ -21,7 +21,7 @@ use url::Url;
 
 use crate::IoError;
 
-pub(crate) use checkpoint::{MANIFEST, PARAMS};
+pub(crate) use checkpoint::{DocumentMember, MANIFEST, PARAMS};
 
 /// How long a connection (with its TLS handshake) may take before E-NET-FETCH (Q-43).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
