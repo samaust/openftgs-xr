@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
 
 use ::bevy::app::SubApp;
 use ::bevy::camera::visibility::InheritedVisibility;
@@ -24,7 +25,6 @@ use ::bevy::render::renderer::{RenderContext, ViewQuery};
 use ::bevy::render::sync_world::RenderEntity;
 use ::bevy::render::view::{ExtractedView, Msaa, ViewDepthTexture, ViewTarget};
 use ::bevy::render::{Extract, ExtractSchedule, Render, RenderSystems};
-use ::bevy::tasks::{AsyncComputeTaskPool, Task};
 use ::bevy::transform::components::GlobalTransform;
 use ftgsxr_core::Pose;
 
@@ -151,8 +151,9 @@ struct ViewState {
 struct Views {
     dev: Option<Arc<SplatDevice>>,
     passes: HashMap<(TextureFormat, bool), Arc<SplatPasses>>,
-    /// The `LinearOver` passes compiling ahead on a task, by the same key (Q-325).
-    warming: HashMap<(TextureFormat, bool), Task<Result<SplatPasses, RenderError>>>,
+    /// The `LinearOver` passes compiling ahead on their own threads, by the same key
+    /// (Q-325).
+    warming: HashMap<(TextureFormat, bool), JoinHandle<Result<SplatPasses, RenderError>>>,
     /// Whether this device's and tier's warm-up has started (Q-325).
     warm_started: bool,
     /// The depth copy's pipeline (Q-164), made on first use.
@@ -343,24 +344,44 @@ fn prepare_views(
     }
 }
 
-/// Starts compiling the `LinearOver` passes of both sort modes on the async compute pool
-/// (Q-325): the 0.3 s of pipeline compiles on the Quest 3 then run while the session
-/// starts, not in the first frame a splat camera draws, nor in the frame the governor
-/// first switches the sort mode. `prepare_view` takes a key's result, waiting for it if
-/// it is not ready, so the first frame still draws.
+/// The passes cache's key: the layer format and whether the sort is shared center.
+fn pass_key(layer_format: TextureFormat, sort: SortMode) -> (TextureFormat, bool) {
+    (layer_format, sort == SortMode::SharedCenter)
+}
+
+/// A view's passes: `tier` with the camera's sort mode, at the layer format, over the
+/// core pipeline's depth.
+fn compile(
+    dev: &SplatDevice,
+    layer_format: TextureFormat,
+    tier: &QualityTier,
+    sort: SortMode,
+) -> Result<SplatPasses, RenderError> {
+    let mut view_tier = tier.clone();
+    view_tier.sort_mode = sort;
+    SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
+}
+
+/// Starts compiling the `LinearOver` passes of both sort modes, each on a thread of its
+/// own rather than a shared pool a model load could hold (Q-325): the 0.3 s of pipeline
+/// compiles on the Quest 3 then run while the session starts, not in the first frame a
+/// splat camera draws, nor in the frame the governor first switches the sort mode.
+/// `prepare_view` takes a key's result, waiting for it if it is not ready, so the first
+/// frame still draws; a thread that cannot start leaves its key to compile there.
 // Q-325
 fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
-    let pool = AsyncComputeTaskPool::get();
     for sort in [SortMode::PerView, SortMode::SharedCenter] {
         let dev = Arc::clone(dev);
-        let mut view_tier = tier.clone();
-        view_tier.sort_mode = sort;
-        let task = pool.spawn(async move {
-            SplatPasses::new(&dev, LAYER_FORMAT, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
-        });
-        views
-            .warming
-            .insert((LAYER_FORMAT, sort == SortMode::SharedCenter), task);
+        let tier = tier.clone();
+        let spawned = thread::Builder::new()
+            .name("ftgsxr splat passes".into())
+            .spawn(move || compile(&dev, LAYER_FORMAT, &tier, sort));
+        match spawned {
+            Ok(handle) => {
+                views.warming.insert(pass_key(LAYER_FORMAT, sort), handle);
+            }
+            Err(e) => warn!("the splat passes' warm-up thread did not start: {e}"),
+        }
     }
 }
 
@@ -455,15 +476,14 @@ fn prepare_view(
     };
     let mut view_tier = tier.clone();
     view_tier.sort_mode = camera.sort;
-    let key = (layer_format, camera.sort == SortMode::SharedCenter);
+    let key = pass_key(layer_format, camera.sort);
     let passes = match views.passes.get(&key) {
         Some(p) => Arc::clone(p),
         None => {
             // Q-325: the warm-up's passes when it compiled this key.
-            let made = match views.warming.remove(&key) {
-                Some(task) => ::bevy::tasks::block_on(task),
-                None => SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier),
-            };
+            // A warm-up thread that panicked leaves the key to compile here.
+            let warmed = views.warming.remove(&key).and_then(|h| h.join().ok());
+            let made = warmed.unwrap_or_else(|| compile(dev, layer_format, tier, camera.sort));
             let p = made.map_err(|e| {
                 error!("splat passes: {}: {}", e.code(), e.user_text());
                 "the splat passes did not compile"
