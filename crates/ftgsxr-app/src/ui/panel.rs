@@ -10,7 +10,7 @@
 //! replay); nothing draws a hover tooltip. The wrist menu shows five buttons. Both take
 //! the pointer from `PanelPointer` (Q-263, Q-279).
 
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::visibility::{RenderLayers, Visibility};
 use bevy::camera::{Camera, Camera3d, RenderTarget};
 use bevy::ecs::prelude::*;
 use bevy::ecs::schedule::ScheduleLabel;
@@ -137,13 +137,35 @@ pub(super) fn follow_surfaces(
     }
 }
 
-/// The context of the main panel's (or the wrist menu's) camera.
-fn context(world: &mut World, wrist: bool) -> Option<(Entity, egui::Context)> {
+/// Idles the panel cameras whose quads are hidden (#269): a camera is active exactly when
+/// its quad's `Visibility` is not `Hidden` (a quad without one counts as shown), so a
+/// hidden panel renders no view and its pass draws nothing. Run in `PostUpdate` before
+/// egui's pass, after `Update`'s summon and wrist-menu rules, so a quad that shows draws
+/// in that frame.
+// Q-324
+pub(super) fn idle_hidden(
+    mut cameras: Query<(&PanelCamera, &mut Camera)>,
+    quads: Query<&Visibility>,
+) {
+    for (panel, mut camera) in &mut cameras {
+        let shown = quads
+            .get(panel.quad)
+            .map_or(true, |v| *v != Visibility::Hidden);
+        if camera.is_active != shown {
+            camera.is_active = shown;
+        }
+    }
+}
+
+/// The context of the main panel's (or the wrist menu's) camera, and whether the camera
+/// is active (Q-324: an idle camera's pass draws nothing, but its font is installed, so
+/// the first frame a quad shows has it).
+fn context(world: &mut World, wrist: bool) -> Option<(Entity, egui::Context, bool)> {
     world
-        .query::<(Entity, &PanelCamera, &mut EguiContext)>()
+        .query::<(Entity, &PanelCamera, &Camera, &mut EguiContext)>()
         .iter_mut(world)
-        .find(|(_, p, _)| p.wrist == wrist)
-        .map(|(e, _, mut c)| (e, c.get_mut().clone()))
+        .find(|(_, p, _, _)| p.wrist == wrist)
+        .map(|(e, _, cam, mut c)| (e, c.get_mut().clone(), cam.is_active))
 }
 
 /// Installs the system font in a new context once (Q-211); whether it has one.
@@ -171,10 +193,11 @@ pub(super) fn draw_panel(
     mut font: Local<Option<(Entity, bool)>>,
     mut hovered: Local<Option<egui::Id>>,
 ) {
-    let Some((entity, ctx)) = context(world, false) else {
+    let Some((entity, ctx, active)) = context(world, false) else {
         return;
     };
-    if !font_for(&mut font, entity, &ctx) {
+    // Q-324: the font first, so a summoned panel's first frame has it.
+    if !font_for(&mut font, entity, &ctx) || !active {
         return;
     }
     let mut ui = root(&ctx, "ftgsxr-panel");
@@ -336,10 +359,11 @@ pub(crate) fn wrist_intents(b: WristButton, selected: &[Entity]) -> Vec<Intent> 
 
 /// The wrist menu on its context, run in `WristPass`: a pressed button's intents.
 pub(super) fn draw_wrist(world: &mut World, mut font: Local<Option<(Entity, bool)>>) {
-    let Some((entity, ctx)) = context(world, true) else {
+    let Some((entity, ctx, active)) = context(world, true) else {
         return;
     };
-    if !font_for(&mut font, entity, &ctx) {
+    // Q-324: the font first, so the wrist menu's first frame has it.
+    if !font_for(&mut font, entity, &ctx) || !active {
         return;
     }
     let playing = world

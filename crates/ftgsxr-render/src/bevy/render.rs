@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
 
 use ::bevy::app::SubApp;
 use ::bevy::camera::visibility::InheritedVisibility;
@@ -40,7 +41,7 @@ use crate::gpu::headless::sort_pose;
 use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
 use crate::gpu::{
     Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, Overlays, QualityTier,
-    RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
+    RenderError, RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
 };
 
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
@@ -150,6 +151,11 @@ struct ViewState {
 struct Views {
     dev: Option<Arc<SplatDevice>>,
     passes: HashMap<(TextureFormat, bool), Arc<SplatPasses>>,
+    /// The `LinearOver` passes compiling ahead on their own threads, by the same key
+    /// (Q-325).
+    warming: HashMap<(TextureFormat, bool), JoinHandle<Result<SplatPasses, RenderError>>>,
+    /// Whether this device's and tier's warm-up has started (Q-325).
+    warm_started: bool,
     /// The depth copy's pipeline (Q-164), made on first use.
     depth_copy: Option<Arc<DepthCopy>>,
     states: HashMap<Entity, ViewState>,
@@ -306,6 +312,10 @@ fn prepare_views(
             ..Views::default()
         };
     }
+    if !views.warm_started {
+        views.warm_started = true;
+        warm_up(&mut views, &dev, &tier.0);
+    }
     let live: HashSet<Entity> = extracted.cameras.keys().copied().collect();
     views.states.retain(|e, _| live.contains(e));
     for (&entity, &camera) in &extracted.cameras {
@@ -330,6 +340,47 @@ fn prepare_views(
                 views.warn_once(entity, reason);
                 views.states.remove(&entity);
             }
+        }
+    }
+}
+
+/// The passes cache's key: the layer format and whether the sort is shared center.
+fn pass_key(layer_format: TextureFormat, sort: SortMode) -> (TextureFormat, bool) {
+    (layer_format, sort == SortMode::SharedCenter)
+}
+
+/// A view's passes: `tier` with the camera's sort mode, at the layer format, over the
+/// core pipeline's depth.
+fn compile(
+    dev: &SplatDevice,
+    layer_format: TextureFormat,
+    tier: &QualityTier,
+    sort: SortMode,
+) -> Result<SplatPasses, RenderError> {
+    let mut view_tier = tier.clone();
+    view_tier.sort_mode = sort;
+    SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
+}
+
+/// Starts compiling the `LinearOver` passes of both sort modes, each on a thread of its
+/// own rather than a shared pool a model load could hold (Q-325): the 0.3 s of pipeline
+/// compiles on the Quest 3 then run while the session starts, not in the first frame a
+/// splat camera draws, nor in the frame the governor first switches the sort mode.
+/// `prepare_view` takes a key's result, waiting for it if it is not ready, so the first
+/// frame still draws; a thread that cannot start leaves its key to compile there.
+// Q-325
+fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
+    for sort in [SortMode::PerView, SortMode::SharedCenter] {
+        let dev = Arc::clone(dev);
+        let tier = tier.clone();
+        let spawned = thread::Builder::new()
+            .name("ftgsxr splat passes".into())
+            .spawn(move || compile(&dev, LAYER_FORMAT, &tier, sort));
+        match spawned {
+            Ok(handle) => {
+                views.warming.insert(pass_key(LAYER_FORMAT, sort), handle);
+            }
+            Err(e) => warn!("the splat passes' warm-up thread did not start: {e}"),
         }
     }
 }
@@ -425,15 +476,18 @@ fn prepare_view(
     };
     let mut view_tier = tier.clone();
     view_tier.sort_mode = camera.sort;
-    let key = (layer_format, camera.sort == SortMode::SharedCenter);
+    let key = pass_key(layer_format, camera.sort);
     let passes = match views.passes.get(&key) {
         Some(p) => Arc::clone(p),
         None => {
-            let p = SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
-                .map_err(|e| {
-                    error!("splat passes: {}: {}", e.code(), e.user_text());
-                    "the splat passes did not compile"
-                })?;
+            // Q-325: the warm-up's passes when it compiled this key.
+            // A warm-up thread that panicked leaves the key to compile here.
+            let warmed = views.warming.remove(&key).and_then(|h| h.join().ok());
+            let made = warmed.unwrap_or_else(|| compile(dev, layer_format, tier, camera.sort));
+            let p = made.map_err(|e| {
+                error!("splat passes: {}: {}", e.code(), e.user_text());
+                "the splat passes did not compile"
+            })?;
             let p = Arc::new(p);
             views.passes.insert(key, Arc::clone(&p));
             p
