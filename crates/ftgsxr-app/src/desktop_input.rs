@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use bevy::camera::RenderTarget;
 use bevy::input::InputSystems;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
@@ -23,7 +24,7 @@ use crate::intent::{
     CameraCommand, GizmoMode, Hand, InstanceAction, Intent, OverlayToggle, PlaybackCommand,
     UiCommand, UnloadRequest,
 };
-use crate::manipulate::Selected;
+use crate::manipulate::{Selected, head_candidate};
 use crate::persist::SettingsRes;
 use crate::playback::{Playback, speed_preset};
 use crate::rig::CameraController;
@@ -532,7 +533,7 @@ fn mouse(
     scroll: Option<Res<AccumulatedMouseScroll>>,
     egui: Option<Res<EguiWantsInput>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform, &Projection)>,
+    cameras: Query<(&Camera, &RenderTarget, &GlobalTransform, &Projection)>,
     ctl: Option<Res<CameraController>>,
     time: Res<Time<Real>>,
     mut clicks: ResMut<Clicks>,
@@ -544,11 +545,13 @@ fn mouse(
         let c = w.cursor_position()?;
         Some((c, Vec2::new(w.width(), w.height())))
     });
-    // The active camera: the lowest-order active perspective camera (as Q-180's head).
+    // The ray's camera (Q-198): the lowest-order active perspective camera among those
+    // that may be the head (Q-180, Q-310).
+    // Q-198, Q-310
     let camera = cameras
         .iter()
-        .filter(|(c, ..)| c.is_active)
-        .filter_map(|(c, g, p)| match p {
+        .filter(|(c, t, ..)| head_candidate(c, t))
+        .filter_map(|(c, _, g, p)| match p {
             Projection::Perspective(p) => Some((c.order, *g, p.fov)),
             _ => None,
         })
@@ -666,5 +669,55 @@ mod tests {
         let (o, d) = cursor_ray(&g, 1.0, Vec2::new(200.0, 100.0), Vec2::new(100.0, 50.0));
         assert_eq!(o, Vec3::new(0.0, 1.0, 2.0));
         assert!((d - Vec3::NEG_Z).length() < 1e-6);
+    }
+
+    /// Q-198 read through Q-180 and Q-310 (#535): the mouse ray comes from the
+    /// lowest-order active perspective camera that may be the head, so an active
+    /// perspective camera rendering to an image at a lower order than the window
+    /// camera is passed over, and the ray starts at the window camera.
+    #[test]
+    fn mouse_ray_skips_an_image_target_camera_of_a_lower_order() {
+        use bevy::camera::ImageRenderTarget;
+
+        let mut app = App::new();
+        app.add_message::<Intent>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Time<Real>>()
+            .init_resource::<Clicks>()
+            .add_systems(Update, mouse);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(10.0, 10.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        let perspective = || Projection::Perspective(PerspectiveProjection::default());
+        app.world_mut().spawn((
+            Camera {
+                order: -1,
+                ..Default::default()
+            },
+            RenderTarget::Image(ImageRenderTarget::from(Handle::<Image>::default())),
+            perspective(),
+            GlobalTransform::from_xyz(5.0, 0.0, 0.0),
+        ));
+        app.world_mut().spawn((
+            Camera::default(),
+            RenderTarget::Window(Default::default()),
+            perspective(),
+            GlobalTransform::from_xyz(0.0, 1.6, 2.0),
+        ));
+        app.update();
+        let messages = app.world().resource::<Messages<Intent>>();
+        let origins: Vec<Vec3> = messages
+            .get_cursor()
+            .read(messages)
+            .filter_map(|i| match i {
+                Intent::Pointer {
+                    hand: Hand::Mouse,
+                    origin,
+                    ..
+                } => Some(*origin),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(origins, vec![Vec3::new(0.0, 1.6, 2.0)]);
     }
 }
