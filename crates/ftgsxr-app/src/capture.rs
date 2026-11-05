@@ -78,11 +78,25 @@ impl Plugin for CapturePlugin {
     }
 }
 
+/// The fallback tier of an active camera F12 may take, lower first (Q-323): one that may
+/// be the head (a window, the headset's views; Q-310), then one rendering to an image.
+/// A camera without a color target, or with any other target, is never taken.
+// Q-323
+fn fallback_tier(camera: &Camera, target: &RenderTarget) -> Option<u8> {
+    if head_candidate(camera, target) {
+        Some(0)
+    } else if camera.is_active && matches!(target, RenderTarget::Image(_)) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
 /// `Intent::Screenshot` (F12) asks for the desktop camera, else the lowest-order active
-/// camera, one that may be the head (a window, the headset's views) before one that may
-/// not, so the headset's panel cameras are never taken over an eye while a camera
-/// rendering only to an image is still captured (Q-212, Q-310).
-// Q-212, Q-310
+/// camera of the first fallback tier that has one, so the headset's panel cameras are
+/// never taken over an eye while a camera rendering only to an image is still captured;
+/// with none, no request is written (Q-212, Q-310, Q-323).
+// Q-212, Q-310, Q-323
 fn screenshot_intents(
     mut intents: MessageReader<Intent>,
     mut out: MessageWriter<ScreenshotRequest>,
@@ -96,9 +110,9 @@ fn screenshot_intents(
         let camera = desktop.iter().next().or_else(|| {
             cameras
                 .iter()
-                .filter(|(_, c, _)| c.is_active)
-                .min_by_key(|(_, c, t)| (!head_candidate(c, t), c.order))
-                .map(|(e, ..)| e)
+                .filter_map(|(e, c, t)| fallback_tier(c, t).map(|tier| ((tier, c.order), e)))
+                .min_by_key(|(key, _)| *key)
+                .map(|(_, e)| e)
         });
         if let Some(camera) = camera {
             out.write(ScreenshotRequest { camera });
@@ -451,6 +465,69 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::asset::Handle;
+    use bevy::math::UVec2;
+
+    /// An app with only `screenshot_intents`, its messages, and the cameras `spawn` adds.
+    fn fallback_app(spawn: impl FnOnce(&mut World)) -> App {
+        let mut app = App::new();
+        app.add_message::<Intent>()
+            .add_message::<ScreenshotRequest>()
+            .add_systems(Update, screenshot_intents);
+        spawn(app.world_mut());
+        app
+    }
+
+    /// The cameras F12 asks for in one frame.
+    fn requested(app: &mut App) -> Vec<Entity> {
+        app.world_mut().write_message(Intent::Screenshot);
+        app.update();
+        let messages = app.world().resource::<Messages<ScreenshotRequest>>();
+        messages
+            .get_cursor()
+            .read(messages)
+            .map(|r| r.camera)
+            .collect()
+    }
+
+    fn no_color_target(world: &mut World, order: isize) -> Entity {
+        world
+            .spawn((
+                Camera {
+                    order,
+                    ..Default::default()
+                },
+                RenderTarget::None { size: UVec2::ONE },
+            ))
+            .id()
+    }
+
+    /// Q-323 (#531): with no desktop camera and no camera that may be the head, F12 takes
+    /// the image-target camera, never a camera without a color target of lower order.
+    #[test]
+    fn screenshot_intents_take_an_image_camera_over_one_without_a_color_target() {
+        let mut image = Entity::PLACEHOLDER;
+        let mut app = fallback_app(|w| {
+            no_color_target(w, -2);
+            image = w
+                .spawn((
+                    Camera::default(),
+                    RenderTarget::Image(Handle::<bevy::image::Image>::default().into()),
+                ))
+                .id();
+        });
+        assert_eq!(requested(&mut app), vec![image]);
+    }
+
+    /// Q-323 (#531): a camera without a color target alone is never asked for, so F12
+    /// writes no request.
+    #[test]
+    fn screenshot_intents_write_nothing_for_a_camera_without_a_color_target() {
+        let mut app = fallback_app(|w| {
+            no_color_target(w, 0);
+        });
+        assert_eq!(requested(&mut app), Vec::<Entity>::new());
+    }
 
     #[test]
     fn crc32_of_the_standard_vector() {
