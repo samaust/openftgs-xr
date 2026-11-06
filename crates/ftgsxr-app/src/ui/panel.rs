@@ -233,6 +233,8 @@ pub(super) fn panel_layout(
     out: &mut Vec<Out>,
     hv: &mut Option<egui::Id>,
 ) {
+    // Q-333
+    super::touch::touch_pass(ui);
     let (tab, page, asking) = {
         let s = world.resource::<UiState>();
         (s.tab, s.page, s.confirm.is_some())
@@ -361,24 +363,15 @@ pub(crate) fn wrist_buttons(size_px: Vec2) -> [(WristButton, egui::Rect); 4] {
     })
 }
 
-/// How far the wrist menu's pointer may move between a press and its release and still
-/// click, as a share of its texture's width: 1 cm on the 0.16 m quad (Q-265), where
-/// egui's default of 6 points is about 2.6 mm at the panel zoom, less than a quick click
-/// moves on a menu riding a tracked hand (#558).
-// Q-332
-const WRIST_CLICK_SHARE: f32 = 0.01 / 0.16;
-
-/// Draws the wrist menu's buttons over `ui`'s whole texture; the one clicked, if any. It
-/// also sets the context's click tolerance (Q-332), which egui applies from the next pass.
+/// Draws the wrist menu's buttons over `ui`'s whole texture; the one clicked, if any. Its
+/// buttons follow the touch press (Q-332, Q-333).
 pub(crate) fn wrist_ui(ui: &mut egui::Ui, playing: bool) -> Option<WristButton> {
+    // Q-333
+    super::touch::touch_pass(ui);
     let ppp = ui.ctx().pixels_per_point();
     let view = ui.ctx().viewport_rect();
     ui.painter().rect_filled(view, 0.0, ui.visuals().panel_fill);
     let size = view.size() * ppp;
-    // Q-332: 1 cm of the texture's width in pixels, converted to the context's points.
-    let click_dist = WRIST_CLICK_SHARE * size.x / ppp;
-    ui.ctx()
-        .options_mut(|o| o.input_options.max_click_dist = click_dist);
     let mut clicked = None;
     for (b, r) in wrist_buttons(Vec2::new(size.x, size.y)) {
         let rect = egui::Rect::from_min_max(
@@ -456,7 +449,34 @@ mod tests {
         events: Vec<egui::Event>,
         ppp: f32,
     ) -> (Vec<(String, Vec2)>, Option<WristButton>) {
+        wrist_frame_timed(ctx, events, ppp, 0.0)
+    }
+
+    /// `wrist_frame_at` at `time` seconds.
+    fn wrist_frame_timed(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        ppp: f32,
+        time: f64,
+    ) -> (Vec<(String, Vec2)>, Option<WristButton>) {
+        let (texts, clicked, _) = wrist_frame_fills(ctx, events, ppp, time);
+        (texts, clicked)
+    }
+
+    /// `wrist_frame_timed`, with the filled rects painted (in points) and their fills.
+    #[allow(clippy::type_complexity)]
+    fn wrist_frame_fills(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        ppp: f32,
+        time: f64,
+    ) -> (
+        Vec<(String, Vec2)>,
+        Option<WristButton>,
+        Vec<(egui::Rect, egui::Color32)>,
+    ) {
         let input = egui::RawInput {
+            time: Some(time),
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(640.0 / ppp, 200.0 / ppp),
@@ -482,7 +502,15 @@ mod tests {
         full.shapes
             .iter()
             .for_each(|c| walk(&c.shape, ppp, &mut texts));
-        (texts, clicked)
+        let fills = full
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) => Some((r.rect, r.fill)),
+                _ => None,
+            })
+            .collect();
+        (texts, clicked, fills)
     }
 
     /// The panel cameras (§1.8 User interface, #549, `cpu`): with the `Headset` marker,
@@ -617,39 +645,248 @@ mod tests {
         }
     }
 
-    /// Q-332 (#558, `cpu`): a press on a wrist button whose hit slides 8 mm on the
-    /// 0.16 m quad (32 px of 640, within the 3 cm button) before the release still
-    /// clicks it, at `ui_scale` 1 and 1.5; slid 1.2 cm (48 px), it doesn't.
+    /// One frame of the wrist menu as the panel pointer drives it (Q-333): `select`'s
+    /// changes at `pixel` (in the texture's pixels, after a move there), or the pointer
+    /// leaving the quad with `None`, rewritten for the touch press, at `time` seconds.
+    fn wrist_touch_frame(
+        ctx: &egui::Context,
+        last: &mut Option<Vec2>,
+        pixel: Option<Vec2>,
+        select: &[bool],
+        ppp: f32,
+        time: f64,
+    ) -> Option<WristButton> {
+        let at = pixel.map(|p| super::super::panel_point(p, ppp));
+        let events = super::super::touch::touch_events(ctx, pointer_events(*last, at, select, 0.0));
+        *last = at;
+        wrist_frame_timed(ctx, events, ppp, time).1
+    }
+
+    /// The pixel of the wrist button labelled `label` at the zoom `ppp`, after two frames
+    /// that lay the menu out.
+    fn wrist_button_pixel(ctx: &egui::Context, label: &str, ppp: f32) -> Vec2 {
+        wrist_frame_at(ctx, Vec::new(), ppp);
+        let (texts, _) = wrist_frame_at(ctx, Vec::new(), ppp);
+        texts
+            .iter()
+            .find(|(t, _)| t == label)
+            .map(|(_, p)| *p)
+            .unwrap_or_else(|| panic!("the {label} button is drawn"))
+    }
+
+    /// Q-333 (#561, `cpu`): a press on a wrist button whose hit slides 50 px (1.25 cm on
+    /// the 0.16 m quad, past Q-332's former 1 cm, inside the 120 px button) before the
+    /// release clicks it once, at `ui_scale` 1 and 1.5.
     #[test]
-    fn wrist_ui_clicks_a_press_that_slides_less_than_a_centimetre() {
+    fn wrist_ui_touch_a_press_slid_inside_its_button_clicks_on_release() {
         for scale in [1.0, 1.5] {
             let zoom = panel_zoom(scale);
-            for (slide_px, clicks) in [(32.0, 1), (48.0, 0)] {
+            let ctx = egui::Context::default();
+            let pixel = wrist_button_pixel(&ctx, "Panel", zoom);
+            let mut last = None;
+            let mut clicked = Vec::new();
+            for (i, (dx, select)) in [
+                (0.0, vec![]),
+                (0.0, vec![true]),
+                (25.0, vec![]),
+                (50.0, vec![]),
+                (50.0, vec![false]),
+                (50.0, vec![]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let at = pixel + Vec2::new(dx, 0.0);
+                let t = 0.1 * i as f64;
+                clicked.extend(wrist_touch_frame(
+                    &ctx,
+                    &mut last,
+                    Some(at),
+                    &select,
+                    zoom,
+                    t,
+                ));
+            }
+            assert_eq!(clicked, vec![WristButton::Panel], "ui_scale {scale}");
+        }
+    }
+
+    /// Q-333 (#561, `cpu`): the touch press's cases on the "Panel" wrist button, at
+    /// `ui_scale` 1 and 1.5, each frame a hit (in pixels from the button's centre, `None`
+    /// off the quad), `select`'s changes there and the time: a press held 2 s clicks once;
+    /// slid 2 px (within egui's own tolerance) once, not twice; slid 200 px out of the
+    /// 120 px button and released there, never; slid out and back in, then released
+    /// inside, once; taken off the quad, where its release never reaches the menu, and
+    /// back, never (leaving the quad cancels the press); slid 4 px out over the button's
+    /// edge from a press near it and released there, never; pressed 3 px outside the
+    /// button (egui hits it within its `interact_radius`) and released there, never, or
+    /// slid inside and released, once.
+    #[test]
+    fn wrist_ui_touch_a_press_clicks_on_a_release_inside_and_only_there() {
+        type Frame = (Option<f32>, Vec<bool>, f64);
+        let f = |dx: Option<f32>, select: &[bool], t: f64| -> Frame { (dx, select.to_vec(), t) };
+        let cases: [(&str, Vec<Frame>, usize); 8] = [
+            (
+                "held 2 s",
+                vec![
+                    f(Some(0.0), &[], 0.0),
+                    f(Some(0.0), &[true], 0.1),
+                    f(Some(0.0), &[], 1.0),
+                    f(Some(0.0), &[false], 2.1),
+                ],
+                1,
+            ),
+            (
+                "slid 2 px",
+                vec![
+                    f(Some(0.0), &[], 0.0),
+                    f(Some(0.0), &[true], 0.1),
+                    f(Some(2.0), &[false], 0.2),
+                ],
+                1,
+            ),
+            (
+                "released outside",
+                vec![
+                    f(Some(0.0), &[], 0.0),
+                    f(Some(0.0), &[true], 0.1),
+                    f(Some(200.0), &[], 0.2),
+                    f(Some(200.0), &[false], 0.3),
+                ],
+                0,
+            ),
+            (
+                "out and back",
+                vec![
+                    f(Some(0.0), &[], 0.0),
+                    f(Some(0.0), &[true], 0.1),
+                    f(Some(200.0), &[], 0.2),
+                    f(Some(10.0), &[], 0.3),
+                    f(Some(10.0), &[false], 0.4),
+                ],
+                1,
+            ),
+            (
+                "off the quad and back",
+                vec![
+                    f(Some(0.0), &[], 0.0),
+                    f(Some(0.0), &[true], 0.1),
+                    f(None, &[], 0.2),
+                    f(Some(0.0), &[], 0.3),
+                    f(Some(0.0), &[false], 0.4),
+                ],
+                0,
+            ),
+            (
+                "pressed just outside, released there",
+                vec![
+                    f(Some(63.0), &[], 0.0),
+                    f(Some(63.0), &[true], 0.1),
+                    f(Some(63.0), &[], 0.2),
+                    f(Some(63.0), &[false], 0.3),
+                ],
+                0,
+            ),
+            (
+                "pressed just outside, slid inside",
+                vec![
+                    f(Some(63.0), &[], 0.0),
+                    f(Some(63.0), &[true], 0.1),
+                    f(Some(40.0), &[], 0.2),
+                    f(Some(40.0), &[false], 0.3),
+                ],
+                1,
+            ),
+            (
+                "just over the edge",
+                vec![
+                    f(Some(57.0), &[], 0.0),
+                    f(Some(57.0), &[true], 0.1),
+                    f(Some(61.0), &[false], 0.2),
+                ],
+                0,
+            ),
+        ];
+        for scale in [1.0, 1.5] {
+            let zoom = panel_zoom(scale);
+            for (name, frames, clicks) in &cases {
                 let ctx = egui::Context::default();
-                wrist_frame_at(&ctx, Vec::new(), zoom);
-                let (texts, _) = wrist_frame_at(&ctx, Vec::new(), zoom);
-                let pixel = texts
-                    .iter()
-                    .find(|(t, _)| t == "Panel")
-                    .map(|(_, p)| *p)
-                    .expect("the Panel button is drawn");
+                let pixel = wrist_button_pixel(&ctx, "Panel", zoom);
                 let mut last = None;
                 let mut clicked = Vec::new();
-                for (select, dx) in [
-                    (vec![], 0.0),
-                    (vec![true], 0.0),
-                    (vec![false], slide_px),
-                    (vec![], slide_px),
-                ] {
-                    let at = super::super::panel_point(pixel + Vec2::new(dx, 0.0), zoom);
-                    let events = pointer_events(last, Some(at), &select, 0.0);
-                    last = Some(at);
-                    clicked.extend(wrist_frame_at(&ctx, events, zoom).1);
+                for (dx, select, t) in frames.iter().cloned().chain([(Some(0.0), vec![], 3.0)]) {
+                    let at = dx.map(|dx| pixel + Vec2::new(dx, 0.0));
+                    clicked.extend(wrist_touch_frame(&ctx, &mut last, at, &select, zoom, t));
                 }
                 assert_eq!(
                     clicked,
-                    vec![WristButton::Panel; clicks],
-                    "ui_scale {scale}, slid {slide_px} px"
+                    vec![WristButton::Panel; *clicks],
+                    "ui_scale {scale}, {name}"
+                );
+            }
+        }
+    }
+
+    /// Q-333 (#561, `cpu`): during one press on the "Panel" wrist button, the button
+    /// paints with egui's pressed (active) fill while the hit is inside it and not while
+    /// it is outside, both once the hit has moved past egui's own click tolerance (50 px
+    /// in, 200 px out, 10 px back in) and before (4 px out over its edge). A press taken
+    /// off the quad, where its release never reaches the menu, is over: back on the
+    /// button with `select` up, it doesn't look pressed (`None` is off the quad).
+    #[test]
+    fn wrist_ui_touch_a_button_looks_pressed_only_while_the_hit_is_inside() {
+        let zoom = PANEL_ZOOM;
+        let (_, rect_px) = wrist_buttons(Vec2::new(640.0, 200.0))[1];
+        let rect = egui::Rect::from_min_max(
+            (rect_px.min.to_vec2() / zoom).to_pos2(),
+            (rect_px.max.to_vec2() / zoom).to_pos2(),
+        );
+        let pressed_fill = egui::Style::default().visuals.widgets.active.weak_bg_fill;
+        for (start, moves) in [
+            (
+                0.0,
+                vec![(Some(50.0), true), (Some(200.0), false), (Some(10.0), true)],
+            ),
+            (57.0, vec![(Some(61.0), false)]),
+            (
+                0.0,
+                vec![(None, false), (Some(0.0), false), (Some(10.0), false)],
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let pixel = wrist_button_pixel(&ctx, "Panel", zoom);
+            let mut last = None;
+            let mut t = 0.0;
+            let mut frame = |dx: Option<f32>, select: &[bool]| {
+                t += 0.1;
+                let at = dx.map(|dx| super::super::panel_point(pixel + Vec2::new(dx, 0.0), zoom));
+                let events =
+                    super::super::touch::touch_events(&ctx, pointer_events(last, at, select, 0.0));
+                last = at;
+                let (_, _, fills) = wrist_frame_fills(&ctx, events, zoom, t);
+                fills
+                    .into_iter()
+                    .find(|(r, _)| (r.center() - rect.center()).length() < 1.0)
+                    .map(|(_, f)| f)
+                    .expect("the Panel button paints its rect")
+            };
+            frame(Some(start), &[]);
+            frame(Some(start), &[true]);
+            let off_quad = moves.first().is_some_and(|(dx, _)| dx.is_none());
+            for (dx, inside) in moves {
+                frame(dx, &[]);
+                let fill = frame(dx, &[]);
+                assert_eq!(
+                    fill == pressed_fill,
+                    inside,
+                    "from {start} px, at {dx:?} px"
+                );
+            }
+            // Off the quad the press ends: it isn't left held in the context.
+            if off_quad {
+                assert!(
+                    !ctx.input(|i| i.pointer.primary_down()),
+                    "a press left held"
                 );
             }
         }
@@ -824,8 +1061,20 @@ mod tests {
         (w, h, zoom): (f32, f32, f32),
         events: Vec<egui::Event>,
     ) -> (Vec<egui::epaint::ClippedShape>, Vec<Out>, Option<egui::Id>) {
+        texture_shapes_at(ctx, world, (w, h, zoom), events, None)
+    }
+
+    /// `texture_shapes` at `time` seconds (egui's own clock when `None`).
+    fn texture_shapes_at(
+        ctx: &egui::Context,
+        world: &mut World,
+        (w, h, zoom): (f32, f32, f32),
+        events: Vec<egui::Event>,
+        time: Option<f64>,
+    ) -> (Vec<egui::epaint::ClippedShape>, Vec<Out>, Option<egui::Id>) {
         ctx.set_zoom_factor(zoom);
         let input = egui::RawInput {
+            time,
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(w / zoom, h / zoom),
@@ -1004,5 +1253,157 @@ mod tests {
             press(&mut world, "◀ Back");
             assert_eq!(world.resource::<UiState>().page, None, "{tex:?}");
         }
+    }
+
+    /// What the touch tests' probe section saw: the items clicked and the slider's value.
+    #[derive(Resource, Default)]
+    struct TouchProbe {
+        clicks: Vec<usize>,
+        value: f32,
+    }
+
+    /// A section under the main panel's tab: a slider, a 120-point list that scrolls by
+    /// dragging its content (which egui does only on a touch screen by default) of 20
+    /// "Drag item" buttons, then 40 "Item" buttons, so the panel's own list scrolls; each
+    /// records itself in `TouchProbe` (an "Item" by its index, a "Drag item" by 100 more).
+    fn touch_probe_section(world: &mut World, ui: &mut egui::Ui) {
+        let mut probe = world.resource_mut::<TouchProbe>();
+        ui.add(egui::Slider::new(&mut probe.value, 0.0..=1.0));
+        egui::ScrollArea::vertical()
+            .id_salt("touch-probe-drag")
+            .max_height(120.0)
+            .scroll_source(egui::scroll_area::ScrollSource::ALL)
+            .show(ui, |ui| {
+                for i in 0..20 {
+                    if ui.button(format!("Drag item {i}")).clicked() {
+                        probe.clicks.push(100 + i);
+                    }
+                }
+            });
+        for i in 0..40 {
+            if ui.button(format!("Item {i}")).clicked() {
+                probe.clicks.push(i);
+            }
+        }
+    }
+
+    /// The main panel on a 1024 × 768 px texture at the panel zoom as the panel pointer
+    /// drives it (Q-333): from two frames that lay it out, each frame of `frames` (a hit
+    /// as `TouchFrame` says)
+    /// rewritten for the touch press; what the user did.
+    fn touch_panel(world: &mut World, label: &str, frames: &[TouchFrame]) -> Vec<Out> {
+        let tex = (1024.0, 768.0, PANEL_ZOOM);
+        let ctx = egui::Context::default();
+        // Labels as wide as their text, so a slide can stay inside one.
+        assert!(super::super::load_system_font(&ctx), "a system font");
+        texture_frame(&ctx, world, tex, Vec::new());
+        let (texts, _, _) = texture_frame(&ctx, world, tex, Vec::new());
+        let c = texts
+            .iter()
+            .find(|(t, _)| t == label)
+            .map(|(_, r)| r.center())
+            .unwrap_or_else(|| panic!("{label} is drawn: {texts:?}"));
+        let (mut last, mut outs) = (None, Vec::new());
+        for (d, select, t, scroll) in frames {
+            let at = super::super::panel_point(Vec2::new(c.x, c.y) + *d, tex.2);
+            let events = super::super::touch::touch_events(
+                &ctx,
+                pointer_events(last, Some(at), select, *scroll),
+            );
+            last = Some(at);
+            outs.extend(texture_shapes_at(&ctx, world, tex, events, Some(*t)).1);
+        }
+        outs
+    }
+
+    /// One frame of `touch_panel`: the hit in pixels from the label's centre, `select`'s
+    /// changes there, the time and the stick's scroll in pixels.
+    type TouchFrame = (Vec2, Vec<bool>, f64, f32);
+
+    /// A press, then the moves (in pixels), then the release where the last move left
+    /// it, 0.1 s apart from t = 1 s, with no scroll.
+    fn touch_frames(moves: &[Vec2]) -> Vec<TouchFrame> {
+        let mut frames = vec![
+            (Vec2::ZERO, vec![], 1.0, 0.0),
+            (Vec2::ZERO, vec![true], 1.1, 0.0),
+        ];
+        for (i, &d) in moves.iter().enumerate() {
+            frames.push((d, vec![], 1.2 + 0.1 * i as f64, 0.0));
+        }
+        let end = moves.last().copied().unwrap_or(Vec2::ZERO);
+        frames.push((end, vec![false], 1.2 + 0.1 * moves.len() as f64, 0.0));
+        frames.push((end, vec![], 1.3 + 0.1 * moves.len() as f64, 0.0));
+        frames
+    }
+
+    /// Q-333 (#561, `cpu`): a press on the main panel's "Playback" tab whose hit slides
+    /// 20 px (past egui's own tolerance of 6 points, 10.5 px at the panel zoom, inside the
+    /// tab) before the release switches to that tab, the click cue playing once.
+    #[test]
+    fn panel_layout_touch_a_tab_press_slid_inside_the_tab_clicks_it_once() {
+        let mut world = panel_world(Tab::Scene);
+        let out = touch_panel(
+            &mut world,
+            "Playback",
+            &touch_frames(&[Vec2::new(10.0, 0.0), Vec2::new(20.0, 0.0)]),
+        );
+        assert_eq!(world.resource::<UiState>().tab, Tab::Playback);
+        let cues = out
+            .iter()
+            .filter(|o| matches!(o, Out::Cue(UiCue::Click)))
+            .count();
+        assert_eq!(cues, 1, "the click cue plays once");
+    }
+
+    /// Q-333 (#561, `cpu`): a button in the main panel's list, which scrolls by the stick
+    /// and its scroll bar but not by dragging its content (egui's default off a touch
+    /// screen), clicks on a release inside: pressed and released in place, held 2 s, or
+    /// slid 60 px up onto another button and back. A button in a list that scrolls by
+    /// dragging its content doesn't click when the press drags the list 60 px and comes
+    /// back, as a scroll takes the touch from the button under it, nor when the stick
+    /// scrolls the list during the press; and a slider still
+    /// drags (a press moved 200 px right raises its value).
+    #[test]
+    fn panel_layout_touch_list_buttons_click_inside_unless_a_scroll_and_sliders_drag() {
+        let world_with_probe = || {
+            let mut world = panel_world(Tab::Help);
+            world.init_resource::<TouchProbe>();
+            world
+                .resource_mut::<super::super::DockHooks>()
+                .add(Tab::Help, touch_probe_section);
+            world
+        };
+        let up = Vec2::new(0.0, -60.0);
+        let there_and_back = touch_frames(&[up * 0.5, up, up * 0.5, Vec2::ZERO]);
+        let mut held = touch_frames(&[]);
+        for frame in &mut held[2..] {
+            frame.2 += 2.0;
+        }
+        let mut scrolled = touch_frames(&[Vec2::ZERO]);
+        scrolled[2].3 = -40.0;
+        let cases = [
+            ("in place", "Item 3", touch_frames(&[]), vec![3]),
+            ("held 2 s", "Item 3", held, vec![3]),
+            ("out and back", "Item 3", there_and_back.clone(), vec![3]),
+            ("dragged list", "Drag item 1", there_and_back, vec![]),
+            ("stick scroll", "Item 3", scrolled, vec![]),
+        ];
+        for (name, label, frames, clicks) in cases {
+            let mut world = world_with_probe();
+            touch_panel(&mut world, label, &frames);
+            assert_eq!(world.resource::<TouchProbe>().clicks, clicks, "{name}");
+        }
+        let mut world = world_with_probe();
+        // The slider's rail, left of its value's text.
+        let rail = Vec2::new(-120.0, 0.0);
+        let frames: Vec<_> = touch_frames(&[Vec2::new(100.0, 0.0), Vec2::new(200.0, 0.0)])
+            .into_iter()
+            .map(|(d, select, t, scroll)| (d + rail, select, t, scroll))
+            .collect();
+        touch_panel(&mut world, "0.000", &frames);
+        assert!(
+            world.resource::<TouchProbe>().value > 0.0,
+            "the slider drags"
+        );
     }
 }
