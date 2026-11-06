@@ -1223,9 +1223,10 @@ mod tests {
     #[test]
     fn arbitration_a_quad_takes_the_ray_from_inside_an_instance() {
         use bevy::prelude::Transform;
-        // The wrist menu's quad 15 cm ahead, then the main panel 0.5 m ahead.
+        // The wrist menu's quad (Q-265's size) 15 cm ahead, then the main panel 0.5 m
+        // ahead.
         for (title_bar, ahead, size_m, size_px) in [
-            (false, 0.15, Vec2::new(0.12, 0.09), UVec2::new(256, 192)),
+            (false, 0.15, Vec2::new(0.16, 0.05), UVec2::new(640, 200)),
             (true, 0.5, Vec2::new(0.56, 0.42), UVec2::new(1024, 768)),
         ] {
             let (mut app, instance) = inside_p1();
@@ -1267,10 +1268,22 @@ mod tests {
     }
 
     /// Q-317 (#550's added test; §1.8 Rays): from inside P1's box with no quad hit, the
-    /// pinch selects and grabs the enclosing instance.
+    /// pinch selects and grabs the enclosing instance, a quad off the ray in the scene.
     #[test]
     fn arbitration_from_inside_an_instance_with_no_quad_the_pinch_grabs_it() {
+        use bevy::prelude::Transform;
         let (mut app, instance) = inside_p1();
+        // A quad off the ray: 1 m to the side, 0.5 m ahead.
+        let aside = Transform::from_xyz(1.0, 0.0, 2.5);
+        app.world_mut().spawn((
+            PanelQuad {
+                size_m: Vec2::new(0.56, 0.42),
+                size_px: UVec2::new(1024, 768),
+                title_bar: true,
+            },
+            aside,
+            GlobalTransform::from(aside),
+        ));
         pinching(&mut app, 0.0);
         app.update();
         let hovered = app.world().get::<Hovered>(instance).copied();
@@ -1279,8 +1292,17 @@ mod tests {
         app.update();
         app.update();
         assert!(app.world().get::<Selected>(instance).is_some(), "selected");
-        assert!(app.world().get::<Grabbed>(instance).is_some(), "grabbed");
-        assert!(app.world().resource::<Seen>().0.is_empty(), "no quad");
+        assert!(
+            matches!(
+                app.world().get::<Grabbed>(instance),
+                Some(Grabbed::One {
+                    hand: Hand::Right,
+                    ..
+                })
+            ),
+            "grabbed by the right hand"
+        );
+        assert!(app.world().resource::<Seen>().0.is_empty(), "no quad hit");
     }
 
     /// Q-315 (Q-306's side effect removed): a pinch on the main panel's title bar is
