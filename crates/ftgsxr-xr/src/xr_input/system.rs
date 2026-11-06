@@ -1044,6 +1044,10 @@ mod tests {
         );
     }
 
+    /// §1.8 Rays ("drawn as a thin line to the first hit … with a dot at the hit
+    /// point"), Q-304 as changed (#552's added test): two rays on one instance each
+    /// end at their own entry point on its box, with a dot, whichever hand holds its
+    /// `Hovered` (Q-182: the nearer one).
     #[test]
     fn two_rays_on_one_instance_each_end_at_their_own_hit() {
         let (mut app, instance) = app_with_p1();
