@@ -82,6 +82,7 @@ const GRAB_POINTS_MIN_M: f32 = 0.05;
 /// hit's pixel, in the frame of the panel's pose whose scale is the width: x across the
 /// width from −1/2 to 1/2, y up the height, from −3/8 to 3/8 at the 4:3 aspect, the
 /// texture's top-left at the quad's top-left (Q-210).
+// Q-210
 fn quad_point(pixel: Vec2, size_px: UVec2) -> Vec3 {
     let uv = pixel / size_px.as_vec2();
     Vec3::new(uv.x - 0.5, ASPECT * (0.5 - uv.y), 0.0)
@@ -92,13 +93,13 @@ fn quad_point(pixel: Vec2, size_px: UVec2) -> Vec3 {
 /// in the hand; both zero, the hands' aim positions, when the points lie closer than
 /// `GRAB_POINTS_MIN_M` (spec revision 34).
 fn grab_offsets(pose: Pose, hands: [Pose; 2], points: [Vec3; 2]) -> [Vec3; 2] {
-    let g = points.map(|p| pose.transform_point(p));
-    if g[0].distance(g[1]) < GRAB_POINTS_MIN_M {
+    let stage = points.map(|p| pose.transform_point(p));
+    if stage[0].distance(stage[1]) < GRAB_POINTS_MIN_M {
         return [Vec3::ZERO; 2];
     }
     [
-        hands[0].inverse().transform_point(g[0]),
-        hands[1].inverse().transform_point(g[1]),
+        hands[0].inverse().transform_point(stage[0]),
+        hands[1].inverse().transform_point(stage[1]),
     ]
 }
 
@@ -324,8 +325,11 @@ pub(crate) fn grab(
             }
             PanelGrab::Two { points, .. } => {
                 let Some(rest) = other(hand) else { continue };
-                // The other hand keeps its grab point on the quad.
-                let point = points[usize::from(rest == Hand::Right)];
+                // The other hand keeps its grab point on the quad (left first).
+                let point = match rest {
+                    Hand::Left => points[0],
+                    _ => points[1],
+                };
                 edges.write(PanelGrabEdge(hand));
                 *held = match aim(rest) {
                     Some(a) => PanelGrab::One {
@@ -837,7 +841,7 @@ mod tests {
     /// quad that the grabs took hold of stay with their hands, each keeping its place on
     /// the quad, from hands that do not stand where the points are.
     #[test]
-    fn two_hand_resize_keeps_the_grab_points_on_the_quad() {
+    fn grab_keeps_the_grab_points_on_the_quad() {
         let mut app = app(at(Vec3::new(0.0, 1.6, 0.0), Quat::IDENTITY));
         toggle_panel(&mut app);
         let (panel, t0, _) = main_panel(&mut app);
@@ -845,19 +849,22 @@ mod tests {
         let tracked = |p: Pose| Some(hand(p, p, HandSource::Controller));
         set_hand(&mut app, Hand::Left, tracked(a(-0.1, -0.5)));
         set_hand(&mut app, Hand::Right, tracked(a(0.1, -0.5)));
+        // Level, in the title bar's row, off the quad's centre line.
         let (pl, pr) = (Vec2::new(200.0, 20.0), Vec2::new(800.0, 20.0));
         press(&mut app, Hand::Left, panel, pl);
         app.update();
         press(&mut app, Hand::Right, panel, pr);
         app.update();
-        // The grab points in stage space: the pixels on the 0.56 m quad at its pose.
+        // A pixel's stage point, worked from Q-210: the 1024 × 768 texture's top-left at
+        // the quad's top-left, x to the right across the width, y down the height, on
+        // the quad of the transform's width and height about its centre.
         let stage = |t: &Transform, px: Vec2| {
-            let pose = Pose {
-                translation: t.translation,
-                rotation: t.rotation,
-                scale: t.scale.x,
-            };
-            pose.transform_point(quad_point(px, PANEL_PX))
+            let local = Vec3::new(
+                (px.x / 1024.0 - 0.5) * t.scale.x,
+                (0.5 - px.y / 768.0) * t.scale.y,
+                0.0,
+            );
+            t.translation + t.rotation * local
         };
         let (gl, gr) = (stage(&t0, pl), stage(&t0, pr));
         // The hands move apart and toward the user, level.
@@ -866,6 +873,7 @@ mod tests {
         set_hand(&mut app, Hand::Right, tracked(a(0.1 + dr.x, -0.5 + dr.z)));
         app.update();
         let (_, t1, _) = main_panel(&mut app);
+        assert!(t1.scale.x > t0.scale.x * 1.1, "resized");
         for (px, g, what) in [(pl, gl + dl, "left"), (pr, gr + dr, "right")] {
             let got = stage(&t1, px);
             assert!(
