@@ -288,10 +288,11 @@ fn push_pull_moves_along_the_ray() {
             axis: 1.0,
         }],
     );
-    // 0.5 m/s times the distance, over one 60 Hz frame, away along −z.
+    // §1.8 (revision 35): 1 m/s times the distance in metres, over one 60 Hz frame,
+    // away along −z; within U-32's 10⁻⁵.
     let dt = support::FRAME.as_secs_f32();
     let dz = pose(&t, e).translation.z - z0;
-    assert!((dz + 0.5 * d * dt).abs() < 1e-5, "{dz}");
+    assert!((dz + 1.0 * d * dt).abs() < 1e-5, "{dz}");
     // The grab holds the new place.
     send(
         &mut t,

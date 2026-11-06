@@ -59,7 +59,7 @@ impl Default for ManipulateSettings {
             },
             ray_max_m: 10.0,
             keep_upright: true,
-            push_pull_mps: 0.5,
+            push_pull_mps: 1.0,
         }
     }
 }
