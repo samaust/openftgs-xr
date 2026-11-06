@@ -298,14 +298,18 @@ fn unapply(p: &Pose, y: Vec3) -> Vec3 {
     p.rotation.inverse() * (y - p.translation) / p.scale
 }
 
+/// The stage point of the box-normalized point `n` under `p`.
+fn on_box(p: &Pose, n: Vec3) -> Vec3 {
+    apply(p, BOX_MIN + n * (BOX_MAX - BOX_MIN))
+}
+
 /// Two grab points on the posed box, given by their box-normalized coordinates, then
 /// moved at random: the grab points' box-normalized coordinates under the returned
 /// poses, for each motion.
-fn grab_point_runs(seed: u64, free_rotation: bool) -> Vec<(Vec3, Vec3, Vec3)> {
+fn grab_point_runs(seed: u64, free_rotation: bool, na: Vec3, nb: Vec3) -> Vec<(Vec3, Vec3, Vec3)> {
     let mut rng = Rng(seed);
     let model0 = tilted_model();
-    let at = |n: Vec3| apply(&model0, BOX_MIN + n * (BOX_MAX - BOX_MIN));
-    let (a0, b0) = (at(Vec3::new(0.1, 0.8, 1.0)), at(Vec3::new(0.9, 0.3, 0.0)));
+    let (a0, b0) = (on_box(&model0, na), on_box(&model0, nb));
     let grab = TwoHandGrab::begin(hand_at(a0, &mut rng), hand_at(b0, &mut rng), model0);
     (0..100)
         .map(|_| {
@@ -332,18 +336,17 @@ fn grab_point_runs(seed: u64, free_rotation: bool) -> Vec<(Vec3, Vec3, Vec3)> {
 #[test]
 fn u16_grab_points_keep_their_box_coordinates() {
     let (na, nb) = (Vec3::new(0.1, 0.8, 1.0), Vec3::new(0.9, 0.3, 0.0));
+    let model0 = tilted_model();
     let nm = normalized(unapply(
-        &tilted_model(),
-        (apply(&tilted_model(), BOX_MIN + na * (BOX_MAX - BOX_MIN))
-            + apply(&tilted_model(), BOX_MIN + nb * (BOX_MAX - BOX_MIN)))
-            * 0.5,
+        &model0,
+        (on_box(&model0, na) + on_box(&model0, nb)) * 0.5,
     ));
-    for (a, b, m) in grab_point_runs(0x5EED_6016, true) {
+    for (a, b, m) in grab_point_runs(0x5EED_6016, true, na, nb) {
         assert_vec3(a, na, "free rotation: the first grab point");
         assert_vec3(b, nb, "free rotation: the second grab point");
         assert_vec3(m, nm, "free rotation: the midpoint");
     }
-    for (_, _, m) in grab_point_runs(0x5EED_7016, false) {
+    for (_, _, m) in grab_point_runs(0x5EED_7016, false, na, nb) {
         assert_vec3(m, nm, "keep upright: the midpoint");
     }
 }
