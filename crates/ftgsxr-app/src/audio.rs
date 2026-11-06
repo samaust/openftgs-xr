@@ -978,6 +978,8 @@ mod kira_output {
     use std::sync::{Arc, Mutex, MutexGuard};
     use std::time::Duration;
 
+    use kira::backend::Backend;
+    use kira::sound::PlaybackState;
     use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
     use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Frame, Tween};
 
@@ -999,44 +1001,104 @@ mod kira_output {
         }
     }
 
-    struct Inner {
-        manager: AudioManager<DefaultBackend>,
+    struct Inner<B: Backend> {
+        manager: AudioManager<B>,
         clips: HashMap<UiSound, StaticSoundData>,
-        sinks: HashMap<SinkId, StaticSoundHandle>,
+        sinks: HashMap<SinkId, Sink>,
         next: u64,
     }
 
-    pub(super) struct KiraOutput {
-        inner: Option<Mutex<Inner>>,
+    /// A soundtrack's sink: its handle, and its data, gain and pan to play it again once
+    /// kira has stopped and dropped a sound that played to its end (#538).
+    struct Sink {
+        handle: StaticSoundHandle,
+        data: StaticSoundData,
+        gain: f32,
+        pan: f32,
+    }
+
+    impl<B: Backend> Inner<B> {
+        /// The sink, played again paused at `position_s` with its gain and pan if kira
+        /// stopped it (#538).
+        fn revive(&mut self, sink: SinkId, position_s: f64) -> Option<&mut Sink> {
+            let s = self.sinks.get_mut(&sink)?;
+            if s.handle.state() == PlaybackState::Stopped {
+                let data = s
+                    .data
+                    .volume(decibels(s.gain))
+                    .panning(s.pan)
+                    .start_position(position_s);
+                match self.manager.play(data) {
+                    Ok(mut h) => {
+                        h.pause(NOW);
+                        s.handle = h;
+                    }
+                    Err(e) => bevy::log::warn!("soundtrack {sink:?}: {e}"),
+                }
+            }
+            Some(s)
+        }
+    }
+
+    /// Generic over kira's backend, so that a private test drives it on `MockBackend`.
+    pub(super) struct KiraOutput<B: Backend = DefaultBackend> {
+        inner: Option<Mutex<Inner<B>>>,
         unavailable: Option<String>,
     }
 
     impl KiraOutput {
         pub(super) fn new() -> KiraOutput {
             match AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()) {
-                Ok(manager) => KiraOutput {
-                    inner: Some(Mutex::new(Inner {
-                        manager,
-                        clips: HashMap::new(),
-                        sinks: HashMap::new(),
-                        next: 0,
-                    })),
-                    unavailable: None,
-                },
+                Ok(manager) => KiraOutput::with_manager(manager),
                 Err(e) => KiraOutput {
                     inner: None,
                     unavailable: Some(e.to_string()),
                 },
             }
         }
+    }
 
-        fn lock(&self) -> Option<MutexGuard<'_, Inner>> {
+    impl<B: Backend> KiraOutput<B> {
+        fn with_manager(manager: AudioManager<B>) -> KiraOutput<B> {
+            KiraOutput {
+                inner: Some(Mutex::new(Inner {
+                    manager,
+                    clips: HashMap::new(),
+                    sinks: HashMap::new(),
+                    next: 0,
+                })),
+                unavailable: None,
+            }
+        }
+
+        fn lock(&self) -> Option<MutexGuard<'_, Inner<B>>> {
             self.inner
                 .as_ref()
                 .map(|m| m.lock().unwrap_or_else(|e| e.into_inner()))
         }
 
-        fn with_sink(&self, sink: SinkId, f: impl FnOnce(&mut StaticSoundHandle)) {
+        /// A new sink of `data`, paused at 0 with gain 0; its duration in seconds.
+        fn add_data(&self, data: StaticSoundData) -> Result<(SinkId, f64), String> {
+            let duration_s = data.duration().as_secs_f64();
+            let mut inner = self.lock().ok_or("no output device")?;
+            let mut handle = inner
+                .manager
+                .play(data.volume(Decibels::SILENCE))
+                .map_err(|e| e.to_string())?;
+            handle.pause(NOW);
+            let id = SinkId(inner.next);
+            inner.next += 1;
+            let sink = Sink {
+                handle,
+                data,
+                gain: 0.0,
+                pan: 0.0,
+            };
+            inner.sinks.insert(id, sink);
+            Ok((id, duration_s))
+        }
+
+        fn with_sink(&self, sink: SinkId, f: impl FnOnce(&mut Sink)) {
             if let Some(mut inner) = self.lock()
                 && let Some(h) = inner.sinks.get_mut(&sink)
             {
@@ -1045,7 +1107,7 @@ mod kira_output {
         }
     }
 
-    impl AudioOutput for KiraOutput {
+    impl<B: Backend + Send> AudioOutput for KiraOutput<B> {
         fn unavailable(&self) -> Option<String> {
             self.unavailable.clone()
         }
@@ -1079,45 +1141,49 @@ mod kira_output {
             // Decoded here, on the caller's (compute) thread, outside the lock.
             let data = StaticSoundData::from_cursor(Cursor::new(bytes.to_vec()))
                 .map_err(|e| e.to_string())?;
-            let duration_s = data.duration().as_secs_f64();
-            let mut inner = self.lock().ok_or("no output device")?;
-            let mut handle = inner
-                .manager
-                .play(data.volume(Decibels::SILENCE))
-                .map_err(|e| e.to_string())?;
-            handle.pause(NOW);
-            let id = SinkId(inner.next);
-            inner.next += 1;
-            inner.sinks.insert(id, handle);
-            Ok((id, duration_s))
+            self.add_data(data)
         }
-
         fn remove(&self, sink: SinkId) {
             if let Some(mut inner) = self.lock()
-                && let Some(mut h) = inner.sinks.remove(&sink)
+                && let Some(mut s) = inner.sinks.remove(&sink)
             {
-                h.stop(NOW);
+                s.handle.stop(NOW);
             }
         }
 
         fn seek(&self, sink: SinkId, position_s: f64) {
-            self.with_sink(sink, |h| h.seek_to(position_s));
+            if let Some(mut inner) = self.lock()
+                && let Some(s) = inner.revive(sink, position_s)
+            {
+                s.handle.seek_to(position_s);
+            }
         }
 
         fn pause(&self, sink: SinkId) {
-            self.with_sink(sink, |h| h.pause(NOW));
+            self.with_sink(sink, |s| s.handle.pause(NOW));
         }
 
+        // #538: a stopped sink resumed without a seek plays again from 0.
         fn resume(&self, sink: SinkId) {
-            self.with_sink(sink, |h| h.resume(NOW));
+            if let Some(mut inner) = self.lock()
+                && let Some(s) = inner.revive(sink, 0.0)
+            {
+                s.handle.resume(NOW);
+            }
         }
 
+        // #538: `None` once kira has stopped the sound at its end.
         fn position(&self, sink: SinkId) -> Option<f64> {
-            self.lock()?.sinks.get(&sink).map(|h| h.position())
+            let inner = self.lock()?;
+            let s = inner.sinks.get(&sink)?;
+            (s.handle.state() != PlaybackState::Stopped).then(|| s.handle.position())
         }
 
         fn set_gain(&self, sink: SinkId, gain: f32) {
-            self.with_sink(sink, |h| h.set_volume(decibels(gain), NOW));
+            self.with_sink(sink, |s| {
+                s.gain = gain;
+                s.handle.set_volume(decibels(gain), NOW);
+            });
         }
 
         // Q-268, Q-280: kira's `Panning` runs from −1 (left) to 1 (right), as the port's
@@ -1128,7 +1194,72 @@ mod kira_output {
             } else {
                 0.0
             };
-            self.with_sink(sink, |h| h.set_panning(pan, NOW));
+            self.with_sink(sink, |s| {
+                s.pan = pan;
+                s.handle.set_panning(pan, NOW);
+            });
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use kira::backend::mock::{MockBackend, MockBackendSettings};
+
+        const RATE: u32 = 1000;
+
+        /// One mixer step on the mock backend: 128 frames, 0.128 s at `RATE`.
+        fn step(out: &KiraOutput<MockBackend>) {
+            let mut inner = out.lock().unwrap();
+            let backend = inner.manager.backend_mut();
+            backend.on_start_processing();
+            backend.process();
+            backend.on_start_processing();
+        }
+
+        // #538: kira stops a sound that played to its end and the mixer drops it; a seek
+        // to 0 then a resume plays the sink again from 0.
+        #[test]
+        fn kira_output_plays_a_sink_again_after_its_end() {
+            let manager = AudioManager::<MockBackend>::new(AudioManagerSettings {
+                backend_settings: MockBackendSettings { sample_rate: RATE },
+                ..Default::default()
+            })
+            .unwrap();
+            let out = KiraOutput::with_manager(manager);
+            // 0.5 s of a constant tone.
+            let data = StaticSoundData {
+                sample_rate: RATE,
+                frames: vec![Frame::from_mono(0.5); RATE as usize / 2].into(),
+                settings: StaticSoundSettings::default(),
+                slice: None,
+            };
+            let (sink, duration_s) = out.add_data(data).unwrap();
+            assert!((duration_s - 0.5).abs() < 1e-9);
+            out.set_gain(sink, 1.0);
+            out.resume(sink);
+            for _ in 0..10 {
+                step(&out);
+            }
+            let state = |out: &KiraOutput<MockBackend>| {
+                out.lock()
+                    .unwrap()
+                    .sinks
+                    .get(&sink)
+                    .map(|s| s.handle.state())
+            };
+            assert_eq!(
+                state(&out),
+                Some(PlaybackState::Stopped),
+                "played to its end"
+            );
+            assert_eq!(out.position(sink), None, "a stopped sink has no position");
+            out.seek(sink, 0.0);
+            out.resume(sink);
+            step(&out);
+            assert_eq!(state(&out), Some(PlaybackState::Playing), "plays again");
+            let q = out.position(sink).unwrap();
+            assert!(q > 0.0 && q < 0.2, "from 0: {q}");
         }
     }
 }
