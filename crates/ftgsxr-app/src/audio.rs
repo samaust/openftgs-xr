@@ -1613,9 +1613,8 @@ mod tests {
         out.advance(0.5);
         assert!(!out.sinks()[&sink].playing, "stopped at its end");
         assert_eq!(out.position(sink), None, "a stopped sink has no position");
-        app.world_mut().resource_mut::<Playback>().clock.seek(1.9);
-        app.update();
-        // The loop wraps (the clock's own wrap is the clock's tests'; a seek stands in).
+        // The loop wraps (the clock's own wrap is the clock's tests'; a seek stands in):
+        // the wrap's frame itself reads `None`.
         app.world_mut().resource_mut::<Playback>().clock.seek(0.1);
         app.update();
         let s = out.sinks()[&sink].clone();
