@@ -42,6 +42,7 @@ mod r07_several_models;
 mod r08_pose;
 mod r10_tier_bounds;
 mod r11_color_space;
+mod r12_occlusion;
 mod r13_centers_mode;
 mod r14_light_transform;
 mod r19_transmittance_bound;

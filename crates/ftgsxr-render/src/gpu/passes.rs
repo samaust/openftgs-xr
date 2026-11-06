@@ -27,6 +27,8 @@ use super::tier::QualityTier;
 pub(crate) const CULL_WGSL: &str = include_str!("shaders/cull.wgsl");
 /// `splat.wgsl`: stage 5's splat draw (§1.4).
 pub(crate) const SPLAT_WGSL: &str = include_str!("shaders/splat.wgsl");
+/// `occlusion.wgsl`: E13's depth decode and weight, prepended to `splat.wgsl` (Q-340).
+pub(crate) const OCCLUSION_WGSL: &str = include_str!("shaders/occlusion.wgsl");
 /// `centers.wgsl`: stage 6's centers draw (§1.4).
 pub(crate) const CENTERS_WGSL: &str = include_str!("shaders/centers.wgsl");
 /// `resolve.wgsl`: stage 7's resolve (§1.4, D-6).
@@ -42,7 +44,7 @@ const RESOLVE_BYTES: usize = 16;
 /// The byte offset of the centers draw's indirect arguments (`frame.rs`'s counters).
 const CENTERS_INDIRECT_OFFSET: u64 = 16;
 /// The draw's view block (`splat.wgsl`'s `DrawView`).
-const DRAW_VIEW_BYTES: usize = 32;
+const DRAW_VIEW_BYTES: usize = 144;
 /// The engine's near plane for the other geometry (§1.7: 0.01 m), which the splats' reverse-Z
 /// depth test maps their depth with. // Q-87
 pub(crate) const ENGINE_NEAR: f32 = 0.01;
@@ -93,6 +95,10 @@ pub struct SplatPasses {
     /// The mesh branch of the depth-gated resolve, with a depth format only (Q-101).
     resolve_mesh: Option<wgpu::RenderPipeline>,
     resolve_sampler: wgpu::Sampler,
+    /// E13's 1 × 1 placeholder depth, bound when a draw has no `OcclusionInput`.
+    env_placeholder: wgpu::TextureView,
+    /// E13's non-filtering sampler: the depth image's nearest texel (Q-340).
+    env_sampler: wgpu::Sampler,
 }
 
 fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -227,6 +233,28 @@ impl SplatPasses {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let env_placeholder = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("ftgsxr environment depth placeholder"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let env_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("ftgsxr environment depth"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
         if let Some(e) = bevy::tasks::block_on(scope.pop()) {
             return Err(RenderError::Shader(e.to_string()));
         }
@@ -249,6 +277,8 @@ impl SplatPasses {
             resolve,
             resolve_mesh,
             resolve_sampler,
+            env_placeholder,
+            env_sampler,
         })
     }
 
@@ -457,9 +487,16 @@ impl SplatPasses {
     /// from stage 3's arguments, in the sort's order (pair 0's payloads), blended
     /// `One, OneMinusSrcAlpha` on color and alpha into the pass's layer, which the caller
     /// cleared to (0, 0, 0, 0). With the passes' depth format the splats test against the
-    /// pass's opaque depth (reverse Z, Q-87) and write none. E13's weight is 1: every
-    /// M-2 tier has occlusion off, and `occlusion` is not read until M-6 (R-12). In
-    /// shared-center mode nothing is drawn until the per-eye projection of M-8 (R-9,
+    /// pass's opaque depth (reverse Z, Q-87) and write none. Each fragment's α is
+    /// multiplied by E13's weight w_occ (D-45, Q-63): with `occlusion`, p_f on the
+    /// fragment's own view ray at the record's depth is projected into the depth image's
+    /// camera, its nearest texel decoded to metres from the image's near and far planes
+    /// (Q-340) and weighed hard or soft with δ; a fragment outside the image or behind its
+    /// camera, or an invalid sample, gets 1. Without `occlusion` (or whatever the tier's
+    /// flag says: the caller gates it, Q-338) w_occ is 1, a 1 × 1 placeholder bound in
+    /// the depth's place. `occlusion.depth` is any single-sample 2D view whose format
+    /// samples as an unfilterable float (a depth format, `R16Unorm`, `R32Float`), its first
+    /// channel the stored depth. In shared-center mode nothing is drawn until the per-eye projection of M-8 (R-9,
     /// Q-87). The draw writes no timestamps: the pass is the caller's (Q-87).
     ///
     /// Stage 6's centers (`centers.wgsl`), after the splats (Q-96): one indirect
@@ -482,7 +519,6 @@ impl SplatPasses {
             frame.mode, self.mode,
             "the frame buffers' record layout is the passes' tier's"
         );
-        let _ = occlusion; // M-6 (R-12): E13's environment depth.
         if self.mode != RecordMode::PerView {
             // Q-87: the shared-center vertex projection is M-8's (R-9).
             return;
@@ -494,8 +530,26 @@ impl SplatPasses {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .expect("invariant: encode_prepare runs before encode_draw (# Panics above)");
-        let block = draw_view_uniform(view, self.depth_format.is_some());
+        let env = occlusion.map(|o| EnvParams {
+            camera: o.camera,
+            near: o.near,
+            far: o.far,
+            soft: o.soft,
+            delta_m: o.delta_m,
+        });
+        let block = draw_view_uniform(view, self.depth_format.is_some(), env.as_ref());
         let view_buffer = self.uniform_buffer("ftgsxr draw view", &block);
+        let env_view = occlusion.map_or(&self.env_placeholder, |o| o.depth);
+        let env_entries = [
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(env_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(&self.env_sampler),
+            },
+        ];
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ftgsxr draw"),
             layout: &self.draw_layout,
@@ -504,6 +558,8 @@ impl SplatPasses {
                 buffer_entry(1, &set.payloads[0]),
                 buffer_entry(2, &constants),
                 buffer_entry(3, &view_buffer),
+                env_entries[0].clone(),
+                env_entries[1].clone(),
             ],
         });
         pass.set_pipeline(&self.splat);
@@ -522,6 +578,8 @@ impl SplatPasses {
                 buffer_entry(1, &set.indirect),
                 buffer_entry(2, &constants),
                 buffer_entry(3, &view_buffer),
+                env_entries[0].clone(),
+                env_entries[1].clone(),
             ],
         });
         pass.set_pipeline(&self.centers);
@@ -654,8 +712,14 @@ impl SplatPasses {
     }
 }
 
+/// The splat draw's WGSL: `occlusion.wgsl`'s E13 functions, then `splat.wgsl`.
+fn splat_source() -> String {
+    format!("{OCCLUSION_WGSL}\n{SPLAT_WGSL}")
+}
+
 /// Stage 5's splat pipeline and its bind group layout (`splat.wgsl`): the records, the
-/// sorted payloads and the instances' E7 constants as read-only storage, the view block.
+/// sorted payloads and the instances' E7 constants as read-only storage, the view block,
+/// E13's environment depth and its sampler.
 fn splat_pipeline(
     device: &wgpu::Device,
     layer_format: wgpu::TextureFormat,
@@ -663,7 +727,7 @@ fn splat_pipeline(
 ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ftgsxr splat.wgsl"),
-        source: wgpu::ShaderSource::Wgsl(SPLAT_WGSL.into()),
+        source: wgpu::ShaderSource::Wgsl(splat_source().into()),
     });
     let stages = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
     let storage = |binding| wgpu::BindGroupLayoutEntry {
@@ -690,6 +754,24 @@ fn splat_pipeline(
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
+                count: None,
+            },
+            // E13's environment depth: an unfilterable float view, which a depth format
+            // binds as too, read through a non-filtering sampler (Q-340).
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                 count: None,
             },
         ],
@@ -968,9 +1050,24 @@ fn draw_constants(draw: &ModelDraw) -> [u8; DRAW_CONSTANTS_BYTES] {
     out
 }
 
+/// An `OcclusionInput` without its texture: what the view block carries of it.
+struct EnvParams {
+    camera: Camera,
+    near: f32,
+    far: f32,
+    soft: bool,
+    delta_m: f32,
+}
+
 /// The draw's view block (`splat.wgsl`'s `DrawView`): the camera's W × H, the target's
-/// size, the engine's near plane when depth-tested (else 0), and E13's switches (off).
-fn draw_view_uniform(view: &ViewParams, depth_test: bool) -> [u8; DRAW_VIEW_BYTES] {
+/// size, the engine's near plane when depth-tested (else 0), E13's switches, and with
+/// `occlusion` the view's and the depth camera's intrinsics, the depth image's W × H and
+/// planes, and the view's camera space to the depth camera's, composed in float64.
+fn draw_view_uniform(
+    view: &ViewParams,
+    depth_test: bool,
+    occlusion: Option<&EnvParams>,
+) -> [u8; DRAW_VIEW_BYTES] {
     let mut out = [0u8; DRAW_VIEW_BYTES];
     let mut b = Block {
         bytes: &mut out,
@@ -981,9 +1078,28 @@ fn draw_view_uniform(view: &ViewParams, depth_test: bool) -> [u8; DRAW_VIEW_BYTE
     b.f32(view.target_size.x as f32);
     b.f32(view.target_size.y as f32);
     b.f32(if depth_test { ENGINE_NEAR } else { 0.0 });
-    b.u32(0);
-    b.u32(0);
-    b.f32(0.0);
+    let Some(o) = occlusion else {
+        return out;
+    };
+    b.u32(1);
+    b.u32(u32::from(o.soft));
+    b.f32(o.delta_m);
+    let intrinsics = |b: &mut Block, k: &DMat3| {
+        for v in [k.x_axis.x, k.y_axis.y, k.z_axis.x, k.z_axis.y] {
+            b.f32(v as f32);
+        }
+    };
+    intrinsics(&mut b, &view.camera.k);
+    intrinsics(&mut b, &o.camera.k);
+    b.f32(o.camera.width as f32);
+    b.f32(o.camera.height as f32);
+    b.f32(o.near);
+    b.f32(o.far);
+    let m = o.camera.world_to_camera * view.camera.world_to_camera.inverse();
+    for v in m.to_cols_array() {
+        b.f32(v as f32);
+    }
+    debug_assert_eq!(b.at, DRAW_VIEW_BYTES);
     out
 }
 
@@ -1153,7 +1269,9 @@ mod tests {
     /// `splat.wgsl` parses and validates under naga, with both entry points.
     #[test]
     fn splat_wgsl_is_valid_wgsl() {
-        let module = naga::front::wgsl::parse_str(SPLAT_WGSL).expect("splat.wgsl parses");
+        let source = splat_source();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("splat.wgsl parses: {}", e.emit_to_string(&source)));
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -1201,6 +1319,120 @@ mod tests {
         }
     }
 
+    /// Q-340: `occlusion.wgsl`'s `depth_metres` on hand-worked values (row T566.2's
+    /// decode, d = f(Z − n)/((f − n)Z)): with n = 0.25 and f = 10, d = 0 is 0.25 m,
+    /// d = 0.5 is 2.5/5.125 m and d = 0.975 is 2.5/0.49375 m; with the infinite far plane
+    /// (f < n, or f = +∞) Z = n/(1 − d), so d = 0.5 is 0.5 m and d = 0.875 is 2 m; d = 1
+    /// (the far plane), d < 0 and a NaN are invalid.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_depth_metres_decodes_hand_worked_values() {
+        let dev = SplatDevice::headless().expect("an adapter");
+        let inf = f32::INFINITY;
+        // (d, near, far, expected metres or None for invalid)
+        let cases: [(f32, f32, f32, Option<f64>); 12] = [
+            (0.0, 0.25, 10.0, Some(0.25)),
+            (0.5, 0.25, 10.0, Some(2.5 / 5.125)),
+            (0.975, 0.25, 10.0, Some(2.5 / 0.49375)),
+            (1.0, 0.25, 10.0, None),
+            (-0.1, 0.25, 10.0, None),
+            (f32::NAN, 0.25, 10.0, None),
+            (0.5, 0.25, 0.0, Some(0.5)),
+            (0.875, 0.25, 0.0, Some(2.0)),
+            (1.0, 0.25, 0.0, None),
+            (0.5, 0.25, inf, Some(0.5)),
+            (0.875, 0.25, inf, Some(2.0)),
+            (1.0, 0.25, inf, None),
+        ];
+        let source = format!(
+            "{OCCLUSION_WGSL}
+@group(0) @binding(0) var<storage, read> cases: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> out: array<vec2<f32>>;
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+    let c = cases[id.x];
+    let e = depth_metres(c.x, c.y, c.z);
+    out[id.x] = vec2<f32>(e.metres, select(0.0, 1.0, e.valid));
+}}"
+        );
+        let device = dev.device();
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let input: Vec<u8> = cases
+            .iter()
+            .flat_map(|&(d, n, f, _)| [d, n, f, 0.0])
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        let size = (cases.len() * 8) as u64;
+        let make = |usage, mapped| {
+            device.create_buffer(&BufferDescriptor {
+                label: None,
+                size: if mapped { input.len() as u64 } else { size },
+                usage,
+                mapped_at_creation: mapped,
+            })
+        };
+        let cases_buffer = make(BufferUsages::STORAGE, true);
+        cases_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(&input);
+        cases_buffer.unmap();
+        let out = make(BufferUsages::STORAGE | BufferUsages::COPY_SRC, false);
+        let staging = make(BufferUsages::MAP_READ | BufferUsages::COPY_DST, false);
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[buffer_entry(0, &cases_buffer), buffer_entry(1, &out)],
+        });
+        let mut enc = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(cases.len() as u32, 1, 1);
+        }
+        enc.copy_buffer_to_buffer(&out, 0, &staging, 0, size);
+        dev.queue().submit([enc.finish()]);
+        staging.map_async(wgpu::MapMode::Read, .., |r| r.expect("maps"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the device polls");
+        let bytes = staging.get_mapped_range(..).to_vec();
+        let words: Vec<f32> = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| f32::from_le_bytes(*w))
+            .collect();
+        for (i, &(d, n, f, expected)) in cases.iter().enumerate() {
+            let (metres, valid) = (words[2 * i], words[2 * i + 1] == 1.0);
+            match expected {
+                Some(z) => {
+                    assert!(valid, "d = {d}, n = {n}, f = {f}: valid");
+                    let err = (f64::from(metres) - z).abs() / z;
+                    assert!(
+                        err <= 1e-6,
+                        "d = {d}, n = {n}, f = {f}: {metres} m, not {z}"
+                    );
+                }
+                None => assert!(!valid, "d = {d}, n = {n}, f = {f}: invalid, got {metres} m"),
+            }
+        }
+        let messages = dev.take_validation_messages();
+        assert!(messages.is_empty(), "validation messages: {messages:?}");
+    }
+
     #[test]
     fn resolve_uniform_carries_the_background_and_its_switch() {
         let f = |b: &[u8], at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
@@ -1223,13 +1455,58 @@ mod tests {
             target_size: ftgsxr_core::UVec2::new(128, 96),
         };
         let f = |b: &[u8], at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
-        let b = draw_view_uniform(&view, true);
+        let b = draw_view_uniform(&view, true, None);
         assert_eq!(
             [f(&b, 0), f(&b, 4), f(&b, 8), f(&b, 12), f(&b, 16)],
             [64.0, 48.0, 128.0, 96.0, ENGINE_NEAR]
         );
-        assert_eq!(&b[20..32], &[0u8; 12]);
-        assert_eq!(f(&draw_view_uniform(&view, false), 16), 0.0);
+        // Without an occlusion input E13's flag and the rest of the block are 0.
+        assert!(b[20..].iter().all(|&x| x == 0));
+        assert_eq!(f(&draw_view_uniform(&view, false, None), 16), 0.0);
+    }
+
+    // E13's part of the block: the flag, the mode and δ, both cameras' f_x, f_y, c_x, c_y,
+    // the depth image's W × H and planes, and the view's camera space to the depth
+    // camera's (a view at t_w = (0, 0, 1) and a depth camera at t_w = (0.5, 0, 0), both
+    // unrotated: x_d = x_v + (0.5, 0, −1)).
+    #[test]
+    fn draw_view_uniform_lays_out_e13s_block() {
+        let cam = |w: u32, f: f64, t: DVec3| {
+            let mut w2c = DMat4::IDENTITY;
+            w2c.w_axis = t.extend(1.0);
+            Camera {
+                width: w,
+                height: 48,
+                k: DMat3::from_cols(
+                    DVec3::new(f, 0.0, 0.0),
+                    DVec3::new(0.0, f + 1.0, 0.0),
+                    DVec3::new(32.0, 24.0, 1.0),
+                ),
+                world_to_camera: w2c,
+            }
+        };
+        let view = ViewParams {
+            camera: cam(64, 60.0, DVec3::new(0.0, 0.0, 1.0)),
+            target_size: ftgsxr_core::UVec2::new(64, 48),
+        };
+        let env = EnvParams {
+            camera: cam(96, 80.0, DVec3::new(0.5, 0.0, 0.0)),
+            near: 0.1,
+            far: 0.05,
+            soft: true,
+            delta_m: 0.05,
+        };
+        let b = draw_view_uniform(&view, false, Some(&env));
+        let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        let u = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        assert_eq!([u(20), u(24)], [1, 1]);
+        assert_eq!(f(28), 0.05);
+        assert_eq!([f(32), f(36), f(40), f(44)], [60.0, 61.0, 32.0, 24.0]);
+        assert_eq!([f(48), f(52), f(56), f(60)], [80.0, 81.0, 32.0, 24.0]);
+        assert_eq!([f(64), f(68), f(72), f(76)], [96.0, 48.0, 0.1, 0.05]);
+        // Column-major: the identity's columns, then the translation (0.5, 0, −1, 1).
+        assert_eq!([f(80), f(100), f(120), f(140)], [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!([f(128), f(132), f(136)], [0.5, 0.0, -1.0]);
     }
 
     #[test]

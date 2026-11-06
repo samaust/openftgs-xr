@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared helpers of the display tests (R-11, R-13, R-14): hand-built models, one frame of
-//! §1.4 stages 1–6 into a 16-bit float layer and, when asked, stage 7's resolve onto an
-//! sRGB view target, with the layer, the target and the depth read back.
+//! Shared helpers of the display tests (R-11, R-12, R-13, R-14): hand-built models, one
+//! frame of §1.4 stages 1–6 into a 16-bit float layer, with an environment depth image
+//! written by the test for E13 when asked (R-12), and, when asked, stage 7's resolve onto
+//! an sRGB view target, with the layer, the target and the depth read back.
 
 #![allow(dead_code, reason = "each test file uses a part of the helpers")]
 
@@ -10,7 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ftgsxr_core::{Camera, Model, ModelKind, RenderConventions, TimeSpan, UVec2};
-use ftgsxr_render::{FrameBuffers, ModelDraw, QualityTier, SplatDevice, SplatPasses, ViewParams};
+use ftgsxr_render::{
+    FrameBuffers, ModelDraw, OcclusionInput, QualityTier, SplatDevice, SplatPasses, ViewParams,
+};
 
 /// E4's C₀.
 pub const SH_C0: f32 = 0.282_094_8;
@@ -113,6 +116,38 @@ pub struct Run {
     pub depth: bool,
 }
 
+/// A synthetic environment depth image for E13 (R-12): the stored depths, row-major from
+/// the top row, as the runtime writes them (`stored_depth`), with the image's camera,
+/// planes and E13's switches.
+pub struct Occlusion {
+    /// The stored depth per texel, `size.x × size.y` values.
+    pub depth: Vec<f32>,
+    /// The image's size in texels.
+    pub size: UVec2,
+    /// The depth image's camera (E6).
+    pub camera: Camera,
+    /// nearZ, in metres.
+    pub near: f32,
+    /// farZ, in metres (below `near`: the infinite far plane).
+    pub far: f32,
+    /// Soft or hard occlusion.
+    pub soft: bool,
+    /// δ, in metres.
+    pub delta_m: f32,
+}
+
+/// The stored depth an OpenXR projection writes for a surface at `z` metres along the
+/// depth camera's axis (Q-340; XR_KHR_composition_layer_depth's transform with
+/// minDepth 0 and maxDepth 1, source-log row T566.2): d = f(z − n)/((f − n)z), and
+/// d = 1 − n/z with the infinite far plane (f < n), in float64.
+pub fn stored_depth(z: f64, near: f64, far: f64) -> f32 {
+    if far < near {
+        (1.0 - near / z) as f32
+    } else {
+        (far * (z - near) / ((far - near) * z)) as f32
+    }
+}
+
 fn texture(
     dev: &SplatDevice,
     format: wgpu::TextureFormat,
@@ -138,7 +173,23 @@ fn texture(
 /// One frame of `draws` from `camera` (per view, C = twice the draws' total N), drawn into a
 /// fresh layer and, per `run`, resolved onto a fresh target cleared to (0, 0, 0, 0).
 pub fn render(dev: &SplatDevice, draws: &[ModelDraw], camera: &Camera, run: &Run) -> Frame {
-    let tier = QualityTier::conformance();
+    render_occluded(dev, draws, camera, run, None)
+}
+
+/// `render` with E13's environment depth `occlusion` (R-12), written into an R32Float
+/// texture and passed to `encode_draw` as its `OcclusionInput`; the tier is the
+/// conformance tier with `occlusion: true` when one is given (Q-347).
+pub fn render_occluded(
+    dev: &SplatDevice,
+    draws: &[ModelDraw],
+    camera: &Camera,
+    run: &Run,
+    occlusion: Option<&Occlusion>,
+) -> Frame {
+    let tier = QualityTier {
+        occlusion: occlusion.is_some(), // Q-347
+        ..QualityTier::conformance()
+    };
     let passes = SplatPasses::new(dev, LAYER, run.depth.then_some(DEPTH), &tier)
         .expect("the passes compile");
     // Room for every row's splat and center (Q-78: the centers share the C slots).
@@ -161,6 +212,45 @@ pub fn render(dev: &SplatDevice, draws: &[ModelDraw], camera: &Camera, run: &Run
     let depth_view = depth.as_ref().map(|t| t.create_view(&Default::default()));
     let target = run.resolve.map(|_| texture(dev, TARGET, size, attach));
     let target_view = target.as_ref().map(|t| t.create_view(&Default::default()));
+    let env = occlusion.map(|o| {
+        assert_eq!(
+            o.depth.len(),
+            (o.size.x * o.size.y) as usize,
+            "one value per texel"
+        );
+        let t = texture(
+            dev,
+            wgpu::TextureFormat::R32Float,
+            o.size,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let bytes: Vec<u8> = o.depth.iter().flat_map(|d| d.to_le_bytes()).collect();
+        dev.queue().write_texture(
+            t.as_image_copy(),
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * o.size.x),
+                rows_per_image: Some(o.size.y),
+            },
+            wgpu::Extent3d {
+                width: o.size.x,
+                height: o.size.y,
+                depth_or_array_layers: 1,
+            },
+        );
+        t.create_view(&Default::default())
+    });
+    let input = occlusion
+        .zip(env.as_ref())
+        .map(|(o, depth)| OcclusionInput {
+            depth,
+            camera: o.camera,
+            near: o.near,
+            far: o.far,
+            soft: o.soft,
+            delta_m: o.delta_m,
+        });
 
     let mut enc = dev.device().create_command_encoder(&Default::default());
     passes.encode_prepare(&mut enc, &frame, draws, &sort_pose(camera), &[view]);
@@ -190,7 +280,7 @@ pub fn render(dev: &SplatDevice, draws: &[ModelDraw], camera: &Camera, run: &Run
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        passes.encode_draw(&mut pass, &frame, &view, None);
+        passes.encode_draw(&mut pass, &frame, &view, input.as_ref());
     }
     if let (Some(background), Some(target_view)) = (run.resolve, target_view.as_ref()) {
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
