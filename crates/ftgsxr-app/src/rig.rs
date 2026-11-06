@@ -7,7 +7,8 @@
 //! `Intent::Camera`; `Locomote` and `SnapTurn` move the rig through `apply_locomotion`,
 //! `Teleport` translates it (Q-282), and `Recenter` translates the content group
 //! (Q-283).
-//! The floor grid (§1.4) is an opaque unlit line mesh at y = 0 beside the camera.
+//! The floor grid (§1.4) is an opaque unlit line mesh at y = 0, spawned with or without a
+//! window and shown only in VR mode (Q-228).
 
 use bevy::app::{App, Plugin, Startup, Update};
 use bevy::asset::{Assets, RenderAssetUsages};
@@ -232,16 +233,31 @@ impl Default for CameraController {
 
 /// What the desktop camera and the grid follow (§1.7 Cameras, §1.4 Backgrounds): the
 /// fly camera's base speed and the vertical field of view (`[desktop]`), the floor grid
-/// (`[display] grid`) and the background (`[environment] background`). `persist` maps
+/// (`[display] grid`), the background (`[environment] background`) and whether the
+/// player is in passthrough mode, where the grid is hidden (§1.9, Q-228). `persist` maps
 /// the settings into it and the controller's changes back (PRD #275, "Settings as the
-/// source of truth"); its default is the settings' defaults.
-// Q-196
+/// source of truth"); `passthrough` is the mode gated by the `Headset` marker (Q-335)
+/// and never maps back. Its default is the settings' defaults.
+// Q-196, Q-228, Q-335
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub(crate) struct DesktopView {
     pub(crate) fly_speed_mps: f32,
     pub(crate) fov_deg: f32,
     pub(crate) grid: bool,
     pub(crate) background: [f32; 3],
+    pub(crate) passthrough: bool,
+}
+
+impl DesktopView {
+    /// The floor grid's visibility: shown in VR mode with `[display] grid` on (Q-228).
+    // Q-228
+    fn grid_visibility(&self) -> Visibility {
+        if self.grid && !self.passthrough {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        }
+    }
 }
 
 impl Default for DesktopView {
@@ -256,6 +272,7 @@ impl Default for DesktopView {
             fov_deg: d.fov_deg,
             grid: g.grid,
             background: e.background,
+            passthrough: false,
         }
     }
 }
@@ -380,11 +397,10 @@ pub(crate) fn grid_mesh() -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, points)
 }
 
-/// The floor grid with the desktop camera, where the mesh and material stores exist
-/// (Q-194); its visibility follows `DesktopView.grid`.
-// Q-194
+/// The floor grid, where the mesh and material stores exist, with or without a window
+/// (Q-228: the headset's VR mode has none); shown only in VR mode with `DesktopView.grid`.
+// Q-194, Q-228
 fn spawn_grid(
-    windows: Query<(), With<PrimaryWindow>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
     view: Res<DesktopView>,
@@ -393,11 +409,6 @@ fn spawn_grid(
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         return;
     };
-    // Q-228: the headset's VR-mode grid, which has no window, waits for §1.9's mode.
-    if windows.is_empty() {
-        return;
-    }
-    let shown = view.grid;
     commands.spawn((
         FloorGrid,
         Mesh3d(meshes.add(grid_mesh())),
@@ -407,11 +418,7 @@ fn spawn_grid(
             ..Default::default()
         })),
         Transform::IDENTITY,
-        if shown {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        },
+        view.grid_visibility(),
     ));
 }
 
@@ -803,7 +810,8 @@ fn recenter(
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct BackgroundOverride(pub(crate) Option<[f32; 3]>);
 
-/// `DesktopView`'s field of view on the desktop camera, its grid on the floor grid, and
+/// `DesktopView`'s field of view on the desktop camera, its grid (hidden in passthrough
+/// mode, Q-228) on the floor grid, and
 /// its background (or the override's) on every splat camera that draws one: the desktop
 /// camera and the XR eyes in VR mode; a camera that draws none (passthrough) is left
 /// alone (§1.4 Backgrounds).
@@ -832,11 +840,7 @@ fn follow_view(
     if !view.is_changed() {
         return;
     }
-    let shown = if view.grid {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
+    let shown = view.grid_visibility();
     for mut v in &mut grids {
         if *v != shown {
             *v = shown;

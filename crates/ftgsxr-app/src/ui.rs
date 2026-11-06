@@ -244,6 +244,60 @@ pub struct HudData {
     /// The right side's device and whether its aim is tracked; as `left_hand`.
     // Q-274
     pub right_hand: Option<(HudHandSource, bool)>,
+    /// The depth image's resolution and its age in frames (§1.9 Depth occlusion);
+    /// `None` without an environment-depth provider. The XR crate's to write.
+    // Q-345
+    pub depth_image: Option<(UVec2, u32)>,
+    /// The scene anchor's state (§1.9 Floor, shadows and anchors); `None` without one.
+    /// The XR crate's to write.
+    // Q-345
+    pub anchor: Option<HudAnchor>,
+}
+
+/// The scene anchor's state on the HUD (§1.13 HUD, Q-345).
+// Q-345
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HudAnchor {
+    /// Being created at a scene save.
+    Creating,
+    /// Created and persisted.
+    Persisted,
+    /// Being located at a scene load.
+    Locating,
+    /// Located: the content group is on it.
+    Located,
+    /// Not found: the file's pose is used.
+    Lost,
+}
+
+/// Whether an XR feature exists on this device (§1.9, §1.15 E-XR-UNSUPPORTED and
+/// E-XR-PERMISSION): `Absent` without the runtime's extension (the desktop's, and the
+/// default), `Available`, or `Denied` when its permission was refused (Q-336).
+// Q-336
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FeatureState {
+    /// The runtime offers no extension for it: its control is hidden.
+    #[default]
+    Absent,
+    /// It can be used.
+    Available,
+    /// Its permission was denied: the control stays, with a button to ask again.
+    Denied,
+}
+
+/// The XR features the panels' controls follow (§1.8 User interface, §1.9): the wrist
+/// menu's passthrough button and the Environment tab's passthrough and occlusion
+/// controls show only where their feature is not `Absent`. The XR crate writes it each
+/// frame; without it every feature is `Absent` (Q-336).
+// Q-336
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct XrFeatures {
+    /// Passthrough (XR_FB_passthrough).
+    pub passthrough: FeatureState,
+    /// Depth occlusion (XR_META_environment_depth).
+    pub occlusion: FeatureState,
+    /// Spatial anchors (XR_FB_spatial_entity, XR_META_spatial_entity_persistence).
+    pub anchors: FeatureState,
 }
 
 /// Which device a side's HUD line shows (Q-274): the XR crate's `HandSource`, which the
@@ -663,6 +717,8 @@ impl Plugin for UiPlugin {
             .init_resource::<UiState>()
             .init_resource::<RecentScenes>()
             .init_resource::<HudData>()
+            // Q-336
+            .init_resource::<XrFeatures>()
             .init_resource::<DockHooks>()
             .init_resource::<ToastLimiter>()
             .init_resource::<SeenFailures>()
