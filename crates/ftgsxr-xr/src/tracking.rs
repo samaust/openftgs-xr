@@ -145,6 +145,10 @@ pub(crate) struct Actions {
 
 const HANDS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
 
+/// Appendix D.2's `khr/simple_controller` profile, which the tracked hand also drives on
+/// the hand path on the Quest 3 (D-55).
+const SIMPLE_CONTROLLER: &str = "/interaction_profiles/khr/simple_controller";
+
 /// XR\_META\_detached\_controllers's top-level paths (D-55).
 // D-55
 const DETACHED: [&str; 2] = [
@@ -174,7 +178,7 @@ impl Plugin for TrackingPlugin {
             .init_resource::<hands::HandsPermission>()
             .init_resource::<hands::LocatedHands>()
             .init_resource::<hands::Ownership>()
-            .init_resource::<Detached>()
+            .init_resource::<Profiles>()
             .init_resource::<ftgsxr_app::DeniedPermissions>()
             .add_message::<ftgsxr_app::AskPermissionAgain>();
         let Some(instance) = app.world().get_resource::<OxrInstance>() else {
@@ -287,10 +291,26 @@ mod hud_tests {
     #[test]
     fn controller_held_needs_the_aim_active_and_nothing_detached() {
         let touch = Path::from_raw(7);
-        assert!(controller_held(true, Path::NULL));
-        assert!(!controller_held(true, touch));
-        assert!(!controller_held(false, Path::NULL));
-        assert!(!controller_held(false, touch));
+        for hand_driven in [None, Some(Path::from_raw(9))] {
+            assert!(controller_held(true, touch, Path::NULL, hand_driven));
+            assert!(!controller_held(true, touch, touch, hand_driven));
+            assert!(!controller_held(false, touch, Path::NULL, hand_driven));
+            assert!(!controller_held(false, touch, touch, hand_driven));
+        }
+    }
+
+    /// D-55 (revision 33, #548 on the Quest 3): with the hand extensions enabled, a
+    /// controller asleep or without its battery never reaches the detached path while the
+    /// tracked hand drives `khr/simple_controller` on the hand path, so that profile is
+    /// not a held controller; without the hand extensions every profile counts.
+    #[test]
+    fn controller_held_rejects_a_hand_driven_simple_controller() {
+        let touch = Path::from_raw(7);
+        let simple = Path::from_raw(9);
+        assert!(!controller_held(true, simple, Path::NULL, Some(simple)));
+        assert!(controller_held(true, touch, Path::NULL, Some(simple)));
+        assert!(controller_held(true, simple, Path::NULL, None));
+        assert!(controller_held(true, touch, Path::NULL, None));
     }
 
     /// Q-274: a side's HUD line is its device and whether its aim is tracked; none
@@ -447,10 +467,7 @@ fn suggest_bindings(
         "/interaction_profiles/oculus/touch_controller",
         touch_bindings(&actions),
     ));
-    profiles.push((
-        "/interaction_profiles/khr/simple_controller",
-        simple_bindings(&actions),
-    ));
+    profiles.push((SIMPLE_CONTROLLER, simple_bindings(&actions)));
     for (profile, bindings) in profiles {
         // D-55: every profile here binds the grip pose, so the runtime accepts it on the
         // detached paths too.
@@ -477,35 +494,64 @@ fn suggest_bindings(
     }
 }
 
-/// Each side's current interaction profile on `/user/detached_controller_meta/<side>`,
-/// read once a frame before `write_hands` (profiles change only at `xrSyncActions`, in
-/// PreUpdate); `NULL` without the extension (D-55).
+/// Each side's current interaction profiles, read once a frame before `write_hands`
+/// (profiles change only at `xrSyncActions`, in PreUpdate): on `/user/hand/<side>`, and on
+/// `/user/detached_controller_meta/<side>` (`NULL` without the extension); and
+/// `khr/simple_controller` as a path while the hand extensions are enabled, the profile
+/// the tracked hand drives on the hand path (D-55).
 #[derive(Resource, Clone, Copy, Debug, Default)]
-struct Detached([Path; 2]);
+struct Profiles {
+    hand: [Path; 2],
+    detached: [Path; 2],
+    hand_driven: Option<Path>,
+}
 
 /// Whether a side's controller is held (D-55): its aim action active on
-/// `/user/hand/<side>` and no profile current on its detached path. On the Quest 3 a
-/// set-down controller's Touch profile moves to the detached path while the tracked hand
-/// drives `khr/simple_controller` on the hand path, so the aim stays active (#540).
+/// `/user/hand/<side>`, no profile current on its detached path and, with the hand
+/// extensions enabled (`hand_driven` is then `khr/simple_controller`), the hand path's
+/// profile not the one the tracked hand drives. On the Quest 3 a set-down controller's
+/// Touch profile moves to the detached path while the tracked hand drives
+/// `khr/simple_controller` on the hand path, so the aim stays active (#540); a controller
+/// asleep or without its battery never reaches the detached path at all (#548).
 // D-55
-fn controller_held(aim_active: bool, detached_profile: Path) -> bool {
-    aim_active && detached_profile == Path::NULL
+fn controller_held(
+    aim_active: bool,
+    hand_profile: Path,
+    detached_profile: Path,
+    hand_driven: Option<Path>,
+) -> bool {
+    aim_active && detached_profile == Path::NULL && hand_driven != Some(hand_profile)
 }
 
 /// Reads each side's current interaction profile on `/user/hand/<side>` and, with
-/// XR\_META\_detached\_controllers, on `/user/detached_controller_meta/<side>`, keeps the
-/// detached ones in `Detached`, and logs both at the app's first frame and whenever either
+/// XR\_META\_detached\_controllers, on `/user/detached_controller_meta/<side>`, keeps both
+/// in `Profiles` with the hand-driven `khr/simple_controller` path while the hand
+/// extensions are enabled, and logs both at the app's first frame and whenever either
 /// changes, so a device run (A-11) shows where the runtime puts a set-down controller
-/// (D-55). A failed read counts as no profile, so the controller stays held as without
-/// the extension; the log names the error.
+/// (D-55). A failed read counts as no profile: on the detached path the controller then
+/// stays held as without the extension, on the hand path it is not the hand-driven
+/// profile; the log names the error.
 // D-55
 fn read_profiles(
     session: Res<OxrSession>,
     instance: Res<OxrInstance>,
+    exts: Option<Res<OxrEnabledExtensions>>,
     actions: Res<Actions>,
-    mut detached: ResMut<Detached>,
+    mut profiles: ResMut<Profiles>,
     mut last: Local<[Option<(Path, Path)>; 2]>,
+    mut simple: Local<Option<Option<Path>>>,
 ) {
+    // Resolved once; a failure is logged once and leaves every profile counting.
+    profiles.hand_driven = if exts.as_deref().is_some_and(hands::hands_available) {
+        *simple.get_or_insert_with(|| {
+            instance
+                .string_to_path(SIMPLE_CONTROLLER)
+                .map_err(|e| log_error(&XrError::Runtime(format!("{SIMPLE_CONTROLLER}: {e}"))))
+                .ok()
+        })
+    } else {
+        None
+    };
     let name = |r: &openxr::Result<Path>| match r {
         Ok(p) if *p == Path::NULL => "none".to_owned(),
         Ok(p) => instance
@@ -530,7 +576,8 @@ fn read_profiles(
                 name(&det)
             );
         }
-        detached.0[side] = now.1;
+        profiles.hand[side] = now.0;
+        profiles.detached[side] = now.1;
     }
 }
 
@@ -630,7 +677,7 @@ fn write_hands(
     views: Option<Res<OxrViews>>,
     settings: Option<Res<SettingsRes>>,
     located: Res<hands::LocatedHands>,
-    detached: Res<Detached>,
+    profiles: Res<Profiles>,
     mut ownership: ResMut<hands::Ownership>,
     hud: Option<ResMut<HudData>>,
     mut hands: ResMut<XrHands>,
@@ -640,9 +687,14 @@ fn write_hands(
     for (h, slot) in out.iter_mut().enumerate() {
         let path = actions.hands[h];
         // Q-128: a hand is `Some` while its aim pose action is active; D-55: and while
-        // the controller is not detached.
+        // the controller is held, neither detached nor the tracked hand's profile.
         let aim_active = actions.aim.is_active(&session, path).unwrap_or(false);
-        if !controller_held(aim_active, detached.0[h]) {
+        if !controller_held(
+            aim_active,
+            profiles.hand[h],
+            profiles.detached[h],
+            profiles.hand_driven,
+        ) {
             continue;
         }
         let f32_of = |a: &Action<f32>| a.state(&session, path).map_or(0.0, |s| s.current_state);
