@@ -9,7 +9,7 @@
 //! (the `Headset` marker, Q-266) with `spatial` on, each soundtrack's gain and pan follow
 //! the listener and its instance's box every frame (Q-268, Q-281); elsewhere stereo.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -176,7 +176,9 @@ pub trait AudioOutput: Send + Sync {
     /// Resumes a sink.
     fn resume(&self, sink: SinkId);
     /// A sink's position, `None` for an unknown sink or one that played to its end and
-    /// stopped; a `seek` then `resume` plays a stopped sink again (#538).
+    /// stopped, until a `seek`: a `seek` plays a stopped sink again, paused at the
+    /// position with its gain and pan; a bare `resume` leaves it stopped (#538).
+    // Q-326
     fn position(&self, sink: SinkId) -> Option<f64>;
     /// Sets a sink's gain.
     fn set_gain(&self, sink: SinkId, gain: f32);
@@ -194,7 +196,8 @@ pub struct AudioOutputRes(pub Arc<dyn AudioOutput>);
 /// One sink of `StubAudioOutput`, as the tests read it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StubSink {
-    /// The position, seconds.
+    /// The position, seconds; a sink at its end shows its last position here while
+    /// `position()` reads `None` (Q-326).
     pub position: f64,
     /// Whether it plays.
     pub playing: bool,
@@ -214,7 +217,8 @@ struct StubInner {
     loaded: Vec<UiSound>,
     played: Vec<(UiSound, f32)>,
     /// The sinks that played to their end and stopped, as kira's do (#538).
-    ended: std::collections::HashSet<SinkId>,
+    // Q-326
+    ended: HashSet<SinkId>,
 }
 
 /// An `AudioOutput` without a device, for the tests (§3.3's "stub audio output", Q-149):
@@ -275,7 +279,8 @@ impl StubAudioOutput {
         }
     }
 
-    /// Every sink, by id.
+    /// Every sink, by id; a sink at its end shows its last position here while
+    /// `position()` reads `None` (Q-326).
     pub fn sinks(&self) -> HashMap<SinkId, StubSink> {
         self.lock().sinks.clone()
     }
@@ -354,17 +359,17 @@ impl AudioOutput for StubAudioOutput {
     fn resume(&self, sink: SinkId) {
         let inner = &mut *self.lock();
         if let Some(s) = inner.sinks.get_mut(&sink) {
-            // A stopped sink resumed without a seek plays again from 0, as the kira
-            // adapter's does.
-            if inner.ended.remove(&sink) {
-                s.position = 0.0;
+            // Q-326: a stopped sink resumed without a seek stays stopped; only a seek
+            // plays it again, as the kira adapter's does.
+            if !inner.ended.contains(&sink) {
+                s.playing = true;
             }
-            s.playing = true;
         }
     }
 
     fn position(&self, sink: SinkId) -> Option<f64> {
         let inner = self.lock();
+        // Q-326
         if inner.ended.contains(&sink) {
             return None;
         }
@@ -839,8 +844,11 @@ fn follow_clock(
             (true, true) => match output.0.position(*sink) {
                 Some(q) if (q - p).abs() <= DRIFT_S => {}
                 Some(_) => output.0.seek(*sink, p),
-                // #538: a sink that played to its end stopped (a loop's wrap after a
-                // soundtrack as long as the span); seek and resume play it again.
+                // Q-326: a sink that stopped within DRIFT_S of its end stays so until
+                // the wrap, so its tail is not replayed.
+                None if *duration_s - p <= DRIFT_S => {}
+                // #538, Q-326: a sink that played to its end stopped (a loop's wrap
+                // after a soundtrack as long as the span); seek and resume play it again.
                 None => {
                     output.0.seek(*sink, p);
                     output.0.resume(*sink);
@@ -1020,6 +1028,7 @@ mod kira_output {
     impl<B: Backend> Inner<B> {
         /// The sink, played again paused at `position_s` with its gain and pan if kira
         /// stopped it (#538).
+        // Q-326
         fn revive(&mut self, sink: SinkId, position_s: f64) -> Option<&mut Sink> {
             let s = self.sinks.get_mut(&sink)?;
             if s.handle.state() == PlaybackState::Stopped {
@@ -1143,6 +1152,7 @@ mod kira_output {
                 .map_err(|e| e.to_string())?;
             self.add_data(data)
         }
+
         fn remove(&self, sink: SinkId) {
             if let Some(mut inner) = self.lock()
                 && let Some(mut s) = inner.sinks.remove(&sink)
@@ -1163,16 +1173,13 @@ mod kira_output {
             self.with_sink(sink, |s| s.handle.pause(NOW));
         }
 
-        // #538: a stopped sink resumed without a seek plays again from 0.
+        // #538, Q-326: a stopped sink resumed without a seek stays stopped (kira
+        // ignores a resume on a stopped sound); only a seek plays it again.
         fn resume(&self, sink: SinkId) {
-            if let Some(mut inner) = self.lock()
-                && let Some(s) = inner.revive(sink, 0.0)
-            {
-                s.handle.resume(NOW);
-            }
+            self.with_sink(sink, |s| s.handle.resume(NOW));
         }
 
-        // #538: `None` once kira has stopped the sound at its end.
+        // #538, Q-326: `None` once kira has stopped the sound at its end.
         fn position(&self, sink: SinkId) -> Option<f64> {
             let inner = self.lock()?;
             let s = inner.sinks.get(&sink)?;
@@ -1217,8 +1224,9 @@ mod kira_output {
             backend.on_start_processing();
         }
 
-        // #538: kira stops a sound that played to its end and the mixer drops it; a seek
-        // to 0 then a resume plays the sink again from 0.
+        // #538, Q-326: kira stops a sound that played to its end and the mixer drops
+        // it; a bare resume leaves it stopped, and a seek to 0 then a resume plays the sink
+        // again from 0 with the gain and pan set before it stopped.
         #[test]
         fn kira_output_plays_a_sink_again_after_its_end() {
             let manager = AudioManager::<MockBackend>::new(AudioManagerSettings {
@@ -1236,7 +1244,8 @@ mod kira_output {
             };
             let (sink, duration_s) = out.add_data(data).unwrap();
             assert!((duration_s - 0.5).abs() < 1e-9);
-            out.set_gain(sink, 1.0);
+            out.set_gain(sink, 0.7);
+            out.set_panning(sink, -0.4);
             out.resume(sink);
             for _ in 0..10 {
                 step(&out);
@@ -1254,12 +1263,31 @@ mod kira_output {
                 "played to its end"
             );
             assert_eq!(out.position(sink), None, "a stopped sink has no position");
+            out.resume(sink);
+            step(&out);
+            assert_eq!(
+                state(&out),
+                Some(PlaybackState::Stopped),
+                "a bare resume leaves it stopped"
+            );
+            assert_eq!(out.position(sink), None, "still no position");
             out.seek(sink, 0.0);
+            step(&out);
+            assert_eq!(state(&out), Some(PlaybackState::Paused), "revived paused");
+            {
+                // kira's handle has no gain or pan getter; the sink's kept values are the
+                // ones the revived sound was played with.
+                let inner = out.lock().unwrap();
+                let s = &inner.sinks[&sink];
+                assert_eq!((s.gain, s.pan), (0.7, -0.4), "gain and pan kept");
+            }
             out.resume(sink);
             step(&out);
             assert_eq!(state(&out), Some(PlaybackState::Playing), "plays again");
             let q = out.position(sink).unwrap();
-            assert!(q > 0.0 && q < 0.2, "from 0: {q}");
+            // One mixer step plays 128 frames, 128/RATE s; a margin of 0.05 s.
+            let bound = 128.0 / f64::from(RATE) + 0.05;
+            assert!(q > 0.0 && q < bound, "from 0: {q} < {bound}");
         }
     }
 }
@@ -1585,14 +1613,52 @@ mod tests {
         out.advance(0.5);
         assert!(!out.sinks()[&sink].playing, "stopped at its end");
         assert_eq!(out.position(sink), None, "a stopped sink has no position");
-        app.world_mut().resource_mut::<Playback>().clock.seek(1.9);
-        app.update();
-        // The loop wraps (the clock's own wrap is the clock's tests'; a seek stands in).
+        // The loop wraps (the clock's own wrap is the clock's tests'; a seek stands in):
+        // the wrap's frame itself reads `None`.
         app.world_mut().resource_mut::<Playback>().clock.seek(0.1);
         app.update();
         let s = out.sinks()[&sink].clone();
         assert!(s.playing, "plays again after the wrap");
         assert!((s.position - 0.1).abs() < TOL, "{} vs T 0.1", s.position);
+    }
+
+    // §1.6, Q-326 (#538): a bare resume on a stopped sink leaves it stopped; only a
+    // seek plays it again, so its position stays (τ_m − τ₀,m)/r_m.
+    #[test]
+    fn stub_resume_without_a_seek_leaves_a_stopped_sink_stopped() {
+        let out = StubAudioOutput::with_duration(1.0);
+        let (sink, _) = out.add_soundtrack(&[0; 4]).unwrap();
+        out.resume(sink);
+        out.advance(1.5);
+        out.resume(sink);
+        assert!(!out.sinks()[&sink].playing, "still stopped");
+        assert_eq!(out.position(sink), None, "still at its end");
+        out.seek(sink, 0.25);
+        assert_eq!(out.position(sink), Some(0.25), "a seek revives it");
+    }
+
+    // §1.6, Q-326 (#538): a sink that stopped a few frames before the loop wraps stays
+    // stopped while T lies within DRIFT_S of the soundtrack's end, so its tail is not
+    // replayed.
+    #[test]
+    fn follow_clock_does_not_replay_the_tail_before_the_wrap() {
+        let out = Arc::new(StubAudioOutput::with_duration(1.9));
+        let mut app = app(out.clone());
+        let sink = with_soundtrack(&mut app, &out, "tail");
+        {
+            let mut p = app.world_mut().resource_mut::<Playback>();
+            p.clock.set_length(1.9);
+            p.clock.seek(1.5);
+            p.clock.set_state(PlayState::Playing);
+        }
+        app.update();
+        out.advance(0.5);
+        assert_eq!(out.position(sink), None, "stopped at its end");
+        // T = 1.88: 0.02 s before the end, within DRIFT_S = 0.05.
+        app.world_mut().resource_mut::<Playback>().clock.seek(1.88);
+        app.update();
+        assert!(!out.sinks()[&sink].playing, "not played again");
+        assert_eq!(out.position(sink), None, "left at its end");
     }
 
     #[test]
