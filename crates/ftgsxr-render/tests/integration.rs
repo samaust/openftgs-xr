@@ -30,6 +30,7 @@ mod probe_support;
 mod bevy_adapter;
 mod bevy_adapter_m4;
 mod gpu_foundation;
+mod import_vulkan_texture;
 mod load_splat_asset;
 mod quality_tiers;
 mod r01_probes;
