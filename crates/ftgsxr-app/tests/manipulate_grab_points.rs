@@ -20,9 +20,9 @@ use ftgsxr_render::{SplatAsset, SplatModel};
 use ftgsxr_testkit::fixtures_dir;
 use support::TestApp;
 
-/// U-32's "exact" for its grab-point clause, worked through f32 transforms: U-16's
-/// 10⁻⁵, the tolerance of `TwoHandGrab` that the grab points go through.
-// Q-329
+/// U-32's tolerance for its two-hand grab-point clause (spec revision 36): U-16's
+/// 10⁻⁵, the tolerance of `TwoHandGrab` that the grab points go through, relative for
+/// scale ratios.
 const TOL: f32 = 1e-5;
 
 /// P1 loaded and posed so that its box B_m's longest side is `side_m` long, centred at
@@ -444,8 +444,9 @@ fn u32_grab_points_closer_than_5_cm_fall_back_to_the_hands() {
     let close = ratio_for_rays_apart("grab_points_4cm", 0.04);
     assert!((close - 2.0).abs() < TOL, "4 cm apart: {close}");
     let apart = ratio_for_rays_apart("grab_points_6cm", 0.06);
+    let expected = 0.26 / 0.06;
     assert!(
-        (apart - 0.26 / 0.06).abs() < 10.0 * TOL,
+        (apart - expected).abs() < TOL * expected,
         "6 cm apart: {apart}"
     );
 }
