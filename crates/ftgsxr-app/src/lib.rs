@@ -64,9 +64,10 @@ pub use ui::{
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;
 // §2.1 `ftgsxr_app::persist` (M-3: `SettingsRes`, Q-127; #277: `SettingsPath`, Q-163).
-// Q-224: `SettingsWarnings`.
+// Q-224: `SettingsWarnings`; Q-343: `SceneAnchor`.
 pub use persist::{
-    PersistCommand, SettingsPath, SettingsRes, SettingsWarnings, apply_scene, scene_from_world,
+    PersistCommand, SceneAnchor, SettingsPath, SettingsRes, SettingsWarnings, apply_scene,
+    scene_from_world,
 };
 // §2.1 `ftgsxr_app::platform`; Q-266: `Headset`; Q-322: `AskPermissionAgain`,
 // `DeniedPermissions`.

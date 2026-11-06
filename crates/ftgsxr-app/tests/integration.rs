@@ -68,6 +68,7 @@ mod r15_render;
 mod r17_governor;
 mod rig_camera_controller;
 mod rig_recenter_teleport;
+mod scene_anchor;
 mod u17_locomotion;
 mod u22_governor;
 mod u32_panel_hit;
