@@ -17,6 +17,7 @@
 mod cameras;
 mod dock;
 mod panel;
+mod touch;
 
 pub(crate) use panel::{PanelCamera, panel_zoom};
 
@@ -34,7 +35,8 @@ use bevy::time::Time;
 use bevy::window::{MonitorSelection, PrimaryWindow, Window, WindowMode};
 use bevy_egui::input::EguiInputEvent;
 use bevy_egui::{
-    EguiGlobalSettings, EguiOutput, EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, egui,
+    EguiContext, EguiGlobalSettings, EguiOutput, EguiPlugin, EguiPostUpdateSet,
+    EguiPrimaryContextPass, egui,
 };
 use ftgsxr_core::Pose;
 use ftgsxr_io::{DesktopSettings, ManualLighting, ModelRef};
@@ -995,16 +997,25 @@ fn fill_hud(
 /// context rendering to its panel's image, in order; a context that had the pointer and
 /// gets none this frame sees it leave (Q-263). The messages are the last frame's, read
 /// before egui takes its input, and their pixels reach the context as its points
-/// (Q-290).
-// Q-263, Q-290
+/// (Q-290). Each context's events are rewritten for the touch press (Q-333).
+// Q-263, Q-290, Q-333
 fn panel_pointer(
     mut pointers: MessageReader<PanelPointer>,
     panels: Query<&WorldPanel>,
     contexts: Query<(Entity, &RenderTarget, Option<&EguiOutput>)>,
+    mut egui_contexts: Query<&mut EguiContext>,
     mut state: ResMut<PanelPointerState>,
     mut out: MessageWriter<EguiInputEvent>,
 ) {
     let mut seen: HashMap<Entity, Vec2> = HashMap::new();
+    let mut frame: Vec<(Entity, Vec<egui::Event>)> = Vec::new();
+    let mut push = |context: Entity, events: Vec<egui::Event>| match frame
+        .iter_mut()
+        .find(|(c, _)| *c == context)
+    {
+        Some((_, e)) => e.extend(events),
+        None => frame.push((context, events)),
+    };
     for p in pointers.read() {
         let Ok(panel) = panels.get(p.panel) else {
             continue;
@@ -1024,19 +1035,25 @@ fn panel_pointer(
         // Q-290: the texture's pixels in the context's points.
         let at = panel_point(p.pixel, ppp);
         let scroll = panel_point(Vec2::new(0.0, p.scroll_px), ppp).y;
-        for event in pointer_events(last, Some(at), &p.select, scroll) {
-            out.write(EguiInputEvent { context, event });
-        }
+        push(context, pointer_events(last, Some(at), &p.select, scroll));
         seen.insert(context, at);
     }
     for (&context, &last) in &state.last {
         if !seen.contains_key(&context) {
-            for event in pointer_events(Some(last), None, &[], 0.0) {
-                out.write(EguiInputEvent { context, event });
-            }
+            push(context, pointer_events(Some(last), None, &[], 0.0));
         }
     }
     state.last = seen;
+    for (context, events) in frame {
+        // Q-333
+        let events = match egui_contexts.get_mut(context) {
+            Ok(mut ctx) => touch::touch_events(ctx.get_mut(), events),
+            Err(_) => events,
+        };
+        for event in events {
+            out.write(EguiInputEvent { context, event });
+        }
+    }
 }
 
 /// The first readable system font: egui's bundled fonts are off (#277), so the desktop
