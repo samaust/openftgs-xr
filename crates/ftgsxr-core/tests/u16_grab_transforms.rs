@@ -4,7 +4,9 @@
 //! relative to the hand is invariant under 1,000 random hand motions. Two hands: scale =
 //! distance ratio, clamped at 0.01 and 100; the midpoint is followed; a 30° horizontal
 //! rotation of the hands yaws the model 30° and nothing else in upright mode; free
-//! rotation takes d₀ to d. Tolerance 10⁻⁵.
+//! rotation takes d₀ to d; two grab points on a posed box keep their box-normalized
+//! coordinates under free rotation, and their midpoint keeps its own under keep upright
+//! (spec revision 34). Tolerance 10⁻⁵.
 //!
 //! Expected values are checked on points: a pose is compared through where it sends a
 //! few model-space points, worked from E5's x ↦ s R(q) x + t, so q and −q compare equal.
@@ -278,5 +280,73 @@ fn u16_free_rotation_takes_d0_to_d() {
             let axis = axis.normalize();
             assert_vec3(applied(axis), axis, "rotation axis fixed");
         }
+    }
+}
+
+/// A box B_m for the grab points (spec revision 34): not a cube, off the origin.
+const BOX_MIN: Vec3 = Vec3::new(-0.4, -0.1, -0.3);
+const BOX_MAX: Vec3 = Vec3::new(0.6, 0.5, 0.2);
+
+/// A model-space point's box-normalized coordinates: 0 at B_m's min corner, 1 at its max.
+fn normalized(x: Vec3) -> Vec3 {
+    (x - BOX_MIN) / (BOX_MAX - BOX_MIN)
+}
+
+/// The model-space point that `p` puts at the stage point y: R(q)ᵀ (y − t)/s, worked
+/// here rather than through `Pose::inverse`.
+fn unapply(p: &Pose, y: Vec3) -> Vec3 {
+    p.rotation.inverse() * (y - p.translation) / p.scale
+}
+
+/// The stage point of the box-normalized point `n` under `p`.
+fn on_box(p: &Pose, n: Vec3) -> Vec3 {
+    apply(p, BOX_MIN + n * (BOX_MAX - BOX_MIN))
+}
+
+/// Two grab points on the posed box, given by their box-normalized coordinates, then
+/// moved at random: the grab points' box-normalized coordinates under the returned
+/// poses, for each motion.
+fn grab_point_runs(seed: u64, free_rotation: bool, na: Vec3, nb: Vec3) -> Vec<(Vec3, Vec3, Vec3)> {
+    let mut rng = Rng(seed);
+    let model0 = tilted_model();
+    let (a0, b0) = (on_box(&model0, na), on_box(&model0, nb));
+    let grab = TwoHandGrab::begin(hand_at(a0, &mut rng), hand_at(b0, &mut rng), model0);
+    (0..100)
+        .map(|_| {
+            let (a, b) = (rng.vec3(2.0), rng.vec3(2.0));
+            let p = grab.update(
+                hand_at(a, &mut rng),
+                hand_at(b, &mut rng),
+                &LIMITS,
+                free_rotation,
+            );
+            (
+                normalized(unapply(&p, a)),
+                normalized(unapply(&p, b)),
+                normalized(unapply(&p, (a + b) * 0.5)),
+            )
+        })
+        .collect()
+}
+
+/// Spec revision 34's U-16 clause: two grab points on a posed box keep their
+/// box-normalized coordinates under free rotation, and their midpoint keeps its own
+/// under keep upright. The random motions stay within the scale limits: the grab
+/// points' distance changes by less than 100× either way.
+#[test]
+fn u16_grab_points_keep_their_box_coordinates() {
+    let (na, nb) = (Vec3::new(0.1, 0.8, 1.0), Vec3::new(0.9, 0.3, 0.0));
+    let model0 = tilted_model();
+    let nm = normalized(unapply(
+        &model0,
+        (on_box(&model0, na) + on_box(&model0, nb)) * 0.5,
+    ));
+    for (a, b, m) in grab_point_runs(0x5EED_6016, true, na, nb) {
+        assert_vec3(a, na, "free rotation: the first grab point");
+        assert_vec3(b, nb, "free rotation: the second grab point");
+        assert_vec3(m, nm, "free rotation: the midpoint");
+    }
+    for (_, _, m) in grab_point_runs(0x5EED_7016, false, na, nb) {
+        assert_vec3(m, nm, "keep upright: the midpoint");
     }
 }

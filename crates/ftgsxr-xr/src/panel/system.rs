@@ -62,11 +62,54 @@ pub(crate) enum PanelGrab {
     /// Not held.
     #[default]
     Free,
-    /// Held by one hand at its aim pose (Q-302's grab pose).
-    One { hand: Hand, grab: Grab },
-    /// Held by both: the left hand is E11's a, the right b; the pose's scale is the
-    /// width in metres.
-    Two { grab: TwoHandGrab },
+    /// Held by one hand at its aim pose (Q-302's grab pose); `point` is its grab point.
+    One { hand: Hand, grab: Grab, point: Vec3 },
+    /// Held by both: the left hand's grab point is E11's a, the right's b; the pose's
+    /// scale is the width in metres. `points` are the grab points on the quad, left
+    /// first, and `offsets` the same points in their hands' frames.
+    Two {
+        grab: TwoHandGrab,
+        points: [Vec3; 2],
+        offsets: [Vec3; 2],
+    },
+}
+
+/// E11's fallback: grab points that start closer than this (metres) are replaced by the
+/// hands' aim positions for that grab (spec revision 34).
+const GRAB_POINTS_MIN_M: f32 = 0.05;
+
+/// A grab point on the quad (E11, spec revision 34: the ray's hit on the quad) from the
+/// hit's pixel, in the frame of the panel's pose whose scale is the width: x across the
+/// width from −1/2 to 1/2, y up the height, from −3/8 to 3/8 at the 4:3 aspect, the
+/// texture's top-left at the quad's top-left (Q-210).
+// Q-210
+fn quad_point(pixel: Vec2, size_px: UVec2) -> Vec3 {
+    let uv = pixel / size_px.as_vec2();
+    Vec3::new(uv.x - 0.5, ASPECT * (0.5 - uv.y), 0.0)
+}
+
+/// E11's two-hand grab points at the start of a two-hand grab: each point of the panel
+/// (`points`, in the frame of `pose`) as an offset in its hand's frame, so it moves fixed
+/// in the hand; both zero, the hands' aim positions, when the points lie closer than
+/// `GRAB_POINTS_MIN_M` (spec revision 34).
+fn grab_offsets(pose: Pose, hands: [Pose; 2], points: [Vec3; 2]) -> [Vec3; 2] {
+    let stage = points.map(|p| pose.transform_point(p));
+    if stage[0].distance(stage[1]) < GRAB_POINTS_MIN_M {
+        return [Vec3::ZERO; 2];
+    }
+    [
+        hands[0].inverse().transform_point(stage[0]),
+        hands[1].inverse().transform_point(stage[1]),
+    ]
+}
+
+/// A grab point's pose, `TwoHandGrab`'s a or b: the hand's pose moved to the point
+/// `offset` gives in its frame.
+fn at_offset(hand: Pose, offset: Vec3) -> Pose {
+    Pose {
+        translation: hand.transform_point(offset),
+        ..hand
+    }
 }
 
 /// A new render-target image of `size_px` (bevy's render-to-texture path, D-21).
@@ -242,7 +285,8 @@ pub(crate) fn resized_px(width_m: f32) -> UVec2 {
 /// way (two hands resize it)", E11): a grab press on the title-bar strip begins a
 /// one-hand grab at the hand's aim pose; the other hand's grab press anywhere on the
 /// panel while it is held makes it a two-hand grab, scaling the width between 0.3 and
-/// 1.2 m (yaw only, keep upright); a release (`GrabEnd`, which `xr_input` always passes
+/// 1.2 m (yaw only, keep upright) by its grab points, the rays' hits on the quad, each
+/// fixed in its hand (E11, spec revision 34); a release (`GrabEnd`, which `xr_input` always passes
 /// on) of either returns to the other hand, re-creating the image at the new width
 /// (1829 px per metre) and updating `PanelQuad` and `UiSurface::Panel`. The pose follows
 /// while the holding hands are tracked. Each hand that joins or leaves the grab sends a
@@ -279,13 +323,19 @@ pub(crate) fn grab(
                 *held = PanelGrab::Free;
                 edges.write(PanelGrabEdge(hand));
             }
-            PanelGrab::Two { .. } => {
+            PanelGrab::Two { points, .. } => {
                 let Some(rest) = other(hand) else { continue };
+                // The other hand keeps its grab point on the quad (left first).
+                let point = match rest {
+                    Hand::Left => points[0],
+                    _ => points[1],
+                };
                 edges.write(PanelGrabEdge(hand));
                 *held = match aim(rest) {
                     Some(a) => PanelGrab::One {
                         hand: rest,
                         grab: Grab::begin(a, pose_of(&transform)),
+                        point,
                     },
                     None => {
                         edges.write(PanelGrabEdge(rest));
@@ -307,22 +357,33 @@ pub(crate) fn grab(
                 *held = PanelGrab::One {
                     hand: p.hand,
                     grab: Grab::begin(a, pose_of(&transform)),
+                    point: quad_point(p.pixel, quad.size_px),
                 };
                 edges.write(PanelGrabEdge(p.hand));
             }
-            PanelGrab::One { hand, .. } if *hand != p.hand => {
+            PanelGrab::One { hand, point, .. } if *hand != p.hand => {
                 if let Some(b) = aim(*hand) {
-                    let (l, r) = if p.hand == Hand::Left { (a, b) } else { (b, a) };
+                    // The pose's scale is the width (E11's s).
+                    let pose = Pose {
+                        scale: quad.size_m.x,
+                        ..pose_of(&transform)
+                    };
+                    let here = quad_point(p.pixel, quad.size_px);
+                    let ((l, r), points) = if p.hand == Hand::Left {
+                        ((a, b), [here, *point])
+                    } else {
+                        ((b, a), [*point, here])
+                    };
+                    // The grab points, fixed in their hands (E11, spec revision 34).
+                    let offsets = grab_offsets(pose, [l, r], points);
                     *held = PanelGrab::Two {
-                        // The pose's scale is the width (E11's s).
                         grab: TwoHandGrab::begin(
-                            l,
-                            r,
-                            Pose {
-                                scale: quad.size_m.x,
-                                ..pose_of(&transform)
-                            },
+                            at_offset(l, offsets[0]),
+                            at_offset(r, offsets[1]),
+                            pose,
                         ),
+                        points,
+                        offsets,
                     };
                     edges.write(PanelGrabEdge(p.hand));
                 }
@@ -333,15 +394,16 @@ pub(crate) fn grab(
     // Follow the tracked hands.
     match &*held {
         PanelGrab::Free => {}
-        PanelGrab::One { hand, grab } => {
+        PanelGrab::One { hand, grab, .. } => {
             if let Some(a) = aim(*hand) {
                 let p = grab.update(a);
                 transform.translation = p.translation;
                 transform.rotation = p.rotation;
             }
         }
-        PanelGrab::Two { grab } => {
+        PanelGrab::Two { grab, offsets, .. } => {
             if let (Some(a), Some(b)) = (aim(Hand::Left), aim(Hand::Right)) {
+                let (a, b) = (at_offset(a, offsets[0]), at_offset(b, offsets[1]));
                 let p = grab.update(a, b, &WIDTH_LIMITS, false);
                 let size_m = Vec2::new(p.scale, p.scale * ASPECT);
                 *transform = quad_transform(p, size_m);
@@ -680,8 +742,9 @@ mod tests {
     }
 
     /// §1.8: two hands resize the panel between 0.3 m and 1.2 m wide (E11's ratio of the
-    /// hands' distance), the height following 4:3; at the end of the resize the image is
-    /// re-created at 1829 px per metre and `UiSurface::Panel` follows.
+    /// grab points' distance, spec revision 34), the height following 4:3; at the end of
+    /// the resize the image is re-created at 1829 px per metre and `UiSurface::Panel`
+    /// follows.
     #[test]
     fn grab_with_two_hands_resizes_and_recreates_the_image() {
         let mut app = app(at(Vec3::new(0.0, 1.6, 0.0), Quat::IDENTITY));
@@ -705,11 +768,13 @@ mod tests {
             Hand::Right,
             Some(hand(a(0.1), a(0.1), HandSource::Controller)),
         );
+        // Two level grab points 800 px apart on the 1024 px wide texture: 0.4375 m.
         press(&mut app, Hand::Left, panel, Vec2::new(100.0, 10.0));
         app.update();
-        press(&mut app, Hand::Right, panel, Vec2::new(900.0, 400.0));
+        press(&mut app, Hand::Right, panel, Vec2::new(900.0, 10.0));
         app.update();
-        // The hands 1.5 × apart: 0.84 m wide.
+        // The hands each 5 cm out: the grab points 0.5375 m apart, so 0.56 × 0.5375 /
+        // 0.4375 = 0.688 m wide.
         set_hand(
             &mut app,
             Hand::Left,
@@ -722,14 +787,14 @@ mod tests {
         );
         app.update();
         let q = quad_of(&mut app);
-        assert!((q.size_m.x - 0.84).abs() < 1e-5, "{q:?}");
-        assert!((q.size_m.y - 0.63).abs() < 1e-5, "{q:?}");
+        assert!((q.size_m.x - 0.688).abs() < 1e-5, "{q:?}");
+        assert!((q.size_m.y - 0.516).abs() < 1e-5, "{q:?}");
         assert_eq!(
             q.size_px,
             UVec2::new(1024, 768),
             "the image waits for the release"
         );
-        // 10 × apart: clamped at 1.2 m.
+        // Far apart: clamped at 1.2 m.
         set_hand(
             &mut app,
             Hand::Left,
@@ -770,6 +835,52 @@ mod tests {
                 size_m: q.size_m,
             }
         );
+    }
+
+    /// E11, spec revision 34: while two hands resize the panel, the two points of the
+    /// quad that the grabs took hold of stay with their hands, each keeping its place on
+    /// the quad, from hands that do not stand where the points are.
+    #[test]
+    fn grab_keeps_the_grab_points_on_the_quad() {
+        let mut app = app(at(Vec3::new(0.0, 1.6, 0.0), Quat::IDENTITY));
+        toggle_panel(&mut app);
+        let (panel, t0, _) = main_panel(&mut app);
+        let a = |x: f32, z: f32| at(Vec3::new(x, 1.4, z), Quat::IDENTITY);
+        let tracked = |p: Pose| Some(hand(p, p, HandSource::Controller));
+        set_hand(&mut app, Hand::Left, tracked(a(-0.1, -0.5)));
+        set_hand(&mut app, Hand::Right, tracked(a(0.1, -0.5)));
+        // Level, in the title bar's row, off the quad's centre line.
+        let (pl, pr) = (Vec2::new(200.0, 20.0), Vec2::new(800.0, 20.0));
+        press(&mut app, Hand::Left, panel, pl);
+        app.update();
+        press(&mut app, Hand::Right, panel, pr);
+        app.update();
+        // A pixel's stage point, worked from Q-210: the 1024 × 768 texture's top-left at
+        // the quad's top-left, x to the right across the width, y down the height, on
+        // the quad of the transform's width and height about its centre.
+        let stage = |t: &Transform, px: Vec2| {
+            let local = Vec3::new(
+                (px.x / 1024.0 - 0.5) * t.scale.x,
+                (0.5 - px.y / 768.0) * t.scale.y,
+                0.0,
+            );
+            t.translation + t.rotation * local
+        };
+        let (gl, gr) = (stage(&t0, pl), stage(&t0, pr));
+        // The hands move apart and toward the user, level.
+        let (dl, dr) = (Vec3::new(-0.08, 0.0, 0.1), Vec3::new(0.12, 0.0, 0.1));
+        set_hand(&mut app, Hand::Left, tracked(a(-0.1 + dl.x, -0.5 + dl.z)));
+        set_hand(&mut app, Hand::Right, tracked(a(0.1 + dr.x, -0.5 + dr.z)));
+        app.update();
+        let (_, t1, _) = main_panel(&mut app);
+        assert!(t1.scale.x > t0.scale.x * 1.1, "resized");
+        for (px, g, what) in [(pl, gl + dl, "left"), (pr, gr + dr, "right")] {
+            let got = stage(&t1, px);
+            assert!(
+                (got - g).length() < 1e-5,
+                "the {what} grab point: {got} against {g}"
+            );
+        }
     }
 
     /// `resized_px` at the default width gives the default texture.

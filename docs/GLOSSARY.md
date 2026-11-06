@@ -660,6 +660,10 @@ _Avoid_: viewpoint, saved view, camera preset
 The translate arrows, rotation rings and uniform-scale cube drawn on the selected instance on the desktop, which the mouse drags to change its pose. §1.7
 _Avoid_: handles (unqualified), manipulator, Bevy gizmos (the engine's line-drawing API)
 
+**Grab point**:
+The point of a model instance, or of the main panel's quad, where a hand's ray took hold when it grabbed: E10's hit, or the hand's aim position from inside the box. It stays that point of the instance; a two-hand grab anchors on its two grab points, each carried by its hand. E10, E11, §1.8, D-43
+_Avoid_: hit point (the ray's drawn end, which moves with every frame's ray), contact point, anchor, pivot (the grab points' midpoint)
+
 **Soundtrack**:
 An instance's audio file, found beside the model, named by the index entry or by the scene file, played at speed 1 forward only with soundtrack time 0 at τ₀,m. §1.6, §1.10, D-22
 _Avoid_: audio track, music, sidecar (unqualified)

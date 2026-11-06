@@ -40,8 +40,10 @@ pub struct ScaleLimits {
     pub max: f32,
 }
 
-/// E11, two hands: the hands' start positions a₀ and b₀, their midpoint m₀ and the
-/// instance's start pose P₀.
+/// E11, two hands: the grab points' start positions a₀ and b₀, their midpoint m₀ and
+/// the instance's start pose P₀. The grab points are the points of the instance where
+/// the hands' rays took hold, each moving fixed in its hand (spec revision 34); the
+/// caller passes their poses as `a` and `b`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TwoHandGrab {
     a0: Vec3,
@@ -55,8 +57,8 @@ pub struct TwoHandGrab {
 const DEGENERATE_M: f32 = 1e-6;
 
 impl TwoHandGrab {
-    /// Starts a two-hand grab from the hands' poses (only their positions count) and the
-    /// instance's pose P₀.
+    /// Starts a two-hand grab from the grab points' poses (only their positions count)
+    /// and the instance's pose P₀.
     pub fn begin(a: Pose, b: Pose, model: Pose) -> TwoHandGrab {
         let (a0, b0) = (a.translation, b.translation);
         TwoHandGrab {
@@ -67,13 +69,13 @@ impl TwoHandGrab {
         }
     }
 
-    /// The instance's pose for the hands' current poses:
+    /// The instance's pose for the grab points' current poses:
     /// P' = T(m) R(θ) Scale(s′/s₀) T(−m₀) P₀, with s′ = clamp(s₀ ‖b − a‖/‖b₀ − a₀‖,
     /// s_min, s_max) and m = (a + b)/2. R is R_ŷ(θ), the yaw between the horizontal
     /// projections of d₀ = b₀ − a₀ and d = b − a ("keep upright"), or with
     /// `free_rotation` the shortest rotation taking d₀ to d.
     ///
-    /// Degenerate hands (Q-17): when ‖d₀‖ is below 1 µm the ratio is 1; when d₀ or d
+    /// Degenerate grab points (Q-17): when ‖d₀‖ is below 1 µm the ratio is 1; when d₀ or d
     /// has no direction (or, upright, no horizontal direction) the rotation is the
     /// identity.
     pub fn update(&self, a: Pose, b: Pose, limits: &ScaleLimits, free_rotation: bool) -> Pose {
@@ -82,7 +84,7 @@ impl TwoHandGrab {
         let m = (a + b) * 0.5;
         let s0 = self.model0.scale;
 
-        // Q-17: hands that start together give no ratio.
+        // Q-17: grab points that start together give no ratio.
         let ratio = if d0.length() < DEGENERATE_M {
             1.0
         } else {
