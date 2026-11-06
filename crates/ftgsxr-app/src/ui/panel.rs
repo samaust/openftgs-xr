@@ -5,7 +5,7 @@
 //! image-target camera with its own egui context and schedule, instead of the window.
 //!
 //! The main panel shows the desktop's tabs without the mouse-only items, plus Comfort: a
-//! tab row, the tab's content, the toast line at the bottom, and a Back button at the top
+//! title bar at the top (Q-306), a tab row, the tab's content, the toast line at the bottom, and a Back button at the top
 //! of every sub-page (the confirmation dialogs, the training cameras, the request
 //! replay); nothing draws a hover tooltip. The wrist menu shows five buttons. Both take
 //! the pointer from `PanelPointer` (Q-263, Q-279).
@@ -212,9 +212,15 @@ pub(super) fn draw_panel(
     dock::send(world, out);
 }
 
-/// The main panel's layout: the tab row (or a sub-page's Back button), the toast line at
-/// the bottom, the tab's content or the sub-page between.
-// Q-294
+/// The main panel's title bar as a share of its texture's height: the strip
+/// `ftgsxr_xr`'s panel grab tests (its own copy of the fraction, since it depends on
+/// this crate), so the bar drawn and the strip grabbed coincide.
+// Q-306
+const TITLE_FRACTION: f32 = 1.0 / 16.0;
+
+/// The main panel's layout: the title bar at the top, then the tab row (or a sub-page's
+/// Back button), the toast line at the bottom, the tab's content or the sub-page between.
+// Q-294, Q-306, Q-327
 pub(super) fn panel_layout(
     world: &mut World,
     ui: &mut egui::Ui,
@@ -225,31 +231,46 @@ pub(super) fn panel_layout(
         let s = world.resource::<UiState>();
         (s.tab, s.page, s.confirm.is_some())
     };
-    egui::Panel::top("ftgsxr-panel-top").show(ui, |ui| {
-        if asking || page.is_some() {
-            if dock::button(ui, "◀ Back", out, hv) {
-                if asking {
-                    // Back is No: the question is dropped (Q-199, Q-200, Q-256).
-                    out.push(Out::Answer(false));
-                } else {
-                    world.resource_mut::<UiState>().page = None;
+    // Q-327: a plain bar, no text and no widget, so a pinch on it only grabs (Q-315).
+    let bar = TITLE_FRACTION * ui.ctx().viewport_rect().height();
+    egui::Panel::top("ftgsxr-panel-title")
+        .exact_size(bar)
+        .frame(egui::Frame::NONE.fill(ui.visuals().faint_bg_color))
+        .show(ui, |_| {});
+    // egui hits the widget nearest the pointer within `interact_radius` of its rect: the
+    // tab row's top margin keeps every widget farther than that from the bar.
+    let mut row = egui::Frame::side_top_panel(ui.style());
+    row.inner_margin.top = row
+        .inner_margin
+        .top
+        .max((ui.style().interaction.interact_radius + 1.0).ceil() as i8);
+    egui::Panel::top("ftgsxr-panel-top")
+        .frame(row)
+        .show(ui, |ui| {
+            if asking || page.is_some() {
+                if dock::button(ui, "◀ Back", out, hv) {
+                    if asking {
+                        // Back is No: the question is dropped (Q-199, Q-200, Q-256).
+                        out.push(Out::Answer(false));
+                    } else {
+                        world.resource_mut::<UiState>().page = None;
+                    }
                 }
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    for t in Tab::PANEL {
+                        let r = ui.selectable_label(t == tab, format!("{t:?}"));
+                        if r.hovered() {
+                            *hv = Some(r.id);
+                        }
+                        if r.clicked() {
+                            world.resource_mut::<UiState>().tab = t;
+                            out.push(Out::Cue(UiCue::Click));
+                        }
+                    }
+                });
             }
-        } else {
-            ui.horizontal_wrapped(|ui| {
-                for t in Tab::PANEL {
-                    let r = ui.selectable_label(t == tab, format!("{t:?}"));
-                    if r.hovered() {
-                        *hv = Some(r.id);
-                    }
-                    if r.clicked() {
-                        world.resource_mut::<UiState>().tab = t;
-                        out.push(Out::Cue(UiCue::Click));
-                    }
-                }
-            });
-        }
-    });
+        });
     dock::toast_line(world, ui);
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -659,5 +680,143 @@ mod tests {
             "a recenter"
         );
         assert!(out.iter().any(|o| matches!(o, Out::Cue(UiCue::Click))));
+    }
+
+    /// The textures #542's tests draw the main panel on: (width px, height px, `ui_scale`),
+    /// the default 1024 × 768 at §1.11's smallest, default and largest scales, and the
+    /// 1.2 m panel's 2195 × 1646 (Q-306).
+    const TEXTURES: [(f32, f32, f32); 4] = [
+        (1024.0, 768.0, 0.8),
+        (1024.0, 768.0, 1.0),
+        (1024.0, 768.0, 1.5),
+        (2195.0, 1646.0, 1.0),
+    ];
+
+    /// One frame of the main panel as `draw_panel` draws it on a `w` × `h` px texture at
+    /// `zoom`, with `events` in the context's points: the texts drawn, each with its
+    /// galley's rect in the texture's pixels, what the user did, and the widget hovered.
+    fn texture_frame(
+        ctx: &egui::Context,
+        world: &mut World,
+        (w, h, zoom): (f32, f32, f32),
+        events: Vec<egui::Event>,
+    ) -> (Vec<(String, egui::Rect)>, Vec<Out>, Option<egui::Id>) {
+        ctx.set_zoom_factor(zoom);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(w / zoom, h / zoom),
+            )),
+            events,
+            ..Default::default()
+        };
+        let (mut out, mut hv) = (Vec::new(), None);
+        let mut full = ctx.run_ui(input, |ui| {
+            panel_style(ui.style_mut());
+            panel_layout(world, ui, &mut out, &mut hv)
+        });
+        full.textures_delta.clear();
+        let mut texts = Vec::new();
+        fn walk(s: &egui::Shape, zoom: f32, texts: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::Shape::Text(t) => {
+                    let r = egui::Rect::from_min_size(t.pos, t.galley.size());
+                    let px = egui::Rect::from_min_max(
+                        (r.min.to_vec2() * zoom).to_pos2(),
+                        (r.max.to_vec2() * zoom).to_pos2(),
+                    );
+                    texts.push((t.galley.text().to_string(), px));
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, zoom, texts)),
+                _ => {}
+            }
+        }
+        full.shapes
+            .iter()
+            .for_each(|c| walk(&c.shape, zoom, &mut texts));
+        (texts, out, hv)
+    }
+
+    /// Q-306's answer and Q-327 (#542): the title bar, the top 1/16 of the texture, is
+    /// drawn above the tab row and a sub-page's Back button at every `ui_scale` and size:
+    /// no text lies in it, and a pointer anywhere in it, pressed and released (a trigger's
+    /// select, which `xr_input` passes on there), hovers and clicks nothing.
+    #[test]
+    fn the_title_bar_holds_no_widget_and_no_text_above_the_tab_row_and_back() {
+        for page in [None, Some(Page::Cameras)] {
+            for (w, h, scale) in TEXTURES {
+                let tex = (w, h, panel_zoom(scale));
+                let bar = h / 16.0;
+                let mut world = panel_world(Tab::Scene);
+                world.resource_mut::<UiState>().page = page;
+                let ctx = egui::Context::default();
+                texture_frame(&ctx, &mut world, tex, Vec::new());
+                let (texts, _, _) = texture_frame(&ctx, &mut world, tex, Vec::new());
+                let first = if page.is_some() {
+                    "◀ Back"
+                } else {
+                    "Library"
+                };
+                assert!(
+                    texts.iter().any(|(t, _)| t == first),
+                    "{first} is drawn at {tex:?}: {texts:?}"
+                );
+                for (t, r) in &texts {
+                    assert!(
+                        r.min.y >= bar,
+                        "{t:?} at {r:?} below the {bar} px bar, {tex:?}"
+                    );
+                }
+                for y in [1.0, bar / 2.0, bar - 0.5] {
+                    for x in (0..16).map(|i| (i as f32 + 0.5) * w / 16.0) {
+                        let at = super::super::panel_point(Vec2::new(x, y), tex.2);
+                        for select in [vec![true], vec![false]] {
+                            let events = pointer_events(Some(at), Some(at), &select, 0.0);
+                            let (_, out, hv) = texture_frame(&ctx, &mut world, tex, events);
+                            assert_eq!(hv, None, "a widget hovered at ({x}, {y}), {tex:?}");
+                            assert!(
+                                !out.iter().any(|o| matches!(o, Out::Cue(UiCue::Click))),
+                                "a click at ({x}, {y}), {tex:?}"
+                            );
+                        }
+                    }
+                }
+                let s = world.resource::<UiState>();
+                assert_eq!((s.tab, s.page), (Tab::Scene, page), "{tex:?}");
+            }
+        }
+    }
+
+    /// §1.8 Hands ("a pinch on the panel clicks", #542): below the title bar, a press and
+    /// release at a tab label's pixel (a pinch's select, which `xr_input` passes on off
+    /// the bar, Q-315) opens that tab at every `ui_scale` and size, and one at Back
+    /// leaves the sub-page.
+    #[test]
+    fn a_press_at_a_tab_or_back_below_the_title_bar_clicks_it() {
+        for (w, h, scale) in TEXTURES {
+            let tex = (w, h, panel_zoom(scale));
+            let mut world = panel_world(Tab::Scene);
+            let ctx = egui::Context::default();
+            let press = |world: &mut World, label: &str| {
+                texture_frame(&ctx, world, tex, Vec::new());
+                let (texts, _, _) = texture_frame(&ctx, world, tex, Vec::new());
+                let c = texts
+                    .iter()
+                    .find(|(t, _)| t == label)
+                    .map(|(_, r)| r.center())
+                    .unwrap_or_else(|| panic!("{label} is drawn at {tex:?}: {texts:?}"));
+                assert!(c.y > h / 16.0, "{label} below the bar at {tex:?}");
+                let at = super::super::panel_point(Vec2::new(c.x, c.y), tex.2);
+                for select in [vec![], vec![true], vec![false]] {
+                    let events = pointer_events(Some(at), Some(at), &select, 0.0);
+                    texture_frame(&ctx, world, tex, events);
+                }
+            };
+            press(&mut world, "Playback");
+            assert_eq!(world.resource::<UiState>().tab, Tab::Playback, "{tex:?}");
+            world.resource_mut::<UiState>().page = Some(Page::Cameras);
+            press(&mut world, "◀ Back");
+            assert_eq!(world.resource::<UiState>().page, None, "{tex:?}");
+        }
     }
 }

@@ -49,7 +49,8 @@ pub(crate) struct PanelQuad {
 }
 
 /// The title bar: the top strip of a quad's texture, as a fraction of its height (48 px
-/// of 768); `panel` grabs by it.
+/// of 768), drawn by `ui` as a bar above the tab row, its own copy of the fraction;
+/// `panel` grabs by it.
 // Q-306
 pub(crate) const TITLE_FRACTION: f32 = 1.0 / 16.0;
 
