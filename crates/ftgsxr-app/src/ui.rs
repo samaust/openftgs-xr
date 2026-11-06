@@ -17,6 +17,7 @@
 mod cameras;
 mod dock;
 mod panel;
+mod pointer_hand;
 mod touch;
 
 pub(crate) use panel::{PanelCamera, panel_zoom};
@@ -629,10 +630,11 @@ struct Upload {
 #[derive(Resource, Default)]
 struct Uploads(HashMap<Entity, Upload>);
 
-/// Each panel context's last pointer position, by the context's entity.
+/// Each panel context's pointer, its pointer hand and last position, by the context's
+/// entity (Q-334).
 #[derive(Resource, Default)]
 struct PanelPointerState {
-    last: HashMap<Entity, Vec2>,
+    last: HashMap<Entity, pointer_hand::ContextPointer>,
 }
 
 /// The ui systems that turn state into toasts and commands, ordered after the modules
@@ -993,12 +995,13 @@ fn fill_hud(
         .collect();
 }
 
-/// The panel pointer (§1.8, I-11): each `PanelPointer` becomes pointer events of the
-/// context rendering to its panel's image, in order; a context that had the pointer and
-/// gets none this frame sees it leave (Q-263). The messages are the last frame's, read
-/// before egui takes its input, and their pixels reach the context as its points
-/// (Q-290). Each context's events are rewritten for the touch press (Q-333).
-// Q-263, Q-290, Q-333
+/// The panel pointer (§1.8, I-11): each `PanelPointer` is a hand's ray on the panel of
+/// the context rendering to its image; the context follows one hand at a time, its
+/// pointer hand, and that hand's hits become its pointer events (Q-334); a context that
+/// had the pointer and gets no message in a frame sees it leave (Q-263). The messages are
+/// the last frame's, read before egui takes its input, and their pixels reach the context
+/// as its points (Q-290). Each context's events are rewritten for the touch press (Q-333).
+// Q-263, Q-290, Q-333, Q-334
 fn panel_pointer(
     mut pointers: MessageReader<PanelPointer>,
     panels: Query<&WorldPanel>,
@@ -1007,15 +1010,7 @@ fn panel_pointer(
     mut state: ResMut<PanelPointerState>,
     mut out: MessageWriter<EguiInputEvent>,
 ) {
-    let mut seen: HashMap<Entity, Vec2> = HashMap::new();
-    let mut frame: Vec<(Entity, Vec<egui::Event>)> = Vec::new();
-    let mut push = |context: Entity, events: Vec<egui::Event>| match frame
-        .iter_mut()
-        .find(|(c, _)| *c == context)
-    {
-        Some((_, e)) => e.extend(events),
-        None => frame.push((context, events)),
-    };
+    let mut frame: Vec<(Entity, Vec<pointer_hand::HandHit>)> = Vec::new();
     for p in pointers.read() {
         let Ok(panel) = panels.get(p.panel) else {
             continue;
@@ -1028,32 +1023,44 @@ fn panel_pointer(
         }) else {
             continue;
         };
-        let last = seen
-            .get(&context)
-            .or_else(|| state.last.get(&context))
-            .copied();
         // Q-290: the texture's pixels in the context's points.
-        let at = panel_point(p.pixel, ppp);
-        let scroll = panel_point(Vec2::new(0.0, p.scroll_px), ppp).y;
-        push(context, pointer_events(last, Some(at), &p.select, scroll));
-        seen.insert(context, at);
-    }
-    for (&context, &last) in &state.last {
-        if !seen.contains_key(&context) {
-            push(context, pointer_events(Some(last), None, &[], 0.0));
+        let hit = pointer_hand::HandHit {
+            hand: p.hand,
+            at: panel_point(p.pixel, ppp),
+            select: p.select.clone(),
+            scroll: panel_point(Vec2::new(0.0, p.scroll_px), ppp).y,
+        };
+        match frame.iter_mut().find(|(c, _)| *c == context) {
+            Some((_, hits)) => hits.push(hit),
+            None => frame.push((context, vec![hit])),
         }
     }
-    state.last = seen;
-    for (context, events) in frame {
+    for &context in state.last.keys() {
+        if !frame.iter().any(|(c, _)| *c == context) {
+            frame.push((context, Vec::new()));
+        }
+    }
+    let mut next = HashMap::new();
+    for (context, hits) in frame {
+        let mut ctx = egui_contexts.get_mut(context).ok();
         // Q-333
-        let events = match egui_contexts.get_mut(context) {
-            Ok(mut ctx) => touch::touch_events(ctx.get_mut(), events),
-            Err(_) => events,
+        let armed = ctx.as_mut().is_some_and(|c| touch::armed(c.get_mut()));
+        let prev = state.last.get(&context).copied();
+        // Q-334
+        let (events, pointer) = pointer_hand::hand_events(prev, &hits, armed);
+        if let Some(pointer) = pointer {
+            next.insert(context, pointer);
+        }
+        // Q-333
+        let events = match ctx {
+            Some(mut ctx) => touch::touch_events(ctx.get_mut(), events),
+            None => events,
         };
         for event in events {
             out.write(EguiInputEvent { context, event });
         }
     }
+    state.last = next;
 }
 
 /// The first readable system font: egui's bundled fonts are off (#277), so the desktop

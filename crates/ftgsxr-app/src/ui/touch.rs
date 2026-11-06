@@ -79,6 +79,13 @@ pub(crate) fn touch_pass(ui: &mut egui::Ui) {
     }
 }
 
+/// Whether the context's touch press is armed before this frame's events, so that its
+/// ray leaving the quad ends it with egui's release (Q-334).
+// Q-333, Q-334
+pub(crate) fn armed(ctx: &egui::Context) -> bool {
+    matches!(start(ctx), Some(Press::Armed(_)))
+}
+
 /// The context's stored touch press.
 fn stored(ctx: &egui::Context) -> Option<Press> {
     ctx.data(|d| d.get_temp::<Option<Press>>(press_id()))
