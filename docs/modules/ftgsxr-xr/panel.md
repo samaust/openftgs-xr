@@ -10,7 +10,7 @@ How `ftgsxr_xr::panel` places the main panel and the wrist menu on the headset: 
 - `wrist_menu_pose(grip, head)`: Q-265's offset from the grip along the palm's outward normal, the quad facing the head's position and upright (+y stage up made perpendicular to the facing; +x stage x when the facing is vertical).
 - `wrist_menu_visible(grip, head)`: whether the palm's outward normal, dotted with the unit vector from the grip to the head, exceeds Q-265's threshold.
 
-The two wrist functions take a *palm frame*, not a raw grip: a pose at the grip whose +x is the palm's outward normal, since that normal is a different grip axis per hand and per source (Q-305). The systems build it with `palm_frame` from a tracked hand's wrist pose, turned −90° about its z on either side; a controller has none, since the wrist menu never shows on one (§1.8 User interface, revision 32, #546).
+The two wrist functions take a *palm frame*, not a raw grip: a pose at the grip whose +x is the palm's outward normal, since that normal is a grip axis other than the grip's +x (Q-305). The systems build it with `palm_frame` from a tracked hand's wrist pose, turned −90° about its z on either side; a controller has none, since the wrist menu never shows on one (§1.8 User interface, revision 32, #546).
 
 ## The quads
 

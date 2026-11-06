@@ -108,7 +108,7 @@ fn quad_transform(pose: Pose, size_m: Vec2) -> Transform {
 /// At session creation, with the `Headset` marker (Q-266): the main panel's image and
 /// quad (`WorldPanel`, `MainPanel { follow: Summon }`, `PanelQuad`), hidden until
 /// summoned, and `UiSurface::Panel`; the wrist menu's likewise (`WristMenu`), hidden
-/// until the palm faces the head. Once: a re-created session (Q-124) keeps them.
+/// until a tracked hand's palm faces the head. Once: a re-created session (Q-124) keeps them.
 // Q-265, Q-266, Q-307
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_quads(
@@ -386,15 +386,15 @@ pub(crate) fn grab(
     }
 }
 
-/// The palm frame of a tracked hand's grip (Q-305): +x the palm's outward normal. The
-/// grip is the wrist joint (Q-262), whose +y points out of the back of the hand on both
-/// hands (source-log 290), so it turns −90° about its z, taking +x to its −y.
+/// The palm frame of a tracked hand's grip, its wrist joint (Q-305, Q-262): +x the
+/// palm's outward normal. The wrist joint's +y points out of the back of the hand on
+/// both hands (source-log 290), so it turns −90° about its z, taking +x to its −y.
 // Q-305
-pub(crate) fn palm_frame(hand: &TrackedHand) -> Pose {
+pub(crate) fn palm_frame(grip: Pose) -> Pose {
     let turn = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2);
     Pose {
-        rotation: (hand.grip.rotation * turn).normalize(),
-        ..hand.grip
+        rotation: (grip.rotation * turn).normalize(),
+        ..grip
     }
 }
 
@@ -413,7 +413,7 @@ pub(crate) fn place_wrist(
     };
     let palm = hand_of(&hands, side)
         .filter(|t| t.tracked && t.source == HandSource::Hand)
-        .map(palm_frame);
+        .map(|t| palm_frame(t.grip));
     for (mut transform, mut visibility, quad) in &mut wrists {
         let shown = palm.filter(|g| wrist_menu_visible(*g, hands.head));
         let want = match shown {
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn palm_frame_points_x_out_of_the_palm() {
         let grip = at(Vec3::new(1.0, 2.0, 3.0), Quat::from_rotation_x(0.4));
-        let frame = palm_frame(&hand(grip, grip, HandSource::Hand));
+        let frame = palm_frame(grip);
         assert!(close(frame.rotation * Vec3::X, -(grip.rotation * Vec3::Y)));
         assert_eq!(frame.translation, grip.translation);
     }
@@ -836,12 +836,15 @@ mod tests {
             app.update();
             assert_eq!(wrist(&mut app).1, Visibility::Hidden, "{rotation:?}");
         }
-        // Left-handed: the right hand carries it; the left is ignored.
+        // The controller set down, the hand takes the side (D-55): shown again.
         set_hand(
             &mut app,
             Hand::Left,
             Some(hand(facing, facing, HandSource::Hand)),
         );
+        app.update();
+        assert_eq!(wrist(&mut app).1, Visibility::Inherited);
+        // Left-handed: the right hand carries it; the left is ignored.
         app.world_mut().resource_mut::<XrHands>().left_handed = true;
         app.update();
         assert_eq!(wrist(&mut app).1, Visibility::Hidden);

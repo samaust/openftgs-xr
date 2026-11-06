@@ -673,7 +673,7 @@ The player's XR interface, the desktop's tabs plus Environment and Comfort drawn
 _Avoid_: menu, HUD, dock (the desktop's)
 
 **Wrist menu**:
-The five-button quad attached above the grip pose of one hand, shown when the palm faces the user. §1.8
+The five-button quad attached above the grip pose of one hand, shown while a tracked hand owns that side and its palm faces the user, never on a held controller. §1.8
 _Avoid_: hand menu, watch, quick menu
 
 **Aim state**:
