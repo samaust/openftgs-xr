@@ -9,10 +9,12 @@
 //!   dropped. Its ray leaving the panel ends the press (Q-333): the touch press cancels
 //!   an armed one with egui's release, and any other press (a slider's drag) gets the
 //!   release at its last hit; the context sees the pointer leave, and the other hand's
-//!   ray, if on the panel, takes the pointer the next frame.
+//!   ray, if on the panel, takes the pointer the next frame (that frame's hit, press
+//!   included, is dropped, so a slider's drag doesn't end at the other's hit).
 //! - Otherwise a hand's press on the panel makes it the pointer hand: the context gets
 //!   that hand's move to its hit, then its press, so the press lands on the widget under
-//!   its own ray. When both hands press in the same frame, the pointer hand keeps it.
+//!   its own ray, and takes the scroll from that frame on. When both hands press in the
+//!   same frame, the pointer hand keeps it.
 //! - With no press held, the pointer hand stays the one that pressed last while its ray
 //!   is on the panel; when its ray leaves, the other hand's ray on the panel becomes the
 //!   pointer, with a move to its hit and no `PointerGone`. The first hand to reach a
@@ -29,7 +31,7 @@ use super::pointer_events;
 use crate::intent::Hand;
 
 /// One hand's ray on a panel this frame, in its context's points.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(super) struct HandHit {
     /// The hand.
     pub(super) hand: Hand,
@@ -43,7 +45,7 @@ pub(super) struct HandHit {
 
 /// A panel context's pointer between frames.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ContextPointer {
+pub(super) struct ContextPointer {
     /// The pointer hand.
     pub(super) hand: Hand,
     /// Its last hit, in the context's points.
@@ -66,7 +68,20 @@ pub(super) fn hand_events(
     let mut cur = None;
     if let Some(p) = prev {
         match hits.iter().find(|h| h.hand == p.hand) {
-            Some(h) => cur = Some(forward(&mut out, Some(p.at), h, p.held)),
+            Some(h) => {
+                // A press of the other hand that will take the pointer this frame takes
+                // the scroll too: the pointer hand's is dropped.
+                let taken = !h.select.last().copied().unwrap_or(p.held)
+                    && hits
+                        .iter()
+                        .any(|o| o.hand != p.hand && o.select.contains(&true));
+                let scroll = if taken { 0.0 } else { h.scroll };
+                let h = HandHit {
+                    scroll,
+                    ..h.clone()
+                };
+                cur = Some(forward(&mut out, Some(p.at), &h, p.held));
+            }
             None if p.held => {
                 // The ray left during the press: the press ends, released here unless
                 // the touch press releases it.
@@ -168,7 +183,7 @@ mod tests {
     /// Q-334 (#563): with both rays on the panel, a hand's press moves the pointer to its
     /// own hit first, whichever hand comes last in the frame.
     #[test]
-    fn a_press_moves_the_pointer_to_the_pressing_hand_first() {
+    fn hand_events_a_press_moves_the_pointer_to_the_pressing_hand_first() {
         for (a, b) in [(Hand::Left, Hand::Right), (Hand::Right, Hand::Left)] {
             let ev = run(&[
                 vec![hit(a, L, &[], 0.0), hit(b, R, &[], 0.0)],
@@ -189,7 +204,7 @@ mod tests {
     /// Q-334 (#563): while the left hand holds `select`, the right hand's moves, presses
     /// and scroll don't reach the context; the left's release does, at its own hit.
     #[test]
-    fn the_holding_hand_keeps_the_pointer() {
+    fn hand_events_the_holding_hand_keeps_the_pointer() {
         let ev = run(&[
             vec![
                 hit(Hand::Left, L, &[true], 0.0),
@@ -213,7 +228,7 @@ mod tests {
     /// to the other's ray with a move and no `PointerGone`; the pointer leaves once no
     /// ray is on the panel.
     #[test]
-    fn a_leaving_pointer_hand_hands_over_without_pointer_gone() {
+    fn hand_events_a_leaving_pointer_hand_hands_over_without_pointer_gone() {
         let ev = run(&[
             vec![
                 hit(Hand::Left, L, &[true, false], 0.0),
@@ -232,7 +247,7 @@ mod tests {
 
     /// Q-334 (#563): the stick scroll comes from the pointer hand only.
     #[test]
-    fn only_the_pointer_hands_scroll_reaches_the_context() {
+    fn hand_events_only_the_pointer_hands_scroll_reaches_the_context() {
         let ev = run(&[
             vec![
                 hit(Hand::Right, R, &[true, false], 0.0),
@@ -243,6 +258,15 @@ mod tests {
         ]);
         assert_eq!(ev[1], vec![moved(R)]);
         assert!(matches!(ev[2][1], egui::Event::MouseWheel { delta, .. } if delta.y == 3.0));
+        // The frame the left's press takes the pointer, the right's scroll is dropped.
+        let ev = run(&[
+            vec![hit(Hand::Right, R, &[], 0.0)],
+            vec![
+                hit(Hand::Left, L, &[true], 0.0),
+                hit(Hand::Right, R, &[], 3.0),
+            ],
+        ]);
+        assert_eq!(ev[1], vec![moved(R), moved(L), button(L, true)]);
     }
 
     /// Q-334 (#563): the pointer hand's ray leaving during its press ends the press: a
@@ -250,7 +274,7 @@ mod tests {
     /// `PointerGone`; the other ray takes the pointer the next frame, and the release of
     /// a press the context never got is dropped.
     #[test]
-    fn a_press_ends_when_its_ray_leaves_and_unseen_releases_drop() {
+    fn hand_events_a_press_ends_when_its_ray_leaves_and_unseen_releases_drop() {
         let start = ContextPointer {
             hand: Hand::Left,
             at: L,
@@ -271,7 +295,7 @@ mod tests {
     /// same frame hand the pointer over within the frame; when both press, the pointer
     /// hand keeps it.
     #[test]
-    fn a_release_and_the_other_hands_press_hand_over_in_one_frame() {
+    fn hand_events_a_release_and_the_other_hands_press_hand_over_in_one_frame() {
         let held = ContextPointer {
             hand: Hand::Left,
             at: L,

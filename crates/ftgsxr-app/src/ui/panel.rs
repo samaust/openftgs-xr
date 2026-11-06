@@ -1467,19 +1467,21 @@ mod tests {
     }
 
     /// Q-334 (#563, `cpu`): with both rays on the main panel, a press and release of
-    /// either hand on a tab opens that tab, not the one under the other hand's ray.
+    /// either hand on a tab opens that tab, not the one under the other hand's ray, the
+    /// left's press taking the pointer from the right ray that reached the panel first.
     #[test]
-    fn two_hands_each_hands_press_clicks_the_tab_under_its_own_ray() {
+    fn panel_layout_two_hands_each_hands_press_clicks_the_tab_under_its_own_ray() {
         let on = || Some(vec![]);
         let press = || Some(vec![true]);
         let release = || Some(vec![false]);
         for (left, right) in [("Playback", "Display"), ("Display", "Playback")] {
-            // The left hand clicks.
+            // The left hand clicks, the right ray on the panel first, so the pointer hand.
             let mut world = panel_world(Tab::Scene);
             let out = two_hands(
                 &mut world,
                 (left, right),
                 &[
+                    [None, on()],
                     [on(), on()],
                     [press(), on()],
                     [on(), on()],
@@ -1527,7 +1529,7 @@ mod tests {
     /// own tab; the right's release, of a press the panel never got, clicks nothing, even
     /// once the left ray leaves and the right takes the pointer.
     #[test]
-    fn two_hands_the_holding_hand_keeps_the_pointer_and_its_click() {
+    fn panel_layout_two_hands_the_holding_hand_keeps_the_pointer_and_its_click() {
         let on = || Some(vec![]);
         let mut world = panel_world(Tab::Scene);
         let out = two_hands(
