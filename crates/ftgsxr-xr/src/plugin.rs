@@ -70,6 +70,9 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.ext_hand_tracking = hands;
     raw.fb_hand_tracking_aim = hands;
     raw.meta_simultaneous_hands_and_controllers = hands;
+    // Q-327: the runtime's in-hand detection, so a set-down controller leaves its side
+    // to the hand (#540).
+    raw.meta_detached_controllers = hands;
     if hands {
         raw.other.push(FREQUENCY_HINT_EXT.to_vec());
     }
@@ -77,7 +80,8 @@ fn extensions(hands: bool) -> OxrExtensions {
 }
 
 /// The hand extensions of §1.8 absent from `enabled`, in Appendix E.1's order (the
-/// frequency hint by name, Q-275).
+/// frequency hint by name, Q-275), then XR\_META\_detached\_controllers (Q-327).
+// Q-327
 fn missing_hand_extensions(enabled: &openxr::ExtensionSet) -> Vec<&'static str> {
     [
         ("XR_EXT_hand_tracking", enabled.ext_hand_tracking),
@@ -92,6 +96,10 @@ fn missing_hand_extensions(enabled: &openxr::ExtensionSet) -> Vec<&'static str> 
         (
             "XR_META_simultaneous_hands_and_controllers",
             enabled.meta_simultaneous_hands_and_controllers,
+        ),
+        (
+            "XR_META_detached_controllers",
+            enabled.meta_detached_controllers,
         ),
     ]
     .into_iter()
@@ -248,8 +256,8 @@ pub fn add_xr(plugins: impl PluginGroup, xr: XrPlugin) -> PluginGroupBuilder {
 mod tests {
     use super::*;
 
-    /// §1.8 Hands, PRD #452's "What `XrPlugin.hands` means": the three hand extensions
-    /// are asked for only when `hands` is set.
+    /// §1.8 Hands, PRD #452's "What `XrPlugin.hands` means": the hand extensions, with
+    /// Q-327's XR\_META\_detached\_controllers, are asked for only when `hands` is set.
     #[test]
     fn extensions_ask_for_the_hand_extensions_only_with_hands() {
         let with = extensions(true);
@@ -257,6 +265,8 @@ mod tests {
         assert!(with.ext_hand_tracking);
         assert!(with.fb_hand_tracking_aim);
         assert!(with.meta_simultaneous_hands_and_controllers);
+        // Q-327: the held-controller signal.
+        assert!(with.meta_detached_controllers);
         // Q-275: the frequency hint by name.
         assert_eq!(
             with.other,
@@ -267,6 +277,7 @@ mod tests {
         assert!(!without.ext_hand_tracking);
         assert!(!without.fb_hand_tracking_aim);
         assert!(!without.meta_simultaneous_hands_and_controllers);
+        assert!(!without.meta_detached_controllers);
         assert!(without.other.is_empty());
         // The rest of the set is the same either way.
         assert!(with.fb_passthrough && without.fb_passthrough);
@@ -283,6 +294,7 @@ mod tests {
                 "XR_FB_hand_tracking_aim",
                 "XR_META_hand_tracking_frequency_hint",
                 "XR_META_simultaneous_hands_and_controllers",
+                "XR_META_detached_controllers",
             ]
         );
         enabled
@@ -291,6 +303,7 @@ mod tests {
             .push(b"XR_META_hand_tracking_frequency_hint\0".to_vec());
         enabled.raw_mut().ext_hand_tracking = true;
         enabled.raw_mut().meta_simultaneous_hands_and_controllers = true;
+        enabled.raw_mut().meta_detached_controllers = true;
         assert_eq!(
             missing_hand_extensions(enabled.raw()),
             vec!["XR_FB_hand_tracking_aim"]

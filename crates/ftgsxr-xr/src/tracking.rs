@@ -29,9 +29,10 @@ use std::collections::VecDeque;
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate, Update};
 use bevy::ecs::message::MessageWriter;
+use bevy::log::info;
 use bevy::math::{Isometry3d, Vec2};
 use bevy::prelude::{
-    Commands, Component, Entity, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut,
+    Commands, Component, Entity, GlobalTransform, IntoScheduleConfigs, Local, Query, Res, ResMut,
     Resource, Transform, TransformSystems, With, Without,
 };
 use bevy_mod_openxr::action_binding::{OxrSendActionBindings, OxrSuggestActionBinding};
@@ -131,11 +132,25 @@ pub(crate) struct Actions {
     grip: Action<Posef>,
     /// `xr_input`'s pulses (D-44) go through it.
     haptic: Action<Haptic>,
+    /// With XR\_META\_detached\_controllers, a grip pose bound only on the detached
+    /// paths: its bindings give the runtime a profile to move a set-down controller to,
+    /// off `/user/hand/<side>` (Q-327). Never located or read.
+    // Q-327
+    detached: Option<Action<Posef>>,
+    /// `DETACHED` as paths, with `detached`.
+    detached_paths: Option<[Path; 2]>,
     hands: [Path; 2],
     suggested: bool,
 }
 
 const HANDS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
+
+/// XR\_META\_detached\_controllers's top-level paths (Q-327).
+// Q-327
+const DETACHED: [&str; 2] = [
+    "/user/detached_controller_meta/left",
+    "/user/detached_controller_meta/right",
+];
 
 /// Which hand and which pose an action space entity locates.
 #[derive(Component, Clone, Copy)]
@@ -164,7 +179,13 @@ impl Plugin for TrackingPlugin {
         let Some(instance) = app.world().get_resource::<OxrInstance>() else {
             return;
         };
-        let actions = match create_actions(instance) {
+        // Q-327: the detached paths only with their extension, since an unenabled
+        // extension's paths are an error in `xrCreateAction` and the bindings.
+        let detached = app
+            .world()
+            .get_resource::<OxrEnabledExtensions>()
+            .is_some_and(|e| e.meta_detached_controllers);
+        let actions = match create_actions(instance, detached) {
             Ok(a) => a,
             Err(e) => {
                 log_error(&XrError::Runtime(format!("the action set `player`: {e}")));
@@ -196,6 +217,7 @@ impl Plugin for TrackingPlugin {
                     hands::locate_hands,
                     write_hands,
                     hands::send_hint,
+                    log_profiles,
                     meshes::draw_hands_and_controllers.in_set(DrawDevices),
                 )
                     .chain()
@@ -313,13 +335,24 @@ impl HapticLog {
     }
 }
 
-fn create_actions(instance: &OxrInstance) -> openxr::Result<Actions> {
-    let hands = [
-        instance.string_to_path(HANDS[0])?,
-        instance.string_to_path(HANDS[1])?,
-    ];
+fn create_actions(instance: &OxrInstance, with_detached: bool) -> openxr::Result<Actions> {
+    let paths = |p: [&str; 2]| -> openxr::Result<[Path; 2]> {
+        Ok([
+            instance.string_to_path(p[0])?,
+            instance.string_to_path(p[1])?,
+        ])
+    };
+    let hands = paths(HANDS)?;
     let set = instance.create_action_set("player", "Player", 0)?;
+    // Q-327
+    let detached_paths = with_detached.then(|| paths(DETACHED)).transpose()?;
+    let detached = match &detached_paths {
+        Some(p) => Some(set.create_action("detached_grip", "Detached controller pose", p)?),
+        None => None,
+    };
     Ok(Actions {
+        detached,
+        detached_paths,
         select: set.create_action("select", "Select", &hands)?,
         grab: set.create_action("grab", "Grab", &hands)?,
         move_: set.create_action("move", "Move", &hands)?,
@@ -405,6 +438,18 @@ fn suggest_bindings(
         simple_bindings(&actions),
     ));
     for (profile, bindings) in profiles {
+        // Q-327: every profile here binds the grip pose, so the runtime accepts it on the
+        // detached paths too.
+        if let Some(detached) = &actions.detached {
+            out.write(OxrSuggestActionBinding {
+                action: detached.as_raw(),
+                interaction_profile: Cow::Borrowed(profile),
+                bindings: DETACHED
+                    .iter()
+                    .map(|d| Cow::Owned(format!("{d}/input/grip/pose")))
+                    .collect(),
+            });
+        }
         for (action, hands, path) in bindings {
             out.write(OxrSuggestActionBinding {
                 action,
@@ -414,6 +459,43 @@ fn suggest_bindings(
                     .map(|&h| Cow::Owned(format!("{}/{path}", HANDS[h])))
                     .collect(),
             });
+        }
+    }
+}
+
+/// Logs each side's current interaction profile on `/user/hand/<side>` and, with
+/// XR\_META\_detached\_controllers, on `/user/detached_controller_meta/<side>`, when
+/// either changes: on the device (A-11) it shows whether a set-down controller's profile
+/// leaves the hand path and what becomes current there instead (Q-327).
+// Q-327
+fn log_profiles(
+    session: Res<OxrSession>,
+    instance: Res<OxrInstance>,
+    actions: Res<Actions>,
+    mut last: Local<[Option<(Path, Path)>; 2]>,
+) {
+    let name = |p: Path| {
+        if p == Path::NULL {
+            "none".to_owned()
+        } else {
+            instance
+                .path_to_string(p)
+                .unwrap_or_else(|e| format!("{e}"))
+        }
+    };
+    let current = |p: Path| session.current_interaction_profile(p).unwrap_or(Path::NULL);
+    for (side, label) in ["left", "right"].into_iter().enumerate() {
+        let hand = current(actions.hands[side]);
+        let detached = actions
+            .detached_paths
+            .map_or(Path::NULL, |d| current(d[side]));
+        if last[side] != Some((hand, detached)) {
+            last[side] = Some((hand, detached));
+            info!(
+                "{label} interaction profile: hand {}, detached {}",
+                name(hand),
+                name(detached)
+            );
         }
     }
 }
@@ -570,11 +652,10 @@ fn write_hands(
             tracked,
         });
     }
-    // Q-262: per side, the controller or the hand that owns it.
-    let ownership = &mut *ownership;
+    // Q-262, Q-327: per side, the held controller, else the hand.
     for (h, slot) in out.iter_mut().enumerate() {
         let hand = located.raw[h].map(|raw| rooted(&root, hands::hand_state(&raw)));
-        let owner = ownership.sides[h].update(*slot, hand);
+        let owner = hands::side_owner(slot.as_ref(), hand.as_ref());
         ownership.owners[h] = owner;
         if owner == Some(HandSource::Hand) {
             *slot = hand;

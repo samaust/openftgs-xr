@@ -220,7 +220,7 @@ const TITLE_FRACTION: f32 = 1.0 / 16.0;
 
 /// The main panel's layout: the title bar at the top, then the tab row (or a sub-page's
 /// Back button), the toast line at the bottom, the tab's content or the sub-page between.
-// Q-294, Q-306, Q-327
+// Q-294, Q-306, Q-328
 pub(super) fn panel_layout(
     world: &mut World,
     ui: &mut egui::Ui,
@@ -231,7 +231,7 @@ pub(super) fn panel_layout(
         let s = world.resource::<UiState>();
         (s.tab, s.page, s.confirm.is_some())
     };
-    // Q-327: a plain bar, no text and no widget, so a pinch on it only grabs (Q-315).
+    // Q-328: a plain bar, no text and no widget, so a pinch on it only grabs (Q-315).
     let bar = TITLE_FRACTION * ui.ctx().viewport_rect().height();
     egui::Panel::top("ftgsxr-panel-title")
         .exact_size(bar)
@@ -737,7 +737,7 @@ mod tests {
         (texts, out, hv)
     }
 
-    /// Q-306's answer and Q-327 (#542): the title bar, the top 1/16 of the texture, is
+    /// Q-306's answer and Q-328 (#542): the title bar, the top 1/16 of the texture, is
     /// drawn above the tab row and a sub-page's Back button at every `ui_scale` and size:
     /// no text lies in it, and a pointer anywhere in it, pressed and released (a trigger's
     /// select, which `xr_input` passes on there), hovers and clicks nothing.

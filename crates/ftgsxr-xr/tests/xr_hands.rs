@@ -60,6 +60,8 @@ fn xr_hands_requested_on_monado_keeps_controllers_and_logs_no_error() {
         "XR_FB_hand_tracking_aim",
         "XR_META_hand_tracking_frequency_hint",
         "XR_META_simultaneous_hands_and_controllers",
+        // Q-327
+        "XR_META_detached_controllers",
     ] {
         let n = log
             .iter()

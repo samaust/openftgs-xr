@@ -19,7 +19,6 @@ use ftgsxr_app::{
     AskPermissionAgain, DeniedPermissions, Permission, PermissionHandle, PlatformRes, Toast,
     ToastLevel,
 };
-use ftgsxr_core::Pose;
 use openxr::sys;
 
 use super::{HandSource, TrackedHand, pose_of};
@@ -101,89 +100,21 @@ pub(crate) fn hand_state(raw: &RawHand) -> TrackedHand {
     }
 }
 
-/// An aim moved farther than this counts as input for ownership, metres (Q-262).
-// Q-262
-const MOVED_M: f32 = 0.01;
-/// A pinch strength changed by more than this counts as input for ownership (Q-262).
-// Q-262
-const PINCH_STEP: f32 = 0.05;
-
-/// One side's ownership between its controller and its hand (§1.8 Hands, Q-262): the
-/// previous frame's samples and the references the 1 cm and 0.05 thresholds are measured
-/// from (each device's state at its last counted input, or when it became active).
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SideOwnership {
-    owner: Option<HandSource>,
-    last_controller: Option<TrackedHand>,
-    controller_ref: Option<TrackedHand>,
-    last_hand: Option<TrackedHand>,
-    hand_ref: Option<TrackedHand>,
-}
-
-fn moved(a: &Pose, b: &Pose) -> bool {
-    a.translation.distance(b.translation) > MOVED_M
-}
-
-impl SideOwnership {
-    /// The device that owns the side this frame, given its controller and hand (both in
-    /// one frame; `None` when inactive). Alone, a device owns the side; with both active
-    /// the side belongs to the one whose input last changed: for the controller any
-    /// button, trigger, squeeze or stick value differing from the previous frame (OpenXR's
-    /// "changed since the last sync") or its aim moved more than 1 cm; for the hand a
-    /// pinch strength changed by more than 0.05, a MENU\_PRESSED edge or its aim moved
-    /// more than 1 cm. A device becoming active is not input; when both change in the
-    /// same frame, or both appear together, the owner stays, the controller first.
-    // Q-262, Q-286
-    pub(crate) fn update(
-        &mut self,
-        controller: Option<TrackedHand>,
-        hand: Option<TrackedHand>,
-    ) -> Option<HandSource> {
-        let c_input = match (controller, self.last_controller, self.controller_ref) {
-            (Some(c), Some(last), Some(r)) => {
-                c.trigger != last.trigger
-                    || c.squeeze != last.squeeze
-                    || c.stick != last.stick
-                    || c.primary != last.primary
-                    || c.secondary != last.secondary
-                    || c.menu != last.menu
-                    || moved(&c.aim, &r.aim)
-            }
-            _ => false,
-        };
-        let h_input = match (hand, self.last_hand, self.hand_ref) {
-            (Some(h), Some(last), Some(r)) => {
-                (h.pinch - r.pinch).abs() > PINCH_STEP
-                    || (h.pinch_middle - r.pinch_middle).abs() > PINCH_STEP
-                    || h.menu != last.menu
-                    || moved(&h.aim, &r.aim)
-            }
-            _ => false,
-        };
-        // The references: reset at activation and at each counted input.
-        self.controller_ref = match controller {
-            Some(c) if c_input || self.last_controller.is_none() => Some(c),
-            Some(_) => self.controller_ref,
-            None => None,
-        };
-        self.hand_ref = match hand {
-            Some(h) if h_input || self.last_hand.is_none() => Some(h),
-            Some(_) => self.hand_ref,
-            None => None,
-        };
-        self.last_controller = controller;
-        self.last_hand = hand;
-        self.owner = match (controller.is_some(), hand.is_some()) {
-            (false, false) => None,
-            (true, false) => Some(HandSource::Controller),
-            (false, true) => Some(HandSource::Hand),
-            (true, true) => match (c_input, h_input) {
-                (true, false) => Some(HandSource::Controller),
-                (false, true) => Some(HandSource::Hand),
-                _ => self.owner.or(Some(HandSource::Controller)),
-            },
-        };
-        self.owner
+/// The device that owns a side this frame (§1.8 Hands, Q-262 as #540 revised it), given
+/// its controller and its hand (`None` when inactive): a held controller has priority, so
+/// it owns the side whether or not the hand is tracked; without one the hand owns it.
+/// "Held" is the controller's aim action being active on `/user/hand/<side>`, which
+/// XR\_META\_detached\_controllers turns off for a controller the runtime sees put down
+/// (Q-327); without that extension an active controller counts as held.
+// Q-262, Q-327
+pub(crate) fn side_owner(
+    controller: Option<&TrackedHand>,
+    hand: Option<&TrackedHand>,
+) -> Option<HandSource> {
+    match (controller, hand) {
+        (Some(_), _) => Some(HandSource::Controller),
+        (None, Some(_)) => Some(HandSource::Hand),
+        (None, None) => None,
     }
 }
 
@@ -308,10 +239,9 @@ pub(crate) struct LocatedHands {
     warned: bool,
 }
 
-/// Both sides' ownership and this frame's owners.
+/// This frame's owner of each side (`side_owner`).
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub(crate) struct Ownership {
-    pub(crate) sides: [SideOwnership; 2],
     pub(crate) owners: [Option<HandSource>; 2],
 }
 
@@ -751,94 +681,37 @@ mod tests {
         })
     }
 
-    fn shifted(mut h: TrackedHand, dx: f32) -> TrackedHand {
-        h.aim.translation.x += dx;
-        h
-    }
-
-    /// §1.8 Hands: a device alone owns its side; nothing active, no owner.
+    /// Q-262 (#540): a held controller owns its side, whether or not the hand is
+    /// tracked and whatever either does; without one the hand owns it; with neither, no
+    /// one. A set-down controller is `None` here, its aim inactive under XR\_META\_detached\_controllers
+    /// (Q-327).
     #[test]
-    fn side_ownership_alone_owns() {
-        let mut s = SideOwnership::default();
-        assert_eq!(s.update(None, None), None);
-        assert_eq!(
-            s.update(Some(controller()), None),
-            Some(HandSource::Controller)
-        );
-        assert_eq!(s.update(None, Some(hand())), Some(HandSource::Hand));
-        assert_eq!(s.update(None, None), None);
-    }
-
-    /// Q-262: with both active, the device whose input last changed owns the side, and
-    /// keeps it while neither changes.
-    #[test]
-    fn side_ownership_follows_the_last_input() {
-        let mut s = SideOwnership::default();
+    fn side_owner_gives_a_held_controller_priority() {
         let (c, h) = (controller(), hand());
-        assert_eq!(s.update(Some(c), None), Some(HandSource::Controller));
-        // The hand appears: activation is not input, the controller keeps the side.
-        assert_eq!(s.update(Some(c), Some(h)), Some(HandSource::Controller));
-        // A pinch change of 0.1 (> 0.05) is the hand's input.
-        let mut pinched = h;
-        pinched.pinch += 0.1;
-        assert_eq!(s.update(Some(c), Some(pinched)), Some(HandSource::Hand));
-        assert_eq!(s.update(Some(c), Some(pinched)), Some(HandSource::Hand));
-        // A trigger change is the controller's input.
-        let mut pulled = c;
-        pulled.trigger = 0.3;
+        assert_eq!(side_owner(None, None), None);
+        assert_eq!(side_owner(Some(&c), None), Some(HandSource::Controller));
+        assert_eq!(side_owner(None, Some(&h)), Some(HandSource::Hand));
+        assert_eq!(side_owner(Some(&c), Some(&h)), Some(HandSource::Controller));
+        // The hand's input does not take the side from a held controller: a full pinch,
+        // the system gesture and a 10 cm aim move (Q-262's former inputs, #540's flip).
+        let mut busy = h;
+        busy.pinch = 1.0;
+        busy.pinch_middle = 1.0;
+        busy.menu = true;
+        busy.aim.translation.x += 0.1;
         assert_eq!(
-            s.update(Some(pulled), Some(pinched)),
+            side_owner(Some(&c), Some(&busy)),
             Some(HandSource::Controller)
         );
-        // A MENU_PRESSED edge is the hand's input.
-        let mut menu = pinched;
-        menu.menu = true;
-        assert_eq!(s.update(Some(pulled), Some(menu)), Some(HandSource::Hand));
-    }
-
-    /// Q-262's thresholds: under 1 cm of aim motion and under 0.05 of pinch are jitter;
-    /// motion past 1 cm from the reference, even slowly, is input.
-    #[test]
-    fn side_ownership_ignores_jitter_under_the_thresholds() {
-        let mut s = SideOwnership::default();
-        let (c, h) = (controller(), hand());
-        s.update(Some(c), None);
-        s.update(Some(c), Some(h));
-        let mut jitter = shifted(h, 0.009);
-        jitter.pinch += 0.04;
-        jitter.pinch_middle -= 0.04;
+        // Nor does an idle, untracked controller lose it while still held.
+        let idle = TrackedHand {
+            tracked: false,
+            ..c
+        };
         assert_eq!(
-            s.update(Some(c), Some(jitter)),
+            side_owner(Some(&idle), Some(&busy)),
             Some(HandSource::Controller)
         );
-        // Two 6 mm steps: 12 mm from the reference, past 1 cm.
-        s.update(Some(c), Some(shifted(h, 0.006)));
-        assert_eq!(
-            s.update(Some(c), Some(shifted(h, 0.012))),
-            Some(HandSource::Hand)
-        );
-        // The controller's aim moving 2 cm takes the side back.
-        assert_eq!(
-            s.update(Some(shifted(c, 0.02)), Some(shifted(h, 0.012))),
-            Some(HandSource::Controller)
-        );
-    }
-
-    /// Q-286: both appearing together, or both changing together, keep the owner,
-    /// the controller first.
-    #[test]
-    fn side_ownership_ties_keep_the_owner_controller_first() {
-        let mut s = SideOwnership::default();
-        let (c, h) = (controller(), hand());
-        assert_eq!(s.update(Some(c), Some(h)), Some(HandSource::Controller));
-        let mut s = SideOwnership::default();
-        s.update(None, Some(h));
-        s.update(Some(c), Some(h));
-        let mut c2 = c;
-        c2.squeeze = 1.0;
-        let mut h2 = h;
-        h2.pinch = 0.0;
-        assert_eq!(s.update(Some(c2), Some(h2)), Some(HandSource::Hand));
     }
 
     /// Q-275's state: high while a hand owns a side, the default otherwise, sent only on a
