@@ -481,8 +481,8 @@ fn ray_ends(
     let boxes = instance_boxes(&instances, &groups, assets.as_deref());
     let ray_max_m = manipulate.map_or(RAY_M, |m| m.ray_max_m);
     let rays = frame.rays;
-    frame.ends = rays.map(|r| {
-        r.map(|r| {
+    frame.ends = rays.map(|slot| {
+        slot.map(|r| {
             let hit = r
                 .panel
                 .or_else(|| pick_instance(r.origin, r.dir, &boxes, ray_max_m).map(|(_, t)| t));
@@ -1117,7 +1117,7 @@ mod tests {
         let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
         assert!(!dot);
         assert!(
-            end.distance(Vec3::new(0.0, 0.0, 3.0 + RAY_M)) < 1e-4,
+            end.distance(Vec3::new(0.0, 0.0, 3.0 + 10.0)) < 1e-4,
             "{end}"
         );
     }
