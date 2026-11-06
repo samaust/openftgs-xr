@@ -30,7 +30,7 @@ It then sets `UiSurface::Panel` to the main panel's entity and sizes, which turn
 The main panel is grabbed through `PanelPointer`'s grab presses, which `xr_input` sends while a ray is on the quad (Q-306):
 
 - a grab press on the title bar, Q-306's top strip of the texture, while the panel is visible and the hand tracked, begins E11's one-hand grab at the hand's aim pose; the panel then follows that hand with E11's pose;
-- while one hand holds it, the other hand's grab press anywhere on the panel makes it a two-hand grab, E11 with "keep upright", whose scale is the panel's width, kept in §1.8's range, the height following the 4:3 aspect;
+- while one hand holds it, the other hand's grab press anywhere on the panel makes it a two-hand grab, E11 with "keep upright" on the two grab points, the rays' hits on the quad, each fixed in its hand from then on (the hands' aim positions when the points start closer than 5 cm; spec revision 34), whose scale is the panel's width, kept in §1.8's range, the height following the 4:3 aspect;
 - a `GrabEnd` of either hand returns to a one-hand grab by the other, a release of the one hand frees it; the panel follows only tracked hands.
 
 Each hand that joins or leaves the grab sends `xr_input`'s crate-private `PanelGrabEdge`, which the haptics turn into D-44's grab pulse (Q-313).
