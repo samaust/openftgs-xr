@@ -431,7 +431,8 @@ fn high_contrast_follows_settings(settings: Res<SettingsRes>, mut hc: ResMut<Hig
 /// `[xr] keep_upright` and `ManipulateSettings.keep_upright` both ways (Q-330, Q-207):
 /// the settings' value goes into `manipulate` at the first frame and whenever it changes,
 /// and a value changed in the world goes back into the settings, which then save it.
-/// `last` is the value as last mapped, so neither direction undoes the other.
+/// `last` is the value as last mapped, so neither direction undoes the other. A system of
+/// its own: `sync_settings` already takes 15 of a Bevy system's 16 parameters.
 // Q-330
 fn keep_upright_sync(
     mut settings: ResMut<SettingsRes>,

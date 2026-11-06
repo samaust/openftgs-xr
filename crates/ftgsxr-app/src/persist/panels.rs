@@ -153,10 +153,9 @@ const SNAP_DEGS: [f32; 3] = [30.0, 45.0, 90.0];
 /// The main panel's Comfort tab (§1.8 Comfort and accessibility, User interface): the
 /// turn mode and snap angle, the speed, the vignette, teleport, the height offset,
 /// reduced motion, left-handed mode, keep upright (Q-330), the UI scale and high
-/// contrast, each editing
-/// `SettingsRes` (Q-207, Q-218, Q-278); sliders and buttons, which a ray can drag and
-/// press, rather than drag values; and "Ask again" while the hand-tracking permission
-/// is denied (Q-276, Q-322).
+/// contrast, each editing `SettingsRes` (Q-207, Q-218, Q-278); sliders and buttons,
+/// which a ray can drag and press, rather than drag values; and "Ask again" while the
+/// hand-tracking permission is denied (Q-276, Q-322).
 // Q-207, Q-218, Q-278, Q-294, Q-322, Q-330
 pub(crate) fn comfort_section(world: &mut World, ui: &mut egui::Ui) {
     edit(world, ui, |s, ui| {

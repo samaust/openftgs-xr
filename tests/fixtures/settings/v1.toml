@@ -119,6 +119,7 @@ refresh_rate = 90
 foveation = "dynamic"
 render_scale = 0.8
 reference_space = ["local-floor", "local"]
+keep_upright = false
 
 [cache]
 max_bytes = 5_000_000_123

@@ -291,8 +291,7 @@ fn non_default() -> Settings {
             foveation: Some("dynamic".into()),
             render_scale: Some(0.8),
             reference_space: vec!["local-floor".into(), "local".into()],
-            // The sample fixture predates the key: it reads as the default (Q-330).
-            keep_upright: true,
+            keep_upright: false,
         },
         cache: CacheSettings {
             max_bytes: 5_000_000_123,

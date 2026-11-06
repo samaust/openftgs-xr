@@ -447,7 +447,7 @@ impl Default for XrSettings {
             foveation: None,
             render_scale: None,
             reference_space: vec!["stage".into(), "local-floor".into(), "local".into()],
-            keep_upright: true,
+            keep_upright: true, // Q-330
         }
     }
 }
