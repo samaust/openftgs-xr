@@ -6,6 +6,8 @@ How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's po
 
 `SettingsRes` is the source of truth (PRD #275). When it is absent at `AppPlugin`'s build, the plugin reads it from `SettingsPath`, else the platform's config directory; a caller that inserts it first (the `play` binary, the Quest's harness) keeps its own (Q-163, Q-170). A private `PersistPlugin`, after `AudioPlugin`, maps its tables into the resources the features read whenever it changes (the audio gains, locomotion, the clock's speed and loop, the display settings of each new instance), and back when the user changes one; a change marks it dirty, and a dirty file is saved at most once a second, and always on `SaveSettings` and at exit (Q-207). The load's warnings and errors are E-SETTINGS failures; a file that cannot be read is set aside.
 
+`[xr] keep_upright` and `ManipulateSettings.keep_upright` are kept equal by a small system of their own beside the two-way mapping, with the same rule: the settings' value goes into the world at the first frame and when it changes, and a value changed in the world goes back into the settings (Q-330).
+
 `persist/panels.rs` draws the Display, Environment and Settings tabs' sections through `ui`'s `DockHooks`, each editing `SettingsRes` (Q-218); `[audio]` is `audio`'s section and the governor `governor`'s. The tier pickers (the Display tab's showing the running tier, the Settings tab's the saved one) write `[general] tier` and a crate-private `TierPick` that `governor` switches to (Q-240).
 
 The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startup, before the dock's first draw, `[desktop] dock_width` and `dock_open` become `ui`'s dock state, and Help's first run opens the dock after them (Q-226); while the UI is on the window, a drag of the dock's handle (in whole points, a change under half a point being none) or a collapse goes back into `[desktop]`. A window too narrow for the saved width, or a larger UI scale, clamps only the drawing, and the saved width is drawn again once the window is wide enough (Q-252, owner, #441); the Settings tab does not draw the two keys (Q-253).
@@ -27,4 +29,4 @@ A crate-private `PersistFailure { code, text }` carries the settings' and the po
 
 ## Q-n rows relied on
 
-Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-225, Q-245, Q-252, Q-253, Q-255, Q-258; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.
+Q-163, Q-166, Q-170, Q-173, Q-185, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-225, Q-245, Q-252, Q-253, Q-255, Q-258, Q-330; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.

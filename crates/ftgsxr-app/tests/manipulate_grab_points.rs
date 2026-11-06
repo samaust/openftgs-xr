@@ -7,13 +7,17 @@
 //! instance through a one-hand push and pull, then moves fixed in its hand's frame while
 //! two hands hold; grab points closer than 5 cm fall back to the hands' aim positions;
 //! a pose change during a two-hand grab restarts it with each grab point in place.
+//! The "keep upright" switch (§1.8, #555) is `[xr] keep_upright`, mapped onto
+//! `ManipulateSettings` by `persist` (Q-330): off, a height difference between the grab
+//! points tilts the instance by E11's free rotation; on, the instance turns by yaw only;
+//! a one-hand grab is rigid under both (Q-331).
 
 use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{
     Grabbed, Hand, InstanceAction, Intent, LibraryCommand, LoadedModel, ManipulateSettings,
-    ModelRef,
+    ModelRef, SettingsRes,
 };
 use ftgsxr_core::{Aabb, Pose};
 use ftgsxr_render::{SplatAsset, SplatModel};
@@ -121,12 +125,15 @@ fn move_pose(h: Hand, pose: Pose) -> Intent {
     Intent::GrabMove { hand: h, pose }
 }
 
-/// A test app with keep upright on, or off for free rotation.
+/// A test app with the "keep upright" switch on, or off for free rotation: the
+/// settings' `[xr] keep_upright`, which `persist` maps onto `ManipulateSettings` (Q-330).
 fn app_with(name: &str, free_rotation: bool) -> TestApp {
     let mut t = TestApp::new(name);
     t.app
         .world_mut()
-        .resource_mut::<ManipulateSettings>()
+        .resource_mut::<SettingsRes>()
+        .0
+        .xr
         .keep_upright = !free_rotation;
     t
 }
@@ -524,4 +531,97 @@ fn u32_snap_to_floor_restarts_the_grab_with_the_points_in_place() {
 #[test]
 fn u32_fit_restarts_the_grab_with_the_points_in_place() {
     restart_after("grab_points_fit", InstanceAction::Fit);
+}
+
+/// The instance's rotation is `want`, compared by the axes it turns (sign-free).
+fn assert_rotation(got: Quat, want: Quat, what: &str) {
+    for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+        assert_near(got * axis, want * axis, what);
+    }
+}
+
+/// Two level rays 0.6 m apart grab the 1 m box's front face; the right hand then moves
+/// by `db`. Returns the instance's rotation and `ManipulateSettings.keep_upright`.
+fn two_hand_turn(name: &str, free_rotation: bool, db: Vec3) -> (Quat, bool) {
+    let mut t = app_with(name, free_rotation);
+    let (e, _) = loaded_sized(&mut t, 1.0, Vec3::ZERO);
+    let (la, lb) = (Vec3::new(-0.3, 0.0, 3.0), Vec3::new(0.3, 0.0, 3.0));
+    grab_both(&mut t, la, lb);
+    send(
+        &mut t,
+        &[move_to(Hand::Left, la), move_to(Hand::Right, lb + db)],
+    );
+    let keep = t.app.world().resource::<ManipulateSettings>().keep_upright;
+    (pose(&t, e).rotation, keep)
+}
+
+/// §1.8 "free rotation" (#555, Q-330; U-16's free-rotation case through `manipulate`):
+/// with the switch off, raising the right grab point 0.6 m over the left, 0.6 m apart,
+/// turns d₀ = (0.6, 0, 0) into d = (0.6, 0.6, 0), and the instance tilts 45° about +z,
+/// the shortest rotation taking one to the other.
+#[test]
+fn u16_with_keep_upright_off_a_height_difference_tilts_the_instance() {
+    let (rotation, keep) = two_hand_turn("keep_upright_off", true, Vec3::new(0.0, 0.6, 0.0));
+    assert!(!keep, "the switch reaches manipulate");
+    assert_rotation(
+        rotation,
+        Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
+        "tilted 45° about +z",
+    );
+}
+
+/// §1.8 "keep upright", on by default (#555; U-16's upright case): the same raise
+/// tilts nothing, and a raise with a 0.6 m step back yaws the instance 45° about +y
+/// (d̄ = (1, 0, −1)/√2) and nothing else.
+#[test]
+fn u16_with_keep_upright_on_the_instance_turns_by_yaw_only() {
+    let (rotation, keep) = two_hand_turn("keep_upright_on", false, Vec3::new(0.0, 0.6, 0.0));
+    assert!(keep);
+    assert_rotation(rotation, Quat::IDENTITY, "no tilt");
+    let (rotation, _) = two_hand_turn("keep_upright_yaw", false, Vec3::new(0.0, 0.6, -0.6));
+    assert_rotation(
+        rotation,
+        Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+        "yawed 45° about +y",
+    );
+}
+
+/// Q-331: a one-hand grab is E11's rigid P = H H₀⁻¹ P₀ under both settings: a hand
+/// that tilts 0.3 rad about x and moves carries the instance with it.
+#[test]
+fn u16_a_one_hand_grab_is_rigid_whatever_keep_upright() {
+    for free_rotation in [false, true] {
+        let mut t = app_with(&format!("keep_upright_one_{free_rotation}"), free_rotation);
+        let (e, _) = loaded_sized(&mut t, 1.0, Vec3::ZERO);
+        let p0 = pose(&t, e);
+        let la = Vec3::new(-0.3, 0.1, 3.0);
+        send(&mut t, &grab_at(Hand::Left, la));
+        let h = Pose {
+            translation: la + Vec3::new(0.1, 0.2, -0.3),
+            rotation: Quat::from_rotation_x(0.3),
+            scale: 1.0,
+        };
+        send(&mut t, &[move_pose(Hand::Left, h)]);
+        let p = pose(&t, e);
+        assert_rotation(p.rotation, h.rotation, "the hand's tilt");
+        assert_near(
+            p.translation,
+            h.translation + h.rotation * (p0.translation - la),
+            "the instance's place in the hand",
+        );
+    }
+}
+
+/// The switch persists both ways (Q-330, Q-207): `ManipulateSettings.keep_upright`
+/// changed in the world goes back into the settings, which `persist` saves.
+#[test]
+fn keep_upright_changed_in_the_world_reaches_the_settings() {
+    let mut t = TestApp::new("keep_upright_back");
+    t.frames(1);
+    t.app
+        .world_mut()
+        .resource_mut::<ManipulateSettings>()
+        .keep_upright = false;
+    t.frames(1);
+    assert!(!t.app.world().resource::<SettingsRes>().0.xr.keep_upright);
 }

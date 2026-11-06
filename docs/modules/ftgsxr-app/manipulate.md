@@ -14,6 +14,7 @@ A private `ManipulatePlugin`, after `PlaybackPlugin`. One system reads the frame
 - **Frames.** An instance's `Transform` is its pose relative to its parent, `ContentGroup`; its stage pose is that pose followed by the group's transform (§1.14). Picking, hover, grabs (keep upright included, about stage +y, Q-248), push and pull, turn, nudge, fit, snap to floor, the gizmo and the drawn boxes all work on the stage pose, since the rays, the head and the floor are in stage space, and write the result back relative to the group through the group's inverse (§1.14). E11's scale limits bound the stage scale (Q-249).
 - **Poses.** "Save pose" stores the pose relative to the content group, and "Reset pose" and a saved pose applied on load write it back as it is (Q-247). This module changes `Poses` in memory only; `persist` writes `poses.json` (Q-205).
 - **Defaults.** `ManipulateSettings::default()` and an empty `Poses`; `AppPlugin` inserts each when absent, so `persist` or a caller may insert them first (Q-185).
+- **Keep upright.** `ManipulateSettings.keep_upright` is the settings' `[xr] keep_upright`, which `persist` maps onto it both ways (Q-330): on, a two-hand grab turns by yaw only; off, it takes E11's free rotation. A one-hand grab is rigid either way (Q-331). The main panel's two-hand resize is `ftgsxr_xr::panel`'s and stays upright whatever the switch (Q-306).
 
 ## `rig`
 
