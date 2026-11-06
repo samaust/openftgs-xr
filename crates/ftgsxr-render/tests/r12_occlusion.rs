@@ -73,7 +73,9 @@ fn alphas(dev: &SplatDevice, rows: &[Row], occlusion: &Occlusion) -> (Vec<f32>, 
 /// R-12: a wall at 2 m (stored with nearZ 0.25 and farZ 20) over the right half of the
 /// image, the left half invalid (d = 1, the far plane): the primitive at 3 m behind the
 /// wall is hidden, the one at 1 m in front of it is drawn as without occlusion, and the
-/// one at 3 m in the invalid half is drawn as without occlusion (E13: w_occ = 1).
+/// one at 3 m in the invalid half is drawn as without occlusion (E13: w_occ = 1). The
+/// image is bound as `R32Float` and as `Depth16Unorm`, the depth swapchain's expected
+/// format (#570), whose 16-bit rounding leaves the wall far from both primitives.
 #[test]
 #[ignore = "gpu"]
 fn gpu_r12_a_wall_at_2_m_hides_3_m_and_keeps_1_m() {
@@ -81,12 +83,22 @@ fn gpu_r12_a_wall_at_2_m_hides_3_m_and_keeps_1_m() {
     let dev = gpu_context();
     let (near, far) = (0.25, 20.0);
     let wall = stored_depth(2.0, near, far);
+    for format in [
+        wgpu::TextureFormat::R32Float,
+        wgpu::TextureFormat::Depth16Unorm,
+    ] {
+        wall_at_2_m(&dev, near, far, wall, format);
+    }
+}
+
+fn wall_at_2_m(dev: &SplatDevice, near: f64, far: f64, wall: f32, format: wgpu::TextureFormat) {
     let depth = (0..W * H)
         .map(|i| if i % W < W / 2 { 1.0 } else { wall })
         .collect();
     let occlusion = Occlusion {
         depth,
         size: UVec2::new(W, H),
+        format,
         camera: view(),
         near: near as f32,
         far: far as f32,
@@ -100,7 +112,7 @@ fn gpu_r12_a_wall_at_2_m_hides_3_m_and_keeps_1_m() {
         row([0.6, -0.3, 3.0], 0.03, 0.9),
         row([0.2, 0.1, 1.0], 0.02, 0.9),
     ];
-    let (reference, occluded) = alphas(&dev, &rows, &occlusion);
+    let (reference, occluded) = alphas(dev, &rows, &occlusion);
     let region = |u: u32, v: u32| match (u < W / 2, v < H / 2) {
         (true, _) => "invalid",
         (false, true) => "behind",
@@ -148,6 +160,7 @@ fn gpu_r12_the_soft_weight_across_z_e_plus_minus_delta() {
     let occlusion = |soft: bool| Occlusion {
         depth: vec![wall; (W * H) as usize],
         size: UVec2::new(W, H),
+        format: wgpu::TextureFormat::R32Float,
         camera: view(),
         near: near as f32,
         far: far as f32,
@@ -235,6 +248,7 @@ fn gpu_r12_a_45_degree_wall_gives_the_edge_of_each_fragments_own_ray() {
     let occlusion = Occlusion {
         depth,
         size: UVec2::new(dw, dh),
+        format: wgpu::TextureFormat::R32Float,
         camera: env,
         near: near as f32,
         far: far as f32,

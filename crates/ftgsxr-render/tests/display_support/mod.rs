@@ -124,6 +124,9 @@ pub struct Occlusion {
     pub depth: Vec<f32>,
     /// The image's size in texels.
     pub size: UVec2,
+    /// The texture's format: `R32Float`, or `Depth16Unorm` (the depth swapchain's
+    /// expected format, the values rounded to 16 bits).
+    pub format: wgpu::TextureFormat,
     /// The depth image's camera (E6).
     pub camera: Camera,
     /// nearZ, in metres.
@@ -176,8 +179,8 @@ pub fn render(dev: &SplatDevice, draws: &[ModelDraw], camera: &Camera, run: &Run
     render_occluded(dev, draws, camera, run, None)
 }
 
-/// `render` with E13's environment depth `occlusion` (R-12), written into an R32Float
-/// texture and passed to `encode_draw` as its `OcclusionInput`; the tier is the
+/// `render` with E13's environment depth `occlusion` (R-12), written into a texture of
+/// its format and passed to `encode_draw` as its `OcclusionInput`; the tier is the
 /// conformance tier with `occlusion: true` when one is given (Q-347).
 pub fn render_occluded(
     dev: &SplatDevice,
@@ -220,17 +223,29 @@ pub fn render_occluded(
         );
         let t = texture(
             dev,
-            wgpu::TextureFormat::R32Float,
+            o.format,
             o.size,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
-        let bytes: Vec<u8> = o.depth.iter().flat_map(|d| d.to_le_bytes()).collect();
+        let (bytes, texel): (Vec<u8>, u32) = match o.format {
+            wgpu::TextureFormat::R32Float => {
+                (o.depth.iter().flat_map(|d| d.to_le_bytes()).collect(), 4)
+            }
+            wgpu::TextureFormat::Depth16Unorm => (
+                o.depth
+                    .iter()
+                    .flat_map(|d| ((d.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes())
+                    .collect(),
+                2,
+            ),
+            f => panic!("no synthetic depth image in {f:?}"),
+        };
         dev.queue().write_texture(
             t.as_image_copy(),
             &bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * o.size.x),
+                bytes_per_row: Some(texel * o.size.x),
                 rows_per_image: Some(o.size.y),
             },
             wgpu::Extent3d {
