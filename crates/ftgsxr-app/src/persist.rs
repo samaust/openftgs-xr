@@ -36,7 +36,7 @@ use crate::library::{
 use crate::manipulate::{
     HighContrast, ManipulateSettings, Poses, now_rfc3339, pose_of, transform_of,
 };
-use crate::platform::{AskPermissionAgain, DeniedPermissions, PlatformRes};
+use crate::platform::{AskPermissionAgain, DeniedPermissions, Headset, PlatformRes};
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
@@ -272,9 +272,11 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
     }
     // Q-195, Q-196: rig's resources from the settings, before its plugin builds, so the
     // desktop camera and the grid start as the settings say.
+    // Q-335: the Quest's `main` and the tests insert the marker before `AppPlugin`.
+    let headset = world.contains_resource::<Headset>();
     let (view, loco) = {
         let s = &world.resource::<SettingsRes>().0;
-        (desktop_view(s), locomotion_of(s))
+        (desktop_view(s, headset), locomotion_of(s, headset))
     };
     world.insert_resource(view);
     world.insert_resource(loco);
@@ -1008,18 +1010,28 @@ fn audio_state(s: &AudioSettings) -> AudioState {
     }
 }
 
-fn desktop_view(s: &Settings) -> DesktopView {
+fn desktop_view(s: &Settings, headset: bool) -> DesktopView {
     DesktopView {
         fly_speed_mps: s.desktop.fly_speed_mps,
         fov_deg: s.desktop.fov_deg,
         grid: s.display.grid,
         background: s.environment.background,
+        passthrough: passthrough_mode(s, headset),
     }
 }
 
-/// D-17: stick locomotion off in passthrough mode (Q-195).
-fn locomotion_of(s: &Settings) -> Locomotion {
-    Locomotion::from_settings(&s.locomotion, s.environment.mode != "passthrough")
+/// Whether the player is in passthrough mode: `[environment] mode` is the wanted mode,
+/// and counts only under the `Headset` marker, so the desktop and `play --xr` stay in
+/// VR mode whatever the setting says (§1.4 Backgrounds, Q-335).
+// Q-335
+fn passthrough_mode(s: &Settings, headset: bool) -> bool {
+    headset && s.environment.mode == "passthrough"
+}
+
+/// D-17: stick locomotion off in passthrough mode (Q-195), as gated (Q-335).
+// Q-195, Q-335
+fn locomotion_of(s: &Settings, headset: bool) -> Locomotion {
+    Locomotion::from_settings(&s.locomotion, !passthrough_mode(s, headset))
 }
 
 /// The fields of `view` that differ from `base`'s view, written into `s`.
@@ -1085,8 +1097,12 @@ fn sync_settings(
     mut library_out: MessageWriter<LibraryCommand>,
     mut instances: Query<(Entity, Option<&mut SplatMode>), With<LoadedModel>>,
     mut commands: Commands,
+    headset: Option<Res<Headset>>,
 ) {
     let first = last.is_none();
+    // Q-335: the gate, and a marker inserted after the first frame maps the mode again.
+    let gate_added = headset.as_ref().is_some_and(|h| h.is_added());
+    let headset = headset.is_some();
     if first {
         *seen = listed_sources(&library, &files.models);
     }
@@ -1108,7 +1124,7 @@ fn sync_settings(
             snap.locomotion = t;
         }
         if view.is_changed() {
-            let base = desktop_view(snap);
+            let base = desktop_view(snap, headset);
             if *view != base {
                 let mut t = settings.0.clone();
                 view_into(&view, &base, &mut t);
@@ -1152,7 +1168,7 @@ fn sync_settings(
     } else {
         intents.clear();
     }
-    if !(first || settings.is_changed()) {
+    if !(first || gate_added || settings.is_changed()) {
         return;
     }
     // The settings into the world.
@@ -1163,15 +1179,19 @@ fn sync_settings(
             *audio = a;
         }
     }
-    if first || s.locomotion != snap.locomotion || s.environment.mode != snap.environment.mode {
-        let l = locomotion_of(s);
+    if first
+        || gate_added
+        || s.locomotion != snap.locomotion
+        || s.environment.mode != snap.environment.mode
+    {
+        let l = locomotion_of(s, headset);
         if *loco != l {
             *loco = l;
         }
     }
     {
-        let v = desktop_view(s);
-        if (first || v != desktop_view(snap)) && *view != v {
+        let v = desktop_view(s, headset);
+        if (first || gate_added || v != desktop_view(snap, headset)) && *view != v {
             *view = v;
         }
     }
