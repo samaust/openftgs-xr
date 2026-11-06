@@ -244,6 +244,30 @@ pub struct HudData {
     /// The right side's device and whether its aim is tracked; as `left_hand`.
     // Q-274
     pub right_hand: Option<(HudHandSource, bool)>,
+    /// The depth image's resolution and its age in frames (§1.9 Depth occlusion);
+    /// `None` without an environment-depth provider. The XR crate's to write.
+    // Q-345
+    pub depth_image: Option<(UVec2, u32)>,
+    /// The scene anchor's state (§1.9 Floor, shadows and anchors); `None` without one.
+    /// The XR crate's to write.
+    // Q-345
+    pub anchor: Option<HudAnchor>,
+}
+
+/// The scene anchor's state on the HUD (§1.13 HUD, Q-345).
+// Q-345
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HudAnchor {
+    /// Being created at a scene save.
+    Creating,
+    /// Created and persisted.
+    Persisted,
+    /// Being located at a scene load.
+    Locating,
+    /// Located: the content group is on it.
+    Located,
+    /// Not found: the file's pose is used.
+    Lost,
 }
 
 /// Whether an XR feature exists on this device (§1.9, §1.15 E-XR-UNSUPPORTED and

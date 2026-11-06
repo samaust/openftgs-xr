@@ -56,10 +56,10 @@ pub use rig::{
     ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
 };
 // §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`; Q-274:
-// `HudHandSource`; Q-336: `XrFeatures`, `FeatureState`.
+// `HudHandSource`; Q-336: `XrFeatures`, `FeatureState`; Q-345: `HudAnchor`.
 pub use ui::{
-    FeatureState, HudData, HudHandSource, HudInstance, PanelPointer, Toast, ToastLevel, UiSurface,
-    WorldPanel, WristMenu, XrFeatures, panel_hit,
+    FeatureState, HudAnchor, HudData, HudHandSource, HudInstance, PanelPointer, Toast, ToastLevel,
+    UiSurface, WorldPanel, WristMenu, XrFeatures, panel_hit,
 };
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;

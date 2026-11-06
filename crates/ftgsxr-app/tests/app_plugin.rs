@@ -56,6 +56,28 @@ fn hud_data_s_head_tracking_is_left_to_the_xr_crate() {
     );
 }
 
+/// `HudData`'s depth image and anchor state are the XR crate's to write (Q-345): `None`
+/// without it, and the app's own filling leaves written values alone.
+// Q-345
+#[test]
+fn hud_data_s_depth_and_anchor_fields_are_left_to_the_xr_crate() {
+    use bevy::math::UVec2;
+    use ftgsxr_app::HudAnchor;
+    let mut t = TestApp::new("hud-depth-anchor");
+    t.frames(2);
+    assert_eq!(t.app.world().resource::<HudData>().depth_image, None);
+    assert_eq!(t.app.world().resource::<HudData>().anchor, None);
+    {
+        let mut hud = t.app.world_mut().resource_mut::<HudData>();
+        hud.depth_image = Some((UVec2::new(320, 320), 1));
+        hud.anchor = Some(HudAnchor::Located);
+    }
+    t.frames(2);
+    let hud = t.app.world().resource::<HudData>();
+    assert_eq!(hud.depth_image, Some((UVec2::new(320, 320), 1)));
+    assert_eq!(hud.anchor, Some(HudAnchor::Located));
+}
+
 #[test]
 fn settings_default_to_the_platform_s_file() {
     let t = TestApp::new("default-settings");
