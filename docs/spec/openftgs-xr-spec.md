@@ -417,7 +417,7 @@ ftgsxr bench NAME [--out BENCH.json] [--model MODEL]
 **User interface** \[R: easy to use AR/XR UI; D-21\]. Two surfaces:
 
 - The *main panel*: the desktop's tabs (§1.7) without the mouse-only items, plus Environment (§1.9) and Comfort (the settings above), rendered to a 1024 × 768 texture on a quad 0.56 m × 0.42 m (resizable 0.3–1.2 m wide by a two-hand grab, the texture resolution following the width), world-locked, and movable by its title bar. The menu button, the system gesture or the wrist menu's panel button summon it: it appears 1 m in front of the head, 0.2 m below eye height, facing the user, and stays where it is until summoned again; summoning while it is visible hides it. Interaction: the ray's hit point on the quad is the pointer; `select` clicks, holding `select` drags (sliders, scroll bars); the pointing hand's stick scrolls the focused list. On the panel, the Help tab shows a Controls page instead of the keyboard shortcuts: each controller action of D.2 with the runtime's localized names of the inputs bound to it (`xrEnumerateBoundSourcesForAction`, `xrGetInputSourceLocalizedName`), read again at each interaction-profile change, an action without one shown as "not bound"; then D.3's gestures; then a line saying the controllers can be remapped in the system's settings. Touch targets are at least 1.2 cm at the default size (22 px at 1024 × 768), text at least 24 px, one Back button at the top of every sub-page, no hover tooltips, and a toast line at the bottom for messages (errors, "pose saved", "extrapolating").
-- The *wrist menu*: five large buttons on a small panel attached to the left hand's grip pose (the right hand's in left-handed mode), 8 cm above the wrist, visible when the palm faces the user: play or pause, passthrough on or off, main panel, reset pose of the selected instance, fit the selected instance. It uses the same pointer.
+- The *wrist menu*: five large buttons on a small panel attached to the left hand's grip pose (the right hand's in left-handed mode), 8 cm above the wrist, visible while a tracked hand owns that side (Hands, above) and its palm faces the user, so hidden while a controller is held there: play or pause, passthrough on or off, main panel, reset pose of the selected instance, fit the selected instance. It uses the same pointer.
 
 The desktop's keyboard-free actions are reachable from these two surfaces; nothing needs a controller button to be discovered. Appendix D.2 and D.3 give the bindings.
 
@@ -1388,7 +1388,7 @@ Six classes of tests pin the specification, each with a numeric pass criterion: 
 | U-34 | error catalog (§1.15) | every `CoreError`, `IoError`, `RenderError`, `XrError` and `HeadlessError` variant has a §1.15 code and a non-empty user text; `exit_code` maps Input and Environment to 2 and Numeric to 3 | exact |
 | U-35 | skeleton (§2.7) | every source file's SPDX header; `cargo metadata` lists §2.1's crates; every shader file is referenced | exact |
 | U-36 | `ftgs-scene` reader (§1.5, §1.7) | the committed manifest fixture: cameras with K and world-to-camera, images with timestamps, splits and frame indices, a per-image camera override; the preset hint from its camera up vectors; the request camera's checks applied | exact |
-| U-37 | panel placement (§1.8) | the summon pose: 1 m ahead of the head along its yaw, 0.2 m below eye height, facing the head; the wrist menu 8 cm above the grip pose, visible when the palm faces the head (dot product test) | 10⁻⁶ |
+| U-37 | panel placement (§1.8) | the summon pose: 1 m ahead of the head along its yaw, 0.2 m below eye height, facing the head; the wrist menu 8 cm above the grip pose, visible while a tracked hand owns the side and the palm faces the head (dot product test), hidden for a controller in any pose | 10⁻⁶ |
 
 Property-based variants (proptest) of U-7, U-8, U-10, U-13 and U-14 draw values within the rows' domains.
 
@@ -1706,7 +1706,7 @@ Action set `player`; the paths are the OpenXR input paths under `/user/hand/left
 | `fit` (selected instance) | X | — | `input/x/click` | — |
 | `mode` (cycle the render mode) | Y | — | `input/y/click` | — |
 | `aim` (ray) | aim pose | aim pose | `input/aim/pose` | `input/aim/pose` |
-| `grip` (hand and wrist menu) | grip pose | grip pose | `input/grip/pose` | `input/grip/pose` |
+| `grip` (hand) | grip pose | grip pose | `input/grip/pose` | `input/grip/pose` |
 | `haptic` | output | output | `output/haptic` | `output/haptic` |
 
 Left-handed mode swaps the two sticks' roles (`move` and `turn`) and the wrist menu's hand only. The system button is the runtime's.
@@ -1719,7 +1719,7 @@ Left-handed mode swaps the two sticks' roles (`move` and `turn`) and the wrist m
 | `play_pause` | middle-finger pinch | aim state |
 | `menu` | system gesture (palm up, pinch) | aim state MENU\_PRESSED |
 | `aim` | aim pose | aim state |
-| `grip` | wrist joint pose | XR\_EXT\_hand\_tracking |
+| `grip` (hand and wrist menu) | wrist joint pose | XR\_EXT\_hand\_tracking |
 | `move`, `turn` | none: locomotion by walking, or the controllers | — |
 
 ## Appendix E — Platform facts
