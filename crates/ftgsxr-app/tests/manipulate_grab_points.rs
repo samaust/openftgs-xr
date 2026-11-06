@@ -10,7 +10,8 @@
 //! The "keep upright" switch (§1.8, #555) is `[xr] keep_upright`, mapped onto
 //! `ManipulateSettings` by `persist` (Q-330): off, a height difference between the grab
 //! points tilts the instance by E11's free rotation; on, the instance turns by yaw only;
-//! a one-hand grab is rigid under both (Q-331).
+//! a one-hand grab is rigid with the switch off and, on, turns by yaw only about its grab
+//! point (E11, spec revision 37, D-43).
 
 use crate::support;
 
@@ -586,30 +587,64 @@ fn u16_with_keep_upright_on_the_instance_turns_by_yaw_only() {
     );
 }
 
-/// Q-331: a one-hand grab is E11's rigid P = H H₀⁻¹ P₀ under both settings: a hand
-/// that tilts 0.3 rad about x and moves carries the instance with it.
+/// E11's one-hand grab (spec revision 37, D-43; U-16's one-hand case through
+/// `manipulate`): with the switch off it is rigid, P = H H₀⁻¹ P₀, so a hand that tilts
+/// 0.3 rad about x and moves carries the instance with it.
 #[test]
-fn u16_a_one_hand_grab_is_rigid_whatever_keep_upright() {
-    for free_rotation in [false, true] {
-        let mut t = app_with(&format!("keep_upright_one_{free_rotation}"), free_rotation);
-        let (e, _) = loaded_sized(&mut t, 1.0, Vec3::ZERO);
-        let p0 = pose(&t, e);
-        let la = Vec3::new(-0.3, 0.1, 3.0);
-        send(&mut t, &grab_at(Hand::Left, la));
-        let h = Pose {
-            translation: la + Vec3::new(0.1, 0.2, -0.3),
-            rotation: Quat::from_rotation_x(0.3),
-            scale: 1.0,
-        };
-        send(&mut t, &[move_pose(Hand::Left, h)]);
-        let p = pose(&t, e);
-        assert_rotation(p.rotation, h.rotation, "the hand's tilt");
-        assert_near(
-            p.translation,
-            h.translation + h.rotation * (p0.translation - la),
-            "the instance's place in the hand",
-        );
-    }
+fn u16_with_keep_upright_off_a_one_hand_grab_is_rigid() {
+    let mut t = app_with("keep_upright_one_off", true);
+    let (e, _) = loaded_sized(&mut t, 1.0, Vec3::ZERO);
+    let p0 = pose(&t, e);
+    let la = Vec3::new(-0.3, 0.1, 3.0);
+    send(&mut t, &grab_at(Hand::Left, la));
+    let h = Pose {
+        translation: la + Vec3::new(0.1, 0.2, -0.3),
+        rotation: Quat::from_rotation_x(0.3),
+        scale: 1.0,
+    };
+    send(&mut t, &[move_pose(Hand::Left, h)]);
+    let p = pose(&t, e);
+    assert_rotation(p.rotation, h.rotation, "the hand's tilt");
+    assert_near(
+        p.translation,
+        h.translation + h.rotation * (p0.translation - la),
+        "the instance's place in the hand",
+    );
+}
+
+/// E11's one-hand grab with the switch on (spec revision 37): the grab point, the ray's
+/// hit on the front face, follows the hand, g = H H₀⁻¹ g₀, and the instance turns about
+/// it by the twist about ŷ of the hand's turn only. A hand turned by R_ŷ(0.5) R_x(0.3)
+/// has the unit quaternion (cos ¼ cos 0.15, …, sin ¼ cos 0.15, …), whose twist
+/// 2 atan2(q_y, q_w) is 0.5 rad: the instance yaws 0.5 rad and does not tilt.
+#[test]
+fn u16_with_keep_upright_on_a_one_hand_grab_turns_by_yaw_about_its_grab_point() {
+    let mut t = app_with("keep_upright_one_on", false);
+    let (e, b) = loaded_sized(&mut t, 1.0, Vec3::ZERO);
+    let p0 = pose(&t, e);
+    let la = Vec3::new(-0.3, 0.1, 3.0);
+    let g0 = front_hit(&b, &p0, la);
+    let on_model = p0.inverse().transform_point(g0);
+    send(&mut t, &grab_at(Hand::Left, la));
+    let h = Pose {
+        translation: la + Vec3::new(0.1, 0.2, -0.3),
+        rotation: Quat::from_rotation_y(0.5) * Quat::from_rotation_x(0.3),
+        scale: 1.0,
+    };
+    send(&mut t, &[move_pose(Hand::Left, h)]);
+    let p = pose(&t, e);
+    let g = h.translation + h.rotation * (g0 - la);
+    assert_near(
+        p.transform_point(on_model),
+        g,
+        "the grab point follows the hand",
+    );
+    assert_rotation(
+        p.rotation,
+        Quat::from_rotation_y(0.5) * p0.rotation,
+        "yawed 0.5 rad, no tilt",
+    );
+    assert!((p.scale - p0.scale).abs() < TOL, "the scale is kept");
 }
 
 /// The switch persists both ways (Q-330, Q-207): `ManipulateSettings.keep_upright`

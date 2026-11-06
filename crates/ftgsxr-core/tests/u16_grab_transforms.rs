@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! U-16, E11 (`Grab`, `TwoHandGrab`, `cpu` lane, D-43). One hand: the model's pose
-//! relative to the hand is invariant under 1,000 random hand motions. Two hands: scale =
+//! U-16, E11 (`Grab`, `TwoHandGrab`, `cpu` lane, D-43). One hand: with free rotation
+//! the model's pose relative to the hand is invariant under 1,000 random hand motions;
+//! with keep upright, under the same motions, the grab point follows the hand, the
+//! model's up axis is unchanged and its yaw changes by the twist of the hand's turn
+//! about ŷ (spec revision 37). Two hands: scale =
 //! distance ratio, clamped at 0.01 and 100; the midpoint is followed; a 30° horizontal
 //! rotation of the hands yaws the model 30° and nothing else in upright mode; free
 //! rotation takes d₀ to d; two grab points on a posed box keep their box-normalized
@@ -91,10 +94,10 @@ fn u16_one_hand_keeps_the_model_fixed_in_the_hand() {
         .iter()
         .map(|&x| in_hand(&hand0, apply(&model0, x)))
         .collect();
-    let grab = Grab::begin(hand0, model0);
+    let grab = Grab::begin(hand0, model0, rng.vec3(2.0));
     for _ in 0..1000 {
         let hand = rng.hand();
-        let model = grab.update(hand);
+        let model = grab.update(hand, true);
         for (x, want) in PROBES.iter().zip(&held) {
             assert_vec3(in_hand(&hand, apply(&model, *x)), *want, "hand-frame point");
         }
@@ -104,9 +107,94 @@ fn u16_one_hand_keeps_the_model_fixed_in_the_hand() {
         );
     }
     // At the start pose the model has not moved.
-    let still = grab.update(hand0);
+    let still = grab.update(hand0, true);
     for x in PROBES {
         assert_vec3(apply(&still, x), apply(&model0, x), "unmoved hand");
+    }
+}
+
+/// E11's twist about ŷ of a unit rotation q: φ = 2 atan2(q_y, q_w), 0 where both vanish.
+fn twist_y(q: Quat) -> f32 {
+    if q.y == 0.0 && q.w == 0.0 {
+        0.0
+    } else {
+        2.0 * q.y.atan2(q.w)
+    }
+}
+
+/// R_ŷ(φ) applied to a vector, worked from its matrix rather than through `Quat`.
+fn yaw(phi: f32, v: Vec3) -> Vec3 {
+    let (s, c) = phi.sin_cos();
+    Vec3::new(c * v.x + s * v.z, v.y, -s * v.x + c * v.z)
+}
+
+#[test]
+fn u16_one_hand_upright_follows_the_grab_point_and_turns_by_yaw_only() {
+    let mut rng = Rng(0x5EED_2016);
+    let hand0 = rng.hand();
+    // A tilted model: the grab must keep its tilt.
+    let model0 = Pose {
+        translation: rng.vec3(2.0),
+        rotation: rng.rotation(),
+        scale: 1.7,
+    };
+    let g0 = rng.vec3(2.0);
+    let g_in_hand = in_hand(&hand0, g0);
+    let g_on_model = unapply(&model0, g0);
+    let up_in_model = model0.rotation.inverse() * Vec3::Y;
+    let grab = Grab::begin(hand0, model0, g0);
+    for _ in 0..1000 {
+        let hand = rng.hand();
+        let model = grab.update(hand, false);
+        // g = H H₀⁻¹ g₀, and it stays that point of the model.
+        let g = hand.rotation * g_in_hand + hand.translation;
+        assert_vec3(apply(&model, g_on_model), g, "grab point");
+        // The stage's up axis, seen from the model, is where it was.
+        assert_vec3(
+            model.rotation.inverse() * Vec3::Y,
+            up_in_model,
+            "up axis in the model",
+        );
+        // Each model axis turns by R_ŷ(φ), φ the twist of R_H R_H₀⁻¹ about ŷ.
+        let phi = twist_y(hand.rotation * hand0.rotation.inverse());
+        for x in [Vec3::X, Vec3::Y, Vec3::Z] {
+            assert_vec3(
+                model.rotation * x,
+                yaw(phi, model0.rotation * x),
+                "model axis",
+            );
+        }
+        assert!((model.scale - 1.7).abs() <= TOL, "the scale is kept");
+    }
+    let still = grab.update(hand0, false);
+    for x in PROBES {
+        assert_vec3(apply(&still, x), apply(&model0, x), "unmoved hand");
+    }
+}
+
+#[test]
+fn u16_one_hand_upright_a_half_turn_about_a_horizontal_axis_has_no_twist() {
+    // q = (1, 0, 0, 0): q_y = q_w = 0, so φ = 0 and the model only follows g.
+    let hand0 = Pose {
+        translation: Vec3::new(0.0, 1.0, 0.0),
+        rotation: Quat::IDENTITY,
+        scale: 1.0,
+    };
+    let model0 = tilted_model();
+    let g0 = Vec3::new(0.3, 1.2, -1.5);
+    let grab = Grab::begin(hand0, model0, g0);
+    let hand = Pose {
+        rotation: Quat::from_rotation_x(std::f32::consts::PI),
+        ..hand0
+    };
+    let model = grab.update(hand, false);
+    let g = hand.rotation * in_hand(&hand0, g0) + hand.translation;
+    for x in PROBES {
+        assert_vec3(
+            apply(&model, x),
+            apply(&model0, x) - g0 + g,
+            "translated only",
+        );
     }
 }
 

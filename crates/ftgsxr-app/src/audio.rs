@@ -1432,7 +1432,7 @@ mod tests {
         };
         let one = |hand| Grabbed::One {
             hand,
-            grab: Grab::begin(Pose::IDENTITY, Pose::IDENTITY),
+            grab: Grab::begin(Pose::IDENTITY, Pose::IDENTITY, Vec3::ZERO),
         };
         let e = app.world_mut().spawn(one(Hand::Left)).id();
         assert_eq!(played(&mut app), [UiSound::GrabBegin]);

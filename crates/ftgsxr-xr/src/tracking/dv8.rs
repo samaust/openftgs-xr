@@ -423,7 +423,7 @@ pub(crate) fn run(
                             Name::new("ftgsxr-test: dv8 grab"),
                             Grabbed::One {
                                 hand,
-                                grab: Grab::begin(Pose::IDENTITY, Pose::IDENTITY),
+                                grab: Grab::begin(Pose::IDENTITY, Pose::IDENTITY, Vec3::ZERO),
                             },
                         ))
                         .id();
