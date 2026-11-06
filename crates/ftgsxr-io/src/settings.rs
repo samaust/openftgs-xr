@@ -255,8 +255,9 @@ pub struct XrSettings {
     /// and `local`, stored as written; the chain always ends at LOCAL, with a warning,
     /// even when the list leaves `local` out, which `ftgsxr_xr::session` applies (Q-49).
     pub reference_space: Vec<String>,
-    /// §1.8 "keep upright": two-hand grabs turn by yaw only; off, they take E11's free
-    /// rotation. On by default (§1.5, D-43); one-hand grabs are rigid either way (Q-331).
+    /// §1.8 "keep upright": grabs, one-hand and two-hand, turn by yaw only; off, a
+    /// two-hand grab takes E11's free rotation and a one-hand grab is rigid. The main
+    /// panel's one-hand grab stays rigid either way. On by default (§1.5, E11, D-43).
     // Q-330
     pub keep_upright: bool,
 }

@@ -103,6 +103,18 @@ fn grab_offsets(pose: Pose, hands: [Pose; 2], points: [Vec3; 2]) -> [Vec3; 2] {
     ]
 }
 
+/// Starts the panel's one-hand grab by the hand at `aim`, with its grab point `point`
+/// on the quad (in the frame of the panel's pose scaled by its width `width_m`).
+fn begin_one(aim: Pose, transform: &Transform, width_m: f32, point: Vec3) -> Grab {
+    let pose = pose_of(transform);
+    let stage = Pose {
+        scale: width_m,
+        ..pose
+    }
+    .transform_point(point);
+    Grab::begin(aim, pose, stage)
+}
+
 /// A grab point's pose, `TwoHandGrab`'s a or b: the hand's pose moved to the point
 /// `offset` gives in its frame.
 fn at_offset(hand: Pose, offset: Vec3) -> Pose {
@@ -334,7 +346,7 @@ pub(crate) fn grab(
                 *held = match aim(rest) {
                     Some(a) => PanelGrab::One {
                         hand: rest,
-                        grab: Grab::begin(a, pose_of(&transform)),
+                        grab: begin_one(a, &transform, quad.size_m.x, point),
                         point,
                     },
                     None => {
@@ -354,10 +366,11 @@ pub(crate) fn grab(
         let Some(a) = aim(p.hand) else { continue };
         match &*held {
             PanelGrab::Free if p.pixel.y < quad.size_px.y as f32 * TITLE_FRACTION => {
+                let point = quad_point(p.pixel, quad.size_px);
                 *held = PanelGrab::One {
                     hand: p.hand,
-                    grab: Grab::begin(a, pose_of(&transform)),
-                    point: quad_point(p.pixel, quad.size_px),
+                    grab: begin_one(a, &transform, quad.size_m.x, point),
+                    point,
                 };
                 edges.write(PanelGrabEdge(p.hand));
             }
@@ -396,7 +409,9 @@ pub(crate) fn grab(
         PanelGrab::Free => {}
         PanelGrab::One { hand, grab, .. } => {
             if let Some(a) = aim(*hand) {
-                let p = grab.update(a);
+                // Rigid under both settings: one hand tilts the panel to face the
+                // user (E11, spec revision 37).
+                let p = grab.update(a, true);
                 transform.translation = p.translation;
                 transform.rotation = p.rotation;
             }
@@ -693,6 +708,50 @@ mod tests {
         );
         app.update();
         assert_eq!(main_panel(&mut app).1.translation, t1.translation);
+    }
+
+    /// E11 (spec revision 37): the panel's one-hand grab is P = H M whatever "keep
+    /// upright" says, so with the switch on a hand that pitches 0.4 rad about x tilts the
+    /// panel with it, about the hand.
+    #[test]
+    fn a_one_hand_grab_tilts_the_panel_with_keep_upright_on() {
+        let mut app = app(at(Vec3::new(0.0, 1.6, 0.0), Quat::IDENTITY));
+        app.insert_resource(ftgsxr_app::ManipulateSettings::default());
+        assert!(
+            app.world()
+                .resource::<ftgsxr_app::ManipulateSettings>()
+                .keep_upright
+        );
+        toggle_panel(&mut app);
+        let (panel, t0, _) = main_panel(&mut app);
+        let aim0 = at(Vec3::new(0.2, 1.2, -0.3), Quat::IDENTITY);
+        set_hand(
+            &mut app,
+            Hand::Right,
+            Some(hand(aim0, aim0, HandSource::Controller)),
+        );
+        press(&mut app, Hand::Right, panel, Vec2::new(500.0, 20.0));
+        app.update();
+        let pitch = Quat::from_rotation_x(0.4);
+        let tilted = at(aim0.translation, pitch);
+        set_hand(
+            &mut app,
+            Hand::Right,
+            Some(hand(tilted, tilted, HandSource::Controller)),
+        );
+        app.update();
+        let t1 = main_panel(&mut app).1;
+        assert!(
+            close(t1.rotation * Vec3::Z, pitch * (t0.rotation * Vec3::Z)),
+            "tilted with the hand: {t1:?}"
+        );
+        assert!(
+            close(
+                t1.translation,
+                aim0.translation + pitch * (t0.translation - aim0.translation)
+            ),
+            "{t1:?}"
+        );
     }
 
     #[derive(Resource, Default)]

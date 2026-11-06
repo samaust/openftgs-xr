@@ -13,8 +13,8 @@ use crate::support::TestApp;
 
 use bevy::prelude::*;
 use ftgsxr_app::{
-    ContentGroup, Hand, Hovered, InstanceAction, Intent, LibraryCommand, LoadedModel, ModelRef,
-    Selected,
+    ContentGroup, Hand, Hovered, InstanceAction, Intent, LibraryCommand, LoadedModel,
+    ManipulateSettings, ModelRef, Selected,
 };
 use ftgsxr_core::{Aabb, Pose};
 use ftgsxr_render::{SplatAsset, SplatModel};
@@ -231,6 +231,11 @@ fn content_group_fit_and_snap_are_in_stage_space() {
 #[test]
 fn content_group_a_one_hand_grab_keeps_the_stage_pose_in_the_hand() {
     let (mut t, e) = under("cg_grab", moved_group());
+    // Free rotation: the rigid one-hand grab (E11, spec revision 37).
+    t.app
+        .world_mut()
+        .resource_mut::<ManipulateSettings>()
+        .keep_upright = false;
     let c = stage(&t, e).transform_point(bounds(&t, e).center());
     let before = stage(&t, e);
     let h0 = at(c + Vec3::new(0.0, 0.0, 2.0));
@@ -244,8 +249,9 @@ fn content_group_a_one_hand_grab_keeps_the_stage_pose_in_the_hand() {
             },
         ],
     );
-    // E11: P = H M. The hand moved by Δ and turned by R about x through itself: the
-    // stage pose turns by R about the hand's start and moves by Δ, its scale kept.
+    // E11 under free rotation: P = H M. The hand moved by Δ and turned by R about x
+    // through itself: the stage pose turns by R about the hand's start and moves by Δ,
+    // its scale kept.
     let delta = Vec3::new(0.3, 0.1, -0.2);
     let r = Quat::from_rotation_x(20f32.to_radians());
     let h1 = Pose {
@@ -415,6 +421,52 @@ fn content_group_upright_grab_turns_about_stage_y() {
     let after = stage(&t, e);
     let turn = after.rotation * before.rotation.inverse();
     let want = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+    assert!(
+        (turn * Vec3::X - want * Vec3::X).length() < TOL
+            && (turn * Vec3::Y - Vec3::Y).length() < TOL,
+        "{turn:?}"
+    );
+    assert!((after.scale - before.scale).abs() < TOL);
+}
+
+#[test]
+fn content_group_upright_one_hand_grab_turns_about_stage_y() {
+    // Q-248, E11 (spec revision 37): keep upright (on by default) turns a one-hand grab
+    // about stage +y under a tilted group. A hand turned by R_ŷ(0.5) R_x(0.3) has the
+    // twist 0.5 rad about ŷ, so the stage pose yaws 0.5 rad and does not tilt.
+    let tilted = Transform {
+        translation: Vec3::new(0.0, 1.0, -1.0),
+        rotation: Quat::from_rotation_x(30f32.to_radians()),
+        scale: Vec3::ONE,
+    };
+    let (mut t, e) = under("cg_upright_one", tilted);
+    let before = stage(&t, e);
+    let c = before.transform_point(bounds(&t, e).center());
+    let h0 = at(c + Vec3::new(0.0, 0.0, 2.0));
+    send(
+        &mut t,
+        &[
+            ray_at(Hand::Right, c),
+            Intent::GrabBegin {
+                hand: Hand::Right,
+                pose: h0,
+            },
+        ],
+    );
+    send(
+        &mut t,
+        &[Intent::GrabMove {
+            hand: Hand::Right,
+            pose: Pose {
+                translation: h0.translation + Vec3::new(0.3, 0.1, -0.2),
+                rotation: Quat::from_rotation_y(0.5) * Quat::from_rotation_x(0.3),
+                scale: 1.0,
+            },
+        }],
+    );
+    let after = stage(&t, e);
+    let turn = after.rotation * before.rotation.inverse();
+    let want = Quat::from_rotation_y(0.5);
     assert!(
         (turn * Vec3::X - want * Vec3::X).length() < TOL
             && (turn * Vec3::Y - Vec3::Y).length() < TOL,

@@ -661,7 +661,7 @@ The translate arrows, rotation rings and uniform-scale cube drawn on the selecte
 _Avoid_: handles (unqualified), manipulator, Bevy gizmos (the engine's line-drawing API)
 
 **Grab point**:
-The point of a model instance, or of the main panel's quad, where a hand's ray took hold when it grabbed: E10's hit, or the hand's aim position from inside the box. It stays that point of the instance; a two-hand grab anchors on its two grab points, each carried by its hand. E10, E11, §1.8, D-43
+The point of a model instance, or of the main panel's quad, where a hand's ray took hold when it grabbed: E10's hit, or the hand's aim position from inside the box. It stays that point of the instance; a one-hand grab under "keep upright" turns about its grab point, carried by the hand, and a two-hand grab anchors on its two grab points, each carried by its hand. E10, E11, §1.8, D-43
 _Avoid_: hit point (the ray's drawn end, which moves with every frame's ray), contact point, anchor, pivot (the grab points' midpoint)
 
 **Soundtrack**:

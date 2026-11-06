@@ -9,25 +9,55 @@ use glam::{Quat, Vec3};
 use crate::types::{Aabb, Pose};
 
 /// E11, one hand: the model's pose in the hand's frame, M = H₀⁻¹ P₀, taken when the
-/// grab starts.
+/// grab starts, with the hand's start pose H₀, the grab point g₀ that "keep upright"
+/// turns about, and the start pose P₀ it turns (spec revision 37, D-43).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grab {
     in_hand: Pose,
+    hand0: Pose,
+    point0: Vec3,
+    model0: Pose,
 }
 
 impl Grab {
     /// Starts a one-hand grab: M = H₀⁻¹ P₀, with `hand` the hand's pose H₀ (a rigid
-    /// transform) and `model` the instance's pose P₀.
-    pub fn begin(hand: Pose, model: Pose) -> Grab {
+    /// transform), `model` the instance's pose P₀ and `point` the grab point g₀ in stage
+    /// space, the point of the instance where the ray took hold.
+    pub fn begin(hand: Pose, model: Pose, point: Vec3) -> Grab {
         Grab {
             in_hand: model.then(&hand.inverse()),
+            hand0: hand,
+            point0: point,
+            model0: model,
         }
     }
 
-    /// The instance's pose for the hand's current pose: P = H M, so the instance keeps
-    /// its place in the hand.
-    pub fn update(&self, hand: Pose) -> Pose {
-        self.in_hand.then(&hand)
+    /// The instance's pose for the hand's current pose H. With `free_rotation`, P = H M,
+    /// so the instance keeps its place in the hand. Otherwise ("keep upright") the grab
+    /// point follows the hand, g = H H₀⁻¹ g₀, and the instance turns about it by the
+    /// hand's yaw only: P = T(g) R_ŷ(φ) T(−g₀) P₀, with φ = 2 atan2(q_y, q_w) the twist
+    /// about ŷ of the hand's turn q = R_H R_H₀⁻¹ (0 where q_y = q_w = 0).
+    pub fn update(&self, hand: Pose, free_rotation: bool) -> Pose {
+        if free_rotation {
+            return self.in_hand.then(&hand);
+        }
+        let g = self
+            .hand0
+            .inverse()
+            .then(&hand)
+            .transform_point(self.point0);
+        let q = (hand.rotation * self.hand0.rotation.inverse()).normalize();
+        let phi = if q.y == 0.0 && q.w == 0.0 {
+            0.0
+        } else {
+            2.0 * q.y.atan2(q.w)
+        };
+        let turn = Quat::from_rotation_y(phi);
+        Pose {
+            translation: g + turn * (self.model0.translation - self.point0),
+            rotation: (turn * self.model0.rotation).normalize(),
+            scale: self.model0.scale,
+        }
     }
 }
 

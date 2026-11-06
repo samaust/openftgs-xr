@@ -43,8 +43,8 @@ pub struct ManipulateSettings {
     pub limits: ScaleLimits,
     /// E10's t_max in metres.
     pub ray_max_m: f32,
-    /// Two-hand grabs turn about y only (E11); `persist` keeps it equal to the settings'
-    /// `[xr] keep_upright`, both ways (Q-330). One-hand grabs ignore it (Q-331).
+    /// Grabs, one-hand and two-hand, turn about stage y only (E11, D-43); `persist` keeps
+    /// it equal to the settings' `[xr] keep_upright`, both ways (Q-330).
     pub keep_upright: bool,
     /// The push and pull speed per metre of distance, in m/s (§1.8).
     pub push_pull_mps: f32,
@@ -582,15 +582,12 @@ fn rebase(hs: &mut HandStates, e: Entity, pose: Pose) {
         return;
     };
     let next = match (g, hands) {
-        (Grabbed::One { hand, .. }, _) => {
-            hs.hands
-                .get(&hand)
-                .and_then(|h| h.pose)
-                .map(|h| Grabbed::One {
-                    hand,
-                    grab: Grab::begin(h, pose),
-                })
-        }
+        (Grabbed::One { hand, .. }, _) => hs.hands.get(&hand).and_then(|h| {
+            Some(Grabbed::One {
+                hand,
+                grab: Grab::begin(h.pose?, pose, pose.transform_point(h.point)),
+            })
+        }),
         // Each grab point at the same place on the instance (E11, revision 34).
         (Grabbed::Two { .. }, Some(pair)) => {
             begin_two(hs, pair, pose).map(|grab| Grabbed::Two { grab })
@@ -727,7 +724,7 @@ fn run_intents(
                             (
                                 Grabbed::One {
                                     hand,
-                                    grab: Grab::begin(pose, model),
+                                    grab: Grab::begin(pose, model, hit),
                                 },
                                 None,
                             ),
@@ -753,9 +750,10 @@ fn run_intents(
                     continue;
                 };
                 let new = match (g, hands) {
-                    // Rigid under both settings: keep upright is the two-hand grab's.
-                    // Q-331
-                    (Grabbed::One { grab, .. }, _) => grab.update(pose),
+                    // Yaw only about the grab point under keep upright, about stage +y:
+                    // the grab runs on the stage pose (E11, spec revision 37).
+                    // D-43, Q-248
+                    (Grabbed::One { grab, .. }, _) => grab.update(pose, !s.keep_upright),
                     (Grabbed::Two { grab }, Some((a, b))) => {
                         // The grab points, fixed in their hands (E11, revision 34).
                         let grab_point = |h: Hand| {
@@ -783,10 +781,12 @@ fn run_intents(
                     // Releasing one hand of two returns to a one-hand grab by the other.
                     Some((Grabbed::Two { .. }, Some((a, b)))) => {
                         let other = if a == hand { b } else { a };
-                        let po = hs.hands.get(&other).and_then(|h| h.pose);
-                        match (po, stage_pose(&q, &groups, e)) {
-                            (Some(po), Some(model)) => {
-                                let grab = Grab::begin(po, model);
+                        let other_hold =
+                            hs.hands.get(&other).and_then(|h| Some((h.pose?, h.point)));
+                        match (other_hold, stage_pose(&q, &groups, e)) {
+                            (Some((po, point)), Some(model)) => {
+                                // The other hand's grab point stays its point (E11).
+                                let grab = Grab::begin(po, model, model.transform_point(point));
                                 hs.grabs
                                     .insert(e, (Grabbed::One { hand: other, grab }, None));
                             }
