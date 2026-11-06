@@ -246,6 +246,36 @@ pub struct HudData {
     pub right_hand: Option<(HudHandSource, bool)>,
 }
 
+/// Whether an XR feature exists on this device (§1.9, §1.15 E-XR-UNSUPPORTED and
+/// E-XR-PERMISSION): `Absent` without the runtime's extension (the desktop's, and the
+/// default), `Available`, or `Denied` when its permission was refused (Q-336).
+// Q-336
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FeatureState {
+    /// The runtime offers no extension for it: its control is hidden.
+    #[default]
+    Absent,
+    /// It can be used.
+    Available,
+    /// Its permission was denied: the control stays, with a button to ask again.
+    Denied,
+}
+
+/// The XR features the panels' controls follow (§1.8 User interface, §1.9): the wrist
+/// menu's passthrough button and the Environment tab's passthrough and occlusion
+/// controls show only where their feature is not `Absent`. The XR crate writes it each
+/// frame; without it every feature is `Absent` (Q-336).
+// Q-336
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct XrFeatures {
+    /// Passthrough (XR_FB_passthrough).
+    pub passthrough: FeatureState,
+    /// Depth occlusion (XR_META_environment_depth).
+    pub occlusion: FeatureState,
+    /// Spatial anchors (XR_FB_spatial_entity, XR_META_spatial_entity_persistence).
+    pub anchors: FeatureState,
+}
+
 /// Which device a side's HUD line shows (Q-274): the XR crate's `HandSource`, which the
 /// app cannot name, mapped by the XR crate.
 // Q-274
@@ -663,6 +693,8 @@ impl Plugin for UiPlugin {
             .init_resource::<UiState>()
             .init_resource::<RecentScenes>()
             .init_resource::<HudData>()
+            // Q-336
+            .init_resource::<XrFeatures>()
             .init_resource::<DockHooks>()
             .init_resource::<ToastLimiter>()
             .init_resource::<SeenFailures>()
