@@ -91,7 +91,7 @@ impl Plugin for XrInputPlugin {
                 PostUpdate,
                 (
                     (haptics, apply_pulses.run_if(openxr_session_running)).chain(),
-                    draw.run_if(resource_exists::<GizmoConfigStore>),
+                    (ray_ends, draw.run_if(resource_exists::<GizmoConfigStore>)).chain(),
                 ),
             );
     }
@@ -114,6 +114,8 @@ struct InputState {
 #[derive(Resource, Default)]
 struct Frame {
     rays: [Option<RayDraw>; 2],
+    /// Each side's drawn end and whether a dot marks a hit there (Q-304, #552).
+    ends: [Option<(Vec3, bool)>; 2],
     arc: Vec<Vec3>,
 }
 
@@ -464,29 +466,43 @@ fn colors(high_contrast: bool) -> (Color, Color) {
     }
 }
 
-/// The rays to their first hit (a panel quad, else the hovered instance's distance,
-/// else 10 m) with a dot at a hit, and the teleport arc (§1.8 Rays, PRD #452).
-fn draw(
-    frame: Res<Frame>,
-    hovered: Query<&Hovered>,
-    settings: Option<Res<SettingsRes>>,
-    mut gizmos: Gizmos,
+/// Each ray's end at the hit of the target that took it: the quad's hit when a quad
+/// took the ray (Q-263, Q-317), otherwise the hand's own E10 hit on the instances'
+/// boxes as they stand after this frame's grabs, whichever hand holds the instance's
+/// `Hovered` (Q-182); else 10 m, a dot only at a hit (§1.8 Rays, Q-304, #552).
+// Q-304
+fn ray_ends(
+    mut frame: ResMut<Frame>,
+    instances: Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    groups: Query<&Transform, Without<LoadedModel>>,
+    assets: Option<Res<Assets<SplatAsset>>>,
+    manipulate: Option<Res<ManipulateSettings>>,
 ) {
+    let boxes = instance_boxes(&instances, &groups, assets.as_deref());
+    let ray_max_m = manipulate.map_or(RAY_M, |m| m.ray_max_m);
+    let rays = frame.rays;
+    frame.ends = rays.map(|r| {
+        r.map(|r| {
+            let hit = r
+                .panel
+                .or_else(|| pick_instance(r.origin, r.dir, &boxes, ray_max_m).map(|(_, t)| t));
+            (r.origin + r.dir * hit.unwrap_or(RAY_M), hit.is_some())
+        })
+    });
+}
+
+/// The rays to their ends (`ray_ends`) with a dot at a hit, and the teleport arc
+/// (§1.8 Rays, PRD #452).
+fn draw(frame: Res<Frame>, settings: Option<Res<SettingsRes>>, mut gizmos: Gizmos) {
     let (ray, dot) = colors(settings.is_some_and(|s| s.0.display.high_contrast));
-    for (i, side) in SIDES.into_iter().enumerate() {
-        let Some(r) = frame.rays[i] else { continue };
-        let instance = hovered
-            .iter()
-            .filter(|h| h.hand == side)
-            .map(|h| h.distance)
-            .reduce(f32::min);
-        let hit = match (r.panel, instance) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        let end = r.origin + r.dir * hit.unwrap_or(RAY_M);
+    for (r, (end, hit)) in frame
+        .rays
+        .iter()
+        .zip(frame.ends)
+        .filter_map(|(r, e)| Some(((*r)?, e?)))
+    {
         gizmos.line(r.origin, end, ray);
-        if hit.is_some() {
+        if hit {
             gizmos.sphere(Isometry3d::from_translation(end), DOT_RADIUS_M, dot);
         }
     }
@@ -959,6 +975,151 @@ mod tests {
             tracked: true,
         };
         app.world_mut().resource_mut::<XrHands>().right = Some(hand);
+    }
+
+    /// The +z face of `instance`'s posed box, where a ray along −z from in front enters.
+    fn front_z(app: &bevy::app::App, instance: Entity) -> f32 {
+        let t = *app.world().get::<Transform>(instance).unwrap();
+        let model = app.world().get::<SplatModel>(instance).unwrap().0.clone();
+        let b = app
+            .world()
+            .resource::<Assets<SplatAsset>>()
+            .get(&model)
+            .unwrap()
+            .bounds;
+        (0..8)
+            .map(|k| {
+                let c = Vec3::new(
+                    if k & 1 == 0 { b.min.x } else { b.max.x },
+                    if k & 2 == 0 { b.min.y } else { b.max.y },
+                    if k & 4 == 0 { b.min.z } else { b.max.z },
+                );
+                t.transform_point(c).z
+            })
+            .fold(f32::MIN, f32::max)
+    }
+
+    /// Q-304 as changed, with Q-263 and Q-317 (#552's added test): one hand's ray ends
+    /// at a panel nearer than the instance, and at the instance in front of a panel.
+    #[test]
+    fn a_ray_ends_at_the_target_that_took_it() {
+        let (mut app, instance) = app_with_p1();
+        let front = front_z(&app, instance);
+        let panel = |app: &mut bevy::app::App, z: f32| {
+            app.world_mut()
+                .spawn((
+                    PanelQuad {
+                        size_m: Vec2::new(0.56, 0.42),
+                        size_px: UVec2::new(1024, 768),
+                        title_bar: true,
+                    },
+                    Transform::from_xyz(0.0, 0.0, z),
+                    GlobalTransform::from(Transform::from_xyz(0.0, 0.0, z)),
+                ))
+                .id()
+        };
+        let p = panel(&mut app, 1.5);
+        aiming(&mut app, 0.0);
+        app.update();
+        let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
+        assert!(
+            dot && end.distance(Vec3::new(0.0, 0.0, 1.5)) < 1e-4,
+            "{end}"
+        );
+        app.world_mut().entity_mut(p).despawn();
+        panel(&mut app, -1.0);
+        app.update();
+        app.update();
+        let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
+        assert!(
+            dot && end.distance(Vec3::new(0.0, 0.0, front)) < 1e-4,
+            "{end}"
+        );
+    }
+
+    /// Q-304 as changed, with Q-317 as changed by #550 (#552's added test): from inside
+    /// an instance's box, a ray a quad took ends at the quad, not at the hand.
+    #[test]
+    fn a_ray_a_quad_took_from_inside_a_box_ends_at_the_quad() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, instance) = app_with_p1();
+        let inside = app.world().get::<Transform>(instance).unwrap().translation;
+        let boxes = app
+            .world_mut()
+            .run_system_once(
+                |i: Query<
+                    (Entity, &Transform, &SplatModel, Option<&ChildOf>),
+                    With<LoadedModel>,
+                >,
+                 g: Query<&Transform, Without<LoadedModel>>,
+                 a: Option<Res<Assets<SplatAsset>>>| {
+                    instance_boxes(&i, &g, a.as_deref())
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            pick_instance(inside, -Vec3::Z, &boxes, RAY_M),
+            Some((instance, 0.0)),
+            "the origin lies in the box"
+        );
+        app.world_mut().resource_mut::<Frame>().rays[1] = Some(RayDraw {
+            origin: inside,
+            dir: -Vec3::Z,
+            panel: Some(0.5),
+        });
+        app.world_mut().run_system_once(ray_ends).unwrap();
+        let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
+        assert!(dot && end.distance(inside - Vec3::Z * 0.5) < 1e-4, "{end}");
+    }
+
+    /// §1.8 Rays ("drawn as a thin line to the first hit … with a dot at the hit
+    /// point"), Q-304 as changed (#552's added test): two rays on one instance each
+    /// end at their own entry point on its box, with a dot, whichever hand holds its
+    /// `Hovered` (Q-182: the nearer one).
+    #[test]
+    fn two_rays_on_one_instance_each_end_at_their_own_hit() {
+        let (mut app, instance) = app_with_p1();
+        aiming(&mut app, 0.0);
+        let mut left = app.world().resource::<XrHands>().right.unwrap();
+        left.aim = aim_at(-0.05, 0.0, 3.2, Quat::IDENTITY);
+        left.grip = left.aim;
+        app.world_mut().resource_mut::<XrHands>().left = Some(left);
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().get::<Hovered>(instance).map(|h| h.hand),
+            Some(Hand::Right),
+            "the nearer hand hovers"
+        );
+        let front = front_z(&app, instance);
+        let ends = app.world().resource::<Frame>().ends;
+        for (i, x) in [(0, -0.05), (1, 0.0)] {
+            let (end, dot) = ends[i].expect("a tracked hand has a ray");
+            assert!(dot, "hand {i} has a dot");
+            assert!(
+                end.distance(Vec3::new(x, 0.0, front)) < 1e-4,
+                "hand {i} ends at {end}, the front face is z = {front}"
+            );
+        }
+    }
+
+    /// Q-304: a ray that hits nothing runs 10 m with no dot.
+    #[test]
+    fn a_ray_on_nothing_runs_ten_metres_without_a_dot() {
+        let (mut app, _) = app_with_p1();
+        let mut hand = {
+            aiming(&mut app, 0.0);
+            app.world().resource::<XrHands>().right.unwrap()
+        };
+        hand.aim = aim_at(0.0, 0.0, 3.0, Quat::from_rotation_y(std::f32::consts::PI));
+        app.world_mut().resource_mut::<XrHands>().right = Some(hand);
+        app.update();
+        let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
+        assert!(!dot);
+        assert!(
+            end.distance(Vec3::new(0.0, 0.0, 3.0 + RAY_M)) < 1e-4,
+            "{end}"
+        );
     }
 
     /// Q-263 (#460's added test; source of truth §1.8 Rays and User interface): a hand
