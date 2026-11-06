@@ -2,9 +2,12 @@
 
 //! U-37 (`cpu`, §3.1), panel placement (source of truth: U-37's row and §1.8 User
 //! interface): the summon pose 1 m ahead of the head along its yaw, 0.2 m below eye
-//! height, facing the head; the wrist menu 8 cm above the grip pose, visible when the
-//! palm faces the head (a dot-product test). Tolerance 10⁻⁶. The functions are Q-265's;
-//! their `grip` is the palm frame of Q-305 (+x the palm's outward normal).
+//! height, facing the head; the wrist menu 8 cm above the grip pose, visible while a
+//! tracked hand owns the side and the palm faces the head (a dot-product test).
+//! Tolerance 10⁻⁶. The functions are Q-265's; their `grip` is the palm frame of Q-305
+//! (+x the palm's outward normal). They take no device, so the row's tracked-hand
+//! clause, "hidden for a controller in any pose", is pinned by `panel`'s private test of
+//! the wrist menu's placement (#546).
 
 use ftgsxr_core::{Pose, Quat, Vec3};
 use ftgsxr_xr::{summon_pose, wrist_menu_pose, wrist_menu_visible};

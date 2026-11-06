@@ -10,7 +10,7 @@ How `ftgsxr_xr::panel` places the main panel and the wrist menu on the headset: 
 - `wrist_menu_pose(grip, head)`: Q-265's offset from the grip along the palm's outward normal, the quad facing the head's position and upright (+y stage up made perpendicular to the facing; +x stage x when the facing is vertical).
 - `wrist_menu_visible(grip, head)`: whether the palm's outward normal, dotted with the unit vector from the grip to the head, exceeds Q-265's threshold.
 
-The two wrist functions take a *palm frame*, not a raw grip: a pose at the grip whose +x is the palm's outward normal, since that normal is a different grip axis per hand and per source (Q-305). The systems build it with `palm_frame`: the left controller's grip as it is, the right controller's turned 180° about its y, and a tracked hand's wrist pose turned −90° about its z on either side.
+The two wrist functions take a *palm frame*, not a raw grip: a pose at the grip whose +x is the palm's outward normal, since that normal is a grip axis other than the grip's +x (Q-305). The systems build it with `palm_frame` from a tracked hand's wrist pose, turned −90° about its z on either side; a controller has none, since the wrist menu never shows on one (§1.8 User interface, revision 32, #546).
 
 ## The quads
 
@@ -39,4 +39,4 @@ During a two-hand grab the quad scales live: the transform's scale, `PanelQuad.s
 
 ## The wrist menu
 
-Each frame `place_wrist` reads the left hand's `TrackedHand`, the right's in left-handed mode (§1.8 Comfort), builds its palm frame and, while the hand is tracked and `wrist_menu_visible` holds, shows the quad at `wrist_menu_pose`; otherwise the quad is hidden. Its buttons and their intents are `ui`'s (Q-291).
+Each frame `place_wrist` reads the left hand's `TrackedHand`, the right's in left-handed mode (§1.8 Comfort), builds its palm frame and, while that side is owned by a tracked hand (`HandSource::Hand`, D-55) and `wrist_menu_visible` holds, shows the quad at `wrist_menu_pose`; otherwise, a held controller included, the quad is hidden. Its buttons and their intents are `ui`'s (Q-291).
