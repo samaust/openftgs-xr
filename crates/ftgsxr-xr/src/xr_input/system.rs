@@ -1167,7 +1167,8 @@ mod tests {
 
     /// Q-315 (Q-306's side effect removed): a pinch on the main panel's title bar is
     /// its grab and no click: the panel gets the grab press and release and no select;
-    /// a pinch below the strip clicks.
+    /// a pinch below the strip clicks, from the row just under it, where `ui`'s tab row
+    /// begins (Q-306, #542).
     #[test]
     fn a_pinch_on_the_title_bar_grabs_and_does_not_click() {
         use bevy::app::Update;
@@ -1214,5 +1215,10 @@ mod tests {
         assert_eq!(pinch(&mut app, 20.0, 0.0), (vec![], vec![false]));
         assert_eq!(pinch(&mut app, 300.0, 0.9), (vec![true], vec![true]));
         assert_eq!(pinch(&mut app, 300.0, 0.0), (vec![false], vec![false]));
+        // Either side of the strip's 48 px edge (#542).
+        assert_eq!(pinch(&mut app, 47.0, 0.9), (vec![], vec![true]));
+        assert_eq!(pinch(&mut app, 47.0, 0.0), (vec![], vec![false]));
+        assert_eq!(pinch(&mut app, 49.0, 0.9), (vec![true], vec![true]));
+        assert_eq!(pinch(&mut app, 49.0, 0.0), (vec![false], vec![false]));
     }
 }

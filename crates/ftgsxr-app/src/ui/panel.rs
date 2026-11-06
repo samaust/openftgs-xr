@@ -5,9 +5,9 @@
 //! image-target camera with its own egui context and schedule, instead of the window.
 //!
 //! The main panel shows the desktop's tabs without the mouse-only items, plus Comfort: a
-//! title bar at the top (Q-306), a tab row, the tab's content, the toast line at the bottom, and a Back button at the top
-//! of every sub-page (the confirmation dialogs, the training cameras, the request
-//! replay); nothing draws a hover tooltip. The wrist menu shows five buttons. Both take
+//! title bar at the top (Q-306), a tab row, the tab's content, the toast line at the
+//! bottom, and a Back button at the top of every sub-page (the confirmation dialogs, the
+//! training cameras, the request replay); nothing draws a hover tooltip. The wrist menu shows five buttons. Both take
 //! the pointer from `PanelPointer` (Q-263, Q-279).
 
 use bevy::camera::visibility::{RenderLayers, Visibility};
