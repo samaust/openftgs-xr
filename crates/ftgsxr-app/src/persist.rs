@@ -28,7 +28,7 @@ use ftgsxr_io::{
 use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 
 use crate::audio::AudioState;
-use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
+use crate::intent::{Feature, InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{
     Library, LibraryCommand, LibraryFailure, LoadedModel, MissingModel, Replaces, SceneLoad,
     ShowOnUpload, list_missing,
@@ -460,7 +460,9 @@ fn keep_upright_sync(
 /// `Intent::Ui(SaveScene)` saves a scene named by the time (Q-200); `LoadScene` is the
 /// UI's, which confirms and sends `PersistCommand::LoadScene`. The overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
 /// is a `[display.overlays]` setting, flipped here and mapped onto every instance by
-/// `sync_settings` (Q-207).
+/// `sync_settings` (Q-207). `Toggle(Feature::Occlusion)` flips `[environment] occlusion`
+/// (Q-336); `Toggle(Feature::Passthrough)` is the XR crate's (Q-335).
+// Q-336
 fn run_intents(
     mut reader: MessageReader<Intent>,
     mut out: MessageWriter<PersistCommand>,
@@ -480,6 +482,10 @@ fn run_intents(
                     OverlayToggle::Velocities => ov.velocities = !ov.velocities,
                     OverlayToggle::TimeTint => ov.time_tint = !ov.time_tint,
                 }
+            }
+            Intent::Toggle(Feature::Occlusion) => {
+                let e = &mut settings.0.environment;
+                e.occlusion = !e.occlusion;
             }
             _ => {}
         }

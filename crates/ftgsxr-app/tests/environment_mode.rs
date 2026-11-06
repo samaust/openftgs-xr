@@ -109,3 +109,31 @@ fn a_saved_passthrough_mode_starts_the_headset_without_the_grid() {
     assert!(!shown(&mut t));
     assert!(!sticks(&t));
 }
+
+/// `Toggle(Feature::Occlusion)` flips `[environment] occlusion` in the settings, as the
+/// other toggles do; a second one flips it back (Q-336, Q-207).
+#[test]
+fn toggle_occlusion_flips_the_setting() {
+    use ftgsxr_app::{Feature, Intent};
+    let mut t = app("toggle_occlusion", true);
+    t.frames(1);
+    let occlusion = |t: &TestApp| {
+        t.app
+            .world()
+            .resource::<SettingsRes>()
+            .0
+            .environment
+            .occlusion
+    };
+    let before = occlusion(&t);
+    t.app
+        .world_mut()
+        .write_message(Intent::Toggle(Feature::Occlusion));
+    t.frames(2);
+    assert_eq!(occlusion(&t), !before);
+    t.app
+        .world_mut()
+        .write_message(Intent::Toggle(Feature::Occlusion));
+    t.frames(2);
+    assert_eq!(occlusion(&t), before);
+}
