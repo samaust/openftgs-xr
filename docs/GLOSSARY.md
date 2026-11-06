@@ -680,6 +680,10 @@ _Avoid_: menu, HUD, dock (the desktop's)
 The five-button quad attached above the grip pose of one hand, shown while a tracked hand owns that side and its palm faces the user, never on a held controller. §1.8
 _Avoid_: hand menu, watch, quick menu
 
+**Pointer hand**:
+The one hand whose ray a panel's egui context follows when both rays hit the panel: the hand holding `select` on it, else the last to press there while its ray stays, else the other ray on it; only its hit, presses and stick scroll reach the panel. It makes precise §1.8's "pointing hand" for two rays. §1.8, Q-334
+_Avoid_: active hand, cursor hand, primary hand
+
 **Aim state**:
 The per-hand pose, pinch strengths and flags XR_FB_hand_tracking_aim gives, the source of a tracked hand's ray and gestures. §1.8, D-25
 _Avoid_: gesture recognizer, hand pose (the joints)

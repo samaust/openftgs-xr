@@ -17,6 +17,7 @@
 mod cameras;
 mod dock;
 mod panel;
+mod pointer_hand;
 mod touch;
 
 pub(crate) use panel::{PanelCamera, panel_zoom};
@@ -629,10 +630,11 @@ struct Upload {
 #[derive(Resource, Default)]
 struct Uploads(HashMap<Entity, Upload>);
 
-/// Each panel context's last pointer position, by the context's entity.
+/// Each panel context's pointer, its pointer hand and last position, by the context's
+/// entity (Q-334).
 #[derive(Resource, Default)]
 struct PanelPointerState {
-    last: HashMap<Entity, Vec2>,
+    pointers: HashMap<Entity, pointer_hand::ContextPointer>,
 }
 
 /// The ui systems that turn state into toasts and commands, ordered after the modules
@@ -993,12 +995,13 @@ fn fill_hud(
         .collect();
 }
 
-/// The panel pointer (§1.8, I-11): each `PanelPointer` becomes pointer events of the
-/// context rendering to its panel's image, in order; a context that had the pointer and
-/// gets none this frame sees it leave (Q-263). The messages are the last frame's, read
-/// before egui takes its input, and their pixels reach the context as its points
-/// (Q-290). Each context's events are rewritten for the touch press (Q-333).
-// Q-263, Q-290, Q-333
+/// The panel pointer (§1.8, I-11): each `PanelPointer` is a hand's ray on the panel of
+/// the context rendering to its image; the context follows one hand at a time, its
+/// pointer hand, and that hand's hits become its pointer events (Q-334); a context that
+/// had the pointer and gets no message in a frame sees it leave (Q-263). The messages are
+/// the last frame's, read before egui takes its input, and their pixels reach the context
+/// as its points (Q-290). Each context's events are rewritten for the touch press (Q-333).
+// Q-263, Q-290, Q-333, Q-334
 fn panel_pointer(
     mut pointers: MessageReader<PanelPointer>,
     panels: Query<&WorldPanel>,
@@ -1007,15 +1010,7 @@ fn panel_pointer(
     mut state: ResMut<PanelPointerState>,
     mut out: MessageWriter<EguiInputEvent>,
 ) {
-    let mut seen: HashMap<Entity, Vec2> = HashMap::new();
-    let mut frame: Vec<(Entity, Vec<egui::Event>)> = Vec::new();
-    let mut push = |context: Entity, events: Vec<egui::Event>| match frame
-        .iter_mut()
-        .find(|(c, _)| *c == context)
-    {
-        Some((_, e)) => e.extend(events),
-        None => frame.push((context, events)),
-    };
+    let mut frame: Vec<(Entity, Vec<pointer_hand::HandHit>)> = Vec::new();
     for p in pointers.read() {
         let Ok(panel) = panels.get(p.panel) else {
             continue;
@@ -1028,32 +1023,44 @@ fn panel_pointer(
         }) else {
             continue;
         };
-        let last = seen
-            .get(&context)
-            .or_else(|| state.last.get(&context))
-            .copied();
         // Q-290: the texture's pixels in the context's points.
-        let at = panel_point(p.pixel, ppp);
-        let scroll = panel_point(Vec2::new(0.0, p.scroll_px), ppp).y;
-        push(context, pointer_events(last, Some(at), &p.select, scroll));
-        seen.insert(context, at);
-    }
-    for (&context, &last) in &state.last {
-        if !seen.contains_key(&context) {
-            push(context, pointer_events(Some(last), None, &[], 0.0));
+        let hit = pointer_hand::HandHit {
+            hand: p.hand,
+            at: panel_point(p.pixel, ppp),
+            select: p.select.clone(),
+            scroll: panel_point(Vec2::new(0.0, p.scroll_px), ppp).y,
+        };
+        match frame.iter_mut().find(|(c, _)| *c == context) {
+            Some((_, hits)) => hits.push(hit),
+            None => frame.push((context, vec![hit])),
         }
     }
-    state.last = seen;
-    for (context, events) in frame {
+    for &context in state.pointers.keys() {
+        if !frame.iter().any(|(c, _)| *c == context) {
+            frame.push((context, Vec::new()));
+        }
+    }
+    let mut next = HashMap::new();
+    for (context, hits) in frame {
+        let mut ctx = egui_contexts.get_mut(context).ok();
         // Q-333
-        let events = match egui_contexts.get_mut(context) {
-            Ok(mut ctx) => touch::touch_events(ctx.get_mut(), events),
-            Err(_) => events,
+        let armed = ctx.as_mut().is_some_and(|c| touch::armed(c.get_mut()));
+        let prev = state.pointers.get(&context).copied();
+        // Q-334
+        let (events, pointer) = pointer_hand::hand_events(prev, &hits, armed);
+        if let Some(pointer) = pointer {
+            next.insert(context, pointer);
+        }
+        // Q-333
+        let events = match ctx {
+            Some(mut ctx) => touch::touch_events(ctx.get_mut(), events),
+            None => events,
         };
         for event in events {
             out.write(EguiInputEvent { context, event });
         }
     }
+    state.pointers = next;
 }
 
 /// The first readable system font: egui's bundled fonts are off (#277), so the desktop
@@ -1352,6 +1359,110 @@ mod tests {
         ));
         assert_eq!(pointer_events(None, Some(p), &[], 0.0).len(), 1);
         assert!(pointer_events(None, None, &[], 12.5).is_empty());
+    }
+
+    /// The context events `panel_pointer` wrote, in order.
+    #[derive(Resource, Default)]
+    struct Written(Vec<(Entity, egui::Event)>);
+
+    fn written(mut r: MessageReader<EguiInputEvent>, mut w: ResMut<Written>) {
+        w.0.extend(r.read().map(|e| (e.context, e.event.clone())));
+    }
+
+    /// Q-334 (#563, `cpu`): `panel_pointer` with two image-target contexts, the main
+    /// panel's and the wrist menu's: each context follows its own pointer hand. With
+    /// both rays on the main panel it gets the first ray's move only; the right hand's
+    /// press there moves its pointer to the right's hit before the press; the left ray
+    /// moving to the wrist menu points there while the right's release reaches the main
+    /// panel; with no ray left, each context sees the pointer leave, once.
+    #[test]
+    fn panel_pointer_each_context_follows_its_pointer_hand() {
+        use bevy::asset::uuid::Uuid;
+        let mut app = App::new();
+        app.add_message::<PanelPointer>()
+            .add_message::<EguiInputEvent>()
+            .init_resource::<PanelPointerState>()
+            .init_resource::<Written>()
+            .add_systems(Update, (panel_pointer, written).chain());
+        let mut context = |n: u128| {
+            let image: Handle<Image> = Handle::Uuid(Uuid::from_u128(n), Default::default());
+            let context = app
+                .world_mut()
+                .spawn((
+                    RenderTarget::Image(image.clone().into()),
+                    EguiContext::default(),
+                ))
+                .id();
+            let panel = app.world_mut().spawn(WorldPanel { image }).id();
+            (context, panel)
+        };
+        let (main, main_panel) = context(1);
+        let (wrist, wrist_panel) = context(2);
+        let (a, b, c) = (
+            Vec2::new(100.0, 50.0),
+            Vec2::new(400.0, 300.0),
+            Vec2::new(20.0, 30.0),
+        );
+        let pos = |p: Vec2| egui::pos2(p.x, p.y);
+        let button = |p: Vec2, pressed| egui::Event::PointerButton {
+            pos: pos(p),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // Each ray's hand, panel, hit pixel and select changes.
+        type Ray = (Hand, Entity, Vec2, Vec<bool>);
+        let frames: [Vec<Ray>; 5] = [
+            vec![
+                (Hand::Left, main_panel, a, vec![]),
+                (Hand::Right, main_panel, b, vec![]),
+            ],
+            vec![
+                (Hand::Left, main_panel, a, vec![]),
+                (Hand::Right, main_panel, b, vec![true]),
+            ],
+            vec![
+                (Hand::Left, wrist_panel, c, vec![]),
+                (Hand::Right, main_panel, b, vec![false]),
+            ],
+            vec![],
+            vec![],
+        ];
+        let want: [Vec<(Entity, egui::Event)>; 5] = [
+            vec![(main, egui::Event::PointerMoved(pos(a)))],
+            vec![
+                (main, egui::Event::PointerMoved(pos(a))),
+                (main, egui::Event::PointerMoved(pos(b))),
+                (main, button(b, true)),
+            ],
+            vec![
+                (main, egui::Event::PointerMoved(pos(b))),
+                (main, button(b, false)),
+                (wrist, egui::Event::PointerMoved(pos(c))),
+            ],
+            vec![
+                (main, egui::Event::PointerGone),
+                (wrist, egui::Event::PointerGone),
+            ],
+            vec![],
+        ];
+        for (i, (frame, want)) in frames.into_iter().zip(want).enumerate() {
+            for (hand, panel, pixel, select) in frame {
+                app.world_mut().write_message(PanelPointer {
+                    hand,
+                    panel,
+                    pixel,
+                    select,
+                    grab: vec![],
+                    scroll_px: 0.0,
+                });
+            }
+            app.update();
+            let mut got = std::mem::take(&mut app.world_mut().resource_mut::<Written>().0);
+            // The contexts' order within a frame is the system's own.
+            got.sort_by_key(|(e, _)| *e != main);
+            assert_eq!(got, want, "frame {i}");
+        }
     }
 
     /// `pointer_events` from a ray's hit drive a second egui context: the pointer at the

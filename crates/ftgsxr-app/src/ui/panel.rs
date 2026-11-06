@@ -1406,4 +1406,147 @@ mod tests {
             "the slider drags"
         );
     }
+
+    /// One frame of `two_hands`: each hand's ray on the panel at its label, with its
+    /// `select` changes, or off the panel with `None`, left then right as `xr_input`
+    /// writes them.
+    type TwoHandFrame = [Option<Vec<bool>>; 2];
+
+    /// The main panel on a 1024 × 768 px texture at the panel zoom with the left ray at
+    /// `left`'s label and the right at `right`'s, as the panel pointer drives it (Q-334):
+    /// from two frames that lay it out, each of `frames` through the pointer hand, then
+    /// the touch press, 0.1 s apart; what the user did.
+    fn two_hands(
+        world: &mut World,
+        (left, right): (&str, &str),
+        frames: &[TwoHandFrame],
+    ) -> Vec<Out> {
+        use super::super::pointer_hand::{HandHit, hand_events};
+        use crate::intent::Hand;
+        let tex = (1024.0, 768.0, PANEL_ZOOM);
+        let ctx = egui::Context::default();
+        texture_frame(&ctx, world, tex, Vec::new());
+        let (texts, _, _) = texture_frame(&ctx, world, tex, Vec::new());
+        let at = |label: &str| {
+            let c = texts
+                .iter()
+                .find(|(t, _)| t == label)
+                .map(|(_, r)| r.center())
+                .unwrap_or_else(|| panic!("{label} is drawn: {texts:?}"));
+            super::super::panel_point(Vec2::new(c.x, c.y), tex.2)
+        };
+        let ats = [(Hand::Left, at(left)), (Hand::Right, at(right))];
+        let (mut prev, mut outs) = (None, Vec::new());
+        for (i, frame) in frames.iter().enumerate() {
+            let hits: Vec<HandHit> = ats
+                .iter()
+                .zip(frame)
+                .filter_map(|(&(hand, at), select)| {
+                    select.as_ref().map(|select| HandHit {
+                        hand,
+                        at,
+                        select: select.clone(),
+                        scroll: 0.0,
+                    })
+                })
+                .collect();
+            let armed = super::super::touch::armed(&ctx);
+            let (events, next) = hand_events(prev, &hits, armed);
+            prev = next;
+            let events = super::super::touch::touch_events(&ctx, events);
+            outs.extend(texture_shapes_at(&ctx, world, tex, events, Some(1.0 + 0.1 * i as f64)).1);
+        }
+        outs
+    }
+
+    /// The click cues among `out`.
+    fn clicks(out: &[Out]) -> usize {
+        out.iter()
+            .filter(|o| matches!(o, Out::Cue(UiCue::Click)))
+            .count()
+    }
+
+    /// Q-334 (#563, `cpu`): with both rays on the main panel, a press and release of
+    /// either hand on a tab opens that tab, not the one under the other hand's ray, the
+    /// left's press taking the pointer from the right ray that reached the panel first.
+    #[test]
+    fn panel_layout_two_hands_each_hands_press_clicks_the_tab_under_its_own_ray() {
+        let on = || Some(vec![]);
+        let press = || Some(vec![true]);
+        let release = || Some(vec![false]);
+        for (left, right) in [("Playback", "Display"), ("Display", "Playback")] {
+            // The left hand clicks, the right ray on the panel first, so the pointer hand.
+            let mut world = panel_world(Tab::Scene);
+            let out = two_hands(
+                &mut world,
+                (left, right),
+                &[
+                    [None, on()],
+                    [on(), on()],
+                    [press(), on()],
+                    [on(), on()],
+                    [release(), on()],
+                    [on(), on()],
+                ],
+            );
+            let want = |label| {
+                if label == "Playback" {
+                    Tab::Playback
+                } else {
+                    Tab::Display
+                }
+            };
+            assert_eq!(
+                world.resource::<UiState>().tab,
+                want(left),
+                "left on {left}"
+            );
+            assert_eq!(clicks(&out), 1);
+            // The right hand clicks.
+            let mut world = panel_world(Tab::Scene);
+            let out = two_hands(
+                &mut world,
+                (left, right),
+                &[
+                    [on(), on()],
+                    [on(), press()],
+                    [on(), on()],
+                    [on(), release()],
+                    [on(), on()],
+                ],
+            );
+            assert_eq!(
+                world.resource::<UiState>().tab,
+                want(right),
+                "right on {right}"
+            );
+            assert_eq!(clicks(&out), 1);
+        }
+    }
+
+    /// Q-334 (#563, `cpu`): while the left hand holds `select` on a tab, the right hand's
+    /// ray and press on another don't reach the panel, and the left's release clicks its
+    /// own tab; the right's release, of a press the panel never got, clicks nothing, even
+    /// once the left ray leaves and the right takes the pointer.
+    #[test]
+    fn panel_layout_two_hands_the_holding_hand_keeps_the_pointer_and_its_click() {
+        let on = || Some(vec![]);
+        let mut world = panel_world(Tab::Scene);
+        let out = two_hands(
+            &mut world,
+            ("Playback", "Display"),
+            &[
+                [on(), on()],
+                [Some(vec![true]), on()],
+                [on(), Some(vec![true])],
+                [on(), on()],
+                [Some(vec![false]), on()],
+                [None, on()],
+                [None, Some(vec![false])],
+                [None, on()],
+            ],
+        );
+        assert_eq!(world.resource::<UiState>().tab, Tab::Playback);
+        assert_eq!(clicks(&out), 1);
+    }
 }
