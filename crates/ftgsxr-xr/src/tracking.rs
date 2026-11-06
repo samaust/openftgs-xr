@@ -134,8 +134,8 @@ pub(crate) struct Actions {
     haptic: Action<Haptic>,
     /// With XR\_META\_detached\_controllers, a grip pose bound only on the detached
     /// paths: its bindings give the runtime a profile to move a set-down controller to,
-    /// off `/user/hand/<side>` (Q-327). Never located or read.
-    // Q-327
+    /// off `/user/hand/<side>` (D-55). Never located or read.
+    // D-55
     detached: Option<Action<Posef>>,
     /// `DETACHED` as paths, with `detached`.
     detached_paths: Option<[Path; 2]>,
@@ -145,8 +145,8 @@ pub(crate) struct Actions {
 
 const HANDS: [&str; 2] = ["/user/hand/left", "/user/hand/right"];
 
-/// XR\_META\_detached\_controllers's top-level paths (Q-327).
-// Q-327
+/// XR\_META\_detached\_controllers's top-level paths (D-55).
+// D-55
 const DETACHED: [&str; 2] = [
     "/user/detached_controller_meta/left",
     "/user/detached_controller_meta/right",
@@ -180,7 +180,7 @@ impl Plugin for TrackingPlugin {
         let Some(instance) = app.world().get_resource::<OxrInstance>() else {
             return;
         };
-        // Q-327: the detached paths only with their extension, since an unenabled
+        // D-55: the detached paths only with their extension, since an unenabled
         // extension's paths are an error in `xrCreateAction` and the bindings.
         let detached = app
             .world()
@@ -280,7 +280,7 @@ mod hud_tests {
     use super::*;
     use ftgsxr_core::Pose;
 
-    /// Q-327 (#540 on the Quest 3): a controller is held while its aim is active on the
+    /// D-55 (#540 on the Quest 3): a controller is held while its aim is active on the
     /// hand path and no profile is current on its detached path; a detached controller is
     /// not held even with the aim active, which the runtime keeps through
     /// `khr/simple_controller` driven by the tracked hand.
@@ -358,7 +358,7 @@ fn create_actions(instance: &OxrInstance, with_detached: bool) -> openxr::Result
     };
     let hands = paths(HANDS)?;
     let set = instance.create_action_set("player", "Player", 0)?;
-    // Q-327
+    // D-55
     let detached_paths = with_detached.then(|| paths(DETACHED)).transpose()?;
     let detached = match &detached_paths {
         Some(p) => Some(set.create_action("detached_grip", "Detached controller pose", p)?),
@@ -452,7 +452,7 @@ fn suggest_bindings(
         simple_bindings(&actions),
     ));
     for (profile, bindings) in profiles {
-        // Q-327: every profile here binds the grip pose, so the runtime accepts it on the
+        // D-55: every profile here binds the grip pose, so the runtime accepts it on the
         // detached paths too.
         if let Some(detached) = &actions.detached {
             out.write(OxrSuggestActionBinding {
@@ -479,15 +479,15 @@ fn suggest_bindings(
 
 /// Each side's current interaction profile on `/user/detached_controller_meta/<side>`,
 /// read once a frame before `write_hands` (profiles change only at `xrSyncActions`, in
-/// PreUpdate); `NULL` without the extension (Q-327).
+/// PreUpdate); `NULL` without the extension (D-55).
 #[derive(Resource, Clone, Copy, Debug, Default)]
 struct Detached([Path; 2]);
 
-/// Whether a side's controller is held (Q-327): its aim action active on
+/// Whether a side's controller is held (D-55): its aim action active on
 /// `/user/hand/<side>` and no profile current on its detached path. On the Quest 3 a
 /// set-down controller's Touch profile moves to the detached path while the tracked hand
 /// drives `khr/simple_controller` on the hand path, so the aim stays active (#540).
-// Q-327
+// D-55
 fn controller_held(aim_active: bool, detached_profile: Path) -> bool {
     aim_active && detached_profile == Path::NULL
 }
@@ -496,9 +496,9 @@ fn controller_held(aim_active: bool, detached_profile: Path) -> bool {
 /// XR\_META\_detached\_controllers, on `/user/detached_controller_meta/<side>`, keeps the
 /// detached ones in `Detached`, and logs both at the app's first frame and whenever either
 /// changes, so a device run (A-11) shows where the runtime puts a set-down controller
-/// (Q-327). A failed read counts as no profile, so the controller stays held as without
+/// (D-55). A failed read counts as no profile, so the controller stays held as without
 /// the extension; the log names the error.
-// Q-327
+// D-55
 fn read_profiles(
     session: Res<OxrSession>,
     instance: Res<OxrInstance>,
@@ -639,7 +639,7 @@ fn write_hands(
     let mut out = [None, None];
     for (h, slot) in out.iter_mut().enumerate() {
         let path = actions.hands[h];
-        // Q-128: a hand is `Some` while its aim pose action is active; Q-327: and while
+        // Q-128: a hand is `Some` while its aim pose action is active; D-55: and while
         // the controller is not detached.
         let aim_active = actions.aim.is_active(&session, path).unwrap_or(false);
         if !controller_held(aim_active, detached.0[h]) {
@@ -689,7 +689,7 @@ fn write_hands(
             tracked,
         });
     }
-    // Q-262, Q-327: per side, the held controller, else the hand.
+    // Q-262, D-55: per side, the held controller, else the hand.
     for (h, slot) in out.iter_mut().enumerate() {
         let hand = located.raw[h].map(|raw| rooted(&root, hands::hand_state(&raw)));
         let owner = hands::side_owner(slot.as_ref(), hand.as_ref());

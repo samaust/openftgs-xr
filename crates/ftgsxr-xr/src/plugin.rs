@@ -70,7 +70,7 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.ext_hand_tracking = hands;
     raw.fb_hand_tracking_aim = hands;
     raw.meta_simultaneous_hands_and_controllers = hands;
-    // Q-327: the runtime's in-hand detection, so a set-down controller leaves its side
+    // D-55: the runtime's in-hand detection, so a set-down controller leaves its side
     // to the hand (#540).
     raw.meta_detached_controllers = hands;
     if hands {
@@ -80,8 +80,8 @@ fn extensions(hands: bool) -> OxrExtensions {
 }
 
 /// The hand extensions of §1.8 absent from `enabled`, in Appendix E.1's order (the
-/// frequency hint by name, Q-275), then XR\_META\_detached\_controllers (Q-327).
-// Q-327
+/// frequency hint by name, Q-275), then XR\_META\_detached\_controllers (D-55).
+// D-55
 fn missing_hand_extensions(enabled: &openxr::ExtensionSet) -> Vec<&'static str> {
     [
         ("XR_EXT_hand_tracking", enabled.ext_hand_tracking),
@@ -257,7 +257,7 @@ mod tests {
     use super::*;
 
     /// §1.8 Hands, PRD #452's "What `XrPlugin.hands` means": the hand extensions, with
-    /// Q-327's XR\_META\_detached\_controllers, are asked for only when `hands` is set.
+    /// D-55's XR\_META\_detached\_controllers, are asked for only when `hands` is set.
     #[test]
     fn extensions_ask_for_the_hand_extensions_only_with_hands() {
         let with = extensions(true);
@@ -265,7 +265,7 @@ mod tests {
         assert!(with.ext_hand_tracking);
         assert!(with.fb_hand_tracking_aim);
         assert!(with.meta_simultaneous_hands_and_controllers);
-        // Q-327: the held-controller signal.
+        // D-55: the held-controller signal.
         assert!(with.meta_detached_controllers);
         // Q-275: the frequency hint by name.
         assert_eq!(
