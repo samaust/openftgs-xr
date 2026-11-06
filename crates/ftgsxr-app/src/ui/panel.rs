@@ -231,12 +231,24 @@ pub(super) fn panel_layout(
         let s = world.resource::<UiState>();
         (s.tab, s.page, s.confirm.is_some())
     };
-    // Q-328: a plain bar, no text and no widget, so a pinch on it only grabs (Q-315).
-    let bar = TITLE_FRACTION * ui.ctx().viewport_rect().height();
+    // Q-328: no text and no widget, so a pinch on it only grabs (Q-315); a grip mark,
+    // painted, not a glyph, shows where to grab.
+    let view = ui.ctx().viewport_rect();
+    let bar = TITLE_FRACTION * view.height();
     egui::Panel::top("ftgsxr-panel-title")
         .exact_size(bar)
         .frame(egui::Frame::NONE.fill(ui.visuals().faint_bg_color))
-        .show(ui, |_| {});
+        .show(ui, |ui| {
+            let grip = egui::Rect::from_center_size(
+                egui::pos2(view.center().x, view.min.y + bar / 2.0),
+                egui::vec2(view.width() / 4.0, bar / 6.0),
+            );
+            ui.painter().rect_filled(
+                grip,
+                egui::CornerRadius::same((grip.height() / 2.0) as u8),
+                ui.visuals().weak_text_color(),
+            );
+        });
     // egui hits the widget nearest the pointer within `interact_radius` of its rect: the
     // tab row's top margin keeps every widget farther than that from the bar.
     let mut row = egui::Frame::side_top_panel(ui.style());
@@ -783,6 +795,73 @@ mod tests {
                 }
                 let s = world.resource::<UiState>();
                 assert_eq!((s.tab, s.page), (Tab::Scene, page), "{tex:?}");
+            }
+        }
+    }
+
+    /// Q-328 (#544, #547): the title bar shows a grip mark, a filled shape painted in it,
+    /// centred across the texture, whose fill stands out from the bar's own, at every
+    /// `ui_scale` and size, on a tab and on a sub-page.
+    #[test]
+    fn the_title_bar_paints_a_centred_grip_that_stands_out_from_its_fill() {
+        for page in [None, Some(Page::Cameras)] {
+            for (w, h, scale) in TEXTURES {
+                let zoom = panel_zoom(scale);
+                let mut world = panel_world(Tab::Scene);
+                world.resource_mut::<UiState>().page = page;
+                let ctx = egui::Context::default();
+                ctx.set_zoom_factor(zoom);
+                let input = || egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(w / zoom, h / zoom),
+                    )),
+                    ..Default::default()
+                };
+                let (mut out, mut hv, mut fill) = (Vec::new(), None, None);
+                let mut frame = |fill: &mut Option<egui::Color32>| {
+                    ctx.run_ui(input(), |ui| {
+                        panel_style(ui.style_mut());
+                        *fill = Some(ui.visuals().faint_bg_color);
+                        panel_layout(&mut world, ui, &mut out, &mut hv)
+                    })
+                };
+                frame(&mut fill).textures_delta.clear();
+                let mut full = frame(&mut fill);
+                full.textures_delta.clear();
+                let fill = fill.unwrap();
+                let bar = h / 16.0;
+                let mut rects = Vec::new();
+                fn walk(s: &egui::Shape, zoom: f32, rects: &mut Vec<(egui::Rect, egui::Color32)>) {
+                    match s {
+                        egui::Shape::Rect(r) => rects.push((
+                            egui::Rect::from_min_max(
+                                (r.rect.min.to_vec2() * zoom).to_pos2(),
+                                (r.rect.max.to_vec2() * zoom).to_pos2(),
+                            ),
+                            r.fill,
+                        )),
+                        egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, zoom, rects)),
+                        _ => {}
+                    }
+                }
+                full.shapes
+                    .iter()
+                    .for_each(|c| walk(&c.shape, zoom, &mut rects));
+                let grip = rects.iter().find(|(r, f)| {
+                    *f != fill
+                        && *f != egui::Color32::TRANSPARENT
+                        && r.min.y >= 0.0
+                        && r.max.y <= bar
+                        && r.width() > 0.0
+                        && r.height() > 0.0
+                        && (r.center().x - w / 2.0).abs() <= 1.0
+                });
+                assert!(
+                    grip.is_some(),
+                    "no centred grip in the {bar} px bar at {:?}: {rects:?}",
+                    (w, h, scale, page)
+                );
             }
         }
     }
