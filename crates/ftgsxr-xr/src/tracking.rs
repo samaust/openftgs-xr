@@ -174,6 +174,7 @@ impl Plugin for TrackingPlugin {
             .init_resource::<hands::HandsPermission>()
             .init_resource::<hands::LocatedHands>()
             .init_resource::<hands::Ownership>()
+            .init_resource::<Profiles>()
             .init_resource::<ftgsxr_app::DeniedPermissions>()
             .add_message::<ftgsxr_app::AskPermissionAgain>();
         let Some(instance) = app.world().get_resource::<OxrInstance>() else {
@@ -215,9 +216,9 @@ impl Plugin for TrackingPlugin {
                 // propagation.
                 (
                     hands::locate_hands,
+                    read_profiles,
                     write_hands,
                     hands::send_hint,
-                    log_profiles,
                     meshes::draw_hands_and_controllers.in_set(DrawDevices),
                 )
                     .chain()
@@ -278,6 +279,19 @@ pub(crate) const TICK: Pulse = Pulse {
 mod hud_tests {
     use super::*;
     use ftgsxr_core::Pose;
+
+    /// Q-327 (#540 on the Quest 3): a controller is held while its aim is active on the
+    /// hand path and no profile is current on its detached path; a detached controller is
+    /// not held even with the aim active, which the runtime keeps through
+    /// `khr/simple_controller` driven by the tracked hand.
+    #[test]
+    fn controller_held_needs_the_aim_active_and_nothing_detached() {
+        let touch = Path::from_raw(7);
+        assert!(controller_held(true, Path::NULL));
+        assert!(!controller_held(true, touch));
+        assert!(!controller_held(false, Path::NULL));
+        assert!(!controller_held(false, touch));
+    }
 
     /// Q-274: a side's HUD line is its device and whether its aim is tracked; none
     /// without an active device.
@@ -463,17 +477,44 @@ fn suggest_bindings(
     }
 }
 
-/// Logs each side's current interaction profile on `/user/hand/<side>` and, with
-/// XR\_META\_detached\_controllers, on `/user/detached_controller_meta/<side>`, when
-/// either changes: on the device (A-11) it shows whether a set-down controller's profile
-/// leaves the hand path and what becomes current there instead (Q-327).
+/// Each side's current interaction profiles, read once a frame before `write_hands`
+/// (they change only at `xrSyncActions`, in PreUpdate).
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub(crate) struct Profiles {
+    /// `/user/hand/<side>`'s.
+    hand: [Path; 2],
+    /// `/user/detached_controller_meta/<side>`'s; `NULL` without the extension.
+    detached: [Path; 2],
+}
+
+/// Whether a side's controller is held (Q-327): its aim action active on
+/// `/user/hand/<side>` and no profile current on its detached path. On the Quest 3 a
+/// set-down controller's Touch profile moves to the detached path while the tracked hand
+/// drives `khr/simple_controller` on the hand path, so the aim stays active (#540).
 // Q-327
-fn log_profiles(
+pub(crate) fn controller_held(aim_active: bool, detached_profile: Path) -> bool {
+    aim_active && detached_profile == Path::NULL
+}
+
+/// Reads each side's current interaction profile on `/user/hand/<side>` and, with
+/// XR\_META\_detached\_controllers, on `/user/detached_controller_meta/<side>` into
+/// `Profiles`, and logs them when either changes, so a device run (A-11) shows where the
+/// runtime puts a set-down controller (Q-327).
+// Q-327
+fn read_profiles(
     session: Res<OxrSession>,
     instance: Res<OxrInstance>,
     actions: Res<Actions>,
-    mut last: Local<[Option<(Path, Path)>; 2]>,
+    mut profiles: ResMut<Profiles>,
+    mut logged: Local<bool>,
 ) {
+    let current = |p: Path| session.current_interaction_profile(p).unwrap_or(Path::NULL);
+    let now = Profiles {
+        hand: actions.hands.map(current),
+        detached: actions
+            .detached_paths
+            .map_or([Path::NULL; 2], |d| d.map(current)),
+    };
     let name = |p: Path| {
         if p == Path::NULL {
             "none".to_owned()
@@ -483,21 +524,19 @@ fn log_profiles(
                 .unwrap_or_else(|e| format!("{e}"))
         }
     };
-    let current = |p: Path| session.current_interaction_profile(p).unwrap_or(Path::NULL);
     for (side, label) in ["left", "right"].into_iter().enumerate() {
-        let hand = current(actions.hands[side]);
-        let detached = actions
-            .detached_paths
-            .map_or(Path::NULL, |d| current(d[side]));
-        if last[side] != Some((hand, detached)) {
-            last[side] = Some((hand, detached));
+        let changed =
+            (now.hand[side], now.detached[side]) != (profiles.hand[side], profiles.detached[side]);
+        if changed || !*logged {
             info!(
                 "{label} interaction profile: hand {}, detached {}",
-                name(hand),
-                name(detached)
+                name(now.hand[side]),
+                name(now.detached[side])
             );
         }
     }
+    *logged = true;
+    *profiles = now;
 }
 
 /// Attaches the set to each new session (attachment is per session).
@@ -596,6 +635,7 @@ fn write_hands(
     views: Option<Res<OxrViews>>,
     settings: Option<Res<SettingsRes>>,
     located: Res<hands::LocatedHands>,
+    profiles: Res<Profiles>,
     mut ownership: ResMut<hands::Ownership>,
     hud: Option<ResMut<HudData>>,
     mut hands: ResMut<XrHands>,
@@ -604,8 +644,10 @@ fn write_hands(
     let mut out = [None, None];
     for (h, slot) in out.iter_mut().enumerate() {
         let path = actions.hands[h];
-        // Q-128: a hand is `Some` while its aim pose action is active.
-        if !actions.aim.is_active(&session, path).unwrap_or(false) {
+        // Q-128: a hand is `Some` while its aim pose action is active; Q-327: and while
+        // the controller is not detached.
+        let aim_active = actions.aim.is_active(&session, path).unwrap_or(false);
+        if !controller_held(aim_active, profiles.detached[h]) {
             continue;
         }
         let f32_of = |a: &Action<f32>| a.state(&session, path).map_or(0.0, |s| s.current_state);
