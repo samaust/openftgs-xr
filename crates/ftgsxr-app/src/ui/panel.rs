@@ -375,7 +375,7 @@ pub(crate) fn wrist_ui(ui: &mut egui::Ui, playing: bool) -> Option<WristButton> 
     let view = ui.ctx().viewport_rect();
     ui.painter().rect_filled(view, 0.0, ui.visuals().panel_fill);
     let size = view.size() * ppp;
-    // Q-332: the tolerance in the texture's pixels, in the context's points.
+    // Q-332: 1 cm of the texture's width in pixels, converted to the context's points.
     let click_dist = WRIST_CLICK_SHARE * size.x / ppp;
     ui.ctx()
         .options_mut(|o| o.input_options.max_click_dist = click_dist);
@@ -647,9 +647,9 @@ mod tests {
                     clicked.extend(wrist_frame_at(&ctx, events, zoom).1);
                 }
                 assert_eq!(
-                    clicked.len(),
-                    clicks,
-                    "ui_scale {scale}, slid {slide_px} px: {clicked:?}"
+                    clicked,
+                    vec![WristButton::Panel; clicks],
+                    "ui_scale {scale}, slid {slide_px} px"
                 );
             }
         }
