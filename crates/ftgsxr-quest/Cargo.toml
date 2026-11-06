@@ -24,6 +24,8 @@ bevy.workspace = true
 # #224: Bevy for `#[bevy_main]` and its winit runner on GameActivity (D-18; the XR crate
 # forces neither backend), bevy_mod_xr for the session state (§2.1); tracing's `log`
 # feature hands the events to android_logger (§1.13, no Bevy `LogPlugin` on the Quest).
+# #539: `bevy_gizmos_render` draws the gizmo lines `ftgsxr-xr` queues, the rays and their
+# dot (§1.8 Rays) and the teleport arc (§1.8 Locomotion), and manipulate's boxes (§1.4).
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity.workspace = true
 android_logger.workspace = true
@@ -36,7 +38,7 @@ bevy = { workspace = true, features = [
     "bevy_winit",
     "android-game-activity",
     "bevy_gizmos_render",
-] } # #539: `bevy_gizmos_render` draws the rays, their dot and the teleport arc (§1.8 Rays), and manipulate's boxes (§1.4)
+] }
 bevy_mod_xr.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
