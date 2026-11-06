@@ -35,7 +35,8 @@ bevy = { workspace = true, features = [
     "bevy_window",
     "bevy_winit",
     "android-game-activity",
-] }
+    "bevy_gizmos_render",
+] } # #539: `bevy_gizmos_render` draws the rays, their dot and the teleport arc (§1.8 Rays), and manipulate's boxes (§1.4)
 bevy_mod_xr.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
