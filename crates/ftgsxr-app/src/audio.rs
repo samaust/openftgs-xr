@@ -844,8 +844,11 @@ fn follow_clock(
             (true, true) => match output.0.position(*sink) {
                 Some(q) if (q - p).abs() <= DRIFT_S => {}
                 Some(_) => output.0.seek(*sink, p),
-                // #538: a sink that played to its end stopped (a loop's wrap after a
-                // soundtrack as long as the span); seek and resume play it again.
+                // Q-T538.1: a sink that stopped within DRIFT_S of its end stays so until
+                // the wrap, so its tail is not replayed.
+                None if *duration_s - p <= DRIFT_S => {}
+                // #538, Q-T538.1: a sink that played to its end stopped (a loop's wrap
+                // after a soundtrack as long as the span); seek and resume play it again.
                 None => {
                     output.0.seek(*sink, p);
                     output.0.resume(*sink);
@@ -1633,6 +1636,30 @@ mod tests {
         assert_eq!(out.position(sink), None, "still at its end");
         out.seek(sink, 0.25);
         assert_eq!(out.position(sink), Some(0.25), "a seek revives it");
+    }
+
+    // §1.6, Q-T538.1 (#538): a sink that stopped a few frames before the loop wraps stays
+    // stopped while T lies within DRIFT_S of the soundtrack's end, so its tail is not
+    // replayed.
+    #[test]
+    fn follow_clock_does_not_replay_the_tail_before_the_wrap() {
+        let out = Arc::new(StubAudioOutput::with_duration(1.9));
+        let mut app = app(out.clone());
+        let sink = with_soundtrack(&mut app, &out, "tail");
+        {
+            let mut p = app.world_mut().resource_mut::<Playback>();
+            p.clock.set_length(1.9);
+            p.clock.seek(1.5);
+            p.clock.set_state(PlayState::Playing);
+        }
+        app.update();
+        out.advance(0.5);
+        assert_eq!(out.position(sink), None, "stopped at its end");
+        // T = 1.88: 0.02 s before the end, within DRIFT_S = 0.05.
+        app.world_mut().resource_mut::<Playback>().clock.seek(1.88);
+        app.update();
+        assert!(!out.sinks()[&sink].playing, "not played again");
+        assert_eq!(out.position(sink), None, "left at its end");
     }
 
     #[test]
