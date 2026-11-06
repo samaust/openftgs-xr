@@ -126,8 +126,10 @@ pub struct ModelDraw<'a> {
 
 /// E13's inputs: the environment depth of a view with its camera and planes.
 ///
-/// The splat fragment stage samples it from M-6 on (R-12); in M-2 every tier has occlusion
-/// off and `encode_draw` reads none of it (w_occ = 1).
+/// `SplatPasses::encode_draw` samples it per fragment (D-45, R-12): `depth` is a
+/// single-sample 2D view whose first channel holds the stored depth, zero at `near` and
+/// one at `far` (Q-340), in any format that samples as an unfilterable float (the
+/// runtime's `Depth16Unorm`, `R16Unorm`, `R32Float`); without one w_occ is 1.
 #[derive(Clone, Copy, Debug)]
 pub struct OcclusionInput<'a> {
     /// The environment depth image of the view.
