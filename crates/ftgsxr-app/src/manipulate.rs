@@ -205,6 +205,56 @@ struct HandState {
     pose: Option<Pose>,
     /// The held instance and the grab's distance along the ray.
     held: Option<(Entity, f32)>,
+    /// E11's grab point while it holds: the point of the instance where its ray took
+    /// hold, in the instance's frame (revision 34).
+    point: Vec3,
+    /// During a two-hand grab, the grab point in the hand's frame.
+    offset: Vec3,
+}
+
+/// E11's fallback: two-hand grab points that start closer than this (metres) are
+/// replaced by the hands' aim positions for that grab (revision 34).
+const GRAB_POINTS_MIN_M: f32 = 0.05;
+
+/// E11's two-hand grab points at the start of a two-hand grab: each hand's point of the
+/// instance (`points`, in its frame) under the instance's pose `model`, as an offset in
+/// that hand's frame, so it moves fixed in the hand from here on; both zero, the hands'
+/// aim positions, when the points lie closer than `GRAB_POINTS_MIN_M`.
+fn grab_offsets(model: Pose, hands: [Pose; 2], points: [Vec3; 2]) -> [Vec3; 2] {
+    let g = points.map(|p| model.transform_point(p));
+    if g[0].distance(g[1]) < GRAB_POINTS_MIN_M {
+        return [Vec3::ZERO; 2];
+    }
+    [
+        hands[0].inverse().transform_point(g[0]),
+        hands[1].inverse().transform_point(g[1]),
+    ]
+}
+
+/// A grab point's pose, `TwoHandGrab`'s a or b: the hand's pose moved to the point
+/// `offset` gives in its frame.
+fn at_offset(hand: Pose, offset: Vec3) -> Pose {
+    Pose {
+        translation: hand.transform_point(offset),
+        ..hand
+    }
+}
+
+/// Starts (or restarts) the two-hand grab of the instance at `model` by hands `a` and
+/// `b`, from their poses and grab points (E11, revision 34); `None` while either pose is
+/// unknown.
+fn begin_two(hs: &mut HandStates, (a, b): (Hand, Hand), model: Pose) -> Option<TwoHandGrab> {
+    let (ha, hb) = (hs.hands.get(&a)?, hs.hands.get(&b)?);
+    let hands = [ha.pose?, hb.pose?];
+    let offsets = grab_offsets(model, hands, [ha.point, hb.point]);
+    for (hand, offset) in [(a, offsets[0]), (b, offsets[1])] {
+        hs.hands.entry(hand).or_default().offset = offset;
+    }
+    Some(TwoHandGrab::begin(
+        at_offset(hands[0], offsets[0]),
+        at_offset(hands[1], offsets[1]),
+        model,
+    ))
 }
 
 /// The grabs (authoritative; `Grabbed` mirrors them) and the hands.
@@ -527,28 +577,27 @@ fn bounds_of(q: &Instances, assets: &Assets<SplatAsset>, e: Entity) -> Option<Aa
 /// After a pose changed outside a grab, the grab takes hold again from the new pose.
 // Q-183
 fn rebase(hs: &mut HandStates, e: Entity, pose: Pose) {
-    let Some((g, hands)) = hs.grabs.get_mut(&e) else {
+    let Some(&(g, hands)) = hs.grabs.get(&e) else {
         return;
     };
-    match (*g, *hands) {
+    let next = match (g, hands) {
         (Grabbed::One { hand, .. }, _) => {
-            if let Some(h) = hs.hands.get(&hand).and_then(|h| h.pose) {
-                *g = Grabbed::One {
+            hs.hands
+                .get(&hand)
+                .and_then(|h| h.pose)
+                .map(|h| Grabbed::One {
                     hand,
                     grab: Grab::begin(h, pose),
-                };
-            }
+                })
         }
-        (Grabbed::Two { .. }, Some((a, b))) => {
-            let pa = hs.hands.get(&a).and_then(|h| h.pose);
-            let pb = hs.hands.get(&b).and_then(|h| h.pose);
-            if let (Some(pa), Some(pb)) = (pa, pb) {
-                *g = Grabbed::Two {
-                    grab: TwoHandGrab::begin(pa, pb, pose),
-                };
-            }
+        // Each grab point at the same place on the instance (E11, revision 34).
+        (Grabbed::Two { .. }, Some(pair)) => {
+            begin_two(hs, pair, pose).map(|grab| Grabbed::Two { grab })
         }
-        _ => {}
+        _ => None,
+    };
+    if let (Some(next), Some((g, _))) = (next, hs.grabs.get_mut(&e)) {
+        *g = next;
     }
 }
 
@@ -655,12 +704,16 @@ fn run_intents(
                     }
                     h.ray
                 };
-                let Some((e, dist)) = pick(&q, ray) else {
+                let (Some((e, dist)), Some((origin, dir))) = (pick(&q, ray), ray) else {
                     continue;
                 };
                 let Some(model) = stage_pose(&q, &groups, e) else {
                     continue;
                 };
+                // E11's grab point: where the ray took hold, E10's hit (the ray's origin
+                // from inside the box), kept in the instance's frame (revision 34).
+                hs.hands.entry(hand).or_default().point =
+                    model.inverse().transform_point(origin + dist * dir);
                 match hs.grabs.get(&e).copied() {
                     None => {
                         hs.grabs.insert(
@@ -675,18 +728,11 @@ fn run_intents(
                         );
                     }
                     Some((Grabbed::One { hand: other, .. }, _)) if other != hand => {
-                        let Some(pa) = hs.hands.get(&other).and_then(|h| h.pose) else {
+                        let Some(grab) = begin_two(&mut hs, (other, hand), model) else {
                             continue;
                         };
-                        hs.grabs.insert(
-                            e,
-                            (
-                                Grabbed::Two {
-                                    grab: TwoHandGrab::begin(pa, pose, model),
-                                },
-                                Some((other, hand)),
-                            ),
-                        );
+                        hs.grabs
+                            .insert(e, (Grabbed::Two { grab }, Some((other, hand))));
                     }
                     _ => continue,
                 }
@@ -703,9 +749,13 @@ fn run_intents(
                 let new = match (g, hands) {
                     (Grabbed::One { grab, .. }, _) => grab.update(pose),
                     (Grabbed::Two { grab }, Some((a, b))) => {
-                        let pa = hs.hands.get(&a).and_then(|h| h.pose);
-                        let pb = hs.hands.get(&b).and_then(|h| h.pose);
-                        let (Some(pa), Some(pb)) = (pa, pb) else {
+                        // The grab points, fixed in their hands (E11, revision 34).
+                        let at = |h: Hand| {
+                            hs.hands
+                                .get(&h)
+                                .and_then(|s| Some(at_offset(s.pose?, s.offset)))
+                        };
+                        let (Some(pa), Some(pb)) = (at(a), at(b)) else {
                             continue;
                         };
                         // Upright about stage +y, and the scale limits on the stage

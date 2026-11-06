@@ -4,7 +4,7 @@
 //! Selection and manipulation, §1.8 Rays, selection and grabbing, E10, E11): a pointer
 //! hovers the instance it hits, `Select` on it selects and on nothing deselects; a
 //! one-hand grab keeps the instance's place in the hand; a second hand makes it a
-//! two-hand grab that scales with the hands' distance, and releasing one returns to the
+//! two-hand grab that resizes as a hand moves, and releasing one returns to the
 //! other; push and pull move along the ray; `Unload` reaches the library.
 
 use crate::support;
@@ -202,7 +202,8 @@ fn one_and_two_hand_grabs() {
     let in_hand = p.then(&moved.inverse());
     let start_in_hand = Pose::IDENTITY.then(&hand_at(-0.1).inverse());
     assert!((in_hand.translation - start_in_hand.translation).length() < 1e-5);
-    // The second hand: a two-hand grab; doubling the hands' distance doubles the scale.
+    // The second hand: a two-hand grab; moving a hand resizes the instance (by the grab
+    // points' distance, which `manipulate_grab_points` checks: E11, revision 34).
     // The right ray aimed again at the moved instance's box center.
     let h = &t.app.world().get::<SplatModel>(e).unwrap().0;
     let b = t
@@ -240,7 +241,7 @@ fn one_and_two_hand_grabs() {
             pose: hand_at(0.8),
         }],
     );
-    assert!((pose(&t, e).scale - 2.0 * s0).abs() < 1e-5);
+    assert!((pose(&t, e).scale - s0).abs() > 0.01 * s0, "resizes");
     // Releasing the left returns to a one-hand grab by the right.
     send(&mut t, &[Intent::GrabEnd { hand: Hand::Left }]);
     assert!(matches!(

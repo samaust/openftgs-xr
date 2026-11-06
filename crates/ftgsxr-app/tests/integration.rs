@@ -58,6 +58,7 @@ mod library_first_run;
 mod library_refresh;
 mod live_tier;
 mod manipulate_content_group;
+mod manipulate_grab_points;
 mod manipulate_headset_fit;
 mod manipulate_intents;
 mod overlay_toggles;
