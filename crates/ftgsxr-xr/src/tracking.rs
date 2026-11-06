@@ -291,11 +291,21 @@ mod hud_tests {
     #[test]
     fn controller_held_needs_the_aim_active_and_nothing_detached() {
         let touch = Path::from_raw(7);
-        for hand_driven in [None, Some(Path::from_raw(9))] {
-            assert!(controller_held(true, touch, Path::NULL, hand_driven));
-            assert!(!controller_held(true, touch, touch, hand_driven));
-            assert!(!controller_held(false, touch, Path::NULL, hand_driven));
-            assert!(!controller_held(false, touch, touch, hand_driven));
+        for hand_driven_profile in [None, Some(Path::from_raw(9))] {
+            assert!(controller_held(
+                true,
+                touch,
+                Path::NULL,
+                hand_driven_profile
+            ));
+            assert!(!controller_held(true, touch, touch, hand_driven_profile));
+            assert!(!controller_held(
+                false,
+                touch,
+                Path::NULL,
+                hand_driven_profile
+            ));
+            assert!(!controller_held(false, touch, touch, hand_driven_profile));
         }
     }
 
@@ -503,12 +513,12 @@ fn suggest_bindings(
 struct Profiles {
     hand: [Path; 2],
     detached: [Path; 2],
-    hand_driven: Option<Path>,
+    hand_driven_profile: Option<Path>,
 }
 
 /// Whether a side's controller is held (D-55): its aim action active on
 /// `/user/hand/<side>`, no profile current on its detached path and, with the hand
-/// extensions enabled (`hand_driven` is then `khr/simple_controller`), the hand path's
+/// extensions enabled (`hand_driven_profile` is then `khr/simple_controller`), the hand path's
 /// profile not the one the tracked hand drives. On the Quest 3 a set-down controller's
 /// Touch profile moves to the detached path while the tracked hand drives
 /// `khr/simple_controller` on the hand path, so the aim stays active (#540); a controller
@@ -518,9 +528,9 @@ fn controller_held(
     aim_active: bool,
     hand_profile: Path,
     detached_profile: Path,
-    hand_driven: Option<Path>,
+    hand_driven_profile: Option<Path>,
 ) -> bool {
-    aim_active && detached_profile == Path::NULL && hand_driven != Some(hand_profile)
+    aim_active && detached_profile == Path::NULL && hand_driven_profile != Some(hand_profile)
 }
 
 /// Reads each side's current interaction profile on `/user/hand/<side>` and, with
@@ -539,11 +549,11 @@ fn read_profiles(
     actions: Res<Actions>,
     mut profiles: ResMut<Profiles>,
     mut last: Local<[Option<(Path, Path)>; 2]>,
-    mut simple: Local<Option<Option<Path>>>,
+    mut simple_controller_path: Local<Option<Option<Path>>>,
 ) {
     // Resolved once; a failure is logged once and leaves every profile counting.
-    profiles.hand_driven = if exts.as_deref().is_some_and(hands::hands_available) {
-        *simple.get_or_insert_with(|| {
+    profiles.hand_driven_profile = if exts.as_deref().is_some_and(hands::hands_available) {
+        *simple_controller_path.get_or_insert_with(|| {
             instance
                 .string_to_path(SIMPLE_CONTROLLER)
                 .map_err(|e| log_error(&XrError::Runtime(format!("{SIMPLE_CONTROLLER}: {e}"))))
@@ -693,7 +703,7 @@ fn write_hands(
             aim_active,
             profiles.hand[h],
             profiles.detached[h],
-            profiles.hand_driven,
+            profiles.hand_driven_profile,
         ) {
             continue;
         }
