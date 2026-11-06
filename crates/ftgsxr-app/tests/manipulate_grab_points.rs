@@ -647,6 +647,51 @@ fn u16_with_keep_upright_on_a_one_hand_grab_turns_by_yaw_about_its_grab_point() 
     assert!((p.scale - p0.scale).abs() < TOL, "the scale is kept");
 }
 
+/// E11 with the switch on (spec revision 37) and Q-183: push and pull restart the
+/// one-hand grab with its grab point at the same place on the instance, so after a push
+/// the instance still turns about that point, now further along the ray.
+#[test]
+fn u16_with_keep_upright_on_a_pushed_grab_turns_about_its_grab_point() {
+    let mut t = app_with("keep_upright_one_push", false);
+    let (e, b) = loaded_sized(&mut t, 1.0, Vec3::ZERO);
+    let p0 = pose(&t, e);
+    let la = Vec3::new(-0.3, 0.1, 3.0);
+    let on_model = p0.inverse().transform_point(front_hit(&b, &p0, la));
+    send(&mut t, &grab_at(Hand::Left, la));
+    for _ in 0..30 {
+        send(
+            &mut t,
+            &[Intent::PushPull {
+                hand: Hand::Left,
+                axis: 1.0,
+            }],
+        );
+    }
+    let p1 = pose(&t, e);
+    assert!(
+        p1.translation.z < p0.translation.z - 0.01,
+        "the push moved it"
+    );
+    let g1 = p1.transform_point(on_model);
+    let h = Pose {
+        translation: la + Vec3::new(0.1, 0.2, -0.3),
+        rotation: Quat::from_rotation_y(0.5) * Quat::from_rotation_x(0.3),
+        scale: 1.0,
+    };
+    send(&mut t, &[move_pose(Hand::Left, h)]);
+    let p = pose(&t, e);
+    assert_near(
+        p.transform_point(on_model),
+        h.translation + h.rotation * (g1 - la),
+        "the pushed grab point follows the hand",
+    );
+    assert_rotation(
+        p.rotation,
+        Quat::from_rotation_y(0.5) * p1.rotation,
+        "yawed 0.5 rad, no tilt",
+    );
+}
+
 /// The switch persists both ways (Q-330, Q-207): `ManipulateSettings.keep_upright`
 /// changed in the world goes back into the settings, which `persist` saves.
 #[test]

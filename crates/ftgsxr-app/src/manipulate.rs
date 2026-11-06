@@ -781,8 +781,9 @@ fn run_intents(
                     // Releasing one hand of two returns to a one-hand grab by the other.
                     Some((Grabbed::Two { .. }, Some((a, b)))) => {
                         let other = if a == hand { b } else { a };
-                        let po = hs.hands.get(&other).and_then(|h| Some((h.pose?, h.point)));
-                        match (po, stage_pose(&q, &groups, e)) {
+                        let other_hold =
+                            hs.hands.get(&other).and_then(|h| Some((h.pose?, h.point)));
+                        match (other_hold, stage_pose(&q, &groups, e)) {
                             (Some((po, point)), Some(model)) => {
                                 // The other hand's grab point stays its point (E11).
                                 let grab = Grab::begin(po, model, model.transform_point(point));

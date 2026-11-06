@@ -9,8 +9,8 @@ use glam::{Quat, Vec3};
 use crate::types::{Aabb, Pose};
 
 /// E11, one hand: the model's pose in the hand's frame, M = H₀⁻¹ P₀, taken when the
-/// grab starts, with the hand's start pose H₀, the grab point g₀ and the start pose P₀
-/// that "keep upright" turns about (spec revision 37, D-43).
+/// grab starts, with the hand's start pose H₀, the grab point g₀ that "keep upright"
+/// turns about, and the start pose P₀ it turns (spec revision 37, D-43).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grab {
     in_hand: Pose,

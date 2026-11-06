@@ -249,8 +249,9 @@ fn content_group_a_one_hand_grab_keeps_the_stage_pose_in_the_hand() {
             },
         ],
     );
-    // E11 under free rotation: P = H M. The hand moved by Δ and turned by R about x through itself: the
-    // stage pose turns by R about the hand's start and moves by Δ, its scale kept.
+    // E11 under free rotation: P = H M. The hand moved by Δ and turned by R about x
+    // through itself: the stage pose turns by R about the hand's start and moves by Δ,
+    // its scale kept.
     let delta = Vec3::new(0.3, 0.1, -0.2);
     let r = Quat::from_rotation_x(20f32.to_radians());
     let h1 = Pose {
