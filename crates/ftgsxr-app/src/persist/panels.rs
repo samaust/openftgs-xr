@@ -152,11 +152,11 @@ const SNAP_DEGS: [f32; 3] = [30.0, 45.0, 90.0];
 
 /// The main panel's Comfort tab (§1.8 Comfort and accessibility, User interface): the
 /// turn mode and snap angle, the speed, the vignette, teleport, the height offset,
-/// reduced motion, left-handed mode, the UI scale and high contrast, each editing
-/// `SettingsRes` (Q-207, Q-218, Q-278); sliders and buttons, which a ray can drag and
-/// press, rather than drag values; and "Ask again" while the hand-tracking permission
-/// is denied (Q-276, Q-322).
-// Q-207, Q-218, Q-278, Q-294, Q-322
+/// reduced motion, left-handed mode, keep upright (Q-330), the UI scale and high
+/// contrast, each editing `SettingsRes` (Q-207, Q-218, Q-278); sliders and buttons,
+/// which a ray can drag and press, rather than drag values; and "Ask again" while the
+/// hand-tracking permission is denied (Q-276, Q-322).
+// Q-207, Q-218, Q-278, Q-294, Q-322, Q-330
 pub(crate) fn comfort_section(world: &mut World, ui: &mut egui::Ui) {
     edit(world, ui, |s, ui| {
         let l = &mut s.locomotion;
@@ -177,6 +177,8 @@ pub(crate) fn comfort_section(world: &mut World, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut l.height_offset_m, -0.5..=0.5).text("height offset (m)"));
         ui.checkbox(&mut l.reduced_motion, "reduced motion");
         ui.checkbox(&mut l.left_handed, "left-handed");
+        // Q-330: two-hand grabs by yaw only; off, E11's free rotation.
+        ui.checkbox(&mut s.xr.keep_upright, "keep upright");
         ui.add(egui::Slider::new(&mut s.general.ui_scale, 0.8..=1.5).text("UI scale"));
         ui.checkbox(&mut s.display.high_contrast, "high contrast");
     });
@@ -358,6 +360,7 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
             options.extend_from_slice(FOVEATION);
             choice(ui, "foveation", &mut fov, &options);
             x.foveation = (fov != "runtime").then_some(fov);
+            ui.checkbox(&mut x.keep_upright, "keep_upright"); // Q-330
             ui.label(format!(
                 "refresh_rate {} · render_scale {} · reference_space {}",
                 x.refresh_rate.map_or("runtime".into(), |r| r.to_string()),
@@ -504,6 +507,23 @@ mod tests {
             .drain()
             .collect();
         assert_eq!(asked, [AskPermissionAgain(Permission::HandTracking)]);
+    }
+
+    /// §1.8 "keep upright" (#555, Q-330): the Comfort tab draws the switch, on by
+    /// default, and a click on it turns `[xr] keep_upright` off; with the Comfort tab
+    /// one tap on the main panel, the switch is a second (A-4).
+    #[test]
+    fn comfort_switches_keep_upright_off() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        let ctx = egui::Context::default();
+        frame_of(&ctx, &mut world, Vec::new(), comfort_section);
+        let texts = frame_of(&ctx, &mut world, Vec::new(), comfort_section);
+        assert!(world.resource::<SettingsRes>().0.xr.keep_upright);
+        for events in click(at(&texts, "keep upright")) {
+            frame_of(&ctx, &mut world, events, comfort_section);
+        }
+        assert!(!world.resource::<SettingsRes>().0.xr.keep_upright);
     }
 
     // Q-240 (#402): the picker's selected text is the running tier, not the saved one.

@@ -242,7 +242,7 @@ pub struct DesktopSettings {
     pub keys: BTreeMap<String, String>,
 }
 
-/// `[xr]` (§1.8, §1.12, D-24, D-27, §1.11, Q-49).
+/// `[xr]` (§1.8, §1.12, D-24, D-27, §1.11, Q-49, Q-330).
 #[derive(Clone, Debug, PartialEq)]
 pub struct XrSettings {
     /// The display refresh rate in Hz; `None` is the runtime's default.
@@ -255,6 +255,10 @@ pub struct XrSettings {
     /// and `local`, stored as written; the chain always ends at LOCAL, with a warning,
     /// even when the list leaves `local` out, which `ftgsxr_xr::session` applies (Q-49).
     pub reference_space: Vec<String>,
+    /// §1.8 "keep upright": two-hand grabs turn by yaw only; off, they take E11's free
+    /// rotation. On by default (§1.5, D-43); one-hand grabs are rigid either way (Q-331).
+    // Q-330
+    pub keep_upright: bool,
 }
 
 /// `[cache]` (§1.5, §1.11).
@@ -443,6 +447,7 @@ impl Default for XrSettings {
             foveation: None,
             render_scale: None,
             reference_space: vec!["stage".into(), "local-floor".into(), "local".into()],
+            keep_upright: true, // Q-330
         }
     }
 }
@@ -1098,6 +1103,7 @@ impl Reader {
                 "foveation",
                 "render_scale",
                 "reference_space",
+                "keep_upright",
             ],
         );
         let d = XrSettings::default();
@@ -1108,6 +1114,10 @@ impl Reader {
             reference_space: self
                 .take(t, p, "reference_space", spaces())
                 .unwrap_or(d.reference_space),
+            // Q-330
+            keep_upright: self
+                .take(t, p, "keep_upright", flag())
+                .unwrap_or(d.keep_upright),
         }
     }
 
@@ -1274,16 +1284,20 @@ fn document(s: &Settings) -> Table {
     if let Some(r) = e.lighting_reference {
         environment.insert("lighting_reference".into(), floats(&r));
     }
-    let mut xr = table([(
-        "reference_space",
-        Value::Array(
-            x.reference_space
-                .iter()
-                .cloned()
-                .map(Value::String)
-                .collect(),
+    let mut xr = table([
+        (
+            "reference_space",
+            Value::Array(
+                x.reference_space
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
         ),
-    )]);
+        // Q-330
+        ("keep_upright", Value::Boolean(x.keep_upright)),
+    ]);
     if let Some(r) = x.refresh_rate {
         xr.insert("refresh_rate".into(), float(r));
     }

@@ -43,7 +43,8 @@ pub struct ManipulateSettings {
     pub limits: ScaleLimits,
     /// E10's t_max in metres.
     pub ray_max_m: f32,
-    /// Two-hand grabs turn about y only (E11).
+    /// Two-hand grabs turn about y only (E11); `persist` keeps it equal to the settings'
+    /// `[xr] keep_upright`, both ways (Q-330). One-hand grabs ignore it (Q-331).
     pub keep_upright: bool,
     /// The push and pull speed per metre of distance, in m/s (§1.8).
     pub push_pull_mps: f32,
@@ -752,6 +753,8 @@ fn run_intents(
                     continue;
                 };
                 let new = match (g, hands) {
+                    // Rigid under both settings: keep upright is the two-hand grab's.
+                    // Q-331
                     (Grabbed::One { grab, .. }, _) => grab.update(pose),
                     (Grabbed::Two { grab }, Some((a, b))) => {
                         // The grab points, fixed in their hands (E11, revision 34).

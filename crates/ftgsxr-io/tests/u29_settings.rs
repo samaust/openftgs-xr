@@ -143,6 +143,7 @@ fn u29_defaults_are_section_1s() {
             foveation: None,
             render_scale: None,
             reference_space: vec!["stage".into(), "local-floor".into(), "local".into()],
+            keep_upright: true,
         }
     );
     assert_eq!(
@@ -290,6 +291,7 @@ fn non_default() -> Settings {
             foveation: Some("dynamic".into()),
             render_scale: Some(0.8),
             reference_space: vec!["local-floor".into(), "local".into()],
+            keep_upright: false,
         },
         cache: CacheSettings {
             max_bytes: 5_000_000_123,
@@ -319,6 +321,27 @@ fn u29_toml_round_trip() {
         !first.starts_with('['),
         "format and version come first: {text}"
     );
+}
+
+/// §1.8 "keep upright" (Q-330): `[xr] keep_upright` off round-trips, and a file
+/// without the key reads it as on, §1.5's default in XR (D-43), with no warning.
+#[test]
+fn u29_keep_upright_round_trips_and_is_on_when_absent() {
+    let path = scratch("keep_upright").join("settings.toml");
+    let mut off = Settings::default();
+    off.xr.keep_upright = false;
+    save_settings(&path, &off).expect("save");
+    let text = std::fs::read_to_string(&path).expect("read back");
+    assert!(text.contains("keep_upright = false"), "{text}");
+    let (loaded, warnings) = load_settings(&path).expect("load");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!loaded.xr.keep_upright);
+    let (_, absent, warnings) = load_text(
+        "keep_upright_absent",
+        "format = \"ftgsxr-settings\"\nversion = 1\n[xr]\nreference_space = [\"stage\"]\n",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(absent.xr.keep_upright, "absent: on by default");
 }
 
 /// Writes `text` as `settings.toml` in a fresh directory `name` and loads it.

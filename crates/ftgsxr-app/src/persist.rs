@@ -33,7 +33,9 @@ use crate::library::{
     Library, LibraryCommand, LibraryFailure, LoadedModel, MissingModel, Replaces, SceneLoad,
     ShowOnUpload, list_missing,
 };
-use crate::manipulate::{HighContrast, Poses, now_rfc3339, pose_of, transform_of};
+use crate::manipulate::{
+    HighContrast, ManipulateSettings, Poses, now_rfc3339, pose_of, transform_of,
+};
 use crate::platform::{AskPermissionAgain, DeniedPermissions, PlatformRes};
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
@@ -347,6 +349,7 @@ impl Plugin for PersistPlugin {
                     dock_into_settings.run_if(dock_on_screen),
                     centers_follow_settings,
                     high_contrast_follows_settings,
+                    keep_upright_sync,
                     save_settings_debounced,
                     save_poses,
                 )
@@ -423,6 +426,33 @@ fn high_contrast_follows_settings(settings: Res<SettingsRes>, mut hc: ResMut<Hig
     if *hc != want {
         *hc = want;
     }
+}
+
+/// `[xr] keep_upright` and `ManipulateSettings.keep_upright` both ways (Q-330, Q-207):
+/// the settings' value goes into `manipulate` at the first frame and whenever it changes,
+/// and a value changed in the world goes back into the settings, which then save it.
+/// `last` is the value as last mapped, so neither direction undoes the other. A system of
+/// its own: `sync_settings` already takes 15 of a Bevy system's 16 parameters.
+// Q-330
+fn keep_upright_sync(
+    mut settings: ResMut<SettingsRes>,
+    mut manipulate: ResMut<ManipulateSettings>,
+    mut last: Local<Option<bool>>,
+) {
+    let wanted = settings.0.xr.keep_upright;
+    match *last {
+        Some(l) if wanted == l => {
+            if manipulate.keep_upright != l {
+                settings.0.xr.keep_upright = manipulate.keep_upright;
+            }
+        }
+        _ => {
+            if manipulate.keep_upright != wanted {
+                manipulate.keep_upright = wanted;
+            }
+        }
+    }
+    *last = Some(settings.0.xr.keep_upright);
 }
 
 /// `Intent::Ui(SaveScene)` saves a scene named by the time (Q-200); `LoadScene` is the
