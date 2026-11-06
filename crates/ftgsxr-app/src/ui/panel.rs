@@ -131,8 +131,9 @@ pub(super) fn follow_surfaces(
                 order: PANEL_ORDER,
                 ..Default::default()
             },
-            // #549: Bevy's default, `TonyMcMapface`, needs the `tonemapping_luts`
-            // feature; the panels draw only egui, so tonemapping has nothing to map.
+            // #549: Bevy specializes a tonemapping pipeline for every view, and its
+            // default, `TonyMcMapface`, needs the `tonemapping_luts` feature. The panel
+            // cameras are not HDR, so the pass never runs: no pixel changes.
             Tonemapping::None,
             RenderTarget::Image(image.into()),
             RenderLayers::none(),
@@ -466,8 +467,7 @@ mod tests {
 
     /// The panel cameras (§1.8 User interface, #549, `cpu`): with the `Headset` marker,
     /// a shown main panel and a wrist menu, each camera `follow_surfaces` spawns has
-    /// tonemapping off, since Bevy's default (`TonyMcMapface`) needs the
-    /// `tonemapping_luts` feature, which the workspace does not enable.
+    /// tonemapping off.
     #[test]
     fn follow_surfaces_spawns_panel_cameras_with_tonemapping_off() {
         use bevy::asset::Handle;
