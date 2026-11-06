@@ -1044,45 +1044,6 @@ mod tests {
         );
     }
 
-    /// Q-304 as changed, with Q-317 as changed by #550 (#552's added test): from inside
-    /// an instance's box, a ray a quad took ends at the quad, not at the hand.
-    #[test]
-    fn a_ray_a_quad_took_from_inside_a_box_ends_at_the_quad() {
-        use bevy::ecs::system::RunSystemOnce;
-        let (mut app, instance) = app_with_p1();
-        let inside = app.world().get::<Transform>(instance).unwrap().translation;
-        let boxes = app
-            .world_mut()
-            .run_system_once(
-                |i: Query<
-                    (Entity, &Transform, &SplatModel, Option<&ChildOf>),
-                    With<LoadedModel>,
-                >,
-                 g: Query<&Transform, Without<LoadedModel>>,
-                 a: Option<Res<Assets<SplatAsset>>>| {
-                    instance_boxes(&i, &g, a.as_deref())
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            pick_instance(inside, -Vec3::Z, &boxes, RAY_M),
-            Some((instance, 0.0)),
-            "the origin lies in the box"
-        );
-        app.world_mut().resource_mut::<Frame>().rays[1] = Some(RayDraw {
-            origin: inside,
-            dir: -Vec3::Z,
-            panel: Some(0.5),
-        });
-        app.world_mut().run_system_once(ray_ends).unwrap();
-        let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
-        assert!(dot && end.distance(inside - Vec3::Z * 0.5) < 1e-4, "{end}");
-    }
-
-    /// §1.8 Rays ("drawn as a thin line to the first hit … with a dot at the hit
-    /// point"), Q-304 as changed (#552's added test): two rays on one instance each
-    /// end at their own entry point on its box, with a dot, whichever hand holds its
-    /// `Hovered` (Q-182: the nearer one).
     #[test]
     fn two_rays_on_one_instance_each_end_at_their_own_hit() {
         let (mut app, instance) = app_with_p1();
@@ -1376,6 +1337,42 @@ mod tests {
             source: HandSource::Hand,
             tracked: true,
         });
+    }
+
+    /// Q-304 as changed, with Q-317 as changed by #550 (#552's added test): from inside
+    /// an instance's box, a ray a quad took ends at the quad, not at the hand; with no
+    /// quad, it ends at its E10 hit on the enclosing box, 0, with the dot at the hand.
+    #[test]
+    fn a_ray_from_inside_a_box_ends_at_the_quad_that_took_it() {
+        use bevy::prelude::Transform;
+        let (mut app, _) = inside_p1();
+        let at = Transform::from_xyz(0.0, 0.0, 2.5);
+        let quad = app
+            .world_mut()
+            .spawn((
+                PanelQuad {
+                    size_m: Vec2::new(0.56, 0.42),
+                    size_px: UVec2::new(1024, 768),
+                    title_bar: true,
+                },
+                at,
+                GlobalTransform::from(at),
+            ))
+            .id();
+        pinching(&mut app, 0.0);
+        app.update();
+        let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
+        assert!(
+            dot && end.distance(Vec3::new(0.0, 0.0, 2.5)) < 1e-4,
+            "{end}"
+        );
+        app.world_mut().entity_mut(quad).despawn();
+        app.update();
+        let (end, dot) = app.world().resource::<Frame>().ends[1].unwrap();
+        assert!(
+            dot && end.distance(Vec3::new(0.0, 0.0, 3.0)) < 1e-4,
+            "{end}"
+        );
     }
 
     /// Q-317 (#550's added test): from inside P1's box, a pinch on the wrist menu's quad
