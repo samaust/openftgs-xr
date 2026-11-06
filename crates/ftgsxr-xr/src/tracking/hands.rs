@@ -105,8 +105,8 @@ pub(crate) fn hand_state(raw: &RawHand) -> TrackedHand {
 /// it owns the side whether or not the hand is tracked; without one the hand owns it.
 /// "Held" is the controller's aim action being active on `/user/hand/<side>`, which
 /// XR\_META\_detached\_controllers turns off for a controller the runtime sees put down
-/// (Q-327); without that extension an active controller counts as held.
-// Q-262, Q-327
+/// (D-55); without that extension an active controller counts as held.
+// Q-262, D-55
 pub(crate) fn side_owner(
     controller: Option<&TrackedHand>,
     hand: Option<&TrackedHand>,
@@ -684,7 +684,7 @@ mod tests {
     /// Q-262 (#540): a held controller owns its side, whether or not the hand is
     /// tracked and whatever either does; without one the hand owns it; with neither, no
     /// one. A set-down controller is `None` here, its aim inactive under XR\_META\_detached\_controllers
-    /// (Q-327).
+    /// (D-55).
     #[test]
     fn side_owner_gives_a_held_controller_priority() {
         let (c, h) = (controller(), hand());

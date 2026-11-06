@@ -355,7 +355,7 @@ pub(crate) fn run(
                         "frequency hint: XR_META_hand_tracking_frequency_hint absent"
                     };
                     test.parts.push(hint.into());
-                    // Q-327: whether the runtime offers the held-controller signal.
+                    // D-55: whether the runtime offers the held-controller signal.
                     let detached = if exts.as_deref().is_some_and(|e| e.meta_detached_controllers) {
                         "detached controllers: enabled"
                     } else {
