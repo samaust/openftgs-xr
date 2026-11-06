@@ -20,7 +20,9 @@ use bevy_egui::{EguiContext, EguiSchedule, egui};
 use ftgsxr_core::PlayState;
 
 use super::dock::{self, Out};
-use super::{Page, Tab, UiCue, UiState, UiSurface, WorldPanel, WristMenu};
+use super::{
+    FeatureState, Page, Tab, UiCue, UiState, UiSurface, WorldPanel, WristMenu, XrFeatures,
+};
 use crate::intent::{Feature, InstanceAction, Intent, PlaybackCommand};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
@@ -308,33 +310,46 @@ pub(super) fn panel_layout(
     });
 }
 
-/// The wrist menu's buttons (§1.8 User interface). The passthrough button is hidden
-/// until M-6 builds passthrough (§1.15 E-XR-UNSUPPORTED: "the control is hidden",
-/// Q-292), so M-5 shows four.
-// Q-292
+/// The wrist menu's buttons (§1.8 User interface). The passthrough button shows only
+/// where the XR crate reports passthrough (`XrFeatures.passthrough` not `Absent`): §1.15
+/// E-XR-UNSUPPORTED's "control is hidden" (Q-292, Q-336).
+// Q-292, Q-336
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WristButton {
     PlayPause,
+    Passthrough,
     Panel,
     ResetPose,
     Fit,
 }
 
 impl WristButton {
-    /// §1.8's order, left to right, without the hidden passthrough button.
+    /// §1.8's order, left to right.
     // Q-291, Q-292
-    pub(crate) const ALL: [WristButton; 4] = [
+    pub(crate) const ALL: [WristButton; 5] = [
         WristButton::PlayPause,
+        WristButton::Passthrough,
         WristButton::Panel,
         WristButton::ResetPose,
         WristButton::Fit,
     ];
+
+    /// The buttons shown with `features`, in §1.8's order (Q-336).
+    // Q-336
+    pub(crate) fn shown(features: &XrFeatures) -> Vec<WristButton> {
+        let passthrough = features.passthrough != FeatureState::Absent;
+        WristButton::ALL
+            .into_iter()
+            .filter(|&b| passthrough || b != WristButton::Passthrough)
+            .collect()
+    }
 
     /// The button's label, the play button's following the clock.
     pub(crate) fn label(self, playing: bool) -> &'static str {
         match self {
             WristButton::PlayPause if playing => "Pause",
             WristButton::PlayPause => "Play",
+            WristButton::Passthrough => "Pass-\nthrough",
             WristButton::Panel => "Panel",
             WristButton::ResetPose => "Reset\npose",
             WristButton::Fit => "Fit",
@@ -347,25 +362,37 @@ impl WristButton {
 // Q-291
 const WRIST_BUTTON_SHARE: f32 = 0.03 / 0.16;
 
-/// The wrist menu's buttons in a texture of `size_px` pixels: the shown buttons (four in
-/// M-5) as squares in a row, each 3 cm of the quad's 0.16 m (120 px of 640) or the
-/// texture's height if smaller, spaced evenly and centred vertically (Q-291, Q-292).
-// Q-291, Q-292
-pub(crate) fn wrist_buttons(size_px: Vec2) -> [(WristButton, egui::Rect); 4] {
-    let n = WristButton::ALL.len() as f32;
+/// The wrist menu's buttons in a texture of `size_px` pixels: the buttons shown with
+/// `features` (four without passthrough, five with it) as squares in a row, each 3 cm of
+/// the quad's 0.16 m (120 px of 640) or the texture's height if smaller, spaced evenly
+/// and centred vertically (Q-291, Q-292, Q-336).
+// Q-291, Q-292, Q-336
+pub(crate) fn wrist_buttons(
+    size_px: Vec2,
+    features: &XrFeatures,
+) -> Vec<(WristButton, egui::Rect)> {
+    let shown = WristButton::shown(features);
+    let n = shown.len() as f32;
     let side = (WRIST_BUTTON_SHARE * size_px.x).min(size_px.y);
     let gap = (size_px.x - n * side) / (n + 1.0);
     let top = (size_px.y - side) / 2.0;
-    WristButton::ALL.map(|b| {
-        let i = WristButton::ALL.iter().position(|&x| x == b).unwrap_or(0) as f32;
-        let min = egui::pos2(gap + i * (side + gap), top);
-        (b, egui::Rect::from_min_size(min, egui::vec2(side, side)))
-    })
+    shown
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let min = egui::pos2(gap + i as f32 * (side + gap), top);
+            (b, egui::Rect::from_min_size(min, egui::vec2(side, side)))
+        })
+        .collect()
 }
 
 /// Draws the wrist menu's buttons over `ui`'s whole texture; the one clicked, if any. Its
 /// buttons follow the touch press (Q-332, Q-333).
-pub(crate) fn wrist_ui(ui: &mut egui::Ui, playing: bool) -> Option<WristButton> {
+pub(crate) fn wrist_ui(
+    ui: &mut egui::Ui,
+    playing: bool,
+    features: &XrFeatures,
+) -> Option<WristButton> {
     // Q-333
     super::touch::touch_pass(ui);
     let ppp = ui.ctx().pixels_per_point();
@@ -373,7 +400,7 @@ pub(crate) fn wrist_ui(ui: &mut egui::Ui, playing: bool) -> Option<WristButton> 
     ui.painter().rect_filled(view, 0.0, ui.visuals().panel_fill);
     let size = view.size() * ppp;
     let mut clicked = None;
-    for (b, r) in wrist_buttons(Vec2::new(size.x, size.y)) {
+    for (b, r) in wrist_buttons(Vec2::new(size.x, size.y), features) {
         let rect = egui::Rect::from_min_max(
             (r.min.to_vec2() / ppp).to_pos2(),
             (r.max.to_vec2() / ppp).to_pos2(),
@@ -385,8 +412,9 @@ pub(crate) fn wrist_ui(ui: &mut egui::Ui, playing: bool) -> Option<WristButton> 
     clicked
 }
 
-/// A wrist button's intents (§1.8 User interface): play or pause the clock, the main
-/// panel, and the selected instances' reset pose and fit (none with nothing selected).
+/// A wrist button's intents (§1.8 User interface): play or pause the clock, passthrough
+/// on or off (Q-335: the XR crate consumes the toggle), the main panel, and the selected
+/// instances' reset pose and fit (none with nothing selected).
 pub(crate) fn wrist_intents(b: WristButton, selected: &[Entity]) -> Vec<Intent> {
     let each = |action| {
         selected
@@ -396,6 +424,7 @@ pub(crate) fn wrist_intents(b: WristButton, selected: &[Entity]) -> Vec<Intent> 
     };
     match b {
         WristButton::PlayPause => vec![Intent::Playback(PlaybackCommand::Toggle)],
+        WristButton::Passthrough => vec![Intent::Toggle(Feature::Passthrough)],
         WristButton::Panel => vec![Intent::Toggle(Feature::Panel)],
         WristButton::ResetPose => each(InstanceAction::ResetPose),
         WristButton::Fit => each(InstanceAction::Fit),
@@ -414,9 +443,13 @@ pub(super) fn draw_wrist(world: &mut World, mut font: Local<Option<(Entity, bool
     let playing = world
         .get_resource::<Playback>()
         .is_some_and(|p| p.clock.state() == PlayState::Playing);
+    let features = world
+        .get_resource::<XrFeatures>()
+        .cloned()
+        .unwrap_or_default();
     let mut ui = root(&ctx, "ftgsxr-wrist");
     panel_style(ui.style_mut());
-    let Some(b) = wrist_ui(&mut ui, playing) else {
+    let Some(b) = wrist_ui(&mut ui, playing, &features) else {
         return;
     };
     let selected: Vec<Entity> = world
@@ -486,7 +519,9 @@ mod tests {
         };
         ctx.set_zoom_factor(ppp);
         let mut clicked = None;
-        let mut full = ctx.run_ui(input, |ui| clicked = wrist_ui(ui, false));
+        let mut full = ctx.run_ui(input, |ui| {
+            clicked = wrist_ui(ui, false, &super::super::XrFeatures::default())
+        });
         full.textures_delta.clear();
         let mut texts = Vec::new();
         fn walk(s: &egui::Shape, ppp: f32, texts: &mut Vec<(String, Vec2)>) {
@@ -626,13 +661,13 @@ mod tests {
         assert!(wrist_intents(WristButton::Fit, &[]).is_empty());
     }
 
-    /// The four shown buttons (the passthrough button hidden until M-6, Q-292) are 3 cm
+    /// The four shown buttons (the passthrough button hidden without it, Q-292) are 3 cm
     /// squares (120 px of the 640 × 200 texture), inside it, apart and evenly spaced
     /// (Q-265, Q-291), above Q-267's 60 px.
     #[test]
     fn wrist_buttons_are_four_120_px_squares_in_a_row() {
-        let b = wrist_buttons(Vec2::new(640.0, 200.0));
-        assert_eq!(b.map(|(w, _)| w), WristButton::ALL);
+        let b = wrist_buttons(Vec2::new(640.0, 200.0), &Default::default());
+        assert_eq!(b.len(), 4);
         // (640 − 4 × 120) / 5 = 32 px around each.
         assert!((b[0].1.min.x - 32.0).abs() < 1e-3 && (b[3].1.max.x - 608.0).abs() < 1e-3);
         let tex = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 200.0));
@@ -643,6 +678,92 @@ mod tests {
                 assert!(r.min.x > b[i - 1].1.max.x);
             }
         }
+    }
+
+    /// The fifth button (Q-336, Q-292, `cpu`): with `XrFeatures.passthrough` other than
+    /// `Absent` the wrist menu shows five buttons in §1.8's order (play or pause,
+    /// passthrough, main panel, reset pose, fit), each 120 px and evenly spaced on the
+    /// 640 × 200 texture; with `Absent` the four others; a press at the passthrough
+    /// button's pixel clicks it, and it writes `Toggle(Feature::Passthrough)`.
+    #[test]
+    fn wrist_buttons_are_five_with_passthrough_and_four_without() {
+        use super::super::{FeatureState, XrFeatures};
+        let absent = XrFeatures::default();
+        assert_eq!(absent.passthrough, FeatureState::Absent);
+        let four = wrist_buttons(Vec2::new(640.0, 200.0), &absent);
+        assert_eq!(
+            four.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
+            [
+                WristButton::PlayPause,
+                WristButton::Panel,
+                WristButton::ResetPose,
+                WristButton::Fit
+            ]
+        );
+        for state in [FeatureState::Available, FeatureState::Denied] {
+            let features = XrFeatures {
+                passthrough: state,
+                ..XrFeatures::default()
+            };
+            let five = wrist_buttons(Vec2::new(640.0, 200.0), &features);
+            assert_eq!(
+                five.iter().map(|(b, _)| *b).collect::<Vec<_>>(),
+                [
+                    WristButton::PlayPause,
+                    WristButton::Passthrough,
+                    WristButton::Panel,
+                    WristButton::ResetPose,
+                    WristButton::Fit
+                ],
+                "{state:?}"
+            );
+            // (640 − 5 × 120) / 6 px around each.
+            let gap = 40.0 / 6.0;
+            for (i, (_, r)) in five.iter().enumerate() {
+                assert!((r.width() - 120.0).abs() < 1e-3 && (r.height() - 120.0).abs() < 1e-3);
+                let x = gap + i as f32 * (120.0 + gap);
+                assert!((r.min.x - x).abs() < 1e-3, "{i}: {r:?}");
+            }
+        }
+        // A press and release at the passthrough button's pixel.
+        let features = XrFeatures {
+            passthrough: FeatureState::Available,
+            ..XrFeatures::default()
+        };
+        let ctx = egui::Context::default();
+        let frame = |events| {
+            let input = egui::RawInput {
+                time: Some(0.0),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0 / PANEL_ZOOM, 200.0 / PANEL_ZOOM),
+                )),
+                events,
+                ..Default::default()
+            };
+            ctx.set_zoom_factor(PANEL_ZOOM);
+            let mut clicked = None;
+            let mut full = ctx.run_ui(input, |ui| clicked = wrist_ui(ui, false, &features));
+            full.textures_delta.clear();
+            clicked
+        };
+        frame(Vec::new());
+        frame(Vec::new());
+        let pixel = wrist_buttons(Vec2::new(640.0, 200.0), &features)[1]
+            .1
+            .center();
+        let at = super::super::panel_point(Vec2::new(pixel.x, pixel.y), PANEL_ZOOM);
+        let mut last = None;
+        let mut clicked = Vec::new();
+        for select in [vec![], vec![true], vec![false], vec![]] {
+            clicked.extend(frame(pointer_events(last, Some(at), &select, 0.0)));
+            last = Some(at);
+        }
+        assert_eq!(clicked, vec![WristButton::Passthrough]);
+        assert_eq!(
+            wrist_intents(WristButton::Passthrough, &[]),
+            vec![Intent::Toggle(Feature::Passthrough)]
+        );
     }
 
     /// One frame of the wrist menu as the panel pointer drives it (Q-333): `select`'s
@@ -836,7 +957,7 @@ mod tests {
     #[test]
     fn wrist_ui_touch_a_button_looks_pressed_only_while_the_hit_is_inside() {
         let zoom = PANEL_ZOOM;
-        let (_, rect_px) = wrist_buttons(Vec2::new(640.0, 200.0))[1];
+        let (_, rect_px) = wrist_buttons(Vec2::new(640.0, 200.0), &Default::default())[1];
         let rect = egui::Rect::from_min_max(
             (rect_px.min.to_vec2() / zoom).to_pos2(),
             (rect_px.max.to_vec2() / zoom).to_pos2(),

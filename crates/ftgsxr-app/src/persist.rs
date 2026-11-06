@@ -28,7 +28,7 @@ use ftgsxr_io::{
 use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
 
 use crate::audio::AudioState;
-use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
+use crate::intent::{Feature, InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{
     Library, LibraryCommand, LibraryFailure, LoadedModel, MissingModel, Replaces, SceneLoad,
     ShowOnUpload, list_missing,
@@ -36,7 +36,7 @@ use crate::library::{
 use crate::manipulate::{
     HighContrast, ManipulateSettings, Poses, now_rfc3339, pose_of, transform_of,
 };
-use crate::platform::{AskPermissionAgain, DeniedPermissions, PlatformRes};
+use crate::platform::{AskPermissionAgain, DeniedPermissions, Headset, PlatformRes};
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
@@ -86,6 +86,45 @@ pub struct SettingsPath(pub PathBuf);
 // Q-224
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SettingsWarnings(pub Vec<String>);
+
+/// The scene anchor's handshake with the XR crate (§1.9 Floor, shadows and anchors,
+/// Q-343): `persist` sets `Creating` at a scene save under the `Headset` marker in
+/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)`, and sets
+/// `Locating(uuid)` at the load of a file with an anchor on the headset; the XR crate
+/// answers `Ready` once located, or `Lost(uuid)`, which `persist` toasts.
+/// `scene_from_world` writes `anchor` from `Ready`. While a save waits, any other answer
+/// than `Ready` is a failure (Q-350).
+// Q-343, Q-350
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub enum SceneAnchor {
+    /// No anchor.
+    #[default]
+    None,
+    /// A save waits for the anchor's creation.
+    Creating,
+    /// The anchor, created and persisted, or located: its UUID.
+    Ready(String),
+    /// A loaded scene's anchor, being located.
+    Locating(String),
+    /// A loaded scene's anchor that the runtime did not find.
+    Lost(String),
+}
+
+/// How long a save waits for its anchor (Q-343).
+// Q-343
+const ANCHOR_WAIT: Duration = Duration::from_secs(2);
+
+/// The scene save waiting for its anchor: the file and when the wait began.
+// Q-343
+#[derive(Resource, Default)]
+struct AnchorWait(Option<(PathBuf, Duration)>);
+
+/// The toast of a save written without its anchor (Q-350).
+// Q-350
+const ANCHOR_NOT_CREATED: &str = "anchor not created; scene saved without one";
+
+/// §1.9's toast when a loaded scene's anchor cannot be located.
+const ANCHOR_LOST: &str = "anchor not found; using the saved pose";
 
 /// What the UI and the input adapters ask of `persist` (§2.1). Like `LibraryCommand`, it
 /// derives `Message` and `Event` (Q-166). A relative scene path names a file under the
@@ -272,9 +311,11 @@ pub(crate) fn load_into(world: &mut World, default: PathBuf) {
     }
     // Q-195, Q-196: rig's resources from the settings, before its plugin builds, so the
     // desktop camera and the grid start as the settings say.
+    // Q-335: the Quest's `main` and the tests insert the marker before `AppPlugin`.
+    let headset = world.contains_resource::<Headset>();
     let (view, loco) = {
         let s = &world.resource::<SettingsRes>().0;
-        (desktop_view(s), locomotion_of(s))
+        (desktop_view(s, headset), locomotion_of(s, headset))
     };
     world.insert_resource(view);
     world.insert_resource(loco);
@@ -336,6 +377,8 @@ impl Plugin for PersistPlugin {
             .add_message::<LibraryCommand>()
             .init_resource::<Saver>()
             .init_resource::<ScenePending>()
+            .init_resource::<SceneAnchor>()
+            .init_resource::<AnchorWait>()
             .init_resource::<StartupFailures>()
             .init_resource::<FirstRun>()
             .add_systems(
@@ -345,6 +388,8 @@ impl Plugin for PersistPlugin {
                     ui_bridge,
                     run_intents,
                     run_commands,
+                    finish_anchor_wait,
+                    anchor_toasts,
                     sync_settings,
                     dock_into_settings.run_if(dock_on_screen),
                     centers_follow_settings,
@@ -458,7 +503,9 @@ fn keep_upright_sync(
 /// `Intent::Ui(SaveScene)` saves a scene named by the time (Q-200); `LoadScene` is the
 /// UI's, which confirms and sends `PersistCommand::LoadScene`. The overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
 /// is a `[display.overlays]` setting, flipped here and mapped onto every instance by
-/// `sync_settings` (Q-207).
+/// `sync_settings` (Q-207). `Toggle(Feature::Occlusion)` flips `[environment] occlusion`
+/// (Q-336); `Toggle(Feature::Passthrough)` is the XR crate's (Q-335).
+// Q-336
 fn run_intents(
     mut reader: MessageReader<Intent>,
     mut out: MessageWriter<PersistCommand>,
@@ -478,6 +525,10 @@ fn run_intents(
                     OverlayToggle::Velocities => ov.velocities = !ov.velocities,
                     OverlayToggle::TimeTint => ov.time_tint = !ov.time_tint,
                 }
+            }
+            Intent::Toggle(Feature::Occlusion) => {
+                let e = &mut settings.0.environment;
+                e.occlusion = !e.occlusion;
             }
             _ => {}
         }
@@ -535,12 +586,16 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
             PersistCommand::SaveScene(p) => {
                 let files = world.resource::<Files>().clone();
                 let path = scene_path(&files.scenes, &p);
-                let scene = scene_from_world(world);
-                if let Err(e) = write_scene(&path, &scene) {
-                    warn!("{}: {}: {e}", path.display(), e.code());
-                    world.write_message(PersistFailure::of(&e));
+                // Q-343, Q-335: on the headset in passthrough mode the anchor first.
+                let passthrough = world.contains_resource::<Headset>()
+                    && world.resource::<SettingsRes>().0.environment.mode == "passthrough";
+                if passthrough {
+                    let now = world.resource::<Time<Real>>().elapsed();
+                    world.insert_resource(SceneAnchor::Creating);
+                    world.resource_mut::<AnchorWait>().0 = Some((path, now));
+                } else {
+                    write_scene_file(world, &path);
                 }
-                world.insert_resource(RecentScenes(recent_scenes(&files.scenes)));
             }
             PersistCommand::LoadScene(p) => {
                 let files = world.resource::<Files>().clone();
@@ -557,6 +612,14 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
                     }
                 };
                 resolve_locations(&mut scene, &files.models);
+                // Q-343: the headset locates the file's anchor; elsewhere it is ignored.
+                if world.contains_resource::<Headset>() {
+                    let anchor = match &scene.anchor {
+                        Some(uuid) => SceneAnchor::Locating(uuid.clone()),
+                        None => SceneAnchor::None,
+                    };
+                    world.insert_resource(anchor);
+                }
                 world.write_message(LibraryCommand::UnloadAll);
                 let mut queue = CommandQueue::default();
                 let missing = world.resource_scope(|world, mut library: Mut<Library>| {
@@ -574,6 +637,54 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
                 world.insert_resource(RecentScenes(recent_scenes(&files.scenes)));
             }
         }
+    }
+}
+
+/// Writes the world's scene to `path`, a failure toasted, and refreshes the recent scenes.
+fn write_scene_file(world: &mut World, path: &Path) {
+    let scene = scene_from_world(world);
+    if let Err(e) = write_scene(path, &scene) {
+        warn!("{}: {}: {e}", path.display(), e.code());
+        world.write_message(PersistFailure::of(&e));
+    }
+    let scenes = world.resource::<Files>().scenes.clone();
+    world.insert_resource(RecentScenes(recent_scenes(&scenes)));
+}
+
+/// The waiting save's end (Q-343): written with its anchor at `Ready`; without one, and
+/// toasted, at any other answer or after `ANCHOR_WAIT` (the state then `None`,
+/// Q-350).
+// Q-343, Q-350
+fn finish_anchor_wait(world: &mut World) {
+    let Some((path, since)) = world.resource::<AnchorWait>().0.clone() else {
+        return;
+    };
+    let now = world.resource::<Time<Real>>().elapsed();
+    let ok = match world.resource::<SceneAnchor>() {
+        SceneAnchor::Ready(_) => true,
+        SceneAnchor::Creating if now.saturating_sub(since) < ANCHOR_WAIT => return,
+        SceneAnchor::Creating => {
+            world.insert_resource(SceneAnchor::None);
+            false
+        }
+        _ => false,
+    };
+    world.resource_mut::<AnchorWait>().0 = None;
+    if !ok {
+        warn!("{}: {ANCHOR_NOT_CREATED}", path.display());
+        world.write_message(ToastRequest::warning(ANCHOR_NOT_CREATED));
+    }
+    write_scene_file(world, &path);
+}
+
+/// §1.9's toast when the XR crate reports a loaded scene's anchor lost (Q-343).
+// Q-343
+fn anchor_toasts(anchor: Res<SceneAnchor>, mut toasts: MessageWriter<ToastRequest>) {
+    if anchor.is_changed()
+        && let SceneAnchor::Lost(uuid) = &*anchor
+    {
+        warn!("anchor {uuid}: {ANCHOR_LOST}");
+        toasts.write(ToastRequest::warning(ANCHOR_LOST));
     }
 }
 
@@ -696,8 +807,9 @@ fn overlays_of(o: &ftgsxr_io::OverlaySettings) -> Overlays {
 /// the rig's pose, the desktop camera's local pose under the rig with its field of view
 /// and mode, and the bookmarks set, in slot order (Q-206). Model and audio locations
 /// follow Q-3 against `AppPaths.models`. Each instance's `lighting` is its Scene-tab
-/// manual values, null at the identity; no anchor (M-5).
-// Q-206, Q-3
+/// manual values, null at the identity; `anchor` is `SceneAnchor::Ready`'s UUID, null
+/// otherwise (Q-343).
+// Q-206, Q-3, Q-343
 pub fn scene_from_world(world: &World) -> SceneFile {
     let models_dir = world
         .get_resource::<PlatformRes>()
@@ -774,11 +886,15 @@ pub fn scene_from_world(world: &World) -> SceneFile {
     let bookmarks = ctl
         .map(|c| c.bookmarks.iter().flatten().cloned().collect())
         .unwrap_or_default();
+    let anchor = match world.get_resource::<SceneAnchor>() {
+        Some(SceneAnchor::Ready(uuid)) => Some(uuid.clone()),
+        _ => None,
+    };
     SceneFile {
         models,
         clock,
         environment,
-        anchor: None,
+        anchor,
         rig,
         camera,
         bookmarks,
@@ -1008,18 +1124,28 @@ fn audio_state(s: &AudioSettings) -> AudioState {
     }
 }
 
-fn desktop_view(s: &Settings) -> DesktopView {
+fn desktop_view(s: &Settings, headset: bool) -> DesktopView {
     DesktopView {
         fly_speed_mps: s.desktop.fly_speed_mps,
         fov_deg: s.desktop.fov_deg,
         grid: s.display.grid,
         background: s.environment.background,
+        passthrough: passthrough_mode(s, headset),
     }
 }
 
-/// D-17: stick locomotion off in passthrough mode (Q-195).
-fn locomotion_of(s: &Settings) -> Locomotion {
-    Locomotion::from_settings(&s.locomotion, s.environment.mode != "passthrough")
+/// Whether the player is in passthrough mode: `[environment] mode` is the wanted mode,
+/// and counts only under the `Headset` marker, so the desktop and `play --xr` stay in
+/// VR mode whatever the setting says (§1.4 Backgrounds, Q-335).
+// Q-335
+fn passthrough_mode(s: &Settings, headset: bool) -> bool {
+    headset && s.environment.mode == "passthrough"
+}
+
+/// D-17: stick locomotion off in passthrough mode (Q-195), as gated (Q-335).
+// Q-195, Q-335
+fn locomotion_of(s: &Settings, headset: bool) -> Locomotion {
+    Locomotion::from_settings(&s.locomotion, !passthrough_mode(s, headset))
 }
 
 /// The fields of `view` that differ from `base`'s view, written into `s`.
@@ -1085,8 +1211,12 @@ fn sync_settings(
     mut library_out: MessageWriter<LibraryCommand>,
     mut instances: Query<(Entity, Option<&mut SplatMode>), With<LoadedModel>>,
     mut commands: Commands,
+    headset: Option<Res<Headset>>,
 ) {
     let first = last.is_none();
+    // Q-335: the gate, and a marker inserted after the first frame maps the mode again.
+    let gate_added = headset.as_ref().is_some_and(|h| h.is_added());
+    let headset = headset.is_some();
     if first {
         *seen = listed_sources(&library, &files.models);
     }
@@ -1108,7 +1238,7 @@ fn sync_settings(
             snap.locomotion = t;
         }
         if view.is_changed() {
-            let base = desktop_view(snap);
+            let base = desktop_view(snap, headset);
             if *view != base {
                 let mut t = settings.0.clone();
                 view_into(&view, &base, &mut t);
@@ -1152,7 +1282,7 @@ fn sync_settings(
     } else {
         intents.clear();
     }
-    if !(first || settings.is_changed()) {
+    if !(first || gate_added || settings.is_changed()) {
         return;
     }
     // The settings into the world.
@@ -1163,15 +1293,19 @@ fn sync_settings(
             *audio = a;
         }
     }
-    if first || s.locomotion != snap.locomotion || s.environment.mode != snap.environment.mode {
-        let l = locomotion_of(s);
+    if first
+        || gate_added
+        || s.locomotion != snap.locomotion
+        || s.environment.mode != snap.environment.mode
+    {
+        let l = locomotion_of(s, headset);
         if *loco != l {
             *loco = l;
         }
     }
     {
-        let v = desktop_view(s);
-        if (first || v != desktop_view(snap)) && *view != v {
+        let v = desktop_view(s, headset);
+        if (first || gate_added || v != desktop_view(snap, headset)) && *view != v {
             *view = v;
         }
     }
