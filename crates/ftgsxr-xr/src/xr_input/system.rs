@@ -25,7 +25,7 @@ use ftgsxr_app::{
     Grabbed, Hand, Hovered, Intent, LoadedModel, Locomotion, ManipulateSettings, PanelPointer,
     PlayUiSound, Selected, SettingsRes, UiSound, panel_hit, pick_instance, stick_response,
 };
-use ftgsxr_core::{Aabb, Pose};
+use ftgsxr_core::{Aabb, Pose, ray_hit};
 use ftgsxr_render::{Colormap, RenderMode, SplatAsset, SplatMode, SplatModel};
 
 use super::{SIDES, XrInputConfig, XrInputState, aim_ray, hands_to_intents};
@@ -317,8 +317,15 @@ fn write_intents(
         let hit = if held.contains(&side) {
             None
         } else {
+            // Q-317 (#550): an instance whose box holds the ray's origin (E10's t_in ≤ 0,
+            // `ray_hit` 0) is left out, so from inside a box a quad the ray hits wins.
+            let outside: Vec<_> = boxes
+                .iter()
+                .filter(|(_, pose, b)| ray_hit(origin, dir, b, pose, ray_max_m) != Some(0.0))
+                .cloned()
+                .collect();
             nearest_panel(origin, dir, &quads).filter(|(_, _, d)| {
-                pick_instance(origin, dir, &boxes, ray_max_m).is_none_or(|(_, t)| *d <= t)
+                pick_instance(origin, dir, &outside, ray_max_m).is_none_or(|(_, t)| *d <= t)
             })
         };
         frame.rays[i] = Some(RayDraw {
@@ -1324,6 +1331,139 @@ mod tests {
             app.world().resource::<Seen>().0.is_empty(),
             "nothing went to the panel"
         );
+    }
+
+    /// P1 posed around the right hand at (0, 0, 3), scale 50, so its box holds the ray's
+    /// origin (Q-317 as changed on #550).
+    fn inside_p1() -> (bevy::app::App, Entity) {
+        use bevy::prelude::Transform;
+        let (mut app, instance) = app_with_p1();
+        let around = Transform::from_xyz(0.0, 0.0, 3.0).with_scale(Vec3::splat(50.0));
+        app.world_mut().entity_mut(instance).insert(around);
+        app.update();
+        // The precondition: E10 from the hand gives the instance distance 0.
+        let model = app.world().get::<SplatModel>(instance).unwrap().0.clone();
+        let bounds = app
+            .world()
+            .resource::<Assets<SplatAsset>>()
+            .get(&model)
+            .unwrap()
+            .bounds;
+        let pose = Pose {
+            translation: around.translation,
+            rotation: around.rotation,
+            scale: 50.0,
+        };
+        let t = ray_hit(Vec3::new(0.0, 0.0, 3.0), Vec3::NEG_Z, &bounds, &pose, 10.0);
+        assert_eq!(t, Some(0.0), "the hand is inside P1's box");
+        (app, instance)
+    }
+
+    /// The right hand (hand tracking) at (0, 0, 3) aiming along −z, pinching at `pinch`.
+    fn pinching(app: &mut App, pinch: f32) {
+        let aim = aim_at(0.0, 0.0, 3.0, Quat::IDENTITY);
+        app.world_mut().resource_mut::<XrHands>().right = Some(crate::TrackedHand {
+            aim,
+            grip: aim,
+            pinch,
+            pinch_middle: 0.0,
+            squeeze: 0.0,
+            trigger: 0.0,
+            stick: Vec2::ZERO,
+            primary: false,
+            secondary: false,
+            menu: false,
+            source: HandSource::Hand,
+            tracked: true,
+        });
+    }
+
+    /// Q-317 (#550's added test): from inside P1's box, a pinch on the wrist menu's quad
+    /// and on the main panel goes to the quad; the instance is not hovered, selected or
+    /// grabbed.
+    #[test]
+    fn arbitration_a_quad_takes_the_ray_from_inside_an_instance() {
+        use bevy::prelude::Transform;
+        // The wrist menu's quad (Q-265's size) 15 cm ahead, then the main panel 0.5 m
+        // ahead.
+        for (title_bar, ahead, size_m, size_px) in [
+            (false, 0.15, Vec2::new(0.16, 0.05), UVec2::new(640, 200)),
+            (true, 0.5, Vec2::new(0.56, 0.42), UVec2::new(1024, 768)),
+        ] {
+            let (mut app, instance) = inside_p1();
+            let at = Transform::from_xyz(0.0, 0.0, 3.0 - ahead);
+            let quad = app
+                .world_mut()
+                .spawn((
+                    PanelQuad {
+                        size_m,
+                        size_px,
+                        title_bar,
+                    },
+                    at,
+                    GlobalTransform::from(at),
+                ))
+                .id();
+            pinching(&mut app, 0.0);
+            app.update();
+            pinching(&mut app, 1.0);
+            app.update();
+            app.update();
+            assert!(app.world().get::<Hovered>(instance).is_none(), "no hover");
+            assert!(
+                app.world().get::<Selected>(instance).is_none(),
+                "no selection"
+            );
+            assert!(app.world().get::<Grabbed>(instance).is_none(), "no grab");
+            let seen = &app.world().resource::<Seen>().0;
+            assert!(!seen.is_empty(), "the quad got the pointer");
+            assert!(
+                seen.iter()
+                    .all(|p| p.panel == quad && p.hand == Hand::Right)
+            );
+            assert!(
+                seen.iter().any(|p| p.select == [true]),
+                "the pinch went to the quad: {seen:?}"
+            );
+        }
+    }
+
+    /// Q-317 (#550's added test; §1.8 Rays): from inside P1's box with no quad hit, the
+    /// pinch selects and grabs the enclosing instance, a quad off the ray in the scene.
+    #[test]
+    fn arbitration_from_inside_an_instance_with_no_quad_the_pinch_grabs_it() {
+        use bevy::prelude::Transform;
+        let (mut app, instance) = inside_p1();
+        // A quad off the ray: 1 m to the side, 0.5 m ahead.
+        let aside = Transform::from_xyz(1.0, 0.0, 2.5);
+        app.world_mut().spawn((
+            PanelQuad {
+                size_m: Vec2::new(0.56, 0.42),
+                size_px: UVec2::new(1024, 768),
+                title_bar: true,
+            },
+            aside,
+            GlobalTransform::from(aside),
+        ));
+        pinching(&mut app, 0.0);
+        app.update();
+        let hovered = app.world().get::<Hovered>(instance).copied();
+        assert_eq!(hovered.map(|h| h.hand), Some(Hand::Right), "hovered");
+        pinching(&mut app, 1.0);
+        app.update();
+        app.update();
+        assert!(app.world().get::<Selected>(instance).is_some(), "selected");
+        assert!(
+            matches!(
+                app.world().get::<Grabbed>(instance),
+                Some(Grabbed::One {
+                    hand: Hand::Right,
+                    ..
+                })
+            ),
+            "grabbed by the right hand"
+        );
+        assert!(app.world().resource::<Seen>().0.is_empty(), "no quad hit");
     }
 
     /// Q-315 (Q-306's side effect removed): a pinch on the main panel's title bar is
