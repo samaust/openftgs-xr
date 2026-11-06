@@ -361,12 +361,24 @@ pub(crate) fn wrist_buttons(size_px: Vec2) -> [(WristButton, egui::Rect); 4] {
     })
 }
 
-/// Draws the wrist menu's buttons over `ui`'s whole texture; the one clicked, if any.
+/// How far the wrist menu's pointer may move between a press and its release and still
+/// click, as a share of its texture's width: 1 cm on the 0.16 m quad (Q-265), where
+/// egui's default of 6 points is about 2.6 mm at the panel zoom, less than a quick click
+/// moves on a menu riding a tracked hand (#558).
+// Q-332
+const WRIST_CLICK_SHARE: f32 = 0.01 / 0.16;
+
+/// Draws the wrist menu's buttons over `ui`'s whole texture; the one clicked, if any. It
+/// also sets the context's click tolerance (Q-332), which egui applies from the next pass.
 pub(crate) fn wrist_ui(ui: &mut egui::Ui, playing: bool) -> Option<WristButton> {
     let ppp = ui.ctx().pixels_per_point();
     let view = ui.ctx().viewport_rect();
     ui.painter().rect_filled(view, 0.0, ui.visuals().panel_fill);
     let size = view.size() * ppp;
+    // Q-332: 1 cm of the texture's width in pixels, converted to the context's points.
+    let click_dist = WRIST_CLICK_SHARE * size.x / ppp;
+    ui.ctx()
+        .options_mut(|o| o.input_options.max_click_dist = click_dist);
     let mut clicked = None;
     for (b, r) in wrist_buttons(Vec2::new(size.x, size.y)) {
         let rect = egui::Rect::from_min_max(
@@ -435,7 +447,15 @@ mod tests {
         ctx: &egui::Context,
         events: Vec<egui::Event>,
     ) -> (Vec<(String, Vec2)>, Option<WristButton>) {
-        let ppp = PANEL_ZOOM;
+        wrist_frame_at(ctx, events, PANEL_ZOOM)
+    }
+
+    /// `wrist_frame` at the zoom `ppp` (`panel_zoom` of a `ui_scale`).
+    fn wrist_frame_at(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        ppp: f32,
+    ) -> (Vec<(String, Vec2)>, Option<WristButton>) {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -444,7 +464,7 @@ mod tests {
             events,
             ..Default::default()
         };
-        ctx.set_zoom_factor(PANEL_ZOOM);
+        ctx.set_zoom_factor(ppp);
         let mut clicked = None;
         let mut full = ctx.run_ui(input, |ui| clicked = wrist_ui(ui, false));
         full.textures_delta.clear();
@@ -593,6 +613,44 @@ mod tests {
             assert!(tex.contains_rect(*r), "{r:?}");
             if i > 0 {
                 assert!(r.min.x > b[i - 1].1.max.x);
+            }
+        }
+    }
+
+    /// Q-332 (#558, `cpu`): a press on a wrist button whose hit slides 8 mm on the
+    /// 0.16 m quad (32 px of 640, within the 3 cm button) before the release still
+    /// clicks it, at `ui_scale` 1 and 1.5; slid 1.2 cm (48 px), it doesn't.
+    #[test]
+    fn wrist_ui_clicks_a_press_that_slides_less_than_a_centimetre() {
+        for scale in [1.0, 1.5] {
+            let zoom = panel_zoom(scale);
+            for (slide_px, clicks) in [(32.0, 1), (48.0, 0)] {
+                let ctx = egui::Context::default();
+                wrist_frame_at(&ctx, Vec::new(), zoom);
+                let (texts, _) = wrist_frame_at(&ctx, Vec::new(), zoom);
+                let pixel = texts
+                    .iter()
+                    .find(|(t, _)| t == "Panel")
+                    .map(|(_, p)| *p)
+                    .expect("the Panel button is drawn");
+                let mut last = None;
+                let mut clicked = Vec::new();
+                for (select, dx) in [
+                    (vec![], 0.0),
+                    (vec![true], 0.0),
+                    (vec![false], slide_px),
+                    (vec![], slide_px),
+                ] {
+                    let at = super::super::panel_point(pixel + Vec2::new(dx, 0.0), zoom);
+                    let events = pointer_events(last, Some(at), &select, 0.0);
+                    last = Some(at);
+                    clicked.extend(wrist_frame_at(&ctx, events, zoom).1);
+                }
+                assert_eq!(
+                    clicked,
+                    vec![WristButton::Panel; clicks],
+                    "ui_scale {scale}, slid {slide_px} px"
+                );
             }
         }
     }
