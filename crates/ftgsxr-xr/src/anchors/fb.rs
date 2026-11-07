@@ -2,11 +2,11 @@
 
 //! The `AnchorStore` adapter over XR\_FB\_spatial\_entity, XR\_FB\_spatial\_entity\_query
 //! and XR\_META\_spatial\_entity\_persistence (§1.9, D-26, Appendix E.1; source-log rows
-//! T571.1 to T571.5). Every call is asynchronous and completes through an event matched
+//! 346 to 350). Every call is asynchronous and completes through an event matched
 //! by its request id (Q-343): the create gives the anchor's space and UUID, the query a
 //! saved anchor's space, the save and the erase their results. A component the next call
 //! needs (STORABLE before the save, LOCATABLE before the locate) is checked and enabled
-//! when off, since the documentation leaves their initial state open (T571.4).
+//! when off, since the documentation leaves their initial state open (source-log row 349).
 
 use std::collections::HashMap;
 use std::ptr;
@@ -19,15 +19,15 @@ use openxr::{AnyGraphics, Event, sys};
 use super::{AnchorDriver, AnchorId, AnchorStore, Status};
 use crate::error::XrError;
 
-/// How long a query by UUID may search before the runtime completes it (Q-T571.2).
-// Q-T571.2
+/// How long a query by UUID may search before the runtime completes it (Q-352).
+// Q-352
 const QUERY_TIMEOUT_NS: i64 = 10_000_000_000;
 
 /// The prefix of a pending creation's id (Q-343).
 const REQUEST: &str = "request:";
 
-/// A UUID as text: lowercase hexadecimal, hyphenated 8-4-4-4-12 (Q-T571.1).
-// Q-T571.1
+/// A UUID as text: lowercase hexadecimal, hyphenated 8-4-4-4-12 (Q-351).
+// Q-351
 pub(crate) fn uuid_text(u: &sys::Uuid) -> String {
     let h: String = u.data.iter().map(|b| format!("{b:02x}")).collect();
     format!(
@@ -40,8 +40,8 @@ pub(crate) fn uuid_text(u: &sys::Uuid) -> String {
     )
 }
 
-/// The UUID of `text`, hyphens ignored, 32 hexadecimal digits (Q-T571.1).
-// Q-T571.1
+/// The UUID of `text`, hyphens ignored, 32 hexadecimal digits (Q-351).
+// Q-351
 pub(crate) fn parse_uuid(text: &str) -> Option<sys::Uuid> {
     let hex: Vec<u8> = text.bytes().filter(|&b| b != b'-').collect();
     if hex.len() != 32 {
@@ -190,7 +190,7 @@ impl FbAnchors {
     }
 
     /// Asks the runtime to enable `component` on the anchor `uuid`; its event follows.
-    // Q-T571.2
+    // Q-352
     fn enable(&mut self, uuid: &str, component: sys::SpaceComponentTypeFB) -> Result<(), String> {
         let fp = self
             .session
@@ -461,14 +461,14 @@ impl AnchorStore for FbAnchors {
         };
         let mut req = sys::AsyncRequestIdFB::from_raw(0);
         // SAFETY: the table is the runtime's (the extension enabled); the session is
-        // alive; `info` names one UUID, alive for the call, and no spaces (T571.3: the
+        // alive; `info` names one UUID, alive for the call, and no spaces (source-log row 348: the
         // erase takes UUIDs alone).
         let r = unsafe { (fp.erase_spaces)(self.session.as_raw(), &info, &mut req) };
         if !ok(r) {
             return Err(XrError::Runtime(format!("xrEraseSpacesMETA: {r:?}")));
         }
         self.erases.insert(req.into_raw(), text.clone());
-        // The space stays tracked until destroyed (T571.4): dropped here.
+        // The space stays tracked until destroyed (source-log row 349): dropped here.
         self.anchors.remove(&text);
         Ok(())
     }
@@ -638,7 +638,7 @@ impl AnchorDriver for FbAnchors {
 mod tests {
     use super::*;
 
-    /// Q-T571.1: a UUID's text is lowercase, hyphenated 8-4-4-4-12, and parses back.
+    /// Q-351: a UUID's text is lowercase, hyphenated 8-4-4-4-12, and parses back.
     #[test]
     fn uuid_text_round_trips_through_parse_uuid() {
         let u = sys::Uuid {

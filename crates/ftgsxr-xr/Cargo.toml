@@ -32,7 +32,9 @@ path = "tests/integration.rs"
 # §2.1; Q-321: bevy_pbr, bevy_gizmos and bevy_color, approved by the owner.
 # Q-321
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log", "bevy_pbr", "bevy_gizmos", "bevy_color"] }
-bevy_mod_openxr.workspace = true
+# #568: `fb_passthrough` for `passthrough`'s layer (§1.9, D-14), a feature of a §2.3
+# row as Q-154 and Q-321 allowed.
+bevy_mod_openxr = { workspace = true, features = ["fb_passthrough"] }
 bevy_mod_xr.workspace = true
 ftgsxr-app.workspace = true
 ftgsxr-core.workspace = true

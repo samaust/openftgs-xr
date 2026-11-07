@@ -131,7 +131,8 @@ fn main() {
         QualityTier::by_name("quest-balanced").expect("invariant: §1.12's tier exists")
     });
     let xr = XrPlugin {
-        passthrough: false,
+        // §1.9 (#568): the layer where the runtime offers it.
+        passthrough: true,
         hands: true,
         // Q-121
         sort: SortMode::PerView,

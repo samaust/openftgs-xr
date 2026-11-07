@@ -40,7 +40,7 @@ mod fb;
 
 /// A spatial anchor's id (§2.1): the runtime's UUID as text, lowercase and hyphenated
 /// (8-4-4-4-12); while its creation is pending, the request id `request:<n>` (Q-343).
-// Q-343, Q-T571.1
+// Q-343, Q-351
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AnchorId(pub String);
 
@@ -178,7 +178,7 @@ enum Job {
 /// (Q-348, kept across sessions), what `Ready` came from (the HUD's `Persisted` or
 /// `Located`, Q-345), the UUID each scene path last named (Q-344), the anchors whose
 /// save gave up waiting (forgotten once created) and Q-161's toast once per session.
-// Q-T571.3
+// Q-353
 #[derive(Resource, Default)]
 pub(crate) struct Handshake {
     job: Job,
@@ -190,14 +190,14 @@ pub(crate) struct Handshake {
     abandoned: Vec<AnchorId>,
     toasted: bool,
     /// Whether the instance enabled the spatial-entity extensions: until the session's
-    /// adapter exists and has a frame, a create or a locate waits (Q-T571.2).
+    /// adapter exists and has a frame, a create or a locate waits (Q-352).
     expected: bool,
 }
 
 /// The content group's world pose on an anchor located at `located` in the primary
 /// reference space, under the tracking root's world pose `root` (Q-254): the twist about
 /// stage +y of the anchor's world rotation, its world translation unchanged, scale 1.
-// Q-254, Q-T571.1
+// Q-254, Q-351
 pub(crate) fn placed_group(located: Pose, root: Pose) -> Pose {
     let root = Pose { scale: 1.0, ..root };
     let located = Pose {
@@ -215,7 +215,7 @@ pub(crate) fn placed_group(located: Pose, root: Pose) -> Pose {
 /// The pose, in the primary reference space, of the anchor created at the content group's
 /// origin `group` (its world pose) under the tracking root's world pose `root`: scale
 /// dropped on both, so the anchor carries the group's yaw and translation (§1.9).
-// Q-T571.1
+// Q-351
 pub(crate) fn creation_pose(group: Pose, root: Pose) -> Pose {
     let root = Pose { scale: 1.0, ..root };
     let group = Pose {
@@ -368,7 +368,7 @@ fn ask(platform: Option<&PlatformRes>) -> Flow {
 /// located, the group placed on it by Q-254 and `Ready`, or `Lost(uuid)`; the UUID a
 /// re-saved scene named before erased once the new one is persisted (Q-344). Writes
 /// `HudData.anchor` (Q-345) and `XrFeatures.anchors` (Q-336).
-// Q-343, Q-344, Q-345, Q-348, Q-350, Q-T571.2, Q-T571.3
+// Q-343, Q-344, Q-345, Q-348, Q-350, Q-352, Q-353
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handshake(
     mut store: ResMut<Anchors>,
@@ -432,7 +432,7 @@ pub(crate) fn handshake(
         listed(false);
     }
     let available = store.available();
-    // Q-T571.2: with the extensions enabled, a request waits for the session's adapter
+    // Q-352: with the extensions enabled, a request waits for the session's adapter
     // and its first frame rather than failing on the store that stands in before it.
     let waiting = hs.expected && !(available && store.ready());
     let starting = !waiting
@@ -642,7 +642,7 @@ fn progress(
 }
 
 /// Forgets the anchors whose save stopped waiting, once their creation resolved.
-// Q-T571.2
+// Q-352
 fn forget_abandoned(store: &mut dyn AnchorDriver, hs: &mut Handshake) {
     hs.abandoned.retain(|id| match store.status(id) {
         Status::Pending => true,
@@ -995,7 +995,7 @@ mod tests {
         );
     }
 
-    /// Q-T571.2: with the extensions enabled on the instance, a `Locating` set before the
+    /// Q-352: with the extensions enabled on the instance, a `Locating` set before the
     /// session's adapter exists waits (no `Lost`, no toast), and proceeds once it does.
     #[test]
     fn handshake_waits_for_the_sessions_store() {
