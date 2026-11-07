@@ -14,6 +14,7 @@ mod dv2_stereo;
 mod dv3_sort;
 mod dv4_conformance;
 mod dv6_passthrough;
+mod dv7_depth;
 mod dv8_hands;
 mod dv9_anchors;
 mod i13_xr_unsupported_toast;

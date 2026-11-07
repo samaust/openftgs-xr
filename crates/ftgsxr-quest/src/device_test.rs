@@ -16,6 +16,7 @@ mod dv2;
 mod dv3;
 mod dv4;
 mod dv6;
+mod dv7;
 mod dv8;
 mod dv9;
 
@@ -62,6 +63,7 @@ pub(crate) fn add(app: &mut App, name: &str) {
         dv12::NAME => dv12::add(app),
         dv13::NAME => dv13::add(app),
         dv6::NAME => dv6::add(app),
+        dv7::NAME => dv7::add(app),
         dv8::NAME => dv8::add(app),
         dv9::NAME => dv9::add(app),
         _ => verdict(name, false, "unknown test"),
