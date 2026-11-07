@@ -476,7 +476,7 @@ fn on_loaded(
     let extras = match poses.0.get(&m.identity) {
         Some(saved) => {
             *t = transform_of(saved.pose);
-            // §1.5 Poses: the trim saved with the pose loads with it (E17).
+            // §1.5 Poses: the trim saved with the pose loads with it (E17). Q-374
             if let Some(trim) = saved.trim {
                 commands.entity(add.entity).insert(SplatTrim(trim));
             }
@@ -614,13 +614,15 @@ fn fit_box(bounds: &SplatBounds, content: bool) -> Aabb {
     if content { bounds.content } else { bounds.aabb }
 }
 
-/// §1.5's fit box of an untrimmed asset, for the automatic fit at its load.
+/// §1.5's fit box of an untrimmed asset, for the automatic fit at its load, where an
+/// instance without a saved pose has no trim (Q-374).
 fn asset_fit_box(asset: &SplatAsset, content: bool) -> Aabb {
-    if content {
-        asset.content_bounds
-    } else {
-        asset.bounds
-    }
+    let untrimmed = SplatBounds {
+        aabb: asset.bounds,
+        content: asset.content_bounds,
+        kept_none: false,
+    };
+    fit_box(&untrimmed, content)
 }
 
 fn fit_box_of(q: &Instances, e: Entity, content: bool) -> Option<Aabb> {
@@ -967,8 +969,9 @@ fn run_intents(
                     }
                 }
                 InstanceAction::SetTrim(trim) => {
-                    // Q-374: a trim that is on needs well-formed shapes (E17).
-                    if q.contains(instance) && (trim.mode == TrimMode::Off || trim.is_valid()) {
+                    // Q-374: well-formed shapes whatever the mode (E17), so a trim the
+                    // instance holds can always be saved (Q-372).
+                    if q.contains(instance) && trim.is_valid() {
                         commands.entity(instance).insert(SplatTrim(trim));
                     }
                 }
@@ -1235,9 +1238,13 @@ pub(crate) fn highlight_colors(high_contrast: bool) -> (Color, Color) {
         (HOVER, ACCENT)
     }
 }
+
 /// The trim shape's color (§1.4 Selection and debug views: distinct from the accent):
 /// magenta, apart from the hover, accent and high-contrast colors. Q-374
 const TRIM_COLOR: Color = Color::srgb(1.0, 0.2, 0.85);
+
+/// The segments drawn per great circle of a sphere trim.
+const CIRCLE_SEGMENTS: u32 = 64;
 
 /// E17's shape of the selected instance in thin lines, through its pose: the box's edges,
 /// or the sphere's three great circles in the model's axis planes; nothing when off.
@@ -1252,10 +1259,10 @@ fn trim_lines(gizmos: &mut Gizmos, trim: &Trim, pose: &Pose) {
         TrimMode::Sphere => {
             for (u, v) in [(Vec3::X, Vec3::Y), (Vec3::Y, Vec3::Z), (Vec3::Z, Vec3::X)] {
                 let at = |k: u32| {
-                    let th = k as f32 * std::f32::consts::TAU / 64.0;
+                    let th = k as f32 * std::f32::consts::TAU / CIRCLE_SEGMENTS as f32;
                     pose.transform_point(trim.center + trim.radius * (th.cos() * u + th.sin() * v))
                 };
-                for k in 0..64 {
+                for k in 0..CIRCLE_SEGMENTS {
                     gizmos.line(at(k), at(k + 1), TRIM_COLOR);
                 }
             }

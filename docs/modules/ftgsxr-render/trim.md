@@ -6,7 +6,7 @@ How an instance's trim (E17) gets from the panel to the cull, and how its trimme
 
 The trim lives in one component, `SplatTrim`, on the instance. No `SplatTrim` means off. Everything reads that component: the panel, Save pose, the scene writer, the extraction for the cull, and the bounds task. A trim whose mode is off may still carry shapes (Reset trim leaves the initial shapes there, Q-374). The bounds task and the cull treat such a trim as no trim.
 
-- **Writing it.** Only `manipulate`'s handling of `InstanceAction::SetTrim` and `ResetTrim` writes the component. `SetTrim` ignores a trim that is on with shapes `Trim::is_valid` refuses. A saved pose's trim is inserted when that pose is applied at load. A scene model's trim replaces it, and a scene model without one removes it (Q-374).
+- **Writing it.** `manipulate`'s handling of `InstanceAction::SetTrim` and `ResetTrim` writes the component. `SetTrim` ignores a trim whose shapes `Trim::is_valid` refuses, whatever its mode, so every trim an instance holds can be saved (Q-372). A saved pose's trim is inserted when that pose is applied at load. A scene model's trim replaces it, and a scene model without one removes it (Q-374).
 - **The panel.** `ui/trim_row.rs` draws the Scene tab's trim row and sends `SetTrim` with the whole edited trim; it never writes the component. The slider ranges and the initial shapes come from the asset's untrimmed model box, never from `SplatBounds`, so they don't move while the user trims.
 
 ## The cull
@@ -26,7 +26,7 @@ In `cull.wgsl`, both cull entry points run `trim_keeps` on the moved center in m
 - A newer trim replaces the `BoundsState`, which drops the earlier task, so a stale result is never applied (E17).
 - A result of `None` gives the trim's own box for both boxes, with `kept_none` set; the panel's notice reads that flag.
 
-`trimmed_bounds` (in `layout.rs`) shares E10's counted rows and fallback with `Model::bounds`, and the percentile box with `Model::content_bounds` (`percentile_box`). It clips each counted row's visible interval to the trim: slab clipping for a box, a quadratic for a sphere. Both shapes are convex and the motion is linear, so the kept part is a single interval.
+`trimmed_bounds` (in `layout.rs`) shares E10's visible interval with `Model::bounds` (the crate-private `visible_interval`, here in rebased time), applies E10's fallback the same way, and shares the percentile box with `Model::content_bounds` (`percentile_box`). It clips each counted row's visible interval to the trim: slab clipping for a box, a quadratic for a sphere. Both shapes are convex and the motion is linear, so the kept part is a single interval.
 
 ## Who reads `SplatBounds`
 

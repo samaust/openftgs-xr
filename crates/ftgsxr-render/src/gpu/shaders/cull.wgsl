@@ -10,7 +10,8 @@
 // culls, the Jacobian with its clamp, Σ′ + εI, the determinant guard, the opacity-aware
 // extent and its cap, whole-pixel radii, the box cull, the conic as (a, b, c), Q-21, and
 // the non-finite cull), E8 (the key k̄ = 2³² − 1 − bits(z)), E14 (the gains in linear
-// light) and E17 (the trim's closed test on μx(τ) in model space, after E3's). Every E6 and E7 constant comes from the model's uniform block (D-39).
+// light) and E17 (the trim's closed test on μx(τ) in model space, after E3's, Q-373).
+// Every E6 and E7 constant comes from the model's uniform block (D-39).
 //
 // Records (§1.4 stage 2, words of 32 bits, little-endian):
 // - per view (12 words): μ′ (2 f32), the conic (3 f32), z_c (f32), the radii (2 f32),
@@ -104,6 +105,7 @@ const OVERFLOW: u32 = 8u;
 const ACTIVE: u32 = 9u;
 // Q-118
 const NON_FINITE: u32 = 10u;
+// Q-373
 const TRIMMED: u32 = 11u;
 
 const TRIM_BOX: u32 = 1u;
@@ -633,6 +635,7 @@ fn cull_centers(
         return;
     }
     mark_active();
+    // Q-373
     if !trim_keeps(t.mu) {
         count_trimmed();
         return;
@@ -729,7 +732,7 @@ fn size() {
     size_stats[2] = over;
     size_stats[3] = cap;
     size_stats[4] = atomicLoad(&size_counters[NON_FINITE]);
-    size_stats[5] = atomicLoad(&size_counters[TRIMMED]);
+    size_stats[5] = atomicLoad(&size_counters[TRIMMED]); // Q-373
     for (var i = 6u; i < 20u; i++) {
         size_stats[i] = 0u;
     }

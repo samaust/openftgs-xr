@@ -23,7 +23,7 @@ pub(super) struct TrimInfo {
 /// The six box limits in the panel's order left, right, bottom, top, back, front, each
 /// named and bound to (axis, max) of the model's frame through the preset (E17's table);
 /// a custom preset names the limits x, y and z min and max.
-pub(super) fn trim_limit_labels(preset: Preset) -> [(&'static str, usize, bool); 6] {
+fn trim_limit_labels(preset: Preset) -> [(&'static str, usize, bool); 6] {
     match preset {
         Preset::YUp => [
             ("left", 0, false),
@@ -72,7 +72,7 @@ fn axis_name(axis: usize, max: bool) -> String {
 /// §1.7's slider ranges from the untrimmed B_m: each axis extended by 10 % of the longest
 /// side beyond each face; the radius from 10⁻³ of that side to 1.1 times the half
 /// diagonal.
-pub(super) fn slider_ranges(b: &Aabb) -> ([(f32, f32); 3], (f32, f32)) {
+fn slider_ranges(b: &Aabb) -> ([(f32, f32); 3], (f32, f32)) {
     let l = b.longest_side();
     let pad = 0.1 * l;
     let axes = std::array::from_fn(|a| (b.min[a] - pad, b.max[a] + pad));
@@ -139,10 +139,11 @@ pub(super) fn trim_row(
                 } else {
                     now.box_min[axis]
                 };
-                let text = if label.contains(' ') {
-                    label.to_string()
-                } else {
-                    format!("{label} ({})", axis_name(axis, max))
+                // A named limit shows its model-frame axis too; a custom preset's are
+                // already the axes.
+                let text = match preset {
+                    Preset::Custom(_) => label.to_string(),
+                    _ => format!("{label} ({})", axis_name(axis, max)),
                 };
                 if slider(ui, &text, &mut v, axes[axis]) {
                     next.set_box_limit(axis, max, v);

@@ -31,9 +31,8 @@ const INDIRECT_BYTES: u64 = COUNTER_WORDS * WORD;
 /// scatter passes, then the scan's one workgroup, three words each. // Q-85
 const DISPATCH_BYTES: u64 = 6 * WORD;
 /// The statistics block (§1.4 stage 8, Q-81): the two counts, the overflow flag, C and
-/// the non-finite count (E6) in words 0–4, the trimmed count (E17) in word 5, two pad
-/// words, then six 64-bit timestamps
-/// from byte `STATS_TIMESTAMPS`.
+/// the non-finite count (E6) in words 0–4, the trimmed count (E17, Q-373) in word 5,
+/// two pad words, then six 64-bit timestamps from byte `STATS_TIMESTAMPS`.
 pub(crate) const STATS_BYTES: u64 = 80;
 /// The byte offset of the statistics block's timestamps, 8-byte aligned.
 pub(crate) const STATS_TIMESTAMPS: u64 = 32;

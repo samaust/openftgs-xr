@@ -1726,10 +1726,11 @@ mod tests {
             .collect()
     }
 
-    // I-23 (§1.7 Trim, E17's table): the box limits are named through the orientation
-    // preset, and as x, y and z min and max under a custom one.
+    // Private (I-23's panel cases, which have no public seam, Q-375; §1.7 Trim, E17's
+    // table): the box limits are named through the orientation preset, and as x, y and z
+    // min and max under a custom one.
     #[test]
-    fn i23_the_trim_rows_labels_follow_the_preset() {
+    fn scene_tab_trim_labels_follow_the_preset() {
         use ftgsxr_core::{Preset, Quat, Trim, TrimMode};
         let cases = [
             (
@@ -1789,11 +1790,11 @@ mod tests {
         }
     }
 
-    // I-23 (E17, §1.7): turning the box on from no trim sends the initial shapes, the box
-    // the untrimmed B_m; "Reset trim" sends ResetTrim; the notice shows when nothing is
-    // kept.
+    // Private (I-23's panel cases, Q-375; E17, §1.7): turning the box on from no trim
+    // sends the initial shapes, the box the untrimmed B_m; "Reset trim" sends ResetTrim;
+    // the notice shows when nothing is kept.
     #[test]
-    fn i23_the_trim_row_turns_on_resets_and_warns() {
+    fn scene_tab_trim_turns_on_resets_and_warns() {
         use ftgsxr_core::{Preset, Trim, TrimMode};
         let mut world = World::new();
         let (e, b) = trimmed_instance(&mut world, Preset::YUp, None, false);

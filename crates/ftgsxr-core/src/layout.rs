@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use glam::{DVec3, Vec3};
 
-use crate::types::model::{PARALLEL_ROWS, moved_position_f64, percentile_box};
+use crate::types::model::{PARALLEL_ROWS, moved_position_f64, percentile_box, visible_interval};
 use crate::types::{Aabb, Model, Trim, TrimMode};
 
 /// Which fields are stored on the GPU as IEEE half floats (§1.2 load option 2, D-12).
@@ -322,7 +322,17 @@ pub fn trimmed_bounds(arrays: &GpuArrays, alpha_skip: f32, trim: &Trim) -> Optio
     let n = arrays.n as usize;
     let span = arrays.tau1 - arrays.tau0; // Q-97: the rebased τ₁
     let counted: Vec<(usize, f64, f64)> = (0..n)
-        .filter_map(|k| visible_interval(arrays, alpha_skip, span, k).map(|(a, b)| (k, a, b)))
+        .filter_map(|k| {
+            visible_interval(
+                read_value(&arrays.opacity, arrays.half.opacity, k),
+                alpha_skip,
+                f64::from(arrays.duration[k]),
+                f64::from(arrays.time_center[k]),
+                (0.0, span),
+                arrays.single,
+            )
+            .map(|(a, b)| (k, a, b))
+        })
         .collect();
     let rows = if counted.is_empty() {
         (0..n).map(|k| (k, 0.0, span)).collect()
@@ -358,28 +368,6 @@ pub fn trimmed_bounds(arrays: &GpuArrays, alpha_skip: f32, trim: &Trim) -> Optio
         .filter(|b| b.size().max_element() > 0.0)
         .unwrap_or(whole);
     Some((whole, content))
-}
-
-/// Row `k`'s E10 visible interval in rebased time, clipped to \[0, τ₁ − τ₀\]; `None` when
-/// it is not counted.
-fn visible_interval(
-    arrays: &GpuArrays,
-    alpha_skip: f32,
-    span: f64,
-    k: usize,
-) -> Option<(f64, f64)> {
-    let opacity = read_value(&arrays.opacity, arrays.half.opacity, k);
-    if opacity <= alpha_skip {
-        return None;
-    }
-    if arrays.single {
-        return Some((0.0, 0.0));
-    }
-    let ratio = f64::from(opacity) / f64::from(alpha_skip);
-    let h = f64::from(arrays.duration[k]) * (2.0 * ratio.ln()).sqrt();
-    let c = f64::from(arrays.time_center[k]);
-    let (a, b) = ((c - h).max(0.0), (c + h).min(span));
-    (a <= b).then_some((a, b))
 }
 
 /// Row `k`'s position, velocity and rebased time center, as E1 takes them.

@@ -88,6 +88,7 @@ type BoundsQuery<'w, 's> = Query<
 /// Keeps each instance's `SplatBounds` (E17): the untrimmed boxes at once for a new asset
 /// or a trim turned off; a task for a trim that is on, whose result replaces the boxes when
 /// it arrives.
+// Q-373
 pub(crate) fn update_bounds(
     mut commands: Commands,
     assets: Res<Assets<SplatAsset>>,

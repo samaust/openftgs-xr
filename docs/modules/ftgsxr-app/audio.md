@@ -24,10 +24,10 @@ An instance whose `LoadedModel` names a soundtrack gets a `Soundtrack`, decoded 
 `spatialize` runs last in that chain, after the transform propagation, so it reads this frame's poses (§1.10 Soundtracks, Q-268, Q-281). With the `Headset` marker (Q-266) and `spatial` on, every ready sink is set each frame:
 
 - **The listener** is the midpoint of the world-space translations of every active `SplatCamera` (the two eyes on the headset), its forward the sum of their forwards (Q-281).
-- **The emitter** is the instance's `GlobalTransform` applied to B\_m's center, so it follows the content group and the instance's pose.
+- **The emitter** is the instance's `GlobalTransform` applied to B\_m's center (`SplatBounds.aabb`), so it follows the content group and the instance's pose.
 - **The mix.** The gain is the plain gain times min(1, 1/d) over the 3D distance d; the pan is the sine of the emitter's horizontal azimuth from the listener's forward, positive right, clamped to \[−1, 1\]: both the forward and the offset are projected on the floor and normalized, and the pan is 0 when either projection is zero (an emitter straight above or below, a forward straight up or down) (Q-268, Q-281).
 
-Without a camera, or for an instance whose asset is not loaded, the sink gets pan 0 and the plain gain. Without the marker (the desktop, `play --xr`) or with `spatial` off the soundtracks play stereo: `spatialize` writes the stereo values once on leaving the spatial mode and nothing otherwise, the plain gain being `apply_gains`' and `follow_clock`'s.
+Without a camera, or for an instance without its boxes yet (`SplatBounds`, trimmed while a trim is on, E17), the sink gets pan 0 and the plain gain. Without the marker (the desktop, `play --xr`) or with `spatial` off the soundtracks play stereo: `spatialize` writes the stereo values once on leaving the spatial mode and nothing otherwise, the plain gain being `apply_gains`' and `follow_clock`'s.
 
 ## Q-n rows relied on
 

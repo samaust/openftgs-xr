@@ -6,8 +6,9 @@
 //! an empty trim gives the shape's box with `kept_none`; `ResetTrim` turns it off with the
 //! initial shapes; Save pose then reload restores pose and trim; Reset pose leaves the
 //! trim; Forget pose drops the saved trim; scene save and load restore it; the asset's
-//! box, the thumbnail's, stays untrimmed. The panel's labels and notice are the unit tests
-//! `ui::dock::tests::i23_*` (they need the crate's own dock).
+//! box, the thumbnail's, stays untrimmed. The panel's labels and notice are private tests
+//! (`ui::dock::tests::scene_tab_trim_*`), since the Scene tab has no public seam; the boxes
+//! are compared within 10⁻⁶ of hand-worked values and the fit at I-4's 10⁻⁴ (Q-375).
 
 use crate::support;
 
@@ -326,4 +327,43 @@ fn i23_a_scene_saves_and_restores_the_trim() {
             .is_some_and(|b| close(b.aabb, want_m))),
         "and its boxes"
     );
+}
+
+/// Q-374: a scene model without `trim` is off, over the trim a saved pose brings.
+#[test]
+fn i23_a_scene_without_trim_turns_off_the_saved_poses_trim() {
+    let path = model_file("i23_scene_off");
+    let mut t = TestApp::new("i23_scene_off");
+    let e = load(&mut t, path);
+    // The scene, saved untrimmed.
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::SaveScene("plain".into()));
+    t.frames(1);
+    // Then a trim saved with the pose, which a reload would apply.
+    let (want_m, _) = trimmed_by_hand();
+    set_trim_and_wait(&mut t, e, near_box(), want_m);
+    t.app.world_mut().write_message(PersistCommand::SavePose(e));
+    t.frames(3);
+    t.command(LibraryCommand::UnloadAll);
+    t.frames(2);
+    t.app
+        .world_mut()
+        .write_message(PersistCommand::LoadScene("plain".into()));
+    assert!(
+        t.until(600, |app| app
+            .world_mut()
+            .query::<&SplatBounds>()
+            .iter(app.world())
+            .count()
+            == 1),
+        "the scene's model loads"
+    );
+    t.frames(3);
+    let mut q = t
+        .app
+        .world_mut()
+        .query_filtered::<Entity, With<LoadedModel>>();
+    let e = q.single(t.app.world()).unwrap();
+    assert_eq!(trim(&t, e), None, "the scene's absent trim is off");
 }

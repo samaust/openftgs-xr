@@ -217,11 +217,11 @@ fn instance_boxes(
     };
     instances
         .iter()
-        .map(|(e, t, m, parent)| {
+        .map(|(e, t, b, parent)| {
             let group = parent
                 .and_then(|c| groups.get(c.parent()).ok())
                 .map_or(Pose::IDENTITY, pose);
-            (e, pose(t).then(&group), m.aabb)
+            (e, pose(t).then(&group), b.aabb)
         })
         .collect()
 }

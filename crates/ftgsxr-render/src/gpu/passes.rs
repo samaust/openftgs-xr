@@ -54,7 +54,7 @@ const WORKGROUP: u32 = 256;
 /// The most workgroups in one dimension of a dispatch (wgpu's default limit).
 const MAX_GROUPS_PER_DIMENSION: u32 = 65_535;
 /// One instance's uniform block (`cull.wgsl`'s `Instance`).
-const INSTANCE_BYTES: usize = 176;
+const INSTANCE_BYTES: usize = 176; // Q-373
 /// Instances sit 256 bytes apart, the largest uniform offset alignment wgpu allows.
 const INSTANCE_STRIDE: usize = 256;
 /// The frame's uniform block (`cull.wgsl`'s `Frame`).
@@ -1203,6 +1203,7 @@ fn instance_uniform(
     b.u32(u32::from(draw.sh_degree.min(draw.model.sh_degree)));
     b.u32(instance);
     b.f32(pixel_radius);
+    // Q-373: the trim after the centers' radius.
     let trim = &draw.trim;
     b.u32(match trim.mode {
         TrimMode::Off => 0,

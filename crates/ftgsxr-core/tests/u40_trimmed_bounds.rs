@@ -9,11 +9,11 @@ use ftgsxr_core::{
     pack_for_gpu, trimmed_bounds,
 };
 
-/// U-40's tolerance, 10⁻⁶ (the literals stay below 200 in magnitude; float32 rounds those
-/// that are not whole numbers to within it).
+/// U-40's tolerance, 10⁻⁶ absolute (the literals stay below 6 in magnitude, where float32
+/// holds it, as U-38's).
 fn assert_box(b: Aabb, min: [f32; 3], max: [f32; 3]) {
     let (min, max) = (Vec3::from_array(min), Vec3::from_array(max));
-    let tol = 1e-6 * (1.0 + min.abs().max(max.abs()).max_element());
+    let tol = 1e-6;
     assert!(
         (b.min - min).abs().max_element() <= tol && (b.max - max).abs().max_element() <= tol,
         "{b:?} vs {min} – {max}"
@@ -134,8 +134,14 @@ fn u40_a_moving_row_partly_inside_covers_its_kept_interval_only() {
     assert_box(m, [-1.03, -0.03, -0.03], [2.03, 0.03, 0.03]);
     assert_eq!(c, m);
     // Sphere of radius 1 at x = 1.5: keeps x ∈ [0.5, 2] (the visible interval's end).
-    let (m, _) = trimmed(&[fast_short()], &sphere([1.5, 0.0, 0.0], 1.0)).unwrap();
+    let (m, c) = trimmed(&[fast_short()], &sphere([1.5, 0.0, 0.0], 1.0)).unwrap();
     assert_box(m, [0.47, -0.03, -0.03], [2.03, 0.03, 0.03]);
+    assert_eq!(c, m, "one kept row: B_c is the trimmed B_m");
+    // With a still row inside the sphere too, B_c is the box of the moving row's kept
+    // midpoint (x = 1.25 at τ = 5.125) and the still row (x = 2.2).
+    let rows = [fast_short(), still([2.2, 0.0, 0.0], 0.01)];
+    let (_, c) = trimmed(&rows, &sphere([1.5, 0.0, 0.0], 1.0)).unwrap();
+    assert_box(c, [1.25, 0.0, 0.0], [2.2, 0.0, 0.0]);
     // The midpoints of the kept intervals make B_c: with a second row the box of the two
     // midpoints (x = 0.5 at τ = 5.05, and a still row at x = −0.9).
     let rows = [fast_short(), still([-0.9, 0.0, 0.0], 0.01)];
@@ -188,15 +194,15 @@ fn u40_the_expansion_is_taken_over_the_kept_rows_only() {
 
 #[test]
 fn u40_the_content_box_takes_the_percentiles_of_the_kept_rows() {
-    // 100 kept rows at x = 1 … 100 and 100 trimmed ones at x = 1001 … 1100: over the 100
-    // kept, the nearest ranks ⌈1⌉ and ⌈99⌉ are x = 1 and x = 99.
+    // 100 kept rows at x = 0.05 k (k = 1 … 100) and 100 trimmed ones at x = 5.5 + 0.004 k:
+    // over the 100 kept, the nearest ranks ⌈1⌉ and ⌈99⌉ are x = 0.05 and x = 4.95.
     let mut rows: Vec<Row> = (1..=100)
-        .map(|k| still([k as f32, 0.0, 0.0], 0.01))
+        .map(|k| still([0.05 * k as f32, 0.0, 0.0], 0.01))
         .collect();
-    rows.extend((1001..=1100).map(|k| still([k as f32, 0.0, 0.0], 0.01)));
-    let (m, c) = trimmed(&rows, &boxed([0.5, -1.0, -1.0], [100.5, 1.0, 1.0])).unwrap();
-    assert_box(m, [0.97, -0.03, -0.03], [100.03, 0.03, 0.03]);
-    assert_box(c, [1.0, 0.0, 0.0], [99.0, 0.0, 0.0]);
+    rows.extend((1..=100).map(|k| still([5.5 + 0.004 * k as f32, 0.0, 0.0], 0.01)));
+    let (m, c) = trimmed(&rows, &boxed([0.025, -1.0, -1.0], [5.025, 1.0, 1.0])).unwrap();
+    assert_box(m, [0.02, -0.03, -0.03], [5.03, 0.03, 0.03]);
+    assert_box(c, [0.05, 0.0, 0.0], [4.95, 0.0, 0.0]);
 }
 
 #[test]
