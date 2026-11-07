@@ -10,9 +10,10 @@
 // by E13's weight w_occ (mirroring `ftgsxr_core::occlusion_weight`, Q-63; 1 when occlusion
 // is off), and writes the premultiplied (c·α, α) for the `One, OneMinusSrcAlpha` blend.
 // E13 (D-45): p_f is the point on the fragment's own view ray at the record's depth z_c,
-// projected into the environment depth camera, whose nearest texel is decoded to metres
-// (`occlusion.wgsl`, prepended to this file, Q-340); a fragment behind the depth camera or
-// outside its image, or a sample that is invalid, gets w_occ = 1.
+// projected into the environment depth camera; the weight is filtered over the 2 × 2 nearest
+// texels, each decoded to metres (`occlusion.wgsl`, prepended to this file, Q-340, #601); a
+// fragment behind the depth camera or outside its image gets w_occ = 1, and an invalid texel
+// weighs 1.
 // E7's constants are the instance's model's (D-39), from the per-instance block that
 // `encode_prepare` writes.
 //
@@ -59,8 +60,9 @@ struct DrawView {
 @group(0) @binding(1) var<storage, read> payloads: array<u32>;
 @group(0) @binding(2) var<storage, read> instances: array<InstanceConstants>;
 @group(0) @binding(3) var<uniform> view: DrawView;
-// E13's environment depth (a 1 × 1 placeholder when `view.occlusion` is 0), read at its
-// nearest texel through a non-filtering sampler.
+// E13's environment depth (a 1 × 1 placeholder when `view.occlusion` is 0), read texel by
+// texel with `textureLoad` at the 2 × 2 nearest texels (Q-340, #601). The non-filtering
+// sampler stays in the layout, unread since #601.
 @group(0) @binding(4) var env_depth: texture_2d<f32>;
 @group(0) @binding(5) var env_sampler: sampler;
 
@@ -104,7 +106,19 @@ fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) 
     return out;
 }
 
+// E13's weight against one texel of the depth image: its stored depth decoded to metres
+// (Q-340), weighed at the depth camera's z of p_f; an invalid texel weighs 1.
+fn texel_weight(texel: vec2<i32>, z_f: f32) -> f32 {
+    let d = textureLoad(env_depth, texel, 0).x;
+    let e = depth_metres(d, view.env_near, view.env_far);
+    return occlusion_weight(z_f, e.metres, e.valid, view.delta_m, view.soft != 0u);
+}
+
 // E13's w_occ for the fragment at camera pixel `p` of a record at depth `z_c` (D-45).
+// Q-340 (#601): the weight is filtered over the 2 × 2 nearest texels (percentage-closer
+// filtering): E13's weight against each of the four texels whose centres surround p_f's
+// projection q, clamped to the image, blended bilinearly by q's position among their
+// centres, so an occlusion edge ramps over about one depth texel (D-16's smooth edges).
 fn environment_weight(p: vec2<f32>, z_c: f32) -> f32 {
     if view.occlusion == 0u {
         return 1.0;
@@ -112,18 +126,28 @@ fn environment_weight(p: vec2<f32>, z_c: f32) -> f32 {
     // p_f on the fragment's own view ray at the record's depth, in the view's camera space.
     let x_v = vec3<f32>((p - view.view_k.zw) / view.view_k.xy * z_c, z_c);
     let x_d = (view.env_from_view * vec4<f32>(x_v, 1.0)).xyz;
-    var z_e = 0.0;
-    var valid = false;
-    if x_d.z > 0.0 {
-        let q = view.env_k.xy * x_d.xy / x_d.z + view.env_k.zw;
-        if all(q >= vec2<f32>(0.0)) && all(q < view.env_size) {
-            let d = textureSampleLevel(env_depth, env_sampler, q / view.env_size, 0.0).x;
-            let e = depth_metres(d, view.env_near, view.env_far);
-            z_e = e.metres;
-            valid = e.valid;
-        }
+    if !(x_d.z > 0.0) {
+        return 1.0;
     }
-    return occlusion_weight(x_d.z, z_e, valid, view.delta_m, view.soft != 0u);
+    let q = view.env_k.xy * x_d.xy / x_d.z + view.env_k.zw;
+    if !(all(q >= vec2<f32>(0.0)) && all(q < view.env_size)) {
+        return 1.0;
+    }
+    // The texel centres are at i + ½: t = q − ½ lies between i₀ and i₀ + 1, f along.
+    let t = q - vec2<f32>(0.5);
+    let i0 = vec2<i32>(floor(t));
+    let f = fract(t);
+    let last = vec2<i32>(view.env_size) - vec2<i32>(1);
+    let a = clamp(i0, vec2<i32>(0), last);
+    let b = clamp(i0 + vec2<i32>(1), vec2<i32>(0), last);
+    let w00 = texel_weight(a, x_d.z);
+    let w10 = texel_weight(vec2<i32>(b.x, a.y), x_d.z);
+    let w01 = texel_weight(vec2<i32>(a.x, b.y), x_d.z);
+    let w11 = texel_weight(b, x_d.z);
+    // w + f·(w′ − w), not (1 − f)·w + f·w′: equal weights blend to themselves exactly.
+    let top = w00 + f.x * (w10 - w00);
+    let bottom = w01 + f.x * (w11 - w01);
+    return top + f.y * (bottom - top);
 }
 
 @fragment
