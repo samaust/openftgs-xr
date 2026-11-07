@@ -79,8 +79,9 @@ impl Frame {
     }
 }
 
-/// What the render world saw: the last frame, the frames seen and those whose blend mode
-/// was not OPAQUE.
+/// What the render world saw: the last frame, the frames with a blend mode (the crate
+/// extracts it once the session exists; a frame without it ends no frame) and those whose
+/// blend mode was not OPAQUE.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Seen {
     last: Frame,
@@ -121,6 +122,8 @@ pub(crate) struct Dv6 {
     /// Frames that broke a held mode, with the first such frame.
     broken: u32,
     first_broken: Option<Frame>,
+    /// The style seen at the end of the second passthrough hold (Q-337).
+    style: Option<(PassthroughStyle, bool)>,
     parts: Vec<String>,
     pass: bool,
 }
@@ -156,6 +159,7 @@ fn detect(names: Query<&Name>, mut commands: Commands) {
             since: Instant::now(),
             broken: 0,
             first_broken: None,
+            style: None,
             parts: Vec::new(),
             pass: true,
         });
@@ -185,12 +189,14 @@ fn observe(
         style: record.style,
         failures: record.failures,
     };
-    let opaque = blend.is_some_and(|b| b.blend_mode() == openxr::EnvironmentBlendMode::OPAQUE);
+    let opaque = blend.map(|b| b.blend_mode() == openxr::EnvironmentBlendMode::OPAQUE);
     if let Ok(mut seen) = shared.0.lock() {
         seen.last = frame;
-        seen.frames += 1;
-        if !opaque {
-            seen.not_opaque += 1;
+        if let Some(opaque) = opaque {
+            seen.frames += 1;
+            if !opaque {
+                seen.not_opaque += 1;
+            }
         }
     }
 }
@@ -265,6 +271,9 @@ fn run(
                     }
                     if now - at >= HOLD {
                         test.parts.push(describe(cycle, mode, &seen.last));
+                        if (cycle, mode) == (1, EnvironmentMode::Passthrough) {
+                            test.style = seen.last.style;
+                        }
                         match (cycle, mode) {
                             (_, EnvironmentMode::Passthrough) => {
                                 ask(settings.as_deref_mut(), EnvironmentMode::Vr, 0.0);
@@ -340,7 +349,7 @@ impl Dv6 {
             brightness: BRIGHTNESS,
             ..PassthroughStyle::default()
         };
-        match seen.last.style {
+        match self.style {
             Some((s, true)) if s == want => {
                 let (b, c, sat) = style_map(s);
                 self.parts.push(format!(
