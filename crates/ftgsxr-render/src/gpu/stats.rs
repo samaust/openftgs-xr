@@ -10,7 +10,7 @@ use super::frame::{
 };
 
 /// One frame's statistics for the HUD (§1.13): the counts after stage 3's clamp, C, the
-/// overflow flag, the non-finite count, and the GPU times.
+/// overflow flag, the non-finite and trimmed counts, and the GPU times.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameStats {
     /// Splat records drawn, at most C.
@@ -24,6 +24,9 @@ pub struct FrameStats {
     /// Primitives culled for a non-finite value in their projection (E6), over every
     /// instance drawn by the view (Q-118).
     pub non_finite: u32,
+    /// Rows outside their instance's trim (E17, §1.4 stage 2), over every instance drawn
+    /// by the view, each counted once per instance.
+    pub trimmed: u32,
     /// The GPU times of the frame's passes.
     pub gpu_times_ms: GpuTimes,
 }
@@ -106,6 +109,7 @@ pub(crate) fn decode_stats(bytes: &[u8; STATS_BYTES as usize], period_ns: f32) -
         overflow: word(2) != 0,
         capacity: word(3),
         non_finite: word(4),
+        trimmed: word(5),
         gpu_times_ms: GpuTimes {
             cull: span(ts[0], ts[1]),
             sort: span(ts[2], ts[3]),
@@ -119,7 +123,7 @@ pub(crate) fn decode_stats(bytes: &[u8; STATS_BYTES as usize], period_ns: f32) -
 mod tests {
     use super::*;
 
-    fn block(words: [u32; 5], ts: [u64; 6]) -> [u8; STATS_BYTES as usize] {
+    fn block(words: [u32; 6], ts: [u64; 6]) -> [u8; STATS_BYTES as usize] {
         let mut b = [0u8; STATS_BYTES as usize];
         for (i, w) in words.iter().enumerate() {
             b[4 * i..4 * i + 4].copy_from_slice(&w.to_le_bytes());
@@ -133,7 +137,7 @@ mod tests {
 
     #[test]
     fn decode_stats_reads_the_counts_and_the_flag() {
-        let s = decode_stats(&block([7, 3, 1, 10, 0], [0; 6]), 1.0);
+        let s = decode_stats(&block([7, 3, 1, 10, 0, 0], [0; 6]), 1.0);
         assert_eq!(
             (s.visible_splats, s.visible_centers, s.overflow, s.capacity),
             (7, 3, true, 10)
@@ -147,7 +151,7 @@ mod tests {
         // §1.4 stage 8, revision 13: the non-finite count in word 4; the timestamps after
         // the pad words are read unchanged by it.
         let s = decode_stats(
-            &block([4, 0, 0, 10, 17], [1_000_000, 2_000_000, 0, 0, 0, 0]),
+            &block([4, 0, 0, 10, 17, 0], [1_000_000, 2_000_000, 0, 0, 0, 0]),
             1.0,
         );
         assert_eq!(s.non_finite, 17);
@@ -157,10 +161,22 @@ mod tests {
     }
 
     #[test]
+    fn decode_stats_reads_the_trimmed_count_in_word_5() {
+        // E17 (revision 45): the trimmed count in word 5, the block still 80 bytes.
+        let s = decode_stats(
+            &block([4, 0, 0, 10, 2, 9], [1_000_000, 2_000_000, 0, 0, 0, 0]),
+            1.0,
+        );
+        assert_eq!((s.non_finite, s.trimmed), (2, 9));
+        assert_eq!(s.gpu_times_ms.cull, 1.0);
+        assert_eq!(STATS_BYTES, 80);
+    }
+
+    #[test]
     fn decode_stats_turns_ticks_into_milliseconds() {
         // 1 ns per tick: the cull 2 ms, no sort or draw written, total 2 ms.
         let s = decode_stats(
-            &block([0, 0, 0, 1, 0], [1_000_000, 3_000_000, 0, 0, 0, 0]),
+            &block([0, 0, 0, 1, 0, 0], [1_000_000, 3_000_000, 0, 0, 0, 0]),
             1.0,
         );
         assert_eq!(s.gpu_times_ms.cull, 2.0);
@@ -169,7 +185,7 @@ mod tests {
         assert_eq!(s.gpu_times_ms.total, 2.0);
         // 2 ns per tick, every pass written.
         let s = decode_stats(
-            &block([0; 5], [1_000, 2_000, 2_500, 3_000, 4_000, 6_000]),
+            &block([0; 6], [1_000, 2_000, 2_500, 3_000, 4_000, 6_000]),
             2.0,
         );
         assert_eq!(
@@ -188,7 +204,7 @@ mod tests {
         // A frame that skipped stages 1–4 (Q-100): the cull and sort wrote nothing, so
         // they are 0 (Q-81), and the total runs from the draw's begin to its end (Q-115).
         let s = decode_stats(
-            &block([5, 0, 0, 10, 0], [0, 0, 0, 0, 7_000_000, 10_000_000]),
+            &block([5, 0, 0, 10, 0, 0], [0, 0, 0, 0, 7_000_000, 10_000_000]),
             1.0,
         );
         assert_eq!(s.gpu_times_ms.cull, 0.0);

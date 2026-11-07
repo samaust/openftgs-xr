@@ -759,6 +759,7 @@ fn draw(model: &GpuModel, sh_degree: u8, tau: f64) -> ModelDraw<'_> {
         transform: ColorTransform::IDENTITY,
         sh_degree,
         overlays: Overlays::default(),
+        trim: ftgsxr_core::Trim::default(),
     }
 }
 

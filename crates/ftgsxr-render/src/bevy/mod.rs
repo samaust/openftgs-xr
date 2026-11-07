@@ -11,6 +11,7 @@
 //! keeps one `FrameBuffers` per view and encodes the passes (`render`).
 
 mod asset;
+mod bounds;
 mod camera;
 mod depth_copy;
 mod load;
@@ -26,6 +27,7 @@ use ::bevy::transform::components::Transform;
 use ftgsxr_core::{Camera, GpuLayoutOptions};
 
 pub use asset::{SplatAsset, load_splat_asset};
+pub use bounds::{SplatBounds, SplatTrim};
 pub use load::{SplatGpu, SplatLoad}; // Q-99; Q-172
 
 use crate::gpu::{
@@ -226,7 +228,10 @@ impl Plugin for SplatPlugin {
             .add_observer(load::clear_late_splat_camera)
             .add_observer(load::sample_late_view_depth)
             .add_systems(First, (load::ensure_device, render::publish_stats))
-            .add_systems(Update, (load::start_loads, load::finish_loads).chain())
+            .add_systems(
+                Update,
+                (load::start_loads, load::finish_loads, bounds::update_bounds).chain(),
+            )
             .add_systems(PostUpdate, load::upload_models);
         let inbox = app.world().resource::<render::StatsInbox>().clone();
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {

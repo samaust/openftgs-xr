@@ -9,9 +9,9 @@ pub mod bevy;
 pub mod gpu;
 
 pub use crate::bevy::{
-    DepthFrame, OutputSpace, SplatAsset, SplatCamera, SplatEvent, SplatGpu, SplatLoad, SplatMode,
-    SplatModel, SplatOcclusion, SplatOverlays, SplatPlugin, SplatShLimit, SplatStats,
-    SplatTierState, SplatTime, SplatTransform, load_splat_asset,
+    DepthFrame, OutputSpace, SplatAsset, SplatBounds, SplatCamera, SplatEvent, SplatGpu, SplatLoad,
+    SplatMode, SplatModel, SplatOcclusion, SplatOverlays, SplatPlugin, SplatShLimit, SplatStats,
+    SplatTierState, SplatTime, SplatTransform, SplatTrim, load_splat_asset,
 };
 pub use gpu::import_vulkan_texture; // Q-339
 pub use gpu::{

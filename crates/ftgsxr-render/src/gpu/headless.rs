@@ -242,6 +242,8 @@ impl HeadlessRenderer {
                     transform: ColorTransform::IDENTITY,
                     sh_degree: model.sh_degree,
                     overlays: Overlays::default(),
+                    // §2.1: the headless render draws untrimmed (E17).
+                    trim: ftgsxr_core::Trim::default(),
                 }
             })
             .collect();

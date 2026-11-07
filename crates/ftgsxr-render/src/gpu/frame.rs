@@ -23,7 +23,7 @@ const HALF_SHARED_RECORD_BYTES: u64 = 48;
 const WORD: u64 = 4;
 /// The counters (`cull.wgsl`): two indirect draws (splats and centers, §1.4 stages 5 and
 /// 6) of four words each, the overflow flag, the rows that passed E3's test (Q-79), the
-/// primitives culled for a non-finite projection (E6) and one spare word.
+/// primitives culled for a non-finite projection (E6) and the rows trimmed (E17).
 // Q-118
 pub(crate) const COUNTER_WORDS: u64 = 12;
 const INDIRECT_BYTES: u64 = COUNTER_WORDS * WORD;
@@ -31,7 +31,8 @@ const INDIRECT_BYTES: u64 = COUNTER_WORDS * WORD;
 /// scatter passes, then the scan's one workgroup, three words each. // Q-85
 const DISPATCH_BYTES: u64 = 6 * WORD;
 /// The statistics block (§1.4 stage 8, Q-81): the two counts, the overflow flag, C and
-/// the non-finite count (E6) in words 0–4, three pad words, then six 64-bit timestamps
+/// the non-finite count (E6) in words 0–4, the trimmed count (E17) in word 5, two pad
+/// words, then six 64-bit timestamps
 /// from byte `STATS_TIMESTAMPS`.
 pub(crate) const STATS_BYTES: u64 = 80;
 /// The byte offset of the statistics block's timestamps, 8-byte aligned.

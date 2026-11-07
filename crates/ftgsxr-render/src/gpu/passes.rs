@@ -8,7 +8,7 @@
 use std::sync::atomic::Ordering;
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
-use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, Vec3};
+use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, TrimMode, Vec3};
 
 use super::device::SplatDevice;
 use super::error::RenderError;
@@ -54,7 +54,7 @@ const WORKGROUP: u32 = 256;
 /// The most workgroups in one dimension of a dispatch (wgpu's default limit).
 const MAX_GROUPS_PER_DIMENSION: u32 = 65_535;
 /// One instance's uniform block (`cull.wgsl`'s `Instance`).
-const INSTANCE_BYTES: usize = 128;
+const INSTANCE_BYTES: usize = 176;
 /// Instances sit 256 bytes apart, the largest uniform offset alignment wgpu allows.
 const INSTANCE_STRIDE: usize = 256;
 /// The frame's uniform block (`cull.wgsl`'s `Frame`).
@@ -1163,7 +1163,8 @@ impl Block<'_> {
 /// One instance's uniform block (`cull.wgsl`'s `Instance`, §1.4 stage 1): R(q_m), t_m,
 /// s_m, E4's eye in model space o_{v,m} = P_m⁻¹(o_v), τ_m − τ₀ in float32 (computed in
 /// float64, then rounded, E2), E14's gains and flags, the dispatch range (E3), the SH
-/// degree min(requested, L′), the instance's index and the centers' radius.
+/// degree min(requested, L′), the instance's index and the centers' radius, then E17's
+/// trim: its mode (0 off, 1 box, 2 sphere) and its shapes as whole vec4 words (#226).
 fn instance_uniform(
     draw: &ModelDraw,
     instance: u32,
@@ -1202,7 +1203,20 @@ fn instance_uniform(
     b.u32(u32::from(draw.sh_degree.min(draw.model.sh_degree)));
     b.u32(instance);
     b.f32(pixel_radius);
-    debug_assert_eq!(b.at + 8, INSTANCE_BYTES);
+    let trim = &draw.trim;
+    b.u32(match trim.mode {
+        TrimMode::Off => 0,
+        TrimMode::Box => 1,
+        TrimMode::Sphere => 2,
+    });
+    b.u32(0);
+    b.vec3(trim.box_min);
+    b.f32(0.0);
+    b.vec3(trim.box_max);
+    b.f32(0.0);
+    b.vec3(trim.center);
+    b.f32(trim.radius);
+    debug_assert_eq!(b.at, INSTANCE_BYTES);
     out
 }
 

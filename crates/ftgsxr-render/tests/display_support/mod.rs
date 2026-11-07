@@ -476,6 +476,7 @@ pub fn draw(
         transform,
         sh_degree: 0,
         overlays: ftgsxr_render::Overlays::default(),
+        trim: ftgsxr_core::Trim::default(),
     }
 }
 

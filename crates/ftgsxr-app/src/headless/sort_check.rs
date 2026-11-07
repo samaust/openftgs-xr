@@ -63,6 +63,7 @@ fn frame(dev: &SplatDevice, path: &Path, tier: &QualityTier) -> Result<FrameCont
         transform: ColorTransform { gain: Vec3::ONE },
         sh_degree: 3,
         overlays: Overlays::default(),
+        trim: ftgsxr_core::Trim::default(),
     }];
     let pose = SortPose {
         origin: Vec3::ZERO,
