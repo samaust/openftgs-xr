@@ -4,7 +4,7 @@ How `ftgsxr_xr::passthrough` meets §1.9's environment modes: the mode switch, t
 
 ## What `XrPlugin.passthrough` builds
 
-The switch and the layer are built only with `XrPlugin.passthrough`, which the Quest and `play --xr` set (§2.1). Without it nothing is created and the environment mode stays VR, M-3's behaviour, which the `xr` tests keep. With it, the module runs wherever the runtime offers XR\_FB\_passthrough: on Monado, which does not, nothing is created and `passthrough_available` stays false. `depth` is built under the same flag, since the Depth API needs passthrough (Appendix E.2). The contact shadows are a plugin of their own (below), added by `XrPlugin`'s tail whatever the flag.
+The switch and the layer are built only with `XrPlugin.passthrough`, which the Quest and `play --xr` set (§2.1). Without it nothing is created and the environment mode stays VR, M-3's behaviour, which the `xr` tests keep except the one that tests passthrough. With it, the module runs wherever the runtime offers XR\_FB\_passthrough: on Monado, which does not, nothing is created and `passthrough_available` stays false. `depth` is built under the same flag, since the Depth API needs passthrough (Appendix E.2). The contact shadows are a plugin of their own (below), added by `XrPlugin`'s tail whatever the flag.
 
 ## The switch
 
