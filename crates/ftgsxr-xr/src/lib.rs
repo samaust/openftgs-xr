@@ -8,6 +8,7 @@
 // §2.6: this crate may use `unsafe`, each block with a `// SAFETY:` comment.
 
 mod anchors;
+mod depth;
 mod display;
 mod error;
 mod panel;
@@ -19,6 +20,8 @@ mod xr_input;
 
 // §2.1 `AnchorId`, `AnchorStore`, `NoAnchors` (§1.9, D-26, #571; Q-343).
 pub use anchors::{AnchorId, AnchorStore, NoAnchors};
+// §2.1 `EnvironmentDepth` (§1.9, E13, #570; Q-349).
+pub use depth::EnvironmentDepth;
 // §2.1 (#228, Q-124).
 pub use display::DisplaySettings;
 // Q-133: `DisplaySettings.foveation`'s type, for `ftgsxr-quest`, whose band (§2.1)
