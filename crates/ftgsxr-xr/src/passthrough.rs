@@ -29,6 +29,9 @@ mod dv6;
 mod layer;
 // The contact shadows (Q-342, #569).
 mod shadow;
+// The gauntlet's depth on the GPU (#608, Q-364).
+#[cfg(test)]
+mod occluders_gpu;
 
 pub use shadow::ContactShadowPlugin;
 
@@ -53,7 +56,7 @@ use ftgsxr_render::{OutputSpace, SplatCamera};
 
 use crate::XrError;
 use crate::error::log_warning;
-use crate::tracking::DevicesDrawn;
+use crate::tracking::{DevicesDrawn, GauntletsDrawn};
 
 /// The extension the passthrough layer needs (Appendix E.1).
 const EXTENSION: &str = "XR_FB_passthrough";
@@ -313,11 +316,27 @@ fn eyes_follow_mode(
 
 /// The mode check of `tracking`'s hand and controller meshes (§1.8 Controllers and
 /// Hands: drawn in VR mode, not in passthrough mode): `DevicesDrawn` follows
-/// `Environment.mode`, false without an `Environment`.
-pub(crate) fn devices_drawn(env: Option<Res<Environment>>, mut drawn: ResMut<DevicesDrawn>) {
-    let want = DevicesDrawn(env.is_some_and(|e| e.mode == EnvironmentMode::Vr));
+/// `Environment.mode`, false without an `Environment`; and of its gauntlets (§1.9):
+/// `GauntletsDrawn` in passthrough mode with `[environment] hand_occluders` on (without
+/// `SettingsRes`, the default: off).
+pub(crate) fn devices_drawn(
+    env: Option<Res<Environment>>,
+    settings: Option<Res<SettingsRes>>,
+    mut drawn: ResMut<DevicesDrawn>,
+    mut gauntlets: ResMut<GauntletsDrawn>,
+) {
+    let mode = env.map(|e| e.mode);
+    let want = DevicesDrawn(mode == Some(EnvironmentMode::Vr));
     if *drawn != want {
         *drawn = want;
+    }
+    let on = settings.as_deref().map_or_else(
+        || Settings::default().environment.hand_occluders,
+        |s| s.0.environment.hand_occluders,
+    );
+    let want = GauntletsDrawn(mode == Some(EnvironmentMode::Passthrough) && on);
+    if *gauntlets != want {
+        *gauntlets = want;
     }
 }
 
@@ -561,6 +580,7 @@ mod tests {
     fn devices_drawn_follows_the_environment_mode() {
         let mut app = App::new();
         app.init_resource::<DevicesDrawn>()
+            .init_resource::<GauntletsDrawn>()
             .add_systems(Update, devices_drawn);
         app.update();
         assert_eq!(*app.world().resource::<DevicesDrawn>(), DevicesDrawn(false));
@@ -574,5 +594,41 @@ mod tests {
         app.world_mut().resource_mut::<Environment>().mode = EnvironmentMode::Passthrough;
         app.update();
         assert_eq!(*app.world().resource::<DevicesDrawn>(), DevicesDrawn(false));
+    }
+
+    /// §1.9, D-16: the gauntlets are drawn in passthrough mode with `hand_occluders` on
+    /// only; off by default, in VR mode and without an `Environment`.
+    #[test]
+    fn gauntlets_drawn_needs_passthrough_and_the_option() {
+        let mut app = App::new();
+        app.init_resource::<DevicesDrawn>()
+            .init_resource::<GauntletsDrawn>()
+            .add_systems(Update, devices_drawn);
+        let drawn = |app: &App| app.world().resource::<GauntletsDrawn>().0;
+        let mut settings = Settings::default();
+        settings.environment.hand_occluders = true;
+        app.insert_resource(SettingsRes(settings));
+        app.update();
+        assert!(!drawn(&app), "no Environment");
+        app.insert_resource(Environment {
+            mode: EnvironmentMode::Vr,
+            passthrough_available: true,
+            style: PassthroughStyle::default(),
+        });
+        app.update();
+        assert!(!drawn(&app), "VR mode");
+        app.world_mut().resource_mut::<Environment>().mode = EnvironmentMode::Passthrough;
+        app.update();
+        assert!(drawn(&app), "passthrough with the option on");
+        app.world_mut()
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .hand_occluders = false;
+        app.update();
+        assert!(!drawn(&app), "the option off");
+        app.world_mut().remove_resource::<SettingsRes>();
+        app.update();
+        assert!(!drawn(&app), "the default is off");
     }
 }
