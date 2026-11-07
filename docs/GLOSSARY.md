@@ -580,6 +580,14 @@ _Avoid_: center of mass, percentile box, trimmed box (reserved for a model trimm
 The box the fit, the headset's automatic fit and snap to floor work on: the content box, or the model box when "Fit to" is set to the whole model. §1.5, §1.11
 _Avoid_: fit bounds
 
+**Trim**:
+A model instance's region in model space, off, a box or a sphere, outside which its primitives are not drawn; a primitive is kept while its moved center lies inside. E17, D-56
+_Avoid_: crop, clip (reserved for the near and far culls), cull region, mask
+
+**Trimmed box**:
+The model box and the content box of an instance whose trim is on, taken over only the primitives the trim keeps, over the times it keeps them; the trim's own box when it keeps none. E17, §1.5, D-56
+_Avoid_: trimmed bounds (the code's name, not prose), cropped box
+
 **Stage space**:
 The player's world frame, right-handed, y up, metres, the ground at y = 0: the OpenXR STAGE space or its fallback on a headset, a fixed frame on the desktop. §1.14, D-24
 _Avoid_: world space (ambiguous with openftgs's world frame), room, tracking space
