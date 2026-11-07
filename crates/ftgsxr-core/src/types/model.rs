@@ -165,8 +165,8 @@ impl Model {
     /// E10's B_m in model space: the box over μx(τ) at τ = τ₀ + k T_τ/`samples`,
     /// k = 0 … `samples` (τ₀ alone for a single timestamp or `samples` = 0), of every
     /// primitive with opacity > α_skip, expanded by 3 · the largest scale of those
-    /// primitives. With no such primitive the box covers every primitive (Q-9).
-    // Q-9
+    /// primitives. With no such primitive the box covers every primitive (D-42).
+    // D-42
     pub fn bounds(&self, samples: usize) -> Aabb {
         let alpha_skip = self.conventions.alpha_skip;
         let visible: Vec<usize> = (0..self.len())

@@ -568,6 +568,18 @@ _Avoid_: model (unqualified, where the file is meant), object, asset, splat clou
 A model instance's placement, a translation, a rotation and a uniform scale, saved per model identity. It is kept relative to the content group, whose transform places it in stage space; the composed placement is the instance's stage pose, which rays, grabs, the fit and the floor work on. E5, §1.5, §1.14, D-11, Q-247
 _Avoid_: transform (the engine's component), placement, anchor (reserved for spatial anchors)
 
+**Model box B_m**:
+A model's axis-aligned box in model space, holding every primitive over the times it is visible within the model's span; the box picking, the selection outline, orbit, frame selected, the thumbnail, the contact shadow, recentering and the soundtrack read. E10, D-42
+_Avoid_: bounds (the code's name, not prose), bounding box (unqualified), AABB
+
+**Content box B_c**:
+A model's axis-aligned box in model space that leaves out the outermost hundredth of its primitives along each axis, so a trained model's background and floaters stay outside it; the box the fit sizes and places by default. E10, §1.5, D-11
+_Avoid_: center of mass, percentile box, trimmed box (reserved for a model trimmed to a region)
+
+**Fit box**:
+The box the fit, the headset's automatic fit and snap to floor work on: the content box, or the model box when "Fit to" is set to the whole model. §1.5, §1.11
+_Avoid_: fit bounds
+
 **Stage space**:
 The player's world frame, right-handed, y up, metres, the ground at y = 0: the OpenXR STAGE space or its fallback on a headset, a fixed frame on the desktop. §1.14, D-24
 _Avoid_: world space (ambiguous with openftgs's world frame), room, tracking space
