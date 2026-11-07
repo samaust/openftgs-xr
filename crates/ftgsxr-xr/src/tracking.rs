@@ -23,7 +23,9 @@ pub(crate) use hands::FREQUENCY_HINT_EXT;
 pub(crate) use meshes::DevicesDrawn;
 #[cfg(test)]
 pub(crate) use meshes::grey;
-pub(crate) use occluders::{OccluderShape, OccludersDrawn};
+#[cfg(test)]
+pub(crate) use occluders::{DepthOnlyMaterial, add_material as add_depth_only_material};
+pub(crate) use occluders::{Occluders, OccludersDrawn};
 
 /// The set of the system that places the hands' and controllers' meshes, which
 /// `passthrough`'s mode check runs before.
@@ -204,6 +206,8 @@ impl Plugin for TrackingPlugin {
                 return;
             }
         };
+        // §1.9: the gauntlets' depth-only material, where Bevy's `PbrPlugin` is.
+        occluders::add_material(app);
         app.insert_resource(actions)
             .add_systems(OxrSendActionBindings, suggest_bindings)
             .add_systems(
@@ -242,7 +246,7 @@ impl Plugin for TrackingPlugin {
             );
         app.add_systems(
             PostUpdate,
-            occluders::draw_occluders
+            occluders::draw_gauntlets
                 .in_set(DrawDevices)
                 .after(hands::locate_hands)
                 .after(TransformSystems::Propagate)

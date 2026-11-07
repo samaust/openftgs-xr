@@ -98,12 +98,11 @@ pub struct EnvironmentSettings {
     pub occlusion_delta_m: f32,
     /// The depth provider's hand removal (§1.9, D-16).
     pub hand_removal: bool,
-    /// "Occlude with tracked hands": each tracked hand drawn in passthrough mode, opaque in
-    /// the hands' grey, the provider's hand removal on while it is (§1.9, D-16).
+    /// "Occlude with tracked hands": each tracked hand occluding as a depth-only gauntlet in
+    /// passthrough mode, the provider's hand removal on while it is (§1.9, D-16).
     pub hand_occluders: bool,
-    /// "Draw gauntlets": the tracked hands drawn as gauntlets, each capsule's radius its
-    /// joint radius plus 1.5 cm, instead of VR mode's hand, while `hand_occluders` is on
-    /// (§1.9, D-16).
+    /// "Draw gauntlets": the gauntlets drawn opaque in the hands' grey rather than depth
+    /// only, while `hand_occluders` is on (§1.9, D-16).
     pub hand_gauntlets: bool,
     /// The gauntlet's margin m over each capsule's joint radius, metres, in \[0, 0.02\]
     /// (§1.9's slider, D-16).

@@ -1,52 +1,64 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! "Occlude with tracked hands" (§1.9 Depth occlusion, §1.8 Hands, D-16, #608, spec
-//! revision 40): in passthrough mode with `[environment] hand_occluders` on, each tracked
-//! hand is drawn, opaque in VR mode's neutral grey (`meshes::grey`), so the drawn hand
-//! hides what lies behind it, the splats (which test against the opaque depth, §1.4), the
-//! contact shadow and the panels alike, at its tracked pose (the locate's predicted
-//! display time, `hands::locate_hands`) instead of at the depth image's capture time.
+//! revision 41): in passthrough mode with `[environment] hand_occluders` on, each tracked
+//! hand is drawn as a gauntlet: one capsule per bone of §1.8's capsules (`meshes::BONES`,
+//! the wrist to each fingertip) and two palm capsules, from the wrist to the index and to
+//! the little finger's metacarpophalangeal joints, each of its joints' mean radius (as
+//! Q-288's) plus the margin m, `[environment] hand_gauntlet_margin_m`.
 //!
-//! Its shape is VR mode's hand, §1.8's 24 bone capsules with their joints' mean radius
-//! (`meshes::BONES`, Q-288), or with `[environment] hand_gauntlets` the gauntlet: the
-//! same bones and two palm capsules, from the wrist to the index and to the little
-//! finger's metacarpophalangeal joints, each radius plus the margin m = 1.5 cm. A capsule
-//! whose two joints are not both located is hidden, so an untracked hand draws nothing.
-//! The capsules are children of the tracking root.
+//! The gauntlet writes depth only and no color, so the real hand stays visible and the
+//! gauntlet hides what lies behind it, the splats (which test against the opaque depth,
+//! §1.4), the contact shadow and the panels (both drawn in the alpha-mask phase after
+//! the opaque one, Q-364, Q-368), at its tracked pose (the locate's predicted display
+//! time, `hands::locate_hands`) instead of at the depth image's capture time. With
+//! `[environment] hand_gauntlets` ("draw gauntlets") the same gauntlet is drawn opaque in
+//! the hands' grey (`meshes::grey`) instead. A capsule whose two joints are not both
+//! located is hidden, so an untracked hand draws nothing. The capsules are children of
+//! the tracking root.
+//!
+//! The depth-only material exists where Bevy's `PbrPlugin` does (the player's plugin
+//! groups); in an app without it nothing is drawn.
 
-use bevy::asset::{Assets, Handle};
+use bevy::app::App;
+use bevy::asset::{Asset, Assets, Handle, uuid_handle};
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::Vec3;
 use bevy::math::primitives::Capsule3d;
-use bevy::mesh::{Mesh, Mesh3d};
-use bevy::pbr::{MeshMaterial3d, StandardMaterial};
+use bevy::mesh::{Mesh, Mesh3d, MeshVertexBufferLayoutRef};
+use bevy::pbr::{
+    Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin, MeshMaterial3d, PbrPlugin,
+    StandardMaterial,
+};
 use bevy::prelude::{
     ChildOf, Commands, Component, DetectChangesMut, Entity, GlobalTransform, Local, Query, Res,
     ResMut, Resource, Transform, Visibility, With, Without,
 };
+use bevy::reflect::TypePath;
+use bevy::render::render_resource::{
+    AsBindGroup, ColorWrites, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+};
+use bevy::shader::{Shader, ShaderRef};
 use bevy_mod_xr::session::XrTrackingRoot;
 use openxr::sys;
 
 use super::hands::{JOINTS, LocatedHands, WRIST, located, transform_of};
 use super::meshes::{BONES, bone_transform, grey};
 
-/// The shape a tracked hand is drawn in (§1.9).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OccluderShape {
-    /// VR mode's hand: the bones with their joints' radii.
-    Hand,
-    /// "Draw gauntlets": the bones and the palm capsules, each radius plus `MARGIN_M`.
-    Gauntlet,
+/// How the tracked hands' gauntlets are drawn (§1.9).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Occluders {
+    /// "Draw gauntlets": opaque in the hands' grey; otherwise depth only.
+    pub(crate) drawn: bool,
+    /// The margin m over each capsule's joint radius, metres.
+    pub(crate) margin_m: f32,
 }
 
-/// The shape the tracked hands are drawn in, `None` when they are not: in passthrough
-/// mode with `[environment] hand_occluders` on (§1.9). `passthrough`, after `tracking` in
-/// §2.1's order, sets it each frame before the capsules are placed; `None` until then.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct OccludersDrawn(pub(crate) Option<OccluderShape>);
-
-/// The gauntlet's margin on each capsule's radius, metres (D-16).
-pub(crate) const MARGIN_M: f32 = 0.015;
+/// The tracked hands' gauntlets, `None` when there are none: in passthrough mode with
+/// `[environment] hand_occluders` on (§1.9). `passthrough`, after `tracking` in §2.1's
+/// order, sets it each frame before the capsules are placed; `None` until then.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct OccludersDrawn(pub(crate) Option<Occluders>);
 
 /// XR\_HAND\_JOINT\_INDEX\_PROXIMAL\_EXT and XR\_HAND\_JOINT\_LITTLE\_PROXIMAL\_EXT: a
 /// finger's joints are named after the bone that starts at them (source-log 374), so
@@ -55,9 +67,9 @@ pub(crate) const MARGIN_M: f32 = 0.015;
 const INDEX_MCP: usize = 7;
 const LITTLE_MCP: usize = 22;
 
-/// Every capsule a tracked hand may draw, as joint pairs: §1.8's 24 bones, then the
-/// gauntlet's two palm capsules (§1.9).
-pub(crate) const CAPSULES: [(usize, usize); BONES.len() + 2] = {
+/// The gauntlet's capsules as joint pairs: §1.8's 24 bones, then the two palm capsules
+/// (§1.9).
+const CAPSULES: [(usize, usize); BONES.len() + 2] = {
     let mut c = [(0, 0); BONES.len() + 2];
     let mut i = 0;
     while i < BONES.len() {
@@ -71,64 +83,138 @@ pub(crate) const CAPSULES: [(usize, usize); BONES.len() + 2] = {
 
 /// One capsule: the centres of its two end spheres and its radius.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Capsule {
-    pub(crate) a: Vec3,
-    pub(crate) b: Vec3,
-    pub(crate) radius: f32,
+struct Capsule {
+    a: Vec3,
+    b: Vec3,
+    radius: f32,
 }
 
-/// One hand's capsules in `shape`, in `CAPSULES`' order: each between its two joints'
-/// positions, of their mean radius (Q-288) plus `MARGIN_M` for the gauntlet; `None` where
-/// either joint is not located, and for the palm capsules of VR mode's hand.
-pub(crate) fn occluder(
-    joints: &[sys::HandJointLocationEXT; JOINTS],
-    shape: OccluderShape,
-) -> Vec<Option<Capsule>> {
-    let (count, margin) = match shape {
-        OccluderShape::Hand => (BONES.len(), 0.0),
-        OccluderShape::Gauntlet => (CAPSULES.len(), MARGIN_M),
-    };
+/// One hand's gauntlet, in `CAPSULES`' order: each capsule between its two joints'
+/// positions, of their mean radius (Q-288) plus `margin_m`; `None` where either joint is
+/// not located.
+fn gauntlet(joints: &[sys::HandJointLocationEXT; JOINTS], margin_m: f32) -> Vec<Option<Capsule>> {
     CAPSULES
         .iter()
-        .enumerate()
-        .map(|(k, &(a, b))| {
+        .map(|&(a, b)| {
             let (ja, jb) = (&joints[a], &joints[b]);
-            (k < count && located(ja) && located(jb)).then(|| Capsule {
+            (located(ja) && located(jb)).then(|| Capsule {
                 a: transform_of(&ja.pose).translation,
                 b: transform_of(&jb.pose).translation,
-                radius: (ja.radius + jb.radius) * 0.5 + margin,
+                radius: (ja.radius + jb.radius) * 0.5 + margin_m,
             })
         })
         .collect()
 }
 
-/// One drawn capsule: its side, its index in `CAPSULES`, and the shape its mesh was made
-/// for (at the first frame both joints are located, as Q-288's, and again when the shape
-/// changes).
+/// The depth-only material's fragment shader.
+const SHADER: Handle<Shader> = uuid_handle!("2b8e4f61-7a3c-4d95-b0e2-9c1f5a7d3e48");
+
+/// The shader's source, inline as the contact shadow's (Q-354): its output, opaque
+/// magenta, is discarded by the pipeline's empty write mask, so only the depth is
+/// written and a test sees any color that leaks.
+// Q-354
+const SHADER_WGSL: &str = r"// SPDX-License-Identifier: Apache-2.0
+
+// The tracked-hand gauntlet (§1.9 Depth occlusion, D-16): depth only; the pipeline
+// writes no color. The output is opaque magenta, so a color write would show.
+
+#import bevy_pbr::forward_io::VertexOutput
+
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+}
+";
+
+/// The gauntlet's depth-only material: opaque, in the opaque phase, with its color writes
+/// off; the contact shadow's and the panels' alpha-mask phase comes after it (Q-364,
+/// Q-368), so its depth hides them whatever the bin order.
+// Q-364, Q-368
+#[derive(Asset, TypePath, AsBindGroup, Clone, Debug, Default)]
+pub(crate) struct DepthOnlyMaterial {}
+
+impl Material for DepthOnlyMaterial {
+    fn fragment_shader() -> ShaderRef {
+        SHADER.into()
+    }
+
+    // Drawn in the main opaque pass only, where the splats test against its depth.
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    /// Depth only (§1.9): every color target's write mask is empty.
+    fn specialize(
+        _: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _: &MeshVertexBufferLayoutRef,
+        _: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if let Some(fragment) = descriptor.fragment.as_mut() {
+            for target in fragment.targets.iter_mut().flatten() {
+                target.blend = None;
+                target.write_mask = ColorWrites::empty();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Registers the depth-only material where `PbrPlugin` is.
+pub(crate) fn add_material(app: &mut App) {
+    if !app.is_plugin_added::<PbrPlugin>() {
+        return;
+    }
+    app.world_mut()
+        .resource_mut::<Assets<Shader>>()
+        .insert(
+            SHADER.id(),
+            Shader::from_wgsl(SHADER_WGSL, "ftgsxr_xr/tracking/gauntlet.wgsl"),
+        )
+        .expect("invariant: the shader's handle is a UUID one, which `insert` accepts");
+    app.add_plugins(MaterialPlugin::<DepthOnlyMaterial>::default());
+}
+
+/// One capsule of a gauntlet: its side, its index in `CAPSULES`, the margin its mesh was
+/// made with (at the first frame both joints are located, as Q-288's, and again when the
+/// margin changes) and whether it carries the grey material rather than the depth-only.
 #[derive(Component, Clone, Copy)]
-pub(crate) struct OccluderCapsule {
+pub(crate) struct GauntletCapsule {
     side: usize,
     index: usize,
-    meshed: Option<OccluderShape>,
+    meshed: Option<f32>,
+    grey: Option<bool>,
+}
+
+/// The two materials, made once.
+pub(crate) struct Materials {
+    grey: Handle<StandardMaterial>,
+    depth: Handle<DepthOnlyMaterial>,
 }
 
 /// Spawns the capsules once per tracking root, then each frame places each one between
-/// its joints and shows it while the hands are drawn and both joints are located. The
-/// capsules' global transforms are set here from the root's, which the propagation has
-/// already updated, so this frame's pose is drawn this frame; frustum culling is off since
-/// it may run before them. Skipped in an app without meshes and materials.
+/// its joints and shows it, in the material "draw gauntlets" asks for, while the
+/// gauntlets are on and both joints are located. The capsules' global transforms are set
+/// here from the root's, which the propagation has already updated, so this frame's pose
+/// is drawn this frame; frustum culling is off since it may run before them. Skipped in
+/// an app without meshes and the two materials.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(crate) fn draw_occluders(
+pub(crate) fn draw_gauntlets(
     drawn: Option<Res<OccludersDrawn>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
+    greys: Option<ResMut<Assets<StandardMaterial>>>,
+    depths: Option<ResMut<Assets<DepthOnlyMaterial>>>,
     root: Query<(Entity, &GlobalTransform), With<XrTrackingRoot>>,
     hands: Res<LocatedHands>,
     // Without the root, whose global transform `root` reads (B0001).
     mut capsules: Query<
         (
             Entity,
-            &mut OccluderCapsule,
+            &mut GauntletCapsule,
             &mut Transform,
             &mut GlobalTransform,
             &mut Visibility,
@@ -136,28 +222,29 @@ pub(crate) fn draw_occluders(
         ),
         Without<XrTrackingRoot>,
     >,
-    mut material: Local<Option<Handle<StandardMaterial>>>,
+    mut materials: Local<Option<Materials>>,
     mut commands: Commands,
 ) {
-    let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
+    let (Some(mut meshes), Some(mut greys), Some(mut depths)) = (meshes, greys, depths) else {
         return;
     };
     let Some((root, root_global)) = root.iter().next() else {
         return;
     };
+    let m = materials.get_or_insert_with(|| Materials {
+        grey: greys.add(grey()),
+        depth: depths.add(DepthOnlyMaterial {}),
+    });
     if capsules.is_empty() {
-        let m = material
-            .get_or_insert_with(|| materials.add(grey()))
-            .clone();
         for side in 0..2 {
             for index in 0..CAPSULES.len() {
                 commands.spawn((
-                    OccluderCapsule {
+                    GauntletCapsule {
                         side,
                         index,
                         meshed: None,
+                        grey: None,
                     },
-                    MeshMaterial3d(m.clone()),
                     Transform::default(),
                     Visibility::Hidden,
                     NoFrustumCulling,
@@ -167,29 +254,42 @@ pub(crate) fn draw_occluders(
         }
         return;
     }
-    let shape = drawn.and_then(|d| d.0);
+    let on = drawn.and_then(|d| d.0);
     let placed: [Option<Vec<Option<Capsule>>>; 2] = [0, 1].map(|side| {
         hands.raw[side]
-            .zip(shape)
-            .map(|(raw, shape)| occluder(&raw.joints, shape))
+            .zip(on)
+            .map(|(raw, o)| gauntlet(&raw.joints, o.margin_m))
     });
     for (e, mut capsule, mut t, mut global, mut vis, mesh) in &mut capsules {
         let at = placed[capsule.side]
             .as_ref()
             .and_then(|c| c[capsule.index])
             .and_then(|c| bone_transform(c.a, c.b).map(|(bt, len)| (bt, len, c.radius)));
-        let (Some((bt, len, radius)), Some(shape)) = (at, shape) else {
+        let (Some((bt, len, radius)), Some(o)) = (at, on) else {
             vis.set_if_neq(Visibility::Hidden);
             continue;
         };
-        if capsule.meshed != Some(shape) {
-            capsule.meshed = Some(shape);
+        if capsule.meshed.is_none_or(|m| (m - o.margin_m).abs() > 1e-6) {
+            capsule.meshed = Some(o.margin_m);
             if let Some(old) = mesh {
                 meshes.remove(&old.0);
             }
             commands
                 .entity(e)
                 .insert(Mesh3d(meshes.add(Capsule3d::new(radius, len))));
+        }
+        if capsule.grey != Some(o.drawn) {
+            capsule.grey = Some(o.drawn);
+            let mut entity = commands.entity(e);
+            if o.drawn {
+                entity
+                    .remove::<MeshMaterial3d<DepthOnlyMaterial>>()
+                    .insert(MeshMaterial3d(m.grey.clone()));
+            } else {
+                entity
+                    .remove::<MeshMaterial3d<StandardMaterial>>()
+                    .insert(MeshMaterial3d(m.depth.clone()));
+            }
         }
         *t = bt;
         *global = root_global.mul_transform(bt);
@@ -220,11 +320,11 @@ mod tests {
         j
     }
 
-    /// §1.9, D-16: the gauntlet is §1.8's 24 bones, then the wrist to the index and to
-    /// the little finger's metacarpophalangeal joints; each capsule between its joints, of
-    /// their mean radius plus 1.5 cm.
+    /// §1.9, D-16: §1.8's 24 bones, then the wrist to the index and to the little
+    /// finger's metacarpophalangeal joints; each capsule between its joints, of their mean
+    /// radius plus the chosen margin.
     #[test]
-    fn occluder_gauntlet_is_the_bones_and_two_palm_capsules_with_the_margin() {
+    fn gauntlet_is_the_bones_and_two_palm_capsules_with_the_margin() {
         assert_eq!(CAPSULES.len(), 26);
         assert_eq!(&CAPSULES[..24], &BONES[..]);
         assert_eq!(CAPSULES[24], (WRIST, 7), "the index's proximal joint");
@@ -233,7 +333,7 @@ mod tests {
             (WRIST, 22),
             "the little finger's proximal joint"
         );
-        let g = occluder(&joints(), OccluderShape::Gauntlet);
+        let g = gauntlet(&joints(), 0.005);
         assert_eq!(g.len(), 26);
         for (c, &(a, b)) in g.iter().zip(&CAPSULES) {
             let c = c.expect("every joint is located");
@@ -241,55 +341,41 @@ mod tests {
             assert!((c.b - Vec3::new(b as f32 * 0.01, 1.0, 0.0)).length() < 1e-6);
         }
         // Radii worked by hand from the joints' (1 + i/10) mm: the mean of the two joints'
-        // plus 15 mm. Wrist (1.1 mm) to the thumb's metacarpal (1.2 mm): 16.15 mm; the
-        // index's distal (1.9 mm) to its tip (2.0 mm): 16.95 mm; the palm capsules, wrist
-        // to the index's proximal (1.7 mm): 16.4 mm, to the little finger's (3.2 mm):
-        // 17.15 mm.
-        for (k, want) in [(0, 0.01615), (8, 0.01695), (24, 0.0164), (25, 0.01715)] {
+        // plus 5 mm. Wrist (1.1 mm) to the thumb's metacarpal (1.2 mm): 6.15 mm; the
+        // index's distal (1.9 mm) to its tip (2.0 mm): 6.95 mm; the palm capsules, wrist
+        // to the index's proximal (1.7 mm): 6.4 mm, to the little finger's (3.2 mm):
+        // 7.15 mm.
+        for (k, want) in [(0, 0.00615), (8, 0.00695), (24, 0.0064), (25, 0.00715)] {
             let r = g[k].expect("located").radius;
             assert!((r - want).abs() < 1e-7, "capsule {k}: {r}");
         }
-    }
-
-    /// §1.9 (revision 40): VR mode's hand is the 24 bones alone, of the joints' mean
-    /// radius with no margin (Q-288), and no palm capsule.
-    #[test]
-    fn occluder_hand_is_vr_modes_bones_without_the_margin() {
-        let h = occluder(&joints(), OccluderShape::Hand);
-        assert_eq!(h.len(), 26);
-        assert!(h[..24].iter().all(Option::is_some));
-        assert!(h[24].is_none() && h[25].is_none(), "no palm capsule");
-        // Wrist (1.1 mm) to the thumb's metacarpal (1.2 mm): 1.15 mm; the index's distal
-        // (1.9 mm) to its tip (2.0 mm): 1.95 mm.
-        for (k, want) in [(0, 0.00115), (8, 0.00195)] {
-            let r = h[k].expect("located").radius;
-            assert!((r - want).abs() < 1e-7, "capsule {k}: {r}");
-        }
+        // The slider's ends: the joint radii alone, and 2 cm more.
+        let r0 = gauntlet(&joints(), 0.0)[0].expect("located").radius;
+        let r2 = gauntlet(&joints(), 0.02)[0].expect("located").radius;
+        assert!((r0 - 0.00115).abs() < 1e-7 && (r2 - 0.02115).abs() < 1e-7);
     }
 
     /// An unlocated joint takes out the capsules that end at it, and an untracked hand
     /// (no joint located) draws nothing.
     #[test]
-    fn occluder_leaves_out_capsules_of_unlocated_joints() {
+    fn gauntlet_leaves_out_capsules_of_unlocated_joints() {
         let mut j = joints();
         j[7].location_flags = sys::SpaceLocationFlags::POSITION_VALID;
-        let g = occluder(&j, OccluderShape::Gauntlet);
+        let g = gauntlet(&j, 0.005);
         for (c, &(a, b)) in g.iter().zip(&CAPSULES) {
             assert_eq!(c.is_none(), a == 7 || b == 7, "{a}-{b}");
         }
         let untracked = [sys::HandJointLocationEXT::default(); JOINTS];
-        for shape in [OccluderShape::Hand, OccluderShape::Gauntlet] {
-            assert!(occluder(&untracked, shape).iter().all(Option::is_none));
-        }
+        assert!(gauntlet(&untracked, 0.005).iter().all(Option::is_none));
     }
 
-    /// `draw_occluders` in an app (#608: its queries once conflicted, B0001, which only
+    /// `draw_gauntlets` in an app (#608: its queries once conflicted, B0001, which only
     /// shows when the system runs): it spawns 2 × 26 hidden capsules under the tracking
-    /// root, then shows a tracked hand's 24 bones in VR mode's shape, or its 26 capsules
-    /// as a gauntlet (its meshes made again, larger), where the root puts them, with their
-    /// global transforms set this frame; nothing while `OccludersDrawn` is `None`.
+    /// root, then shows a tracked hand's 26 where the root puts them, with their global
+    /// transforms set this frame, depth only; grey with "draw gauntlets"; new meshes when
+    /// the margin changes; nothing while `OccludersDrawn` is `None`.
     #[test]
-    fn draw_occluders_places_a_tracked_hands_capsules_under_the_root() {
+    fn draw_gauntlets_places_a_tracked_hands_capsules_under_the_root() {
         use bevy::app::{App, Update};
         use bevy::ecs::world::World;
 
@@ -298,23 +384,33 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<DepthOnlyMaterial>>()
             .init_resource::<LocatedHands>()
             .insert_resource(OccludersDrawn(None))
-            .add_systems(Update, draw_occluders);
+            .add_systems(Update, draw_gauntlets);
         let lift = Transform::from_xyz(0.0, 0.5, 0.0);
         app.world_mut()
             .spawn((XrTrackingRoot, lift, GlobalTransform::from(lift)));
         app.update();
         let shown = |world: &mut World| {
-            let mut q = world.query::<(&OccluderCapsule, &Visibility, &GlobalTransform)>();
+            let mut q = world.query::<(
+                &GauntletCapsule,
+                &Visibility,
+                &GlobalTransform,
+                Option<&MeshMaterial3d<StandardMaterial>>,
+                Option<&MeshMaterial3d<DepthOnlyMaterial>>,
+            )>();
             q.iter(world)
-                .filter(|(_, v, _)| **v == Visibility::Visible)
-                .map(|(c, _, g)| (c.side, c.index, g.translation()))
+                .filter(|(_, v, ..)| **v == Visibility::Visible)
+                .map(|(c, _, g, grey, depth)| {
+                    assert!(grey.is_some() != depth.is_some(), "one material");
+                    (c.side, c.index, g.translation(), grey.is_some())
+                })
                 .collect::<Vec<_>>()
         };
         let all = app
             .world_mut()
-            .query::<&OccluderCapsule>()
+            .query::<&GauntletCapsule>()
             .iter(app.world())
             .count();
         assert_eq!(all, 2 * 26, "spawned hidden");
@@ -329,9 +425,10 @@ mod tests {
 
         // Joint i sits at (i cm, 1 m, 0) and the root lifts it by 0.5 m: a capsule between
         // joints a and b is centred at ((a + b) / 2 cm, 1.5 m, 0).
-        let check = |s: Vec<(usize, usize, Vec3)>| {
-            for (side, index, at) in s {
-                assert_eq!(side, 1);
+        let check = |s: &[(usize, usize, Vec3, bool)], grey: bool| {
+            assert_eq!(s.len(), 26, "the tracked hand's capsules: {s:?}");
+            for &(side, index, at, g) in s {
+                assert_eq!((side, g), (1, grey));
                 let (a, b) = CAPSULES[index];
                 let mid = Vec3::new((a + b) as f32 * 0.005, 1.5, 0.0);
                 assert!(
@@ -340,23 +437,27 @@ mod tests {
                 );
             }
         };
-        app.insert_resource(OccludersDrawn(Some(OccluderShape::Hand)));
-        app.update();
-        let s = shown(app.world_mut());
-        assert_eq!(s.len(), 24, "VR mode's hand: {s:?}");
-        check(s);
-        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 24);
-
-        app.insert_resource(OccludersDrawn(Some(OccluderShape::Gauntlet)));
-        app.update();
-        let s = shown(app.world_mut());
-        assert_eq!(s.len(), 26, "the gauntlet: {s:?}");
-        check(s);
-        app.update();
+        let set = |app: &mut App, drawn: bool, margin_m: f32| {
+            app.insert_resource(OccludersDrawn(Some(Occluders { drawn, margin_m })));
+            app.update();
+            app.update();
+        };
+        set(&mut app, false, 0.005);
+        check(&shown(app.world_mut()), false);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 26);
+        set(&mut app, true, 0.005);
+        check(&shown(app.world_mut()), true);
         assert_eq!(
             app.world().resource::<Assets<Mesh>>().len(),
             26,
-            "the hand's meshes replaced by the gauntlet's"
+            "same meshes"
+        );
+        set(&mut app, true, 0.01);
+        check(&shown(app.world_mut()), true);
+        assert_eq!(
+            app.world().resource::<Assets<Mesh>>().len(),
+            26,
+            "the meshes replaced for the new margin"
         );
     }
 }

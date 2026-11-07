@@ -7,7 +7,7 @@
 //! posed box B_m (its stage-space half extents in x and z), alpha 0.3 inside, falling by
 //! smoothstep to 0 over the outer 10 cm of its radius. It is drawn in the main opaque pass
 //! with depth (§1.4 Depth and occlusion), in its alpha-mask phase after the opaque phase,
-//! so the tracked hands drawn in passthrough hide it whatever the bin order (Q-364), as
+//! so the tracked hands' gauntlets hide it whatever the bin order (Q-364), as
 //! premultiplied (0, 0, 0, a) under a blend that keeps
 //! the target's color and takes the maximum alpha, so overlapping footprints join; the
 //! splats composite over it through the resolve's mesh branch (Q-101) and the compositor
@@ -120,7 +120,7 @@ impl Material for ShadowMaterial {
     }
 
     /// Q-364: the alpha-mask phase, which Bevy's main opaque pass draws after the opaque
-    /// phase (source-log 373), so every drawn hand's depth is written first; the blend is
+    /// phase (source-log 373), so every gauntlet's depth is written first; the blend is
     /// still `specialize`'s and the shader ignores the cutoff.
     // Q-364
     fn alpha_mode(&self) -> AlphaMode {
