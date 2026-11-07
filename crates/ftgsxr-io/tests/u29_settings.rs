@@ -82,6 +82,7 @@ fn u29_defaults_are_section_1s() {
             occlusion_soft: true,
             occlusion_delta_m: 0.05,
             hand_removal: false,
+            hand_occluders: false, // D-16
             lighting_mode: "off".into(),
             lighting_manual: ManualLighting {
                 exposure_ev: 0.0,
@@ -242,6 +243,7 @@ fn non_default() -> Settings {
             occlusion_soft: false,
             occlusion_delta_m: 0.12,
             hand_removal: true,
+            hand_occluders: true,
             lighting_mode: "auto-local".into(),
             lighting_manual: ManualLighting {
                 exposure_ev: -1.5,
