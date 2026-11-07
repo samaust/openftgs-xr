@@ -327,15 +327,13 @@ mod tests {
         app.update();
         assert!(shown(app.world_mut()).is_empty(), "not drawn");
 
-        let j = joints();
+        // Joint i sits at (i cm, 1 m, 0) and the root lifts it by 0.5 m: a capsule between
+        // joints a and b is centred at ((a + b) / 2 cm, 1.5 m, 0).
         let check = |s: Vec<(usize, usize, Vec3)>| {
             for (side, index, at) in s {
                 assert_eq!(side, 1);
                 let (a, b) = CAPSULES[index];
-                let mid = (transform_of(&j[a].pose).translation
-                    + transform_of(&j[b].pose).translation)
-                    * 0.5
-                    + Vec3::new(0.0, 0.5, 0.0);
+                let mid = Vec3::new((a + b) as f32 * 0.005, 1.5, 0.0);
                 assert!(
                     at.distance(mid) < 1e-5,
                     "capsule {index} at {at}, not {mid}"

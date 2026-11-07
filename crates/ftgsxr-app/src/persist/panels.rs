@@ -144,10 +144,9 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
 /// everywhere; the XR controls only for the features `XrFeatures` reports (Q-336): with
 /// passthrough the mode switch, the style sliders and contact shadows, and "occlude with
 /// tracked hands" when hands are not `Absent` either (Q-366), with "draw gauntlets" while
-/// it is on (§1.9); with occlusion its
-/// switch, soft or hard, δ and hand removal, with a note while the running tier's
-/// `occlusion` flag turns it off (Q-338); under a `Denied` feature "Ask again", which
-/// writes its toggle again (§1.15 E-XR-PERMISSION). The mode switch writes
+/// it is on (§1.9); with occlusion its switch, soft or hard, δ and hand removal, with a
+/// note while the running tier's `occlusion` flag turns it off (Q-338); under a `Denied`
+/// feature "Ask again", which writes its toggle again (§1.15 E-XR-PERMISSION). The mode switch writes
 /// `Toggle(Feature::Passthrough)`, whose consumer is the XR crate (Q-335); the other
 /// controls edit the settings directly.
 // Q-335, Q-336, Q-338, Q-366

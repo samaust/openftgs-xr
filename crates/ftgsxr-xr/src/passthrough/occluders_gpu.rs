@@ -426,7 +426,7 @@ fn gpu_drawn_hand_capsule_hides_what_is_behind_it_and_nothing_else() {
     scene.show_capsule(true);
     let (grey, hidden) = compare(&splat, &scene.pixels(), 0.1);
     assert!(
-        hidden > 30,
+        hidden > 50,
         "the capsule covers the primitive over pixels: {hidden}"
     );
 
