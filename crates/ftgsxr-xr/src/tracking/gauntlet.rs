@@ -121,8 +121,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
 /// The gauntlet's material: opaque, in the opaque phase, with its color writes off; the
 /// contact shadow's alpha-mask phase comes after it (Q-364). Its depth hides every
-/// depth-tested surface behind it, not only the splats (Q-367).
-// Q-364, Q-367
+/// depth-tested surface behind it, not only the splats (D-16).
+// Q-364, D-16
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug, Default)]
 pub(crate) struct GauntletMaterial {}
 
