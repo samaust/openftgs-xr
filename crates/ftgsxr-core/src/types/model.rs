@@ -171,11 +171,8 @@ impl Model {
     /// τ₀. When no row is counted, every row is, over \[τ₀, τ₁\] (D-42).
     // D-42
     pub fn bounds(&self) -> Aabb {
-        let (rows, all) = self.counted_rows();
-        let one = |i: usize| {
-            let (a, b) = self
-                .visible_interval(i, all)
-                .unwrap_or((self.time.tau0, self.time.tau0));
+        let rows = self.counted_rows();
+        let one = |&(i, a, b): &(usize, f64, f64)| {
             let pa = self.position_at(i, a);
             let pb = self.position_at(i, b);
             let margin = Vec3::splat(3.0 * Vec3::from_array(self.scale[i]).max_element());
@@ -184,9 +181,9 @@ impl Model {
         let empty = || (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
         let join = |(a0, a1): (Vec3, Vec3), (b0, b1): (Vec3, Vec3)| (a0.min(b0), a1.max(b1));
         let (min, max) = if rows.len() >= PARALLEL_ROWS {
-            rows.par_iter().map(|&i| one(i)).reduce(empty, join)
+            rows.par_iter().map(one).reduce(empty, join)
         } else {
-            rows.iter().map(|&i| one(i)).fold(empty(), join)
+            rows.iter().map(one).fold(empty(), join)
         };
         Aabb { min, max }
     }
@@ -200,17 +197,12 @@ impl Model {
     /// without rows.
     // D-42
     pub fn content_bounds(&self) -> Aabb {
-        let (rows, all) = self.counted_rows();
-        let mid = |i: usize| {
-            let (a, b) = self
-                .visible_interval(i, all)
-                .unwrap_or((self.time.tau0, self.time.tau0));
-            self.position_at(i, 0.5 * (a + b))
-        };
+        let rows = self.counted_rows();
+        let mid = |&(i, a, b): &(usize, f64, f64)| self.position_at(i, 0.5 * (a + b));
         let points: Vec<Vec3> = if rows.len() >= PARALLEL_ROWS {
-            rows.par_iter().map(|&i| mid(i)).collect()
+            rows.par_iter().map(mid).collect()
         } else {
-            rows.iter().map(|&i| mid(i)).collect()
+            rows.iter().map(mid).collect()
         };
         let n = points.len();
         if n == 0 {
@@ -218,7 +210,7 @@ impl Model {
             return self.bounds();
         }
         // Nearest rank, 1-based, in integers: ⌈k n / 100⌉.
-        let rank = |k: usize| (k * n).div_ceil(100).max(1);
+        let rank = |k: usize| (k * n).div_ceil(100);
         let (lo, hi) = (rank(1) - 1, rank(99) - 1);
         let mut min = Vec3::ZERO;
         let mut max = Vec3::ZERO;
@@ -237,25 +229,24 @@ impl Model {
         }
     }
 
-    /// E10's counted rows, and whether they are the fallback's every row (D-42).
-    fn counted_rows(&self) -> (Vec<usize>, bool) {
-        let rows: Vec<usize> = (0..self.len())
-            .filter(|&i| self.visible_interval(i, false).is_some())
+    /// E10's counted rows, each with its visible interval: with no counted row, every
+    /// row over \[τ₀, τ₁\] (D-42).
+    fn counted_rows(&self) -> Vec<(usize, f64, f64)> {
+        let rows: Vec<(usize, f64, f64)> = (0..self.len())
+            .filter_map(|i| self.visible_interval(i).map(|(a, b)| (i, a, b)))
             .collect();
         if rows.is_empty() {
-            ((0..self.len()).collect(), true)
+            let (tau0, tau1) = (self.time.tau0, self.time.tau1);
+            (0..self.len()).map(|i| (i, tau0, tau1)).collect()
         } else {
-            (rows, false)
+            rows
         }
     }
 
     /// Row `i`'s visible interval clipped to \[τ₀, τ₁\] (E10); `None` when it is not
-    /// counted. With `all` (E10's fallback), \[τ₀, τ₁\] for every row.
-    fn visible_interval(&self, i: usize, all: bool) -> Option<(f64, f64)> {
+    /// counted.
+    fn visible_interval(&self, i: usize) -> Option<(f64, f64)> {
         let (tau0, tau1) = (self.time.tau0, self.time.tau1);
-        if all {
-            return Some((tau0, tau1));
-        }
         let alpha_skip = self.conventions.alpha_skip;
         let opacity = self.opacity[i];
         if opacity <= alpha_skip {
@@ -264,7 +255,8 @@ impl Model {
         if self.is_single_timestamp() {
             return Some((tau0, tau0));
         }
-        // E2's cull σ_eff(τ) ≥ α_skip, as E3's half-width without the index's widening.
+        // E10's visible times σ_eff(τ) > α_skip (E2's cull), the ends taken in: E3's
+        // half-width without the index's widening.
         let ratio = f64::from(opacity) / f64::from(alpha_skip);
         let h = self.duration[i] * (2.0 * ratio.ln()).sqrt();
         let c = self.time_center[i];

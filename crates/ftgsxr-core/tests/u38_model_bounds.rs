@@ -7,10 +7,10 @@
 
 use ftgsxr_core::{Aabb, Model, ModelKind, RenderConventions, TimeSpan, Vec3};
 
-/// U-38's tolerance, relative to the value's magnitude (at least 1).
+/// U-38's tolerance, 10⁻⁶ (the literals stay below 10 in magnitude, where float32 holds
+/// it).
 fn assert_vec3(a: Vec3, b: Vec3) {
-    let eps = 1e-6 * b.abs().max_element().max(1.0);
-    assert!((a - b).abs().max_element() <= eps, "{a} vs {b}");
+    assert!((a - b).abs().max_element() <= 1e-6, "{a} vs {b}");
 }
 
 fn assert_box(b: Aabb, min: [f32; 3], max: [f32; 3]) {
@@ -181,24 +181,29 @@ fn u38_with_no_counted_row_every_row_counts_over_the_span() {
 
 #[test]
 fn u38_content_faces_are_the_nearest_rank_percentiles_outliers_beyond() {
-    // n = 200: the 2nd and 198th smallest. Rows at x = 2 … 199 and two outliers at ±1000.
+    // n = 200: the 2nd and 198th smallest. Rows at x = (k − 100)/20 for k = 2 … 199,
+    // from −4.9 to 4.95, and two outliers at ±9.
     let mut rows: Vec<Row> = (2..200)
-        .map(|x| still([x as f32, 0.0, 0.0], 0.01))
+        .map(|k: i32| still([(k - 100) as f32 / 20.0, 0.0, 0.0], 0.01))
         .collect();
-    rows.push(still([-1000.0, 0.0, 0.0], 0.01));
-    rows.push(still([1000.0, 0.0, 0.0], 0.01));
+    rows.push(still([-9.0, 0.0, 0.0], 0.01));
+    rows.push(still([9.0, 0.0, 0.0], 0.01));
     let m = model(&rows, 0.0, 10.0);
-    assert_box(m.content_bounds(), [2.0, 0.0, 0.0], [198.0, 0.0, 0.0]);
-    assert_box(m.bounds(), [-1000.03, -0.03, -0.03], [1000.03, 0.03, 0.03]);
+    assert_box(m.content_bounds(), [-4.9, 0.0, 0.0], [4.9, 0.0, 0.0]);
+    assert_box(m.bounds(), [-9.03, -0.03, -0.03], [9.03, 0.03, 0.03]);
 
-    // n = 150: ⌈1.5⌉ = 2 and ⌈148.5⌉ = 149, on each axis independently.
+    // n = 150: ⌈1.5⌉ = 2 and ⌈148.5⌉ = 149, on each axis independently: rows at
+    // (k/20, −k/20, k/40), k = 1 … 150.
     let rows: Vec<Row> = (1..=150)
-        .map(|k| still([k as f32, -(k as f32), 0.5 * k as f32], 0.01))
+        .map(|k| {
+            let k = k as f32;
+            still([k / 20.0, -k / 20.0, k / 40.0], 0.01)
+        })
         .collect();
     assert_box(
         model(&rows, 0.0, 10.0).content_bounds(),
-        [2.0, -149.0, 1.0],
-        [149.0, -2.0, 74.5],
+        [0.1, -7.45, 0.05],
+        [7.45, -0.1, 3.725],
     );
 }
 

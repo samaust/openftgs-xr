@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr_core::types` items no §3 row pins on their own (`cpu` lane), each against a
-//! hand-worked literal: `Model::bounds` and `Model::content_bounds` (E10's B_m and B_c, D-42), `Model::cap_sh`'s shape
-//! (§1.2 load option 1; its color clause is U-9's), `TimeSpan` (E9's r, D-32), `Pose`
-//! (E5) and `Aabb`.
+//! hand-worked literal: `Model::bounds` and `Model::content_bounds` (E10's B_m and B_c,
+//! D-42), `Model::cap_sh`'s shape (§1.2 load option 1; its color clause is U-9's),
+//! `TimeSpan` (E9's r, D-32), `Pose` (E5) and `Aabb`.
 
 use approx::assert_relative_eq;
 use ftgsxr_core::{Aabb, Model, ModelKind, Pose, Quat, RenderConventions, TimeSpan, Vec3};

@@ -2,7 +2,9 @@
 
 //! E10's two boxes on a trained room-scale model (`ds` lane, #622): on `kitchen`'s
 //! exchange file, B_m (`Model::bounds`) and the content box B_c (`Model::content_bounds`)
-//! have the sizes #622's triage measured, within 1 %. The figures are those of the file
+//! have the sizes #622's triage measured, within 1 % (the agent brief's criterion; the
+//! figures are the triage notes' table on github.com/samaust/openftgs-xr/issues/622,
+//! measured with a script kept outside the repository). The figures are those of the file
 //! the triage measured, openftgs-m17's `kitchen/default-395` (N = 3,000,000, τ in
 //! [0, 9.97] s); a `kitchen` trained again gives other figures. The test reads it at
 //! `$OPENFTGS_DATASETS/xr-fixtures/kitchen.safetensors`, where Q-108 puts M-8's

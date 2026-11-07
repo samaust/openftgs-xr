@@ -616,8 +616,6 @@ fn library_tab(
     }
 }
 
-/// Scene: the instances, their visibility, mode, pose, time offset and end rule; save
-/// and load.
 /// The "Fit to" toggle's label: the fit box it stands at (§1.5 Poses, Q-371).
 fn fit_to_label(content: bool) -> &'static str {
     if content {
@@ -627,6 +625,8 @@ fn fit_to_label(content: bool) -> &'static str {
     }
 }
 
+/// Scene: the instances, their visibility, mode, pose, time offset and end rule; save
+/// and load.
 fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Option<egui::Id>) {
     ui.horizontal(|ui| {
         if button(ui, "Save scene", out, hv) {
