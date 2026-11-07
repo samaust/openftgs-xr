@@ -34,11 +34,13 @@ use crate::xr_input::XrInputPlugin;
 /// render, camera and action plugins with the player's app info, Appendix E.1's
 /// extensions where the runtime offers them, an OPAQUE (D-14) `Rgba8UnormSrgb` (Q-91)
 /// session, D-24's reference spaces and the eyes as `SplatCamera`s. Add it through
-/// [`add_xr`] (Q-120). `passthrough` is carried and logged (M-6); `hands` asks for §1.8's
+/// [`add_xr`] (Q-120). `hands` asks for §1.8's
 /// hand extensions (PRD #452, #454); `sort` is each eye's `SplatCamera.sort` (Q-121).
+/// `passthrough` builds `passthrough`'s layer, switch and style (§1.9, D-14), which run
+/// where the runtime offers XR\_FB\_passthrough; without it the mode stays VR.
 #[derive(Clone, Copy, Debug)]
 pub struct XrPlugin {
-    /// Whether passthrough is wanted (M-6).
+    /// Whether passthrough is wanted: true on the Quest and for `play --xr` (§1.9).
     pub passthrough: bool,
     /// Whether hand tracking is wanted: true on the Quest and for `play --xr` (PRD #452).
     pub hands: bool,
@@ -54,7 +56,7 @@ fn extensions(hands: bool) -> OxrExtensions {
     let raw = exts.raw_mut();
     raw.khr_vulkan_enable2 = true;
     raw.ext_local_floor = true;
-    // For `Environment.passthrough_available` only in M-3.
+    // §1.9: `passthrough`'s layer, and `Environment.passthrough_available`.
     raw.fb_passthrough = true;
     raw.fb_display_refresh_rate = true;
     raw.fb_foveation = true;
@@ -130,7 +132,7 @@ fn app_info() -> AppInfo {
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
         info!(
-            "XrPlugin: passthrough {} (M-6) and hands {} wanted, sort {:?}",
+            "XrPlugin: passthrough {} and hands {} wanted, sort {:?}",
             self.passthrough, self.hands, self.sort
         );
         app.add_plugins(XrSessionPlugin { auto_handle: true })
@@ -204,6 +206,7 @@ pub fn runtime_unavailable(app: &App) -> Option<XrError> {
 struct XrTail {
     sort: SortMode,
     hands: bool,
+    passthrough: bool,
 }
 
 impl Plugin for XrTail {
@@ -235,6 +238,11 @@ impl Plugin for XrTail {
         .add_plugins(PanelPlugin)
         // After the events plugin and `session`, whose re-creation it uses (Q-124).
         .add_plugins(DisplayPlugin);
+        // §1.9, D-14 (#568): the layer, the switch and the style; without it nothing is
+        // created and the mode stays VR (M-3's behaviour).
+        if self.passthrough {
+            app.add_plugins(passthrough::PassthroughPlugin);
+        }
     }
 }
 
@@ -249,6 +257,7 @@ pub fn add_xr(plugins: impl PluginGroup, xr: XrPlugin) -> PluginGroupBuilder {
         .add(XrTail {
             sort: xr.sort,
             hands: xr.hands,
+            passthrough: xr.passthrough,
         })
 }
 
