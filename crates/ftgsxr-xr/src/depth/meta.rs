@@ -318,7 +318,9 @@ impl MetaDepth {
             space: ctx.space,
             display_time: ctx.time,
         };
-        let stamp = sys::EnvironmentDepthImageTimestampMETA {
+        // The runtime writes `capture_time` (#602): a mutable binding, reached through a
+        // pointer made from a mutable place, read back after the call.
+        let mut stamp = sys::EnvironmentDepthImageTimestampMETA {
             ty: sys::EnvironmentDepthImageTimestampMETA::TYPE,
             next: std::ptr::null(),
             capture_time: sys::Time::from_nanos(0),
@@ -336,7 +338,7 @@ impl MetaDepth {
         };
         let mut image = sys::EnvironmentDepthImageMETA {
             ty: sys::EnvironmentDepthImageMETA::TYPE,
-            next: std::ptr::from_ref(&stamp).cast(),
+            next: (&raw mut stamp).cast::<std::ffi::c_void>().cast_const(),
             swapchain_index: 0,
             near_z: 0.0,
             far_z: 0.0,
@@ -346,7 +348,10 @@ impl MetaDepth {
         // between this frame's xrBeginFrame and xrEndFrame (the render world's Prepare,
         // after bevy_mod_openxr's begin, source-log row 361), once per frame (`Views`);
         // `info`, `image` and the timestamp chained on its `next` are valid typed
-        // structures alive for the call, which writes `image` and the timestamp.
+        // structures alive for the call, which writes `image` through `&mut image` and the
+        // timestamp through its `next`, a pointer made from the mutable `stamp` (`&raw
+        // mut`), so the write is allowed; nothing else touches `stamp` until it is read
+        // after the call (#602).
         let r = unsafe { (t.acquire_environment_depth_image)(self.provider, &info, &mut image) };
         if r == sys::Result::ENVIRONMENT_DEPTH_NOT_AVAILABLE_META {
             return Acquired::Same;
