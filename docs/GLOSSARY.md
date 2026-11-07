@@ -717,7 +717,7 @@ The runtime object that produces the environment depth, created once per session
 _Avoid_: depth sensor, depth API (the platform's name), scene model
 
 **Contact shadow**:
-The soft dark ellipse drawn on the floor under a model instance's footprint in passthrough mode. §1.9
+The soft dark disc drawn on the floor under a model instance's footprint in passthrough mode. §1.9
 _Avoid_: drop shadow, ambient occlusion, floor shadow
 
 **Spatial anchor**:
