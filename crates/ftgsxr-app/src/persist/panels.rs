@@ -142,9 +142,9 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
 
 /// The Environment tab (§1.7 Panels, §1.9): the VR-mode controls, background and grid,
 /// everywhere; the XR controls only for the features `XrFeatures` reports (Q-336): with
-/// passthrough the mode switch, the style sliders and contact shadows, and "occlude with
-/// tracked hands" when hands are not `Absent` either (Q-366), with the gauntlet's margin
-/// and "draw gauntlets" while it is on (§1.9); with occlusion its switch, soft or hard, δ
+/// passthrough the mode switch, the style sliders and contact shadows, and the gauntlets'
+/// margin and "draw gauntlets" when hands are not `Absent` either (Q-366) while hand
+/// removal is off (§1.9); with occlusion its switch, soft or hard, δ
 /// and hand removal, with a note while the running tier's `occlusion` flag turns it off
 /// (Q-338); under a `Denied` feature "Ask again", which writes its toggle again (§1.15
 /// E-XR-PERMISSION). The mode switch writes `Toggle(Feature::Passthrough)`, whose consumer
@@ -188,26 +188,23 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             ui.add(egui::Slider::new(&mut e.passthrough_contrast, -1.0..=1.0).text("contrast"));
             ui.add(egui::Slider::new(&mut e.passthrough_saturation, -1.0..=1.0).text("saturation"));
             ui.checkbox(&mut e.contact_shadows, "contact shadows");
-            // §1.9, Q-366: offered whenever hand tracking is available, with or without
-            // the depth provider.
-            if hands {
-                ui.checkbox(&mut e.hand_occluders, "occlude with tracked hands");
-                // §1.9: offered while the option is on.
-                if e.hand_occluders {
-                    // §1.9: the gauntlet's margin over 0–2 cm in 1 mm steps.
-                    let mut cm = e.hand_gauntlet_margin_m * 100.0;
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut cm, 0.0..=2.0)
-                                .step_by(0.1)
-                                .text("gauntlet margin (cm)"),
-                        )
-                        .changed()
-                    {
-                        e.hand_gauntlet_margin_m = cm / 100.0;
-                    }
-                    ui.checkbox(&mut e.hand_gauntlets, "draw gauntlets");
+            // §1.9 (revision 42), Q-366: the tracked hands' gauntlets, offered whenever
+            // hand tracking is available, with or without the depth provider, while hand
+            // removal is off.
+            if hands && !e.hand_removal {
+                // §1.9: the gauntlet's margin over 0–2 cm in 1 mm steps.
+                let mut cm = e.hand_gauntlet_margin_m * 100.0;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut cm, 0.0..=2.0)
+                            .step_by(0.1)
+                            .text("gauntlet margin (cm)"),
+                    )
+                    .changed()
+                {
+                    e.hand_gauntlet_margin_m = cm / 100.0;
                 }
+                ui.checkbox(&mut e.hand_gauntlets, "draw gauntlets");
             }
         }
         if occlusion {
@@ -402,7 +399,6 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
                 0.001,
             );
             ui.checkbox(&mut e.hand_removal, "hand_removal");
-            ui.checkbox(&mut e.hand_occluders, "hand_occluders");
             ui.checkbox(&mut e.hand_gauntlets, "hand_gauntlets");
             num(
                 ui,
@@ -783,12 +779,13 @@ mod tests {
         assert_eq!(world.resource::<SettingsRes>().0.general.tier, "quest-low");
     }
 
-    /// §1.9, Q-366 (`cpu`): "occlude with tracked hands" shows in passthrough mode whenever
-    /// hand tracking is available, without the depth provider, and not without hands or
-    /// passthrough; clicking it turns `[environment] hand_occluders` on.
+    /// §1.9 (revision 42), Q-366 (`cpu`): the gauntlets' margin slider and "draw
+    /// gauntlets" show in passthrough mode whenever hand tracking is available, without
+    /// the depth provider, while hand removal is off; not without hands or passthrough,
+    /// and not with hand removal on. No "occlude with tracked hands" checkbox remains.
     #[test]
-    fn the_environment_tab_offers_hand_occluders_with_passthrough_and_hands() {
-        let label = "occlude with tracked hands";
+    fn the_environment_tab_offers_the_gauntlets_with_passthrough_hands_and_no_removal() {
+        let (gauntlets, margin) = ("draw gauntlets", "gauntlet margin (cm)");
         let mut world = World::new();
         world.insert_resource(SettingsRes::default());
         world.init_resource::<Messages<Intent>>();
@@ -796,59 +793,56 @@ mod tests {
         let ctx = egui::Context::default();
         let has =
             |texts: &[(String, egui::Pos2)], label: &str| texts.iter().any(|(t, _)| t == label);
-        let absent = |hands, passthrough| XrFeatures {
+        let features = |hands, passthrough| XrFeatures {
             passthrough,
             hands,
             ..XrFeatures::default()
+        };
+        let frame = |world: &mut World| {
+            frame_of(&ctx, world, Vec::new(), environment_section);
+            frame_of(&ctx, world, Vec::new(), environment_section)
         };
         for (hands, passthrough) in [
             (FeatureState::Absent, FeatureState::Available),
             (FeatureState::Available, FeatureState::Absent),
             (FeatureState::Absent, FeatureState::Absent),
         ] {
-            world.insert_resource(absent(hands, passthrough));
-            frame_of(&ctx, &mut world, Vec::new(), environment_section);
-            let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-            assert!(!has(&texts, label), "{hands:?} {passthrough:?}: {texts:?}");
+            world.insert_resource(features(hands, passthrough));
+            let texts = frame(&mut world);
+            for label in [gauntlets, margin] {
+                assert!(
+                    !has(&texts, label),
+                    "{label}, {hands:?} {passthrough:?}: {texts:?}"
+                );
+            }
         }
         for hands in [FeatureState::Available, FeatureState::Denied] {
-            // No depth provider (occlusion `Absent`): the checkbox still shows.
-            world.insert_resource(absent(hands, FeatureState::Available));
-            frame_of(&ctx, &mut world, Vec::new(), environment_section);
-            let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-            assert!(has(&texts, label), "{hands:?}: {texts:?}");
+            // No depth provider (occlusion `Absent`): the controls still show.
+            world.insert_resource(features(hands, FeatureState::Available));
+            let texts = frame(&mut world);
+            for label in [gauntlets, margin] {
+                assert!(has(&texts, label), "{label}, {hands:?}: {texts:?}");
+            }
+            assert!(!has(&texts, "occlude with tracked hands"), "{texts:?}");
             assert!(!has(&texts, "hand removal"), "{texts:?}");
         }
-        assert!(!world.resource::<SettingsRes>().0.environment.hand_occluders);
-        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-        for events in click(at(&texts, label)) {
-            frame_of(&ctx, &mut world, events, environment_section);
-        }
-        assert!(world.resource::<SettingsRes>().0.environment.hand_occluders);
-
-        // §1.9 (revision 41): "draw gauntlets" is offered while the option is on, and
-        // clicking it turns `[environment] hand_gauntlets` on.
-        let gauntlets = "draw gauntlets";
-        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-        assert!(has(&texts, gauntlets), "{texts:?}");
+        assert!(!world.resource::<SettingsRes>().0.environment.hand_gauntlets);
+        let texts = frame(&mut world);
         for events in click(at(&texts, gauntlets)) {
             frame_of(&ctx, &mut world, events, environment_section);
         }
         assert!(world.resource::<SettingsRes>().0.environment.hand_gauntlets);
-        // Revision 41: the margin's slider is offered while the option is on.
-        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-        assert!(has(&texts, "gauntlet margin (cm)"), "{texts:?}");
+        // Hand removal on: the content draws over the hands, so no gauntlet control.
         world
             .resource_mut::<SettingsRes>()
             .0
             .environment
-            .hand_occluders = false;
-        frame_of(&ctx, &mut world, Vec::new(), environment_section);
-        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-        for label in [gauntlets, "gauntlet margin (cm)"] {
+            .hand_removal = true;
+        let texts = frame(&mut world);
+        for label in [gauntlets, margin] {
             assert!(
                 !has(&texts, label),
-                "{label} not offered with the option off: {texts:?}"
+                "{label} with hand removal on: {texts:?}"
             );
         }
     }
