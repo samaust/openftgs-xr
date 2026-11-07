@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr_core::types` items no §3 row pins on their own (`cpu` lane), each against a
-//! hand-worked literal: `Model::bounds` (E10's B_m, Q-9), `Model::cap_sh`'s shape
+//! hand-worked literal: `Model::bounds` (E10's B_m, D-42), `Model::cap_sh`'s shape
 //! (§1.2 load option 1; its color clause is U-9's), `TimeSpan` (E9's r, D-32), `Pose`
 //! (E5) and `Aabb`.
 
@@ -71,7 +71,7 @@ fn bounds_of_a_single_timestamp_take_one_sample() {
 
 #[test]
 fn bounds_without_a_visible_row_cover_every_row() {
-    // Q-9: with every opacity ≤ α_skip, the box is over all rows.
+    // D-42: with every opacity ≤ α_skip, the box is over all rows.
     let mut m = two_rows();
     m.opacity = vec![0.001, 0.001];
     let b = m.bounds(8);
