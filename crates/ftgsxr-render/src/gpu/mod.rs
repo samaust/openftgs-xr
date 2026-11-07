@@ -4,12 +4,13 @@
 //! device, `GpuModel`, frame buffers, the frame inputs, the passes (`SplatPasses`: the cull
 //! and size passes of stages 1–3, the radix sort of stage 4, the splat and centers draws
 //! of stages 5 and 6, the resolve of stage 7 and the statistics of stage 8), the frame
-//! buffers' read back and the headless renderer.
+//! buffers' read back, the headless renderer and the import of a Vulkan image (Q-339).
 
 pub(crate) mod device;
 mod error;
 pub(crate) mod frame;
 pub(crate) mod headless;
+mod import;
 mod inputs;
 pub(crate) mod model;
 pub(crate) mod passes;
@@ -22,6 +23,7 @@ pub use device::{BudgetSource, MemoryBudget, SplatDevice}; // Q-68, Q-74
 pub use error::RenderError;
 pub use frame::FrameBuffers;
 pub use headless::{HeadlessRenderer, ModelId};
+pub use import::import_vulkan_texture; // Q-339
 pub use inputs::{
     ColorTransform, Colormap, ModelDraw, OcclusionInput, Overlays, RenderMode, SortPose, ViewParams,
 };
