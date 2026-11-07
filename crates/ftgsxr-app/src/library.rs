@@ -22,7 +22,9 @@ use bevy::log::warn;
 use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
 use bevy::transform::components::Transform;
 use bevy::window::FileDragAndDrop;
-use ftgsxr_core::{ModelInfo, ModelKind, ModelTime, checkpoint_dir, memory_estimate};
+use ftgsxr_core::{
+    ModelInfo, ModelKind, ModelTime, checkpoint_dir, max_field_bytes_per_primitive, memory_estimate,
+};
 use ftgsxr_io::{
     DocumentProvider, Entry, EntryKind, HttpClient, IoError, ModelBytes, ModelRef, ModelSource,
     Progress, Revalidation, SourceSpec, TlsRoots, Url, classify_name, open_ref, open_source,
@@ -655,9 +657,10 @@ fn read_drops(
 }
 
 /// The reduce-to-budget count (Q-158): the budget's remaining bytes over the static
-/// bytes of one primitive under the tier's layout and the governor's SH cap, floored;
-/// `None` without a device or when every row fits.
-// Q-158
+/// bytes of one primitive under the tier's layout and the governor's SH cap, floored, and
+/// at most the rows whose largest field fits the device's storage binding, its buffer
+/// padded to whole words (Q-369); `None` without a device or when every row fits.
+// Q-158, Q-369
 fn reduce_count(info: &ModelInfo, gpu: Option<&SplatGpu>, tier: &SplatTierState) -> Option<usize> {
     let dev = gpu?.device();
     let remaining = dev
@@ -671,7 +674,8 @@ fn reduce_count(info: &ModelInfo, gpu: Option<&SplatGpu>, tier: &SplatTierState)
     let per = memory_estimate(1, info.sh_degree, &opts, false)
         .static_bytes
         .max(1);
-    let count = remaining / per;
+    let widest = max_field_bytes_per_primitive(info.sh_degree, &opts).max(1);
+    let count = (remaining / per).min(dev.max_binding_bytes() / 4 * 4 / widest);
     (count < info.n).then(|| usize::try_from(count).unwrap_or(usize::MAX))
 }
 
