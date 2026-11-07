@@ -113,6 +113,10 @@ pub(crate) enum Status {
 pub(crate) trait AnchorDriver: AnchorStore {
     /// Whether the runtime offers anchors (false for `NoAnchors`).
     fn available(&self) -> bool;
+    /// Whether `create` and `locate` can run now (the adapter: once it has a frame).
+    fn ready(&self) -> bool {
+        true
+    }
     /// Starts loading the saved anchor `uuid`; its `status` then tells.
     fn query(&mut self, uuid: &AnchorId) -> Result<(), XrError>;
     /// What became of `id` (a request id or a UUID).
@@ -185,6 +189,9 @@ pub(crate) struct Handshake {
     load_path: Option<PathBuf>,
     abandoned: Vec<AnchorId>,
     toasted: bool,
+    /// Whether the instance enabled the spatial-entity extensions: until the session's
+    /// adapter exists and has a frame, a create or a locate waits (Q-T571.2).
+    expected: bool,
 }
 
 /// The content group's world pose on an anchor located at `located` in the primary
@@ -266,9 +273,11 @@ impl Plugin for AnchorsPlugin {
         // E-XR-UNSUPPORTED once per absent extension, a warning with no toast (Q-134,
         // Q-161: the default is not an explicit request).
         if let Some(enabled) = app.world().get_resource::<OxrEnabledExtensions>() {
-            for name in missing_extensions(enabled.0.raw()) {
+            let missing = missing_extensions(enabled.0.raw());
+            for name in &missing {
                 log_warning(&XrError::Unsupported(name));
             }
+            app.world_mut().resource_mut::<Handshake>().expected = missing.is_empty();
         }
         // Dv-9 (#571): inert until the quest runner's entity names it (Q-308, Q-346).
         #[cfg(target_os = "android")]
@@ -422,9 +431,13 @@ pub(crate) fn handshake(
         hs.flow = ask(platform.as_deref());
         listed(false);
     }
-    let starting =
-        hs.job == Job::Idle && matches!(*scene, SceneAnchor::Creating | SceneAnchor::Locating(_));
     let available = store.available();
+    // Q-T571.2: with the extensions enabled, a request waits for the session's adapter
+    // and its first frame rather than failing on the store that stands in before it.
+    let waiting = hs.expected && !(available && store.ready());
+    let starting = !waiting
+        && hs.job == Job::Idle
+        && matches!(*scene, SceneAnchor::Creating | SceneAnchor::Locating(_));
     if starting && available && hs.flow == Flow::Idle {
         hs.flow = ask(platform.as_deref());
     }
@@ -979,6 +992,36 @@ mod tests {
         assert_eq!(
             *forgotten.lock().expect("unpoisoned"),
             vec![AnchorId("uuid-1".into())]
+        );
+    }
+
+    /// Q-T571.2: with the extensions enabled on the instance, a `Locating` set before the
+    /// session's adapter exists waits (no `Lost`, no toast), and proceeds once it does.
+    #[test]
+    fn handshake_waits_for_the_sessions_store() {
+        let saved = pose([0.4, 0.0, -1.2], yaw(25.0));
+        let mut store = Fake::default();
+        store
+            .saved
+            .insert(AnchorId("a1b2".into()), creation_pose(saved, root()));
+        let mut app = app(Fake::default(), Pose::IDENTITY);
+        app.insert_resource(Anchors::default());
+        app.world_mut().resource_mut::<Handshake>().expected = true;
+        app.insert_resource(SceneAnchor::Locating("a1b2".into()));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<SceneAnchor>(),
+            SceneAnchor::Locating("a1b2".into())
+        );
+        app.insert_resource(Anchors(Box::new(store)));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<SceneAnchor>(),
+            SceneAnchor::Ready("a1b2".into())
         );
     }
 

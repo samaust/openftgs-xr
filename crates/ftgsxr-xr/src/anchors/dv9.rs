@@ -165,7 +165,9 @@ pub(crate) fn add(app: &mut App) {
         PostUpdate,
         (
             detect.run_if(not(resource_exists::<Dv9>)),
-            run.run_if(resource_exists::<Dv9>).before(super::handshake),
+            run.run_if(resource_exists::<Dv9>)
+                .after(super::feed_frame)
+                .before(super::handshake),
         ),
     );
 }
@@ -220,7 +222,7 @@ fn run(
     match test.phase.clone() {
         Phase::Done => {}
         Phase::Store => {
-            if store.available() && !root.is_empty() {
+            if store.available() && store.ready() && !root.is_empty() {
                 let phase = match platform.as_deref() {
                     Some(p) => Phase::Permission(p.0.request_permission(Permission::Anchors)),
                     None => Phase::Permission(PermissionHandle(u32::MAX)),

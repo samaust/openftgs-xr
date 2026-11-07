@@ -479,6 +479,10 @@ impl AnchorDriver for FbAnchors {
         true
     }
 
+    fn ready(&self) -> bool {
+        self.base != sys::Space::NULL && self.time.as_nanos() != 0
+    }
+
     fn query(&mut self, uuid: &AnchorId) -> Result<(), XrError> {
         let fp = self
             .session
