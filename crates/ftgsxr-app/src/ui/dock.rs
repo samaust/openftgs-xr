@@ -20,7 +20,7 @@ use super::{
 };
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
-use crate::manipulate::{FIT_DEFAULT_M, FIT_MIN_M, PoseExtras, SetPoseExtras};
+use crate::manipulate::{FIT_DEFAULT_M, FIT_MIN_M, ManipulateSettings, PoseExtras, SetPoseExtras};
 use crate::platform::PickKind;
 use crate::playback::{Playback, RangeSetting, Scrubbing};
 
@@ -618,6 +618,15 @@ fn library_tab(
 
 /// Scene: the instances, their visibility, mode, pose, time offset and end rule; save
 /// and load.
+/// The "Fit to" toggle's label: the fit box it stands at (§1.5 Poses, Q-371).
+fn fit_to_label(content: bool) -> &'static str {
+    if content {
+        "Fit to: content"
+    } else {
+        "Fit to: whole model"
+    }
+}
+
 fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Option<egui::Id>) {
     ui.horizontal(|ui| {
         if button(ui, "Save scene", out, hv) {
@@ -640,6 +649,12 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
     let mut ask = None;
     let mut lightings = Vec::new();
     let mut extras_out = Vec::new();
+    // §1.5 Poses: "Fit to" is one global setting, shown and flipped beside every
+    // instance's fit (Q-371).
+    let fit_content = world
+        .get_resource::<ManipulateSettings>()
+        .is_none_or(|s| s.fit_to_content);
+    let mut flip_fit_to = false;
     for (e, mut m, mut tf, vis, mode, light, extras, time) in q.iter_mut(world) {
         ui.separator();
         // §1.5: the instance's name is editable; §1.6: an "extrapolating" badge.
@@ -823,6 +838,10 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                         action,
                     }));
                 }
+                // Q-371
+                if action == InstanceAction::Fit && button(ui, fit_to_label(fit_content), out, hv) {
+                    flip_fit_to = true;
+                }
             }
             if button(ui, "Unload", out, hv) {
                 // Q-199: asked first.
@@ -832,6 +851,9 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
     }
     for x in extras_out {
         world.write_message(x);
+    }
+    if flip_fit_to && let Some(mut s) = world.get_resource_mut::<ManipulateSettings>() {
+        s.fit_to_content = !fit_content;
     }
     for (e, l) in lightings {
         if let Ok(mut ec) = world.get_entity_mut(e) {
@@ -1623,6 +1645,31 @@ mod tests {
         assert_eq!(
             actions(&click(&mut world, scene_tab, "Splats")),
             vec![(e, InstanceAction::SetMode(RenderMode::Splats))]
+        );
+    }
+
+    // §1.5 Poses (revision 44, Q-371): a "Fit to" toggle beside the fit action, in the
+    // Scene tab the desktop dock and the XR panel share, flips the one global fit box
+    // and sends no instance action.
+    #[test]
+    fn scene_tab_fit_to_toggles_the_global_fit_box() {
+        let mut world = World::new();
+        world.insert_resource(crate::manipulate::ManipulateSettings::default());
+        instance(&mut world, RenderMode::Splats, false);
+        assert_eq!(
+            actions(&click(&mut world, scene_tab, "Fit to: content")),
+            vec![]
+        );
+        assert!(
+            !world
+                .resource::<crate::manipulate::ManipulateSettings>()
+                .fit_to_content
+        );
+        click(&mut world, scene_tab, "Fit to: whole model");
+        assert!(
+            world
+                .resource::<crate::manipulate::ManipulateSettings>()
+                .fit_to_content
         );
     }
 
