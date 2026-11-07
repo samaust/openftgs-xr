@@ -589,10 +589,10 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
                 let path = scene_path(&files.scenes, &p);
                 // Q-343, Q-335: on the headset in passthrough mode the anchor first, the
                 // mode as gated (`passthrough_mode`).
-                let passthrough = passthrough_mode(
-                    &world.resource::<SettingsRes>().0,
-                    world.contains_resource::<Headset>(),
-                );
+                let headset = world.contains_resource::<Headset>();
+                let passthrough = world
+                    .get_resource::<SettingsRes>()
+                    .is_some_and(|s| passthrough_mode(&s.0, headset));
                 if passthrough {
                     let now = world.resource::<Time<Real>>().elapsed();
                     world.insert_resource(SceneAnchor::Creating);
@@ -601,7 +601,7 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
                     // §1.9: an anchor only for a save in passthrough mode on the headset,
                     // so this one writes null and the earlier anchor is let go (a save
                     // still waiting in `Creating` keeps its wait).
-                    if *world.resource::<SceneAnchor>() != SceneAnchor::Creating {
+                    if world.get_resource::<SceneAnchor>() != Some(&SceneAnchor::Creating) {
                         world.insert_resource(SceneAnchor::None);
                     }
                     write_scene_file(world, &path);
