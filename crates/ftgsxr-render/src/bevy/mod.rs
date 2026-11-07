@@ -103,8 +103,8 @@ pub enum OutputSpace {
 pub struct DepthFrame {
     /// The depth image: a 2D image whose first channel holds the stored depth, zero at
     /// `near` and one at `far` (Q-340), in a format that samples as an unfilterable
-    /// float (a depth format, `R16Unorm`, `R32Float`); `ftgsxr_xr::depth` copies the
-    /// runtime's image into it each frame (Q-339).
+    /// float (a depth format, `R16Unorm`, `R32Float`); `ftgsxr_xr::depth` draws the
+    /// runtime's image into it each frame by a conversion pass (Q-339, Q-360).
     pub image: Handle<Image>,
     /// The camera the image was taken from.
     pub camera: Camera,

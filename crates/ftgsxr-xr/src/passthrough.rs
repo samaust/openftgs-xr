@@ -84,7 +84,9 @@ pub struct PassthroughStyle {
 /// the style.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Environment {
-    /// The current mode; `Vr` in M-3.
+    /// The effective mode (Q-335): passthrough while a session exists, the setting asks
+    /// for it, the `Headset` marker exists and the runtime offers XR\_FB\_passthrough;
+    /// `Vr` otherwise.
     pub mode: EnvironmentMode,
     /// Whether XR\_FB\_passthrough was enabled on the instance.
     pub passthrough_available: bool,

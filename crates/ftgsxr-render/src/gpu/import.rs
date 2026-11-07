@@ -11,7 +11,8 @@ use super::device::SplatDevice;
 /// Imports the Vulkan image `image` (a raw `VkImage` handle) of `size` × `layers` array
 /// layers in `format` into a `wgpu::Texture` of `dev`'s device, usable as a copy source
 /// and for texture binding; its memory stays the image owner's (Q-339: once per
-/// swapchain image, for `ftgsxr_xr::depth`'s copy into `DepthFrame.image`).
+/// swapchain image, for `ftgsxr_xr::depth`'s conversion pass into `DepthFrame.image`,
+/// Q-360).
 ///
 /// # Safety
 ///
