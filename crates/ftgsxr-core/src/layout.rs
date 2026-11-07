@@ -185,6 +185,29 @@ pub fn memory_estimate(
     }
 }
 
+/// The largest of §1.12's per-field bytes per primitive under `opts`, at the capped degree
+/// L′ = min(L, `opts.sh_cap`): position 12, time center and duration 4 each, velocity and
+/// scale 12, rotation 16, opacity 4 and SH 12 (L′+1)², half of each for a field `opts.half`
+/// names. A model's rows times this is its largest GPU array, which one storage binding
+/// must hold (Q-369).
+// Q-369
+pub fn max_field_bytes_per_primitive(sh_degree: u8, opts: &GpuLayoutOptions) -> u64 {
+    let half = opts.half;
+    let bytes = |values: usize, is_half: bool| (values * if is_half { 2 } else { 4 }) as u64;
+    [
+        bytes(3, false),
+        bytes(1, false),
+        bytes(3, half.velocity),
+        bytes(3, half.scale),
+        bytes(4, half.rotation),
+        bytes(1, half.opacity),
+        bytes(sh_values(loaded_degree(sh_degree, opts.sh_cap)), half.sh),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0)
+}
+
 /// §1.2 load option 4's opt-in reduction: the `budget` rows of highest importance score
 /// opacity·scale_x·scale_y·scale_z, in file order (D-13). The score is computed in
 /// float64; at equal scores the earlier file row is kept, so the result is deterministic.
