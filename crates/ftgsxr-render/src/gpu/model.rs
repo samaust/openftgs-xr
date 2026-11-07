@@ -108,10 +108,16 @@ fn static_bytes(a: &GpuArrays) -> u64 {
     (f32s + packed) as u64
 }
 
+/// The bytes of a field's buffer holding `len` bytes: padded to whole words, at least one
+/// (Q-22), the range its storage binding takes.
+fn buffer_size(len: usize) -> usize {
+    len.div_ceil(4).max(1) * 4
+}
+
 /// A storage buffer holding `bytes` padded with zeros to whole words (at least one),
 /// written through the mapping at creation.
 fn storage_buffer(dev: &SplatDevice, label: &str, mut bytes: Vec<u8>) -> wgpu::Buffer {
-    let size = bytes.len().div_ceil(4).max(1) * 4;
+    let size = buffer_size(bytes.len());
     bytes.resize(size, 0);
     let buffer = dev.device().create_buffer(&BufferDescriptor {
         label: Some(label),
@@ -178,11 +184,35 @@ fn speed_percentile_99(arrays: &GpuArrays) -> f32 {
     s[rank - 1]
 }
 
-/// `arrays`' static bytes reserved on `dev`'s budget (Q-74); a refusal is logged with N,
-/// the bytes needed and the budget left (§1.2 load option 4, D-13), since
-/// `RenderError::Budget` carries no N.
+/// `RenderError::Budget` when a field's buffer exceeds `dev`'s largest storage binding,
+/// with the field's buffer bytes and the limit, logged with N and the field's name (Q-369):
+/// its bind group could not be made.
+// Q-369
+fn check_bindings(dev: &SplatDevice, arrays: &GpuArrays) -> Result<(), RenderError> {
+    let limit = dev.limits().max_storage_buffer_binding_size;
+    for (i, name) in FIELD_NAMES.iter().enumerate() {
+        let bytes = buffer_size(field(arrays, i).len()) as u64;
+        if bytes > limit {
+            warn!(
+                "model of N = {} refused: its {name} buffer takes {bytes} bytes, over the \
+                 device's {limit}-byte storage binding (E-MEM-BUDGET)",
+                arrays.n
+            );
+            return Err(RenderError::Budget {
+                needed: bytes,
+                budget: limit,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// `arrays`' static bytes reserved on `dev`'s budget (Q-74), once every field's buffer fits
+/// one storage binding (Q-369); a refusal is logged with N, the bytes needed and the budget
+/// left (§1.2 load option 4, D-13), since `RenderError::Budget` carries no N.
 // Q-117
 fn reserve_logged(dev: &SplatDevice, arrays: &GpuArrays) -> Result<Reservation, RenderError> {
+    check_bindings(dev, arrays)?;
     dev.reserve(static_bytes(arrays)).inspect_err(|e| {
         if let RenderError::Budget { needed, budget } = e {
             warn!(
@@ -201,6 +231,8 @@ impl GpuModel {
     /// allocated on the GPU (§2.4 rule 4, §1.2 load option 4, D-13), and given back when
     /// the model is dropped (Q-74): a model that does not fit in what the device's live
     /// models leave of the budget is `RenderError::Budget`, its `budget` the bytes left.
+    /// So is a model with a field whose buffer exceeds the device's largest storage
+    /// binding, its `needed` the buffer's bytes and its `budget` the limit (Q-369).
     ///
     /// # Panics
     ///
@@ -295,6 +327,18 @@ impl FieldBytes<'_> {
 
 const FIELDS: usize = 8;
 
+/// The fields' names in `field` order, for the binding-limit refusal's log (Q-369).
+const FIELD_NAMES: [&str; FIELDS] = [
+    "position",
+    "time center",
+    "duration",
+    "velocity",
+    "scale",
+    "rotation",
+    "opacity",
+    "sh",
+];
+
 fn field(a: &GpuArrays, i: usize) -> FieldBytes<'_> {
     match i {
         0 => FieldBytes::F32(&a.position),
@@ -359,7 +403,7 @@ impl ModelUpload {
         let buffer = |label: &str, len: usize| {
             dev.device().create_buffer(&BufferDescriptor {
                 label: Some(label),
-                size: (len.div_ceil(4).max(1) * 4) as u64,
+                size: buffer_size(len) as u64,
                 usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | TEST_READ,
                 mapped_at_creation: false,
             })
@@ -651,37 +695,181 @@ mod tests {
         assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
     }
 
+    /// A writer into a shared buffer, for a captured log.
+    #[derive(Clone)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("the log buffer")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("the log buffer").clone()).expect("UTF-8")
+        }
+    }
+
+    /// The thread's log captured until the guard is dropped.
+    fn capture_log() -> (Captured, bevy::log::tracing::subscriber::DefaultGuard) {
+        use bevy::log::tracing_subscriber::{self, util::SubscriberInitExt};
+        let log = Captured(std::sync::Arc::default());
+        let writer = log.clone();
+        let guard = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish()
+            .set_default();
+        (log, guard)
+    }
+
+    /// A device of its own, as `SplatDevice::headless` makes one, but whose largest storage
+    /// binding is `bytes` (Q-369).
+    fn device_with_binding_limit(bytes: u64) -> SplatDevice {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        desc.backends = wgpu::Backends::VULKAN;
+        desc.flags = wgpu::InstanceFlags::from_build_config().with_env();
+        let instance = wgpu::Instance::new(desc);
+        let adapter =
+            bevy::tasks::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            }))
+            .expect("an adapter");
+        let required_limits = wgpu::Limits {
+            max_storage_buffer_binding_size: bytes,
+            ..adapter.limits()
+        };
+        let (device, queue) =
+            bevy::tasks::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("ftgsxr binding-limit test"),
+                required_limits,
+                ..Default::default()
+            }))
+            .expect("a device");
+        SplatDevice::from_wgpu(device, queue, adapter.get_info())
+    }
+
+    /// Arrays of `n` degree-3 rows in float32, whose SH array (192 bytes a row) is the
+    /// largest.
+    fn degree3_arrays(n: u32) -> GpuArrays {
+        let n_ = n as usize;
+        GpuArrays {
+            n,
+            sh_degree: 3,
+            sh: vec![0; 192 * n_],
+            ..patterned_arrays(n)
+        }
+    }
+
+    /// Binds `buffer` whole as a read-only storage buffer of a compute bind group.
+    fn bind_whole(dev: &SplatDevice, buffer: &wgpu::Buffer) {
+        let layout = dev
+            .device()
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let _ = dev.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+    }
+
+    /// Q-369 (#617): on a device whose largest storage binding is 64 KiB, a model of 400
+    /// degree-3 rows (a 76 800-byte SH buffer) is refused with E-MEM-BUDGET, the buffer's
+    /// bytes and the limit, by the one-call and the chunked upload alike, before anything
+    /// is reserved, and the refusal logs N, the field and both figures; the largest N that
+    /// fits, ⌊65 536 ÷ 192⌋ = 341, uploads and its SH buffer binds without a validation
+    /// message, while a buffer one row longer does not bind.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_upload_refuses_a_field_over_the_binding_limit() {
+        let (log, _subscriber) = capture_log();
+        let limit = 65_536;
+        let dev = device_with_binding_limit(limit);
+        assert_eq!(dev.limits().max_storage_buffer_binding_size, limit);
+        let conv = RenderConventions::default();
+        let over = std::sync::Arc::new(degree3_arrays(400));
+        let refused = |r: Result<(), RenderError>| match r {
+            Err(RenderError::Budget { needed, budget }) => {
+                assert_eq!((needed, budget), (76_800, limit));
+            }
+            Err(e) => panic!("expected E-MEM-BUDGET, got {e:?}"),
+            Ok(()) => panic!("a model over the binding limit uploaded"),
+        };
+        refused(GpuModel::upload(&dev, &over, persistent_index(400), &conv).map(|_| ()));
+        refused(
+            ModelUpload::begin(
+                &dev,
+                std::sync::Arc::clone(&over),
+                persistent_index(400),
+                &conv,
+                0.0,
+            )
+            .map(|_| ()),
+        );
+        assert_eq!(dev.model_bytes_in_use(), 0, "nothing reserved");
+        let text = log.text();
+        assert!(
+            text.contains("N = 400")
+                && text.contains("sh buffer")
+                && text.contains("76800 bytes")
+                && text.contains("65536-byte"),
+            "{text}"
+        );
+        assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
+
+        let cap = (limit / 192) as u32;
+        assert_eq!(cap, 341);
+        let model = GpuModel::upload(&dev, &degree3_arrays(cap), persistent_index(cap), &conv)
+            .expect("the largest N that fits uploads");
+        bind_whole(&dev, &model.buffers.sh);
+        assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
+        // The control: the device does hold the lowered limit.
+        let longer = dev.device().create_buffer(&BufferDescriptor {
+            label: None,
+            size: 192 * u64::from(cap + 1),
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        bind_whole(&dev, &longer);
+        assert!(
+            !dev.take_validation_messages().is_empty(),
+            "a buffer over the limit fails to bind"
+        );
+    }
+
     /// Q-117 (#189): an upload over the budget logs N, the bytes needed and the budget,
     /// which `RenderError::Budget` does not carry.
     #[test]
     #[ignore = "gpu"]
     fn gpu_reserve_logged_over_the_budget_logs_n_and_the_bytes() {
         use crate::gpu::device::{BudgetSource, MemoryBudget};
-        use bevy::log::tracing_subscriber::{self, util::SubscriberInitExt};
-        use std::sync::{Arc, Mutex};
 
-        /// A writer into a shared buffer, for the captured log.
-        #[derive(Clone)]
-        struct Captured(Arc<Mutex<Vec<u8>>>);
-        impl std::io::Write for Captured {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0
-                    .lock()
-                    .expect("the log buffer")
-                    .extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let log = Captured(Arc::new(Mutex::new(Vec::new())));
-        let writer = log.clone();
-        let _subscriber = tracing_subscriber::fmt()
-            .with_writer(move || writer.clone())
-            .with_ansi(false)
-            .finish()
-            .set_default();
+        let (log, _subscriber) = capture_log();
 
         let mut dev = SplatDevice::headless().expect("an adapter");
         let n = 64;
@@ -702,7 +890,7 @@ mod tests {
             }
             other => panic!("expected E-MEM-BUDGET, got {:?}", other.map(|_| ())),
         }
-        let text = String::from_utf8(log.0.lock().expect("the log buffer").clone()).expect("UTF-8");
+        let text = log.text();
         assert!(
             text.contains("N = 64") && text.contains("3080 bytes") && text.contains("1000 bytes"),
             "{text}"

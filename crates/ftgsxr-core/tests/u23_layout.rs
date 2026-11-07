@@ -549,3 +549,40 @@ fn u23_reduce_to_budget_top_scores_deterministic() {
         assert_eq!(reduce_to_budget(&m, budget), kept, "deterministic");
     }
 }
+
+/// Q-369 (#617): the largest field's bytes per primitive, the SH array's on every Quest tier
+/// (half precision; caps 3, 2 and 1: 96, 54 and 24 bytes), giving #617's largest N under a
+/// 128 MiB binding; at degree 0 another field is the largest (the float32 rotation, 16
+/// bytes, or the float32 position, 12, when the rest are half), and a cap above L keeps L.
+#[test]
+fn max_field_bytes_per_primitive_gives_the_quest_caps() {
+    use ftgsxr_core::layout::max_field_bytes_per_primitive;
+    let half = HalfFields {
+        velocity: true,
+        scale: true,
+        rotation: true,
+        opacity: true,
+        sh: true,
+    };
+    let limit: u64 = 134_217_728;
+    for (cap, bytes, n) in [(3, 96, 1_398_101), (2, 54, 2_485_513), (1, 24, 5_592_405)] {
+        let opts = GpuLayoutOptions {
+            half,
+            sh_cap: Some(cap),
+        };
+        let per = max_field_bytes_per_primitive(3, &opts);
+        assert_eq!(per, bytes, "cap {cap}");
+        assert_eq!(limit / per, n, "cap {cap}");
+    }
+    let float = GpuLayoutOptions::default();
+    assert_eq!(max_field_bytes_per_primitive(0, &float), 16);
+    assert_eq!(max_field_bytes_per_primitive(3, &float), 192);
+    // Half SH at degree 0 (6 bytes) is below the float32 position (12 bytes).
+    let opts = GpuLayoutOptions { half, sh_cap: None };
+    assert_eq!(max_field_bytes_per_primitive(0, &opts), 12);
+    let opts = GpuLayoutOptions {
+        half,
+        sh_cap: Some(3),
+    };
+    assert_eq!(max_field_bytes_per_primitive(1, &opts), 24);
+}

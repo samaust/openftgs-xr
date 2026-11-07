@@ -157,6 +157,9 @@ pub struct Setup {
     pub initial: Vec<ModelRef>,
     /// `AppPlugin.scene`.
     pub scene: Option<PathBuf>,
+    /// The `gpu_` variant's device with this largest storage binding, in bytes, and the
+    /// adapter's other limits (Q-369); `None` keeps the adapter's.
+    pub binding_limit: Option<u64>,
 }
 
 impl Default for Setup {
@@ -165,6 +168,7 @@ impl Default for Setup {
             tier: QualityTier::by_name("desktop").expect("the desktop tier"),
             initial: Vec::new(),
             scene: None,
+            binding_limit: None,
         }
     }
 }
@@ -233,7 +237,7 @@ impl TestApp {
             InputPlugin,
         ));
         if gpu {
-            add_render(&mut app);
+            add_render(&mut app, setup.binding_limit);
         }
         app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
         let audio = Arc::new(StubAudioOutput::new());
@@ -344,14 +348,33 @@ impl Drop for TestApp {
     }
 }
 
-/// The render half the adapter's own tests add (`ftgsxr-render`'s `bevy_adapter`).
-fn add_render(app: &mut App) {
+/// The render half the adapter's own tests add (`ftgsxr-render`'s `bevy_adapter`), its
+/// device's largest storage binding lowered to `binding_limit` bytes when given (Q-369).
+fn add_render(app: &mut App, binding_limit: Option<u64>) {
     use bevy::camera::CameraPlugin;
     use bevy::core_pipeline::CorePipelinePlugin;
     use bevy::image::ImagePlugin;
     use bevy::mesh::MeshPlugin;
     use bevy::render::RenderPlugin;
+    use bevy::render::settings::{WgpuLimits, WgpuSettings};
     use bevy::window::{ExitCondition, WindowPlugin};
+    // Bevy takes the adapter's limits, each lowered to the constraint's where it is lower:
+    // the constraint is the adapter's own limits with the binding lowered.
+    let constrained_limits = binding_limit.map(|bytes| WgpuLimits {
+        max_storage_buffer_binding_size: bytes,
+        ..ftgsxr_render::SplatDevice::headless()
+            .expect("an adapter")
+            .device()
+            .limits()
+    });
+    let render = RenderPlugin {
+        render_creation: WgpuSettings {
+            constrained_limits,
+            ..WgpuSettings::default()
+        }
+        .into(),
+        ..RenderPlugin::default()
+    };
     app.add_plugins((
         WindowPlugin {
             primary_window: None,
@@ -359,7 +382,7 @@ fn add_render(app: &mut App) {
             close_when_requested: false,
             ..WindowPlugin::default()
         },
-        RenderPlugin::default(),
+        render,
         ImagePlugin::default(),
         MeshPlugin,
         CameraPlugin,

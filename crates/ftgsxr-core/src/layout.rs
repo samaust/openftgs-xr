@@ -165,14 +165,7 @@ pub fn memory_estimate(
     opts: &GpuLayoutOptions,
     shared_sort: bool,
 ) -> MemoryEstimate {
-    let half = opts.half;
-    let bytes = |values: usize, is_half: bool| (values * if is_half { 2 } else { 4 }) as u64;
-    let per_primitive = bytes(3 + 1 + 1, false)
-        + bytes(3, half.velocity)
-        + bytes(3, half.scale)
-        + bytes(4, half.rotation)
-        + bytes(1, half.opacity)
-        + bytes(sh_values(loaded_degree(sh_degree, opts.sh_cap)), half.sh);
+    let per_primitive: u64 = field_bytes_per_primitive(sh_degree, opts).iter().sum();
     let record = if shared_sort {
         SHARED_RECORD_BYTES
     } else {
@@ -183,6 +176,37 @@ pub fn memory_estimate(
         per_capacity_bytes: record + SORT_BYTES + HISTOGRAM_BYTES,
         layer_bytes_per_pixel: LAYER_BYTES_PER_PIXEL,
     }
+}
+
+/// The largest of §1.12's per-field bytes per primitive under `opts`, at the capped degree
+/// L′ = min(L, `opts.sh_cap`): position 12, time center and duration 4 each, velocity and
+/// scale 12, rotation 16, opacity 4 and SH 12 (L′+1)², half of each for a field `opts.half`
+/// names. A model's rows times this is its largest GPU array, which one storage binding
+/// must hold (Q-369).
+// Q-369
+pub fn max_field_bytes_per_primitive(sh_degree: u8, opts: &GpuLayoutOptions) -> u64 {
+    field_bytes_per_primitive(sh_degree, opts)
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+}
+
+/// §1.12's bytes per primitive of each `GpuArrays` field under `opts`, in `GpuArrays`
+/// order (position, time center, duration, velocity, scale, rotation, opacity, SH), the
+/// SH at L′ = min(L, `opts.sh_cap`).
+fn field_bytes_per_primitive(sh_degree: u8, opts: &GpuLayoutOptions) -> [u64; 8] {
+    let half = opts.half;
+    let bytes = |values: usize, is_half: bool| (values * if is_half { 2 } else { 4 }) as u64;
+    [
+        bytes(3, false),
+        bytes(1, false),
+        bytes(1, false),
+        bytes(3, half.velocity),
+        bytes(3, half.scale),
+        bytes(4, half.rotation),
+        bytes(1, half.opacity),
+        bytes(sh_values(loaded_degree(sh_degree, opts.sh_cap)), half.sh),
+    ]
 }
 
 /// §1.2 load option 4's opt-in reduction: the `budget` rows of highest importance score
