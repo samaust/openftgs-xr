@@ -209,12 +209,16 @@ fn sync_shadows(
     env: Option<Res<Environment>>,
     headset: Option<Res<Headset>>,
     settings: Option<Res<SettingsRes>>,
-    instances: Query<(
-        Entity,
-        &SplatBounds,
-        &GlobalTransform,
-        Option<&InheritedVisibility>,
-    )>,
+    // With `SplatModel`, so the shadows' query (`Without<SplatModel>`) stays disjoint.
+    instances: Query<
+        (
+            Entity,
+            &SplatBounds,
+            &GlobalTransform,
+            Option<&InheritedVisibility>,
+        ),
+        With<SplatModel>,
+    >,
     mut shadows: Query<
         (
             Entity,
