@@ -436,7 +436,7 @@ The passthrough's appearance has three controls, brightness, contrast and satura
 
 **Light estimation and color matching** \[R: color matching using light estimation, and with depth estimation; A: Passthrough Camera API, Horizon OS v74 or later (v76 for Camera2), `horizonos.permission.HEADSET_CAMERA` and `android.permission.CAMERA`; E14; D-15, D-38\]. Four lighting modes for the content, in the Environment tab: off (default), manual (exposure in EV, white-balance temperature and tint sliders), auto global (E14 over the whole frame) and auto local (E14 over the pixels within the selected instance's depth band, which needs occlusion's depth provider). The auto modes open the headset's passthrough camera at its lowest resolution (1280 × 960) and 60 Hz after the permissions are granted on first use; the shim reduces each frame to a 64 × 48 RGB thumbnail with its timestamp and the camera's pose and field of view, and the player computes E14's statistics from the thumbnail, globally or over the depth band (D-15, §2.5). Enabling an auto mode captures the reference E\_ref from the next smoothed estimate; "re-capture reference" is a button; the current gains are shown, and the strength γ is a slider (0–1, 0.5 by default). The transform applies to every instance, or to the selected one when "per instance" is set, and is saved with the scene. Where the camera API is unavailable (an older OS, a denied permission, the desktop) only manual mode is offered and the UI says why.
 
-**Floor, shadows and anchors** \[+; X: XR\_FB\_spatial\_entity, XR\_META\_spatial\_entity\_persistence; A: `com.oculus.permission.USE_ANCHOR_API`; D-26\]. The floor is stage space's y = 0 (§1.8). In passthrough mode each instance may cast a contact shadow: a soft dark disc on the floor under B\_m's footprint (opacity 0.3, feathered over 10 cm), on by default, which grounds the model visually without lighting. When a scene is saved in passthrough mode on the headset, a spatial anchor is created at the content group's origin and persisted; the scene file keeps its UUID (§1.11). Loading the scene locates the anchor and places the content group on it, so the models return to the same place in the room; when the anchor cannot be located (another headset, a forgotten anchor) the file's rig-relative pose is used and a toast says so. Anchors are forgotten when their scene file is deleted from the player.
+**Floor, shadows and anchors** \[+; X: XR\_FB\_spatial\_entity, XR\_META\_spatial\_entity\_persistence, XR\_META\_spatial\_entity\_discovery (XR\_FB\_spatial\_entity\_query where the runtime lacks it); A: `com.oculus.permission.USE_ANCHOR_API`; D-26\]. The floor is stage space's y = 0 (§1.8). In passthrough mode each instance may cast a contact shadow: a soft dark disc on the floor under B\_m's footprint (opacity 0.3, feathered over 10 cm), on by default, which grounds the model visually without lighting. When a scene is saved in passthrough mode on the headset, a spatial anchor is created at the content group's origin and persisted; the scene file keeps its UUID (§1.11). Loading the scene locates the anchor and places the content group on it, so the models return to the same place in the room; when the anchor cannot be located (another headset, a forgotten anchor) the file's rig-relative pose is used and a toast says so. Anchors are forgotten when their scene file is deleted from the player.
 
 ### 1.10 Audio
 
@@ -1189,7 +1189,7 @@ pub fn light_gains(estimate: &LightEstimate, reference: &LightEstimate, gamma: f
 pub fn manual_gains(manual: &ManualLighting) -> ColorTransform;
 pub fn grey_world_gains(estimate: &LightEstimate) -> ColorTransform;
 pub struct AnchorId(pub String);     // the runtime's UUID as text
-/// Spatial anchors (§1.9); adapter: XR_FB_spatial_entity with XR_META_spatial_entity_persistence; `NoAnchors` on the desktop.
+/// Spatial anchors (§1.9); adapter: XR_FB_spatial_entity with XR_META_spatial_entity_persistence, found again by XR_META_spatial_entity_discovery or XR_FB_spatial_entity_query (D-26); `NoAnchors` on the desktop.
 pub trait AnchorStore: Send + Sync {
     fn create(&mut self, pose: Pose) -> Result<AnchorId, XrError>;
     fn locate(&self, id: &AnchorId) -> Option<Pose>;
@@ -1584,7 +1584,7 @@ Fifty-five rows record the decisions this specification makes where the owner's 
 | D-23 | The player's file formats | TOML settings; JSON poses, scenes and index; every file with `format` and `version`, written atomically | editable settings; JSON like openftgs's files | RON for everything | U-29, U-30 |
 | D-24 | Reference spaces | STAGE, then LOCAL\_FLOOR, then LOCAL with the floor at −1.5 m and a warning; recenter moves the content group | the floor is what placement needs; LOCAL is the universal fallback | LOCAL only | I-17 |
 | D-25 | Hand tracking surface | XR\_EXT\_hand\_tracking joints and XR\_FB\_hand\_tracking\_aim's aim pose and pinches; no hand mesh | the aim state gives rays and gestures without a recognizer | the player's own gesture recognizer | Dv-8 |
-| D-26 | Spatial anchors | XR\_FB\_spatial\_entity with XR\_META\_spatial\_entity\_persistence; one anchor per scene file at the content group's origin | the FB storage extensions are obsolete; one anchor keeps every instance's relative pose | no anchors; one anchor per instance | Dv-9 |
+| D-26 | Spatial anchors | XR\_FB\_spatial\_entity with XR\_META\_spatial\_entity\_persistence; one anchor per scene file at the content group's origin; a saved anchor found again by its UUID through XR\_META\_spatial\_entity\_discovery, through XR\_FB\_spatial\_entity\_query where the runtime lacks discovery | the FB storage extensions are obsolete; one anchor keeps every instance's relative pose; on the Quest 3 the FB query with a UUID filter fails while discovery finds the anchor (Dv-9, 2026-11-06), and Meta recommends discovery where no sharing is needed (owner decision, 2026-11-07, absorbing Q-358) | no anchors; one anchor per instance | Dv-9 |
 | D-27 | Performance extensions | Fixed foveation, display refresh rate and the recommended layer resolution; no Application SpaceWarp | SpaceWarp needs motion vectors splats do not produce | SpaceWarp with approximate motion vectors | Dv-12; B-2 |
 | D-28 | How tests are gated | `#[ignore = "<lane>"]` with name prefixes; `cpu` under plain `cargo test` | Rust has no markers; greppable and CI-friendly | cargo features per lane | the CI lanes run |
 | D-29 | Fixtures | Committed probe `ftgs-if` files, requests and openftgs's reference renders, a tiny 20-iteration checkpoint with its export, PLY snapshot and scene manifest, with checksums and provenance; trained tiny models produced into the dataset directory, never committed | reproducible without openftgs installed for the `cpu` and `gpu` lanes; nothing large in git | generate at test time; commit trained models | R-1; the checksum check |
@@ -1728,7 +1728,7 @@ Left-handed mode swaps the two sticks' roles (`move` and `turn`) and the wrist m
 
 ## Appendix E — Platform facts
 
-Facts this specification relies on, with their sources (Appendix A rows), as of 2026-10-29. They are not decisions: when a fact changes (a new runtime, a new release), the rule that depends on it is re-read and the change is logged.
+Facts this specification relies on, with their sources (Appendix A rows), as of 2026-10-29, with later device facts dated in their rows. They are not decisions: when a fact changes (a new runtime, a new release), the rule that depends on it is re-read and the change is logged.
 
 ### E.1 OpenXR extensions
 
@@ -1746,7 +1746,9 @@ Facts this specification relies on, with their sources (Appendix A rows), as of 
 | XR\_META\_detached\_controllers | a held controller told from one set down (§1.8 Hands, D-55) | yes | yes (Dv-8, 2026-11-05) | by enabling it; the detached paths through the action bindings |
 | XR\_META\_touch\_controller\_plus | the Touch Plus profile (Appendix D.2) | yes | yes | through the action bindings |
 | XR\_FB\_haptic\_pcm, XR\_FB\_haptic\_amplitude\_envelope | haptic pulses (optional) | yes | yes | no |
-| XR\_FB\_spatial\_entity, XR\_META\_spatial\_entity\_persistence, XR\_FB\_spatial\_entity\_query | anchors (§1.9) | yes | yes | no: the player's adapter |
+| XR\_FB\_spatial\_entity, XR\_META\_spatial\_entity\_persistence | anchors (§1.9) | yes | yes | no: the player's adapter |
+| XR\_META\_spatial\_entity\_discovery | finding a saved anchor by its UUID (§1.9, D-26) | yes in 0.21.1 (`ExtensionSet::meta_spatial_entity_discovery`); 0.22.0 not checked | yes (Dv-9, 2026-11-06) | no: the player's adapter |
+| XR\_FB\_spatial\_entity\_query | the anchor query where the runtime lacks discovery (D-26); on the Quest 3 a query with a UUID filter returns XR\_ERROR\_VALIDATION\_FAILURE (Dv-9, 2026-11-06) | yes | yes | no: the player's adapter |
 | XR\_FB\_scene, XR\_META\_spatial\_entity\_mesh | room data (not used in revision 2) | yes | yes | no |
 | XR\_FB\_foveation, \_configuration, \_vulkan, XR\_FB\_swapchain\_update\_state | fixed foveation (§1.12) | yes | yes | no |
 | XR\_FB\_display\_refresh\_rate | the refresh rate (§1.12) | yes | yes | in an open pull request |
