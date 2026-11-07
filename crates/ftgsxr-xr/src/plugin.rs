@@ -70,6 +70,8 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.fb_spatial_entity = true;
     raw.fb_spatial_entity_query = true;
     raw.meta_spatial_entity_persistence = true;
+    // Q-T571.4: spike check 5's fallback, the discovery by UUID.
+    raw.meta_spatial_entity_discovery = true;
     // The Touch Plus profile (Appendix D.2) through `tracking`'s bindings.
     raw.meta_touch_controller_plus = true;
     // §1.8 Hands (PRD #452, #454); the frequency hint by name, since no pinned openxr
