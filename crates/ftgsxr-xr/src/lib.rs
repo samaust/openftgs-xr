@@ -33,6 +33,8 @@ pub use error::XrError;
 pub use panel::{MainPanel, PanelFollow, summon_pose, wrist_menu_pose, wrist_menu_visible};
 // §2.1 (M-3: the declarations I-15 reads).
 pub use passthrough::{Environment, EnvironmentMode, PassthroughStyle};
+// Q-342: the contact shadows' plugin (§1.9, #569).
+pub use passthrough::ContactShadowPlugin;
 // §2.1 `XrPlugin`; Q-120: `add_xr`; Q-220: `runtime_unavailable`.
 pub use plugin::{XrPlugin, add_xr, runtime_unavailable};
 // §2.1 (#227).
