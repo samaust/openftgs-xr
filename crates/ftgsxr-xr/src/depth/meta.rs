@@ -11,7 +11,8 @@
 //! in the primary reference space (Q-341), imports the acquired swapchain image into
 //! wgpu once (Q-339, `ftgsxr_render::import_vulkan_texture`), and on a new capture draws
 //! each layer into its view's history ring through a conversion pass (Q-360), then the
-//! ring's per-texel median into the view's `DepthFrame.image` (Q-363), and builds each
+//! ring's per-texel median, clamped to the range of the newest capture's 3 × 3
+//! neighbourhood, into the view's `DepthFrame.image` (Q-363, #607), and builds each
 //! view's camera through the tracking root; `Views` gives the left then the right frame
 //! (Q-349).
 
@@ -76,13 +77,20 @@ fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
 ";
 
 /// The median pass (Q-363): a full-screen triangle whose fragment writes, to red, the
-/// median of its texel in three images of the view's history ring (the newest bound
-/// three times while the ring holds fewer than 3). The ring holds invalid samples as
-/// d = 1, so the median is valid where 2 of 3 captures are, and d = 1 (invalid to
-/// E13's decode, Q-340) where 2 of 3 are not. Inline, as the conversion pass.
+/// median of its texel in three images of the view's history ring (the newest at
+/// binding 0, bound three times while the ring holds fewer than 3), clamped to the min
+/// and max of the newest capture over the 3 × 3 texels around it, those outside the
+/// image left out (#607: the neighbourhood clamp of temporal anti-aliasing). The ring
+/// holds invalid samples as d = 1, which take part in the median and the clamp as that
+/// value: a texel valid in 2 of 3 captures keeps a valid median unless the newest
+/// neighbourhood is all invalid, and d = 1 stays invalid to E13's decode (Q-340). The
+/// border's neighbourhood reads clamped indices, which visit only texels inside the
+/// image and every one of them, so the min and max are those of the texels inside.
+/// Inline, as the conversion pass.
 // Q-363, Q-354
 const MEDIAN_WGSL: &str = r"// SPDX-License-Identifier: Apache-2.0
-// Q-363: the per-texel median of three converted captures.
+// Q-363: the per-texel median of three converted captures, clamped to the range of
+// the newest capture's 3 x 3 neighbourhood inside the image (#607).
 @group(0) @binding(0) var a: texture_2d<f32>;
 @group(0) @binding(1) var b: texture_2d<f32>;
 @group(0) @binding(2) var c: texture_2d<f32>;
@@ -99,7 +107,18 @@ fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
     let x = textureLoad(a, q, 0).r;
     let y = textureLoad(b, q, 0).r;
     let z = textureLoad(c, q, 0).r;
-    return vec4<f32>(max(min(x, y), min(max(x, y), z)), 0.0, 0.0, 1.0);
+    let m = max(min(x, y), min(max(x, y), z));
+    let top = vec2<i32>(textureDimensions(a)) - 1;
+    var lo = x;
+    var hi = x;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let n = textureLoad(a, clamp(q + vec2<i32>(i, j), vec2<i32>(0), top), 0).r;
+            lo = min(lo, n);
+            hi = max(hi, n);
+        }
+    }
+    return vec4<f32>(clamp(m, lo, hi), 0.0, 0.0, 1.0);
 }
 ";
 
@@ -200,8 +219,9 @@ struct Filter {
     /// Each view's ring: its 3 slots' views (the textures live as long as their views)…
     slots: [[TextureView; RING]; 2],
     /// …and the median's bind groups: slot i alone (bound three times) at i, the ring's
-    /// 3 slots at `RING` (the median is the same in any order).
-    groups: [[BindGroup; RING + 1]; 2],
+    /// 3 slots with slot i the newest, at binding 0 where the clamp reads it, at
+    /// `RING + i` (#607).
+    groups: [[BindGroup; 2 * RING]; 2],
 }
 
 impl Filter {
@@ -256,6 +276,8 @@ impl Filter {
                 group([&s[1]; 3]),
                 group([&s[2]; 3]),
                 group([&s[0], &s[1], &s[2]]),
+                group([&s[1], &s[2], &s[0]]),
+                group([&s[2], &s[0], &s[1]]),
             ]
         });
         Filter {
@@ -302,7 +324,7 @@ impl Filter {
             draw(enc, &self.convert, layers[v], &self.slots[v][slot]);
             let group = match read {
                 Read::Newest => &self.groups[v][slot],
-                Read::Median => &self.groups[v][RING],
+                Read::Median => &self.groups[v][RING + slot],
             };
             draw(enc, &self.median, group, targets[v]);
         }
@@ -1040,9 +1062,9 @@ mod tests {
     /// Q-363, Q-360, Q-362: synthetic two-layer `Depth16Unorm` captures through the
     /// conversion and median passes. The left layer's texels pin the median's cases (a
     /// texel valid in 2 of 3 captures stays valid, a one-capture flip is rejected, a texel
-    /// invalid in 2 of 3 stays d = 1, the middle of three distinct values), the newest
-    /// capture alone before the ring is full and after a restart, and the row flip; the
-    /// right layer reaches the right view's image.
+    /// clamped to the newest capture's 3 × 3 range, #607, the middle of three distinct
+    /// values), the newest capture alone before the ring is full and after a restart, and
+    /// the row flip; the right layer reaches the right view's image.
     #[test]
     #[ignore = "gpu"]
     fn gpu_median_pass_takes_the_median_of_three_converted_captures() {
@@ -1162,18 +1184,249 @@ mod tests {
         let [l, _] = capture(2, both(1, Read::Newest));
         close(&l, &texels(&|x, y| left(2, x, y)), "capture 2 alone");
         let [l, r] = capture(3, both(2, Read::Median));
+        // Texel (2, 0) is invalid in 2 of 3 captures, but the newest capture is valid
+        // over its whole 3 × 3 neighbourhood (100 to 3003), so the clamp (#607) takes
+        // the median's d = 1 down to that range's max.
         let median = |x: u32, y: u32| match y {
-            0 => [100, 100, 65535, 200][x as usize],
+            0 => [100, 100, 3003, 200][x as usize],
             _ => (2000 + x) as u16,
         };
-        close(&l, &texels(&median), "the median of captures 1 to 3");
+        close(
+            &l,
+            &texels(&median),
+            "the median of captures 1 to 3, clamped",
+        );
         close(&r, &texels(&right), "the right layer's median");
-        assert_eq!(l[2], 1.0, "invalid in 2 of 3 stays d = 1");
         let [l, _] = capture(4, both(0, Read::Newest));
         close(&l, &texels(&|_, _| 42), "a restart: capture 4 alone");
 
         drop(groups);
         let messages = dev.take_validation_messages();
         assert!(messages.is_empty(), "validation messages: {messages:?}");
+    }
+
+    /// A synthetic layer: `f(x, y)` is output texel (x, y), top row first, as `D16_UNORM`.
+    type Layer<'a> = dyn Fn(u32, u32) -> u16 + 'a;
+
+    /// Q-363 (#607): runs `captures`' left layers, each with its step for both views,
+    /// through the conversion and median passes on a `w` × `h` image (`f(x, y)` gives
+    /// output texel (x, y), top row first, as `D16_UNORM`; the right layer is 7
+    /// everywhere), and returns the left view's image after the last.
+    fn left_after(w: u32, h: u32, captures: &[(&Layer<'_>, Step)]) -> Vec<f32> {
+        use bevy::render::render_resource::TexelCopyBufferLayout;
+        use ftgsxr_testkit::{gpu_context, layer_messages};
+        let _layer = layer_messages(); // Q-105
+        let dev = gpu_context();
+        let render = RenderDevice::from(dev.device().clone());
+        let extent = |layers| Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: layers,
+        };
+        let source = render.create_texture(&TextureDescriptor {
+            label: Some("stand-in depth swapchain image"),
+            size: extent(LAYERS),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: SOURCE_FORMAT,
+            usage: TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let targets = [0, 1].map(|_| {
+            let t = render.create_texture(&TextureDescriptor {
+                label: Some("stand-in DepthFrame.image"),
+                size: extent(1),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: FORMAT,
+                usage: TextureUsages::RENDER_ATTACHMENT
+                    | TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let v = t.create_view(&TextureViewDescriptor::default());
+            (t, v)
+        });
+        let filter = Filter::new(&render, UVec2::new(w, h));
+        let groups = [0, 1].map(|l| filter.layer_group(&render, &source, l));
+        for &(f, s) in captures {
+            // The source stores row 0 at the bottom (Q-362).
+            let mut bytes = Vec::new();
+            for layer in 0..2 {
+                for ys in 0..h {
+                    for x in 0..w {
+                        let v = if layer == 0 { f(x, h - 1 - ys) } else { 7 };
+                        bytes.extend(v.to_le_bytes());
+                    }
+                }
+            }
+            dev.queue().write_texture(
+                source.as_image_copy(),
+                &bytes,
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(2 * w),
+                    rows_per_image: Some(h),
+                },
+                extent(LAYERS),
+            );
+            let mut enc = render.create_command_encoder(&CommandEncoderDescriptor { label: None });
+            filter.encode(
+                &mut enc,
+                [&groups[0], &groups[1]],
+                [s; 2],
+                [&targets[0].1, &targets[1].1],
+            );
+            dev.queue().submit([enc.finish()]);
+        }
+        let out = read_back(&dev, &render, &targets[0].0, (w, h));
+        drop(groups);
+        let messages = dev.take_validation_messages();
+        assert!(messages.is_empty(), "validation messages: {messages:?}");
+        out
+    }
+
+    /// Three captures `a`, `b`, `c` (`c` the newest) in the ring, with the newest in
+    /// slot 2 and, after a fourth capture, in slot 0: the left image both times.
+    fn median_of((w, h): (u32, u32), a: &Layer<'_>, b: &Layer<'_>, c: &Layer<'_>) -> [Vec<f32>; 2] {
+        [
+            left_after(
+                w,
+                h,
+                &[
+                    (a, step(0, Read::Newest)),
+                    (b, step(1, Read::Newest)),
+                    (c, step(2, Read::Median)),
+                ],
+            ),
+            left_after(
+                w,
+                h,
+                &[
+                    (a, step(0, Read::Newest)),
+                    (a, step(1, Read::Newest)),
+                    (b, step(2, Read::Median)),
+                    (c, step(0, Read::Median)),
+                ],
+            ),
+        ]
+    }
+
+    /// Asserts that `got` is `want(x, y)` (as `D16_UNORM`) at every texel of `w` × `h`.
+    fn assert_image(got: &[f32], (w, h): (u32, u32), want: &dyn Fn(u32, u32) -> u16, what: &str) {
+        for y in 0..h {
+            for x in 0..w {
+                let (g, e) = (got[(y * w + x) as usize], f32::from(want(x, y)) / 65535.0);
+                assert!(
+                    (g - e).abs() <= 1e-6,
+                    "{what}, texel ({x}, {y}): {g} against {e}"
+                );
+            }
+        }
+    }
+
+    const FAR: u16 = 40000;
+    const NEAR: u16 = 10000;
+
+    /// A 5 × 5 block at x, y in 1..=5 of an 8 × 7 image (a 7 × 7 layer, 98 bytes, would
+    /// put the second layer off the 4-byte offset Vulkan asks of a depth upload).
+    fn in_block(x: u32, y: u32) -> bool {
+        (1..=5).contains(&x) && (1..=5).contains(&y)
+    }
+
+    /// Q-363 (#607): a uniform region that changed depth in the newest capture (far, far,
+    /// near over a 5 × 5 block): its interior, whose newest 3 × 3 neighbourhood is all
+    /// near, takes the near depth at once; the block's edge texels and their outside
+    /// neighbours, whose neighbourhood spans both depths, keep the median (far).
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_median_pass_clamp_takes_a_changed_region_at_once() {
+        let size = (8, 7);
+        let far = |_, _| FAR;
+        let near = |x, y| if in_block(x, y) { NEAR } else { FAR };
+        let interior = |x, y| {
+            if (2..=4).contains(&x) && (2..=4).contains(&y) {
+                NEAR
+            } else {
+                FAR
+            }
+        };
+        for (i, l) in median_of(size, &far, &far, &near).iter().enumerate() {
+            assert_image(l, size, &interior, &format!("run {i}"));
+        }
+    }
+
+    /// Q-363 (#607): at a silhouette (near left of x = 4, far from it), texels of the near
+    /// side's last column flipped to far in the newest capture, and of the far side's
+    /// first column flipped to near in the oldest: the newest neighbourhood of a flipped
+    /// texel spans both sides, so the median passes and both flips are rejected.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_median_pass_clamp_keeps_the_median_at_a_silhouette() {
+        let size = (8, 5);
+        let steady = |x, _| if x < 4 { NEAR } else { FAR };
+        let oldest = |x, y| {
+            if x == 4 && y % 2 == 0 {
+                NEAR
+            } else {
+                steady(x, y)
+            }
+        };
+        let newest = |x, y| {
+            if x == 3 && y % 2 == 1 {
+                FAR
+            } else {
+                steady(x, y)
+            }
+        };
+        for (i, l) in median_of(size, &oldest, &steady, &newest)
+            .iter()
+            .enumerate()
+        {
+            assert_image(l, size, &steady, &format!("run {i}"));
+        }
+    }
+
+    /// Q-363 (#607), Q-340: a 5 × 5 block that became invalid (d = 1) in the newest
+    /// capture: its interior is d = 1 at once, though valid in 2 of 3 captures.
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_median_pass_clamp_makes_a_newly_invalid_block_invalid_at_once() {
+        let size = (8, 7);
+        let valid = |_, _| FAR;
+        let invalid = |x, y| if in_block(x, y) { u16::MAX } else { FAR };
+        for (i, l) in median_of(size, &valid, &valid, &invalid).iter().enumerate() {
+            let interior = (3 * 8 + 3) as usize;
+            assert_eq!(l[interior], 1.0, "run {i}: the block's centre");
+            assert_image(
+                l,
+                size,
+                &|x, y| {
+                    if (2..=4).contains(&x) && (2..=4).contains(&y) {
+                        u16::MAX
+                    } else {
+                        FAR
+                    }
+                },
+                &format!("run {i}"),
+            );
+        }
+    }
+
+    /// Q-363 (#607): the neighbourhood of a texel on the image's border holds only the
+    /// texels inside the image: with near, near, far everywhere, every texel, the edges
+    /// and corners included, takes the far depth (a texel outside read as 0 would lower
+    /// the range and let the near median through).
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_median_pass_clamp_reads_only_texels_inside_the_image_at_its_border() {
+        let size = (5, 4);
+        let near = |_, _| NEAR;
+        let far = |_, _| FAR;
+        for (i, l) in median_of(size, &near, &near, &far).iter().enumerate() {
+            assert_image(l, size, &far, &format!("run {i}"));
+        }
     }
 }
