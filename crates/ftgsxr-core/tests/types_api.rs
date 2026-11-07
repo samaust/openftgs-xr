@@ -73,6 +73,22 @@ fn bounds_without_a_counted_row_cover_every_row() {
 }
 
 #[test]
+fn content_bounds_of_a_model_without_rows_is_bounds() {
+    // A model reduced to nothing (§1.2 load option 4) has no percentile: B_c is B_m.
+    let mut m = two_rows();
+    for v in [&mut m.time_center, &mut m.duration] {
+        v.clear();
+    }
+    m.position.clear();
+    m.velocity.clear();
+    m.scale.clear();
+    m.rotation.clear();
+    m.opacity.clear();
+    m.sh.clear();
+    assert_eq!(m.content_bounds(), m.bounds());
+}
+
+#[test]
 fn cap_sh_keeps_the_low_bands_of_every_row() {
     // Degree 2: 9 coefficients · 3 channels per row; value = 100·row + index in the row.
     let mut m = two_rows();

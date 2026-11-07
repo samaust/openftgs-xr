@@ -196,7 +196,8 @@ impl Model {
     /// the counted rows' positions μx at their visible intervals' midpoints, with no
     /// margin. The rows are `bounds`'s; in its fallback (no counted row) every row's
     /// interval is \[τ₀, τ₁\], so its midpoint is (τ₀ + τ₁)/2. `bounds` when B_c's longest
-    /// side is 0 (a single counted row, or all of them at one point).
+    /// side is 0 (a single counted row, or all of them at one point), and for a model
+    /// without rows.
     // D-42
     pub fn content_bounds(&self) -> Aabb {
         let (rows, all) = self.counted_rows();
@@ -212,6 +213,10 @@ impl Model {
             rows.iter().map(|&i| mid(i)).collect()
         };
         let n = points.len();
+        if n == 0 {
+            // No row at all (a model reduced to nothing): B_m's empty box.
+            return self.bounds();
+        }
         // Nearest rank, 1-based, in integers: ⌈k n / 100⌉.
         let rank = |k: usize| (k * n).div_ceil(100).max(1);
         let (lo, hi) = (rank(1) - 1, rank(99) - 1);
