@@ -143,7 +143,8 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
 /// The Environment tab (§1.7 Panels, §1.9): the VR-mode controls, background and grid,
 /// everywhere; the XR controls only for the features `XrFeatures` reports (Q-336): with
 /// passthrough the mode switch, the style sliders and contact shadows, and "occlude with
-/// tracked hands" when hands are not `Absent` either (Q-366); with occlusion its
+/// tracked hands" when hands are not `Absent` either (Q-366), with "draw gauntlets" while
+/// it is on (§1.9); with occlusion its
 /// switch, soft or hard, δ and hand removal, with a note while the running tier's
 /// `occlusion` flag turns it off (Q-338); under a `Denied` feature "Ask again", which
 /// writes its toggle again (§1.15 E-XR-PERMISSION). The mode switch writes
@@ -192,6 +193,10 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             // the depth provider.
             if hands {
                 ui.checkbox(&mut e.hand_occluders, "occlude with tracked hands");
+                // §1.9: offered while the option is on.
+                if e.hand_occluders {
+                    ui.checkbox(&mut e.hand_gauntlets, "draw gauntlets");
+                }
             }
         }
         if occlusion {
@@ -387,6 +392,7 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
             );
             ui.checkbox(&mut e.hand_removal, "hand_removal");
             ui.checkbox(&mut e.hand_occluders, "hand_occluders");
+            ui.checkbox(&mut e.hand_gauntlets, "hand_gauntlets");
             choice(ui, "lighting_mode", &mut e.lighting_mode, LIGHTING_MODES);
             let m = &mut e.lighting_manual;
             num(
@@ -800,5 +806,23 @@ mod tests {
             frame_of(&ctx, &mut world, events, environment_section);
         }
         assert!(world.resource::<SettingsRes>().0.environment.hand_occluders);
+
+        // §1.9 (revision 40): "draw gauntlets" is offered while the option is on, and
+        // clicking it turns `[environment] hand_gauntlets` on.
+        let gauntlets = "draw gauntlets";
+        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        assert!(has(&texts, gauntlets), "{texts:?}");
+        for events in click(at(&texts, gauntlets)) {
+            frame_of(&ctx, &mut world, events, environment_section);
+        }
+        assert!(world.resource::<SettingsRes>().0.environment.hand_gauntlets);
+        world
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .hand_occluders = false;
+        frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        assert!(!has(&texts, gauntlets), "not offered with the option off: {texts:?}");
     }
 }
