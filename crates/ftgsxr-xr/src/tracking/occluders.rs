@@ -181,13 +181,16 @@ pub(crate) fn add_material(app: &mut App) {
 
 /// One capsule of a gauntlet: its side, its index in `CAPSULES`, the margin its mesh was
 /// made with (at the first frame both joints are located, as Q-288's, and again when the
-/// margin changes) and whether it carries the grey material rather than the depth-only.
+/// margin changes) and its material, the grey or the depth-only one, which it keeps: a
+/// material of another type on the same entity made Bevy draw the new bind group with
+/// the old pipeline, a validation error that quit the app (#608), so each capsule exists
+/// once per material and "draw gauntlets" shows one set or the other.
 #[derive(Component, Clone, Copy)]
 pub(crate) struct GauntletCapsule {
     side: usize,
     index: usize,
     meshed: Option<f32>,
-    grey: Option<bool>,
+    grey: bool,
 }
 
 /// The two materials, made once.
@@ -196,9 +199,9 @@ pub(crate) struct Materials {
     depth: Handle<DepthOnlyMaterial>,
 }
 
-/// Spawns the capsules once per tracking root, then each frame places each one between
-/// its joints and shows it, in the material "draw gauntlets" asks for, while the
-/// gauntlets are on and both joints are located. The capsules' global transforms are set
+/// Spawns the capsules once per tracking root, in both materials, then each frame places
+/// each one between its joints and shows it while the gauntlets are on, its material is
+/// the one "draw gauntlets" asks for and both joints are located. The capsules' global transforms are set
 /// here from the root's, which the propagation has already updated, so this frame's pose
 /// is drawn this frame; frustum culling is off since it may run before them. Skipped in
 /// an app without meshes and the two materials.
@@ -236,20 +239,27 @@ pub(crate) fn draw_gauntlets(
         depth: depths.add(DepthOnlyMaterial {}),
     });
     if capsules.is_empty() {
-        for side in 0..2 {
-            for index in 0..CAPSULES.len() {
-                commands.spawn((
-                    GauntletCapsule {
-                        side,
-                        index,
-                        meshed: None,
-                        grey: None,
-                    },
-                    Transform::default(),
-                    Visibility::Hidden,
-                    NoFrustumCulling,
-                    ChildOf(root),
-                ));
+        for grey in [false, true] {
+            for side in 0..2 {
+                for index in 0..CAPSULES.len() {
+                    let mut e = commands.spawn((
+                        GauntletCapsule {
+                            side,
+                            index,
+                            meshed: None,
+                            grey,
+                        },
+                        Transform::default(),
+                        Visibility::Hidden,
+                        NoFrustumCulling,
+                        ChildOf(root),
+                    ));
+                    if grey {
+                        e.insert(MeshMaterial3d(m.grey.clone()));
+                    } else {
+                        e.insert(MeshMaterial3d(m.depth.clone()));
+                    }
+                }
             }
         }
         return;
@@ -265,7 +275,7 @@ pub(crate) fn draw_gauntlets(
             .as_ref()
             .and_then(|c| c[capsule.index])
             .and_then(|c| bone_transform(c.a, c.b).map(|(bt, len)| (bt, len, c.radius)));
-        let (Some((bt, len, radius)), Some(o)) = (at, on) else {
+        let (Some((bt, len, radius)), Some(o)) = (at, on.filter(|o| o.grey == capsule.grey)) else {
             vis.set_if_neq(Visibility::Hidden);
             continue;
         };
@@ -277,19 +287,6 @@ pub(crate) fn draw_gauntlets(
             commands
                 .entity(e)
                 .insert(Mesh3d(meshes.add(Capsule3d::new(radius, len))));
-        }
-        if capsule.grey != Some(o.grey) {
-            capsule.grey = Some(o.grey);
-            let mut entity = commands.entity(e);
-            if o.grey {
-                entity
-                    .remove::<MeshMaterial3d<DepthOnlyMaterial>>()
-                    .insert(MeshMaterial3d(m.grey.clone()));
-            } else {
-                entity
-                    .remove::<MeshMaterial3d<StandardMaterial>>()
-                    .insert(MeshMaterial3d(m.depth.clone()));
-            }
         }
         *t = bt;
         *global = root_global.mul_transform(bt);
@@ -370,10 +367,11 @@ mod tests {
     }
 
     /// `draw_gauntlets` in an app (#608: its queries once conflicted, B0001, which only
-    /// shows when the system runs): it spawns 2 × 26 hidden capsules under the tracking
-    /// root, then shows a tracked hand's 26 where the root puts them, with their global
-    /// transforms set this frame, depth only; grey with "draw gauntlets"; new meshes when
-    /// the margin changes; nothing while `OccludersDrawn` is `None`.
+    /// shows when the system runs): it spawns 2 × 2 × 26 hidden capsules under the tracking
+    /// root, each with one material it keeps (#608: a swapped material quit the app), then
+    /// shows a tracked hand's 26 depth-only ones where the root puts them, with their
+    /// global transforms set this frame; the grey ones instead with "draw gauntlets"; new
+    /// meshes when the margin changes; nothing while `OccludersDrawn` is `None`.
     #[test]
     fn draw_gauntlets_places_a_tracked_hands_capsules_under_the_root() {
         use bevy::app::{App, Update};
@@ -413,7 +411,29 @@ mod tests {
             .query::<&GauntletCapsule>()
             .iter(app.world())
             .count();
-        assert_eq!(all, 2 * 26, "spawned hidden");
+        assert_eq!(all, 2 * 2 * 26, "spawned hidden");
+        let materials = |world: &mut World| {
+            let mut q = world.query::<(
+                Entity,
+                &GauntletCapsule,
+                Option<&MeshMaterial3d<StandardMaterial>>,
+                Option<&MeshMaterial3d<DepthOnlyMaterial>>,
+            )>();
+            let mut m: Vec<_> = q
+                .iter(world)
+                .map(|(e, c, g, d)| {
+                    assert_eq!(
+                        (g.is_some(), d.is_some()),
+                        (c.grey, !c.grey),
+                        "its material"
+                    );
+                    (e, c.grey)
+                })
+                .collect();
+            m.sort();
+            m
+        };
+        let spawned = materials(app.world_mut());
         assert!(shown(app.world_mut()).is_empty());
 
         app.world_mut().resource_mut::<LocatedHands>().raw[1] = Some(RawHand {
@@ -442,18 +462,30 @@ mod tests {
             app.update();
             app.update();
         };
+        // The grey set's meshes, by capsule.
         let handles = |world: &mut World| {
             let mut q = world.query::<(&GauntletCapsule, &Mesh3d)>();
-            let mut h: Vec<_> = q.iter(world).map(|(c, m)| (c.index, m.0.id())).collect();
+            let mut h: Vec<_> = q
+                .iter(world)
+                .filter(|(c, _)| c.grey)
+                .map(|(c, m)| (c.index, m.0.id()))
+                .collect();
             h.sort_by_key(|(i, _)| *i);
             h
         };
         set(&mut app, false, 0.005);
         check(&shown(app.world_mut()), false);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 26);
-        let before = handles(app.world_mut());
         set(&mut app, true, 0.005);
         check(&shown(app.world_mut()), true);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 52);
+        let before = handles(app.world_mut());
+        // Back and forth: each capsule keeps its material, and its meshes.
+        set(&mut app, false, 0.005);
+        check(&shown(app.world_mut()), false);
+        set(&mut app, true, 0.005);
+        check(&shown(app.world_mut()), true);
+        assert_eq!(materials(app.world_mut()), spawned, "no material swapped");
         assert_eq!(
             handles(app.world_mut()),
             before,
@@ -472,7 +504,7 @@ mod tests {
         );
         assert_eq!(
             app.world().resource::<Assets<Mesh>>().len(),
-            26,
+            52,
             "the old meshes removed"
         );
     }
