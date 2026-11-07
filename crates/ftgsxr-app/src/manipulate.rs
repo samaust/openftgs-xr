@@ -48,6 +48,11 @@ pub struct ManipulateSettings {
     pub keep_upright: bool,
     /// The push and pull speed per metre of distance, in m/s (§1.8).
     pub push_pull_mps: f32,
+    /// The fit box (§1.5 Poses): E10's content box B_c when true, its B_m when false.
+    /// The fit, the headset's automatic fit and snap to floor take it; every other use of
+    /// the model's box is B_m's. `persist` keeps it equal to the settings'
+    /// `[general] fit_to`, both ways (Q-371).
+    pub fit_to_content: bool,
 }
 
 // Q-185
@@ -61,6 +66,7 @@ impl Default for ManipulateSettings {
             ray_max_m: 10.0,
             keep_upright: true,
             push_pull_mps: 1.0,
+            fit_to_content: true, // Q-371
         }
     }
 }
@@ -442,7 +448,7 @@ fn manifest_preset(dir: &Path) -> Option<Preset> {
 }
 
 /// D-11: an instance appears at its saved pose, else at the identity, with its hints; on
-/// the headset (the `Headset` marker, Q-266), one without a saved pose whose B_m's
+/// the headset (the `Headset` marker, Q-266), one without a saved pose whose fit box's
 /// longest side lies outside [0.1 m, 5 m] is fitted at once (§1.5 Poses), relative to
 /// the content group (Q-247). A reload keeps its `LoadedModel` (Q-238), so only a first
 /// load fits; a scene's pose, applied after, wins (Q-284).
@@ -460,6 +466,7 @@ fn on_loaded(
     poses: Res<Poses>,
     headset: Option<Res<Headset>>,
     assets: Option<Res<Assets<SplatAsset>>>,
+    settings: Option<Res<ManipulateSettings>>,
     cameras: HeadCameras,
     mut commands: Commands,
 ) {
@@ -476,10 +483,12 @@ fn on_loaded(
         }
         None => {
             let x = hints(&m.source, m.info.kind);
+            // §1.5: the fit box, content by default.
+            let content = settings.is_none_or(|s| s.fit_to_content);
             let bounds = model
                 .zip(assets.as_ref())
                 .and_then(|(model, a)| a.get(&model.0))
-                .map(|a| a.bounds);
+                .map(|a| fit_box(a, content));
             if headset.is_some()
                 && let Some(b) = bounds
                 && !(AUTO_FIT_RANGE_M.0..=AUTO_FIT_RANGE_M.1).contains(&b.size().max_element())
@@ -499,7 +508,7 @@ fn on_loaded(
     commands.entity(add.entity).insert(extras);
 }
 
-/// §1.5 Poses' range of B_m's longest side, in metres, inside which the headset does not
+/// §1.5 Poses' range of the fit box's longest side, in metres, inside which the headset does not
 /// fit a model on its first load (D-11).
 const AUTO_FIT_RANGE_M: (f32, f32) = (0.1, 5.0);
 
@@ -599,6 +608,25 @@ fn boxes(
 fn bounds_of(q: &Instances, assets: &Assets<SplatAsset>, e: Entity) -> Option<Aabb> {
     let (_, _, _, m, ..) = q.get(e).ok()?;
     Some(assets.get(&m?.0)?.bounds)
+}
+
+/// §1.5's fit box: E10's B_c under "Fit to: content", else B_m.
+fn fit_box(asset: &SplatAsset, content: bool) -> Aabb {
+    if content {
+        asset.content_bounds
+    } else {
+        asset.bounds
+    }
+}
+
+fn fit_box_of(
+    q: &Instances,
+    assets: &Assets<SplatAsset>,
+    e: Entity,
+    content: bool,
+) -> Option<Aabb> {
+    let (_, _, _, m, ..) = q.get(e).ok()?;
+    Some(fit_box(assets.get(&m?.0)?, content))
 }
 
 /// After a pose changed outside a grab, the grab takes hold again from the new pose.
@@ -935,8 +963,9 @@ fn run_intents(
                 }
                 InstanceAction::Fit | InstanceAction::SnapToFloor => {
                     // The fit's head and the floor are in stage space.
+                    // §1.5: both on the fit box.
                     let (Some(b), Some(current), Ok((.., x, _, _, _))) = (
-                        bounds_of(&q, &assets, instance),
+                        fit_box_of(&q, &assets, instance, s.fit_to_content),
                         stage_pose(&q, &groups, instance),
                         q.get(instance),
                     ) else {

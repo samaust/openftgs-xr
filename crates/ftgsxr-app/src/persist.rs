@@ -396,6 +396,7 @@ impl Plugin for PersistPlugin {
                     centers_follow_settings,
                     high_contrast_follows_settings,
                     keep_upright_sync,
+                    fit_to_sync,
                     save_settings_debounced,
                     save_poses,
                 )
@@ -499,6 +500,37 @@ fn keep_upright_sync(
         }
     }
     *last = Some(settings.0.xr.keep_upright);
+}
+
+/// `[general] fit_to` and `ManipulateSettings.fit_to_content` both ways, as
+/// `keep_upright_sync` maps its pair (Q-371): `content` is true, anything else false
+/// (the reader already took an unknown value as `content`); a value changed in the world
+/// goes back as `content` or `whole`.
+// Q-371
+fn fit_to_sync(
+    mut settings: ResMut<SettingsRes>,
+    mut manipulate: ResMut<ManipulateSettings>,
+    mut last: Local<Option<bool>>,
+) {
+    let wanted = settings.0.general.fit_to == "content";
+    match *last {
+        Some(l) if wanted == l => {
+            if manipulate.fit_to_content != l {
+                settings.0.general.fit_to = if manipulate.fit_to_content {
+                    "content"
+                } else {
+                    "whole"
+                }
+                .into();
+            }
+        }
+        _ => {
+            if manipulate.fit_to_content != wanted {
+                manipulate.fit_to_content = wanted;
+            }
+        }
+    }
+    *last = Some(settings.0.general.fit_to == "content");
 }
 
 /// `Intent::Ui(SaveScene)` saves a scene named by the time (Q-200); `LoadScene` is the

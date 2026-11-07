@@ -2,8 +2,9 @@
 
 //! The `Instance` actions I-4 drives, on `Poses` (`cpu`, added by #282; source of truth
 //! §1.5 Poses, I-4, D-11, Q-18): save, reset to the saved pose, forget then reset to the
-//! identity, the fit (the box's bottom at 0, its center 1.5 m along the head's yaw,
-//! 10⁻⁴), snap to floor, a saved pose applied when the instance appears, and the fit's
+//! identity, the fit (the fit box's bottom at 0, its center 1.5 m along the head's yaw,
+//! 10⁻⁴; the fit box B_c under `fit_to` content, B_m under whole), snap to floor on the
+//! same box, a saved pose applied when the instance appears, and the fit's
 //! hints (Q-181). `poses.json` through `PersistCommand` and `Intent::Instance`, and a
 //! reload applying the file's pose, are `persist`'s (#285).
 
@@ -11,7 +12,8 @@ use crate::support;
 
 use bevy::prelude::*;
 use ftgsxr_app::{
-    InstanceAction, Intent, LibraryCommand, LoadedModel, ModelRef, PersistCommand, Poses,
+    InstanceAction, Intent, LibraryCommand, LoadedModel, ManipulateSettings, ModelRef,
+    PersistCommand, Poses, SettingsRes,
 };
 use ftgsxr_core::{Aabb, Pose, Preset};
 use ftgsxr_io::{PoseStore, SavedPose};
@@ -62,14 +64,18 @@ fn set(t: &mut TestApp, e: Entity, p: Pose) {
     };
 }
 
-fn bounds(t: &TestApp, e: Entity) -> Aabb {
+fn asset(t: &TestApp, e: Entity) -> &SplatAsset {
     let h = &t.app.world().get::<SplatModel>(e).unwrap().0;
     t.app
         .world()
         .resource::<Assets<SplatAsset>>()
         .get(h)
         .unwrap()
-        .bounds
+}
+
+/// The fit box under the default `fit_to = "content"`: E10's B_c (§1.5 Poses).
+fn bounds(t: &TestApp, e: Entity) -> Aabb {
+    asset(t, e).content_bounds
 }
 
 fn identity(t: &TestApp, e: Entity) -> String {
@@ -327,4 +333,90 @@ fn i04_the_fit_follows_the_heads_yaw() {
     let q = Quat::from_rotation_y(yaw);
     let d = (p.rotation - q).length().min((p.rotation + q).length());
     assert!(d < 1e-4, "{:?}", p.rotation);
+}
+
+/// I-4's fit and snap to floor on `b`: the fit puts `b`'s longest side at L_fit = 1 m,
+/// its bottom on y = 0 and its center 1.5 m along −z (no camera, Q-180); after a lift,
+/// snap to floor puts the bottom back.
+fn assert_fit_and_snap_on(t: &mut TestApp, e: Entity, b: &Aabb) {
+    act(t, e, InstanceAction::Fit);
+    let p = pose(t, e);
+    assert!(
+        (p.scale * b.size().max_element() - 1.0).abs() < 1e-4,
+        "{p:?}"
+    );
+    let bottom = posed_corners(b, &p)
+        .iter()
+        .map(|c| c.y)
+        .fold(f32::INFINITY, f32::min);
+    assert!(bottom.abs() < 1e-4, "{bottom}");
+    let c = p.transform_point(b.center());
+    assert!(c.x.abs() < 1e-4 && (c.z + 1.5).abs() < 1e-4, "{c}");
+    set(
+        t,
+        e,
+        Pose {
+            translation: p.translation + Vec3::new(0.0, 0.7, 0.0),
+            ..p
+        },
+    );
+    act(t, e, InstanceAction::SnapToFloor);
+    assert!(near(pose(t, e), p));
+}
+
+#[test]
+fn i04_fit_to_content_uses_b_c_and_whole_uses_b_m() {
+    // §1.5 Poses, §1.11 `[general] fit_to` (Q-371): eight still rows along x over 1 m,
+    // the last of scale 0.5, so B_m (its 1.5 m margin) and B_c (no margin) differ in size
+    // and center, and each fit lands its own box.
+    let mut t = TestApp::new("i04_fit_to");
+    let mut m = ftgsxr_testkit::random_model(5, 8, 0);
+    for i in 0..8 {
+        m.position[i] = [-0.5 + i as f32 / 7.0, 0.2, 0.0];
+        m.velocity[i] = [0.0; 3];
+        m.scale[i] = [0.01; 3];
+        m.opacity[i] = 0.9;
+    }
+    m.scale[7] = [0.5; 3];
+    let path = t.dir.join("fit_to.safetensors");
+    std::fs::write(&path, ftgsxr_testkit::exchange_bytes(&m)).unwrap();
+    let e = load(&mut t, path);
+    let (whole, content) = (asset(&t, e).bounds, asset(&t, e).content_bounds);
+    assert_ne!(whole, content);
+    assert_eq!(
+        t.app.world().resource::<SettingsRes>().0.general.fit_to,
+        "content"
+    );
+    assert!(
+        t.app
+            .world()
+            .resource::<ManipulateSettings>()
+            .fit_to_content
+    );
+    assert_fit_and_snap_on(&mut t, e, &content);
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .general
+        .fit_to = "whole".into();
+    t.frames(1);
+    assert!(
+        !t.app
+            .world()
+            .resource::<ManipulateSettings>()
+            .fit_to_content
+    );
+    assert_fit_and_snap_on(&mut t, e, &whole);
+    // The world's value goes back into the settings (Q-371).
+    t.app
+        .world_mut()
+        .resource_mut::<ManipulateSettings>()
+        .fit_to_content = true;
+    t.frames(1);
+    assert_eq!(
+        t.app.world().resource::<SettingsRes>().0.general.fit_to,
+        "content"
+    );
+    assert_fit_and_snap_on(&mut t, e, &content);
 }
