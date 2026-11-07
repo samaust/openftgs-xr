@@ -176,7 +176,7 @@ pub(crate) struct PoseExtras {
 }
 
 /// The Scene tab's orientation preset and L_fit for an instance (§1.5 Poses); L_fit is
-/// clamped to 0.25–4 m. The next fit and saved pose use them.
+/// raised to at least 0.25 m, with no upper bound. The next fit and saved pose use them.
 // Q-181
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SetPoseExtras {
@@ -185,15 +185,27 @@ pub(crate) struct SetPoseExtras {
     pub(crate) fit_size_m: f32,
 }
 
-/// §1.5's L_fit range in metres.
-pub(crate) const FIT_RANGE_M: (f32, f32) = (0.25, 4.0);
+/// §1.5's least L_fit in metres; L_fit has no upper bound.
+pub(crate) const FIT_MIN_M: f32 = 0.25;
 
-fn set_pose_extras(mut reader: MessageReader<SetPoseExtras>, mut commands: Commands) {
+// Q-181, Q-370
+fn set_pose_extras(
+    mut reader: MessageReader<SetPoseExtras>,
+    current: Query<&PoseExtras>,
+    mut commands: Commands,
+) {
     for m in reader.read() {
+        // A size that isn't finite is no length: the instance keeps its L_fit (1 m before
+        // it has one, §1.5's default).
+        let fit_size_m = if m.fit_size_m.is_finite() {
+            m.fit_size_m.max(FIT_MIN_M)
+        } else {
+            current.get(m.instance).map_or(1.0, |x| x.fit_size_m)
+        };
         if let Ok(mut e) = commands.get_entity(m.instance) {
             e.try_insert(PoseExtras {
                 preset: m.preset,
-                fit_size_m: m.fit_size_m.clamp(FIT_RANGE_M.0, FIT_RANGE_M.1),
+                fit_size_m,
             });
         }
     }
@@ -369,12 +381,12 @@ pub(crate) fn head_pose(cameras: &HeadCameras) -> Option<Pose> {
 
 /// §1.5's hints for a local model: the preset from the first `ftgs-scene` manifest in
 /// its directory (a checkpoint's parent), by file name, and L_fit = 2S from a
-/// checkpoint's spatial scale, clamped to 0.25–4 m; else Y-up and 1 m.
+/// checkpoint's spatial scale, raised to at least 0.25 m; else Y-up and 1 m.
 // Q-181
 fn hints(source: &ModelRef, kind: ModelKind) -> PoseExtras {
     let fit_size_m = match kind {
         ModelKind::Checkpoint { spatial_scale, .. } if spatial_scale.is_finite() => {
-            ((2.0 * spatial_scale) as f32).clamp(0.25, 4.0)
+            ((2.0 * spatial_scale) as f32).max(FIT_MIN_M)
         }
         _ => 1.0,
     };
@@ -1381,12 +1393,13 @@ mod extras_tests {
     use super::*;
 
     #[test]
-    fn set_pose_extras_clamps_l_fit_and_sets_the_preset() {
+    fn set_pose_extras_raises_l_fit_to_its_minimum_and_sets_the_preset() {
+        // §1.5 (revision 43): L_fit is at least 0.25 m, with no upper bound (#621).
         let mut app = App::new();
         app.add_message::<SetPoseExtras>()
             .add_systems(Update, set_pose_extras);
         let e = app.world_mut().spawn_empty().id();
-        for (asked, kept) in [(10.0, 4.0), (0.1, 0.25), (2.0, 2.0)] {
+        for (asked, kept) in [(20.0, 20.0), (0.1, 0.25), (2.0, 2.0)] {
             app.world_mut().write_message(SetPoseExtras {
                 instance: e,
                 preset: Preset::ZUp,
@@ -1395,6 +1408,65 @@ mod extras_tests {
             app.update();
             let x = *app.world().get::<PoseExtras>(e).unwrap();
             assert_eq!((x.preset, x.fit_size_m), (Preset::ZUp, kept));
+        }
+    }
+
+    #[test]
+    fn set_pose_extras_a_20_m_fit_size_scales_the_longest_side_to_20_m() {
+        // §1.5 (revision 43): a room-scale fit, the box's longest side 2 m → 20 m (#621).
+        let mut app = App::new();
+        app.add_message::<SetPoseExtras>()
+            .add_systems(Update, set_pose_extras);
+        let e = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(SetPoseExtras {
+            instance: e,
+            preset: Preset::YUp,
+            fit_size_m: 20.0,
+        });
+        app.update();
+        let x = *app.world().get::<PoseExtras>(e).unwrap();
+        let b = Aabb {
+            min: Vec3::new(-1.0, 0.0, -0.5),
+            max: Vec3::new(1.0, 1.0, 0.5),
+        };
+        let p = fit_pose(&b, x.preset, x.fit_size_m, Pose::IDENTITY, AHEAD_M);
+        assert!((p.scale - 10.0).abs() < 1e-5, "{}", p.scale);
+    }
+
+    #[test]
+    fn set_pose_extras_ignores_a_size_that_is_not_finite() {
+        // Without an upper bound (§1.5, revision 43), a typed "inf" or a NaN is no length:
+        // the instance keeps its L_fit and takes the preset (Q-370, #621).
+        let mut app = App::new();
+        app.add_message::<SetPoseExtras>()
+            .add_systems(Update, set_pose_extras);
+        let e = app.world_mut().spawn_empty().id();
+        for (preset, asked, kept) in [
+            (Preset::YUp, 3.0, 3.0),
+            (Preset::ZUp, f32::INFINITY, 3.0),
+            (Preset::NegYUp, f32::NAN, 3.0),
+        ] {
+            app.world_mut().write_message(SetPoseExtras {
+                instance: e,
+                preset,
+                fit_size_m: asked,
+            });
+            app.update();
+            let x = *app.world().get::<PoseExtras>(e).unwrap();
+            assert_eq!((x.preset, x.fit_size_m), (preset, kept), "{asked}");
+        }
+    }
+
+    #[test]
+    fn hints_a_checkpoint_suggests_2s_above_4_m() {
+        // §1.5 (revision 43): L_fit = max(2S, 0.25 m); S = 5 → 10 m, S = 0.05 → 0.25 m (#621).
+        let source = ModelRef::File(PathBuf::from("/nonexistent/ckpt"));
+        for (s, l) in [(5.0, 10.0), (0.05, 0.25), (1.0, 2.0)] {
+            let kind = ModelKind::Checkpoint {
+                spatial_scale: s,
+                frame_dt: 0.01,
+            };
+            assert_eq!(hints(&source, kind).fit_size_m, l, "S = {s}");
         }
     }
 }

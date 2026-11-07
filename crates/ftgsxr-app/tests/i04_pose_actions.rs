@@ -234,7 +234,7 @@ fn i04_the_fit_hints_from_a_manifest_and_a_checkpoint() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(src.join("tiny/manifest.json")).unwrap()).unwrap();
     let s = manifest["spatial_scale"].as_f64().unwrap();
-    assert!((saved.fit_size_m as f64 - (2.0 * s).clamp(0.25, 4.0)).abs() < 1e-6);
+    assert!((saved.fit_size_m as f64 - (2.0 * s).max(0.25)).abs() < 1e-6);
     // The fit uses them: the longest side 2S, the model's z up.
     let b = bounds(&t, e);
     act(&mut t, e, InstanceAction::Fit);
