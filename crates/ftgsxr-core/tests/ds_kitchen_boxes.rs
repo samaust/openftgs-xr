@@ -42,6 +42,7 @@ fn assert_size(what: &str, got: Vec3, want: [f32; 3]) {
 #[test]
 #[ignore = "ds"]
 fn ds_kitchen_boxes_have_the_measured_sizes() {
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let path = kitchen();
     let model = open_model(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let whole = model.bounds();
