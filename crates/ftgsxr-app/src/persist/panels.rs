@@ -142,13 +142,14 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
 
 /// The Environment tab (§1.7 Panels, §1.9): the VR-mode controls, background and grid,
 /// everywhere; the XR controls only for the features `XrFeatures` reports (Q-336): with
-/// passthrough the mode switch, the style sliders and contact shadows; with occlusion its
+/// passthrough the mode switch, the style sliders and contact shadows, and "occlude with
+/// tracked hands" when hands are not `Absent` either (Q-366); with occlusion its
 /// switch, soft or hard, δ and hand removal, with a note while the running tier's
 /// `occlusion` flag turns it off (Q-338); under a `Denied` feature "Ask again", which
 /// writes its toggle again (§1.15 E-XR-PERMISSION). The mode switch writes
 /// `Toggle(Feature::Passthrough)`, whose consumer is the XR crate (Q-335); the other
 /// controls edit the settings directly.
-// Q-335, Q-336, Q-338
+// Q-335, Q-336, Q-338, Q-366
 pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
     let training = training_background(world);
     let features = world
@@ -157,6 +158,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .unwrap_or_default();
     let passthrough = features.passthrough != FeatureState::Absent;
     let occlusion = features.occlusion != FeatureState::Absent;
+    let hands = features.hands != FeatureState::Absent;
     // Q-338: the running tier whose `occlusion` flag turns occlusion off, for the note.
     let tier_off = world
         .get_resource::<SplatTierState>()
@@ -186,6 +188,11 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             ui.add(egui::Slider::new(&mut e.passthrough_contrast, -1.0..=1.0).text("contrast"));
             ui.add(egui::Slider::new(&mut e.passthrough_saturation, -1.0..=1.0).text("saturation"));
             ui.checkbox(&mut e.contact_shadows, "contact shadows");
+            // §1.9, Q-366: offered whenever hand tracking is available, with or without
+            // the depth provider.
+            if hands {
+                ui.checkbox(&mut e.hand_occluders, "occlude with tracked hands");
+            }
         }
         if occlusion {
             ui.separator();
@@ -379,6 +386,7 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
                 0.001,
             );
             ui.checkbox(&mut e.hand_removal, "hand_removal");
+            ui.checkbox(&mut e.hand_occluders, "hand_occluders");
             choice(ui, "lighting_mode", &mut e.lighting_mode, LIGHTING_MODES);
             let m = &mut e.lighting_manual;
             num(
@@ -748,5 +756,49 @@ mod tests {
         step(at(&open, "quest-low"), &mut world);
         assert_eq!(picks(&mut world), vec![TierPick("quest-low".into())]);
         assert_eq!(world.resource::<SettingsRes>().0.general.tier, "quest-low");
+    }
+
+    /// §1.9, Q-366 (`cpu`): "occlude with tracked hands" shows in passthrough mode whenever
+    /// hand tracking is available, without the depth provider, and not without hands or
+    /// passthrough; clicking it turns `[environment] hand_occluders` on.
+    #[test]
+    fn the_environment_tab_offers_hand_occluders_with_passthrough_and_hands() {
+        let label = "occlude with tracked hands";
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        let ctx = egui::Context::default();
+        let has =
+            |texts: &[(String, egui::Pos2)], label: &str| texts.iter().any(|(t, _)| t == label);
+        let absent = |hands, passthrough| XrFeatures {
+            passthrough,
+            hands,
+            ..XrFeatures::default()
+        };
+        for (hands, passthrough) in [
+            (FeatureState::Absent, FeatureState::Available),
+            (FeatureState::Available, FeatureState::Absent),
+            (FeatureState::Absent, FeatureState::Absent),
+        ] {
+            world.insert_resource(absent(hands, passthrough));
+            frame_of(&ctx, &mut world, Vec::new(), environment_section);
+            let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+            assert!(!has(&texts, label), "{hands:?} {passthrough:?}: {texts:?}");
+        }
+        for hands in [FeatureState::Available, FeatureState::Denied] {
+            // No depth provider (occlusion `Absent`): the checkbox still shows.
+            world.insert_resource(absent(hands, FeatureState::Available));
+            frame_of(&ctx, &mut world, Vec::new(), environment_section);
+            let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+            assert!(has(&texts, label), "{hands:?}: {texts:?}");
+            assert!(!has(&texts, "hand removal"), "{texts:?}");
+        }
+        assert!(!world.resource::<SettingsRes>().0.environment.hand_occluders);
+        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        for events in click(at(&texts, label)) {
+            frame_of(&ctx, &mut world, events, environment_section);
+        }
+        assert!(world.resource::<SettingsRes>().0.environment.hand_occluders);
     }
 }
