@@ -188,20 +188,35 @@ pub(crate) struct SetPoseExtras {
 /// §1.5's least L_fit in metres; L_fit has no upper bound.
 pub(crate) const FIT_MIN_M: f32 = 0.25;
 
+/// §1.5's default L_fit in metres.
+pub(crate) const FIT_DEFAULT_M: f32 = 1.0;
+
+/// A fit size as §1.5 takes it: raised to at least 0.25 m, none when it isn't finite.
+// Q-370
+fn fit_size(l: f32) -> Option<f32> {
+    l.is_finite().then(|| l.max(FIT_MIN_M))
+}
+
 // Q-181, Q-370
 fn set_pose_extras(
     mut reader: MessageReader<SetPoseExtras>,
     current: Query<&PoseExtras>,
     mut commands: Commands,
 ) {
+    // The sizes set this frame, which the deferred inserts don't show `current` yet.
+    let mut set: HashMap<Entity, f32> = HashMap::new();
     for m in reader.read() {
         // A size that isn't finite is no length: the instance keeps its L_fit (1 m before
         // it has one, §1.5's default).
-        let fit_size_m = if m.fit_size_m.is_finite() {
-            m.fit_size_m.max(FIT_MIN_M)
-        } else {
-            current.get(m.instance).map_or(1.0, |x| x.fit_size_m)
+        let kept = || {
+            set.get(&m.instance).copied().unwrap_or_else(|| {
+                current
+                    .get(m.instance)
+                    .map_or(FIT_DEFAULT_M, |x| x.fit_size_m)
+            })
         };
+        let fit_size_m = fit_size(m.fit_size_m).unwrap_or_else(kept);
+        set.insert(m.instance, fit_size_m);
         if let Ok(mut e) = commands.get_entity(m.instance) {
             e.try_insert(PoseExtras {
                 preset: m.preset,
@@ -382,14 +397,13 @@ pub(crate) fn head_pose(cameras: &HeadCameras) -> Option<Pose> {
 /// §1.5's hints for a local model: the preset from the first `ftgs-scene` manifest in
 /// its directory (a checkpoint's parent), by file name, and L_fit = 2S from a
 /// checkpoint's spatial scale, raised to at least 0.25 m; else Y-up and 1 m.
-// Q-181
+// Q-181, Q-370
 fn hints(source: &ModelRef, kind: ModelKind) -> PoseExtras {
     let fit_size_m = match kind {
-        ModelKind::Checkpoint { spatial_scale, .. } if spatial_scale.is_finite() => {
-            ((2.0 * spatial_scale) as f32).max(FIT_MIN_M)
-        }
-        _ => 1.0,
-    };
+        ModelKind::Checkpoint { spatial_scale, .. } => fit_size((2.0 * spatial_scale) as f32),
+        _ => None,
+    }
+    .unwrap_or(FIT_DEFAULT_M);
     let preset = match source {
         ModelRef::File(p) => p.parent().and_then(manifest_preset).unwrap_or(Preset::YUp),
         _ => Preset::YUp,
@@ -895,7 +909,7 @@ fn run_intents(
                     if let Ok((_, t, m, _, x, ..)) = q.get(instance) {
                         let x = x.copied().unwrap_or(PoseExtras {
                             preset: Preset::YUp,
-                            fit_size_m: 1.0,
+                            fit_size_m: FIT_DEFAULT_M,
                         });
                         let saved = SavedPose {
                             pose: pose_of(t),
@@ -931,7 +945,7 @@ fn run_intents(
                     let new = if action == InstanceAction::Fit {
                         let x = x.copied().unwrap_or(PoseExtras {
                             preset: Preset::YUp,
-                            fit_size_m: 1.0,
+                            fit_size_m: FIT_DEFAULT_M,
                         });
                         fit_pose(
                             &b,
@@ -1455,13 +1469,42 @@ mod extras_tests {
             let x = *app.world().get::<PoseExtras>(e).unwrap();
             assert_eq!((x.preset, x.fit_size_m), (preset, kept), "{asked}");
         }
+        // Before the instance has an L_fit, §1.5's default of 1 m.
+        let fresh = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(SetPoseExtras {
+            instance: fresh,
+            preset: Preset::YUp,
+            fit_size_m: f32::INFINITY,
+        });
+        app.update();
+        assert_eq!(
+            app.world().get::<PoseExtras>(fresh).unwrap().fit_size_m,
+            1.0
+        );
+        // Two messages in one frame: the second keeps the first's size.
+        for asked in [5.0, f32::INFINITY] {
+            app.world_mut().write_message(SetPoseExtras {
+                instance: e,
+                preset: Preset::YUp,
+                fit_size_m: asked,
+            });
+        }
+        app.update();
+        assert_eq!(app.world().get::<PoseExtras>(e).unwrap().fit_size_m, 5.0);
     }
 
     #[test]
-    fn hints_a_checkpoint_suggests_2s_above_4_m() {
-        // §1.5 (revision 43): L_fit = max(2S, 0.25 m); S = 5 → 10 m, S = 0.05 → 0.25 m (#621).
+    fn hints_a_checkpoint_suggests_2s_raised_to_the_minimum() {
+        // §1.5 (revision 43): L_fit = max(2S, 0.25 m); S = 5 → 10 m, S = 0.05 → 0.25 m
+        // (#621). An S whose 2S isn't a finite f32 gives the 1 m default (Q-370).
         let source = ModelRef::File(PathBuf::from("/nonexistent/ckpt"));
-        for (s, l) in [(5.0, 10.0), (0.05, 0.25), (1.0, 2.0)] {
+        for (s, l) in [
+            (5.0, 10.0),
+            (0.05, 0.25),
+            (1.0, 2.0),
+            (1e39, 1.0),
+            (f64::NAN, 1.0),
+        ] {
             let kind = ModelKind::Checkpoint {
                 spatial_scale: s,
                 frame_dt: 0.01,

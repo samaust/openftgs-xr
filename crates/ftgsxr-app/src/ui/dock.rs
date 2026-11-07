@@ -20,7 +20,7 @@ use super::{
 };
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
-use crate::manipulate::{FIT_MIN_M, PoseExtras, SetPoseExtras};
+use crate::manipulate::{FIT_DEFAULT_M, FIT_MIN_M, PoseExtras, SetPoseExtras};
 use crate::platform::PickKind;
 use crate::playback::{Playback, RangeSetting, Scrubbing};
 
@@ -759,7 +759,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         // §1.5 Poses: the orientation preset and L_fit the fit uses.
         let x = extras.copied().unwrap_or(PoseExtras {
             preset: Preset::YUp,
-            fit_size_m: 1.0,
+            fit_size_m: FIT_DEFAULT_M,
         });
         let mut next = x;
         ui.horizontal(|ui| {
