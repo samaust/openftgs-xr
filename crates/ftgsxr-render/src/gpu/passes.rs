@@ -97,7 +97,8 @@ pub struct SplatPasses {
     resolve_sampler: wgpu::Sampler,
     /// E13's 1 × 1 placeholder depth, bound when a draw has no `OcclusionInput`.
     env_placeholder: wgpu::TextureView,
-    /// E13's non-filtering sampler: the depth image's nearest texel (Q-340).
+    /// E13's non-filtering sampler, bound but unread: the fragment reads the depth image's
+    /// 2 × 2 nearest texels with `textureLoad` (Q-340, #601).
     env_sampler: wgpu::Sampler,
 }
 
@@ -490,9 +491,10 @@ impl SplatPasses {
     /// pass's opaque depth (reverse Z, Q-87) and write none. Each fragment's α is
     /// multiplied by E13's weight w_occ (D-45, Q-63): with `occlusion`, p_f on the
     /// fragment's own view ray at the record's depth is projected into the depth image's
-    /// camera, its nearest texel decoded to metres from the image's near and far planes
-    /// (Q-340) and weighed hard or soft with δ; a fragment outside the image or behind its
-    /// camera, or an invalid sample, gets 1. Without `occlusion` (or whatever the tier's
+    /// camera, and weighed hard or soft with δ against each of its 2 × 2 nearest texels,
+    /// each decoded to metres from the image's near and far planes, the four weights
+    /// blended bilinearly (Q-340, #601); a fragment outside the image or behind its camera
+    /// gets 1, and an invalid texel weighs 1. Without `occlusion` (or whatever the tier's
     /// flag says: the caller gates it, Q-338) w_occ is 1, a 1 × 1 placeholder bound in
     /// the depth's place. `occlusion.depth` is any single-sample 2D view whose format
     /// samples as an unfilterable float (a depth format, `R16Unorm`, `R32Float`), its first
@@ -757,7 +759,7 @@ fn splat_pipeline(
                 count: None,
             },
             // E13's environment depth: an unfilterable float view, which a depth format
-            // binds as too, read through a non-filtering sampler (Q-340).
+            // binds as too, read with `textureLoad` at the 2 × 2 nearest texels (Q-340, #601).
             wgpu::BindGroupLayoutEntry {
                 binding: 4,
                 visibility: wgpu::ShaderStages::FRAGMENT,

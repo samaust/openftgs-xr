@@ -33,6 +33,7 @@ mod bevy_adapter_m6;
 mod gpu_foundation;
 mod import_vulkan_texture;
 mod load_splat_asset;
+mod occlusion_edges;
 mod quality_tiers;
 mod r01_probes;
 mod r02_additional_probes;
