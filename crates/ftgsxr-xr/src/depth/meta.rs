@@ -275,7 +275,10 @@ impl MetaDepth {
             // count (2) and the swapchain state its size; its images live as long as the
             // swapchain, which outlives this texture (`Drop` waits for the GPU and drops
             // the textures before destroying it); it was written by the runtime before
-            // this acquire returned. Q-T570.2: wgpu tracks it from UNINITIALIZED.
+            // this acquire returned. Its sampled and transfer-source usages are assumed:
+            // the registry lets the app queue GPU work on it without naming the usages,
+            // and Dv-7's validation scan is the check (spike check 1). Q-T570.2: wgpu
+            // tracks it from UNINITIALIZED.
             let texture = unsafe { import_vulkan_texture(gpu.device(), raw, size, LAYERS, FORMAT) };
             Texture::from(texture)
         });

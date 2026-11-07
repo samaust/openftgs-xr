@@ -226,6 +226,7 @@ pub(crate) struct Control {
     pub(crate) flow: Flow,
     last_setting: bool,
     images: Option<[Handle<Image>; 2]>,
+    images_size: Option<UVec2>,
     extension: bool,
     /// A session exists (set at its creation, cleared before its destruction).
     session: bool,
@@ -422,10 +423,16 @@ fn control(
     }
     control.last_setting = setting;
 
-    // Q-339: the two views' images, once the swapchain's size is known.
-    if control.images.is_none()
-        && let (Some((size, _)), Some(mut images)) = (report.swapchain, images)
+    // Q-339: the two views' images, once the swapchain's size is known, again when a
+    // new session's swapchain has another size.
+    if let (Some((size, _)), Some(mut images)) = (report.swapchain, images)
+        && control.images_size != Some(size)
     {
+        if let Some(old) = control.images.take() {
+            for h in old {
+                images.remove(&h);
+            }
+        }
         let mut make = || {
             let mut image = Image::new_uninit(
                 Extent3d {
@@ -442,6 +449,7 @@ fn control(
             images.add(image)
         };
         control.images = Some([make(), make()]);
+        control.images_size = Some(size);
         info!(
             "depth: the views' images created at {} x {}",
             size.x, size.y
@@ -608,9 +616,17 @@ pub(crate) fn step(
 }
 
 /// Before the session is destroyed: the provider stopped and destroyed with its
-/// swapchain (the adapter's `Drop`), the report cleared.
-fn destroy(mut provider: ResMut<Provider>, shared: Res<Shared>) {
+/// swapchain (the adapter's `Drop`), the report and the render world's frames cleared.
+fn destroy(
+    mut provider: ResMut<Provider>,
+    shared: Res<Shared>,
+    occlusion: Option<ResMut<SplatOcclusion>>,
+) {
     *provider = Provider::default();
+    // The draw node binds nothing of the old session (Q-338: empty while stopped).
+    if let Some(mut o) = occlusion {
+        o.frames.clear();
+    }
     if let Ok(mut r) = shared.0.lock() {
         *r = Report::default();
     }
