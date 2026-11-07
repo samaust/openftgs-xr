@@ -1890,7 +1890,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_failure_text_wraps_inside_the_narrowest_dock() {
+    fn library_tab_wraps_a_long_failure_text_inside_the_narrowest_dock() {
         let width = 160.0;
         let mut world = library_with(crate::library::EntryState::Failed(LONG.into()));
         let texts = library_texts(&mut world, width);
@@ -1900,7 +1900,8 @@ mod tests {
                 "{label} is drawn: {texts:?}"
             );
         }
-        // The entry's own row; the source controls above it are not #620's.
+        // The entry's own row; the source controls above it are not #620's. Half a
+        // point of slack for the layout's rounding of positions.
         for (t, r) in texts
             .iter()
             .filter(|(t, _)| [LONG, "kitchen", "Retry"].contains(&&**t))
@@ -1910,7 +1911,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_of_a_long_failure_loads_the_entry_with_the_reduce_flag() {
+    fn library_tab_retry_of_a_long_failure_loads_the_entry_with_the_reduce_flag() {
         for reduce in [false, true] {
             let mut world = library_with(crate::library::EntryState::Failed(LONG.into()));
             world.resource_mut::<crate::ui::UiState>().reduce = reduce;
@@ -1923,7 +1924,7 @@ mod tests {
     }
 
     #[test]
-    fn a_short_failure_shows_the_name_its_text_and_retry() {
+    fn library_tab_shows_a_short_failure_with_the_name_and_retry() {
         let text = "E-IO: Could not read /m/kitchen.safetensors";
         let mut world = library_with(crate::library::EntryState::Failed(text.into()));
         let texts = library_texts(&mut world, 320.0);
