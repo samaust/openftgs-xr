@@ -29,7 +29,9 @@ mod probe_support;
 
 mod bevy_adapter;
 mod bevy_adapter_m4;
+mod bevy_adapter_m6;
 mod gpu_foundation;
+mod import_vulkan_texture;
 mod load_splat_asset;
 mod quality_tiers;
 mod r01_probes;
@@ -42,6 +44,7 @@ mod r07_several_models;
 mod r08_pose;
 mod r10_tier_bounds;
 mod r11_color_space;
+mod r12_occlusion;
 mod r13_centers_mode;
 mod r14_light_transform;
 mod r19_transmittance_bound;

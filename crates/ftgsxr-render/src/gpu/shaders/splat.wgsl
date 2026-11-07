@@ -9,6 +9,10 @@
 // skips a negative (or NaN) quadratic form and α < α_skip, clamps at α_max, then multiplies
 // by E13's weight w_occ (mirroring `ftgsxr_core::occlusion_weight`, Q-63; 1 when occlusion
 // is off), and writes the premultiplied (c·α, α) for the `One, OneMinusSrcAlpha` blend.
+// E13 (D-45): p_f is the point on the fragment's own view ray at the record's depth z_c,
+// projected into the environment depth camera, whose nearest texel is decoded to metres
+// (`occlusion.wgsl`, prepended to this file, Q-340); a fragment behind the depth camera or
+// outside its image, or a sample that is invalid, gets w_occ = 1.
 // E7's constants are the instance's model's (D-39), from the per-instance block that
 // `encode_prepare` writes.
 //
@@ -35,16 +39,30 @@ struct DrawView {
     target_size: vec2<f32>,
     // The engine's near plane for the reverse-Z depth test, 0 without one (Q-87).
     depth_near: f32,
-    // 1 when E13's environment depth is sampled (M-6), else 0: w_occ = 1.
+    // 1 when E13's environment depth is sampled, else 0: w_occ = 1.
     occlusion: u32,
     soft: u32,
     delta_m: f32,
+    // The view camera's f_x, f_y, c_x, c_y (E6).
+    view_k: vec4<f32>,
+    // The depth camera's f_x, f_y, c_x, c_y and its image W × H (E6).
+    env_k: vec4<f32>,
+    env_size: vec2<f32>,
+    // The depth image's nearZ and farZ in metres (farZ < nearZ: infinite).
+    env_near: f32,
+    env_far: f32,
+    // The view's camera space to the depth camera's: R_d·R_vᵀ and its translation.
+    env_from_view: mat4x4<f32>,
 }
 
 @group(0) @binding(0) var<storage, read> records: array<u32>;
 @group(0) @binding(1) var<storage, read> payloads: array<u32>;
 @group(0) @binding(2) var<storage, read> instances: array<InstanceConstants>;
 @group(0) @binding(3) var<uniform> view: DrawView;
+// E13's environment depth (a 1 × 1 placeholder when `view.occlusion` is 0), read at its
+// nearest texel through a non-filtering sampler.
+@group(0) @binding(4) var env_depth: texture_2d<f32>;
+@group(0) @binding(5) var env_sampler: sampler;
 
 const RECORD_WORDS: u32 = 12u;
 
@@ -86,22 +104,26 @@ fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) 
     return out;
 }
 
-// E13's weight (`ftgsxr_core::occlusion_weight`, Q-63): hard, 1 up to z_e + δ; soft,
-// 1 − smoothstep(z_e − δ, z_e + δ, z_f); at δ ≤ 0, in both modes, the hard step at z_e;
-// 1 without a valid sample.
-fn occlusion_weight(z_f: f32, z_e: f32, valid: bool, delta_m: f32, soft: bool) -> f32 {
-    if !valid {
+// E13's w_occ for the fragment at camera pixel `p` of a record at depth `z_c` (D-45).
+fn environment_weight(p: vec2<f32>, z_c: f32) -> f32 {
+    if view.occlusion == 0u {
         return 1.0;
     }
-    let delta = max(delta_m, 0.0);
-    if soft && delta > 0.0 {
-        let t = clamp((z_f - (z_e - delta)) / (2.0 * delta), 0.0, 1.0);
-        return 1.0 - t * t * (3.0 - 2.0 * t);
+    // p_f on the fragment's own view ray at the record's depth, in the view's camera space.
+    let x_v = vec3<f32>((p - view.view_k.zw) / view.view_k.xy * z_c, z_c);
+    let x_d = (view.env_from_view * vec4<f32>(x_v, 1.0)).xyz;
+    var z_e = 0.0;
+    var valid = false;
+    if x_d.z > 0.0 {
+        let q = view.env_k.xy * x_d.xy / x_d.z + view.env_k.zw;
+        if all(q >= vec2<f32>(0.0)) && all(q < view.env_size) {
+            let d = textureSampleLevel(env_depth, env_sampler, q / view.env_size, 0.0).x;
+            let e = depth_metres(d, view.env_near, view.env_far);
+            z_e = e.metres;
+            valid = e.valid;
+        }
     }
-    if z_f <= z_e + delta {
-        return 1.0;
-    }
-    return 0.0;
+    return occlusion_weight(x_d.z, z_e, valid, view.delta_m, view.soft != 0u);
 }
 
 @fragment
@@ -127,8 +149,7 @@ fn fs_splat(in: VertexOut) -> @location(0) vec4<f32> {
     if alpha < alpha_skip {
         discard;
     }
-    // M-2 samples no environment depth (occlusion is off in every M-2 tier): w_occ = 1.
-    alpha = alpha * occlusion_weight(in.constants.w, 0.0, false, view.delta_m, view.soft != 0u);
+    alpha = alpha * environment_weight(p, in.constants.w);
     // (c·σ_eff)·(α/σ_eff) = c·α, premultiplied.
     return vec4<f32>(in.color.xyz * (alpha / sigma_eff), alpha);
 }
