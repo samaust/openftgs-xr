@@ -111,14 +111,15 @@ pub(super) fn apply(
     mut record: ResMut<Record>,
     mut commands: Commands,
 ) {
+    let table = &session.instance().exts().fb_passthrough;
     let (Some(_passthrough), Some(layer)) = (passthrough, layer) else {
-        if !record.tried {
+        // Nothing is created where the runtime lacks the extension (I-15 on Monado).
+        if !record.tried && table.is_some() {
             record.tried = true;
             create(&session, &mut commands);
         }
         return;
     };
-    let table = &session.instance().exts().fb_passthrough;
     if record.style.map(|(s, _)| s) != Some(request.style)
         && let Some(table) = table.as_ref()
     {
