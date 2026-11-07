@@ -12,8 +12,9 @@
 //!   creates the two views' `DepthFrame.image`s once the swapchain's size is known.
 //! - The drive (render world, after the frame's begin and Bevy's prepared assets, before
 //!   the camera passes): the adapter (`meta`) started and stopped as asked, hand removal
-//!   at the start and on change (D-16), `acquire` called once per view (Q-349), the frame's
-//!   `SplatOcclusion` written for the draw node (Q-339), empty while stopped (Q-338).
+//!   at the start and on change (D-16; on while `hand_occluders` is, §1.9), `acquire`
+//!   called once per view (Q-349), the frame's `SplatOcclusion` written for the draw
+//!   node (Q-339), empty while stopped (Q-338).
 //!
 //! Built with `XrPlugin.passthrough` (the Depth API needs passthrough, E.2); where the
 //! runtime lacks XR\_META\_environment\_depth the feature is `Absent` and E-XR-UNSUPPORTED
@@ -168,6 +169,13 @@ pub(crate) fn wanted(mode: EnvironmentMode, setting: bool, tier: bool) -> bool {
     mode == EnvironmentMode::Passthrough && setting && tier
 }
 
+/// The provider's hand removal (§1.9, D-16): on while "occlude with tracked hands" is on,
+/// so the depth image's older copy of the hand does not occlude besides the gauntlet;
+/// otherwise `[environment] hand_removal`.
+pub(crate) fn effective_hand_removal(hand_removal: bool, hand_occluders: bool) -> bool {
+    hand_removal || hand_occluders
+}
+
 /// Q-341: a depth view's camera in the stage space. `view` is the view's pose in the
 /// primary reference space the acquire named; it is composed with the tracking root's
 /// global transform `root`, as the eyes' views are (bevy\_mod\_openxr's render-world
@@ -189,7 +197,7 @@ pub(crate) fn depth_camera(
 pub(crate) struct DepthRequest {
     /// Run the provider (Q-338, and the permission granted, Q-348).
     pub(crate) run: bool,
-    /// `[environment] hand_removal` (D-16).
+    /// `[environment] hand_removal`, or on with `hand_occluders` (§1.9, D-16).
     pub(crate) hand_removal: bool,
     /// `[environment] occlusion_soft` and `occlusion_delta_m` (E13).
     pub(crate) soft: bool,
@@ -356,7 +364,7 @@ fn control(
             let e = ftgsxr_io::Settings::default().environment;
             (
                 e.occlusion,
-                e.hand_removal,
+                effective_hand_removal(e.hand_removal, e.hand_occluders),
                 e.occlusion_soft,
                 e.occlusion_delta_m,
             )
@@ -365,7 +373,7 @@ fn control(
             let e = &s.0.environment;
             (
                 e.occlusion,
-                e.hand_removal,
+                effective_hand_removal(e.hand_removal, e.hand_occluders),
                 e.occlusion_soft,
                 e.occlusion_delta_m,
             )
@@ -995,5 +1003,15 @@ mod tests {
         ] {
             assert!(!wanted(mode, setting, tier), "{mode:?} {setting} {tier}");
         }
+    }
+
+    /// §1.9, D-16: the provider runs with hand removal on while "occlude with tracked
+    /// hands" is on, whatever the hand-removal setting; with the option off, the setting.
+    #[test]
+    fn effective_hand_removal_is_on_when_either_setting_is() {
+        assert!(!effective_hand_removal(false, false));
+        assert!(effective_hand_removal(true, false));
+        assert!(effective_hand_removal(false, true));
+        assert!(effective_hand_removal(true, true));
     }
 }
