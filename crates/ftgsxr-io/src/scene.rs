@@ -537,7 +537,6 @@ fn environment_of(v: &Value, at: &str) -> Result<EnvironmentSettings, IoError> {
         occlusion_soft: b("occlusion_soft", d.occlusion_soft)?,
         occlusion_delta_m: f("occlusion_delta_m", d.occlusion_delta_m)?,
         hand_removal: b("hand_removal", d.hand_removal)?,
-        hand_occluders: b("hand_occluders", d.hand_occluders)?,
         hand_gauntlets: b("hand_gauntlets", d.hand_gauntlets)?,
         hand_gauntlet_margin_m: f("hand_gauntlet_margin_m", d.hand_gauntlet_margin_m)?,
         lighting_mode: c("lighting_mode", d.lighting_mode, LIGHTING_MODES)?,
@@ -816,7 +815,6 @@ fn environment_doc(e: &EnvironmentSettings) -> Result<Value, IoError> {
         float(e.occlusion_delta_m, &at("occlusion_delta_m"))?,
     );
     map.insert("hand_removal".into(), e.hand_removal.into());
-    map.insert("hand_occluders".into(), e.hand_occluders.into());
     map.insert("hand_gauntlets".into(), e.hand_gauntlets.into());
     map.insert(
         "hand_gauntlet_margin_m".into(),

@@ -38,7 +38,6 @@
     "occlusion_soft": false,
     "occlusion_delta_m": 0.08,
     "hand_removal": true,
-    "hand_occluders": true,
     "hand_gauntlets": true,
     "hand_gauntlet_margin_m": 0.012,
     "lighting_mode": "auto-local",

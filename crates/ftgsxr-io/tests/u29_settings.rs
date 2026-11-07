@@ -82,7 +82,6 @@ fn u29_defaults_are_section_1s() {
             occlusion_soft: true,
             occlusion_delta_m: 0.05,
             hand_removal: false,
-            hand_occluders: false,         // D-16
             hand_gauntlets: false,         // D-16
             hand_gauntlet_margin_m: 0.005, // D-16
             lighting_mode: "off".into(),
@@ -245,7 +244,6 @@ fn non_default() -> Settings {
             occlusion_soft: false,
             occlusion_delta_m: 0.12,
             hand_removal: true,
-            hand_occluders: true,
             hand_gauntlets: true,
             hand_gauntlet_margin_m: 0.012,
             lighting_mode: "auto-local".into(),
