@@ -223,7 +223,8 @@ fn add_plugins(
 ) -> Result<(), ExitCode> {
     if m.get_flag("xr") {
         let xr = ftgsxr_xr::XrPlugin {
-            passthrough: false,
+            // §1.9 (#568): the layer where the runtime offers it.
+            passthrough: true,
             hands: true,
             sort: ftgsxr_app::SortMode::PerView,
         };

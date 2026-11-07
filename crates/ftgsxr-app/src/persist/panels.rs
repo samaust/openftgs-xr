@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `persist`'s sections of ui's dock (§1.7 Panels, D-21, §1.11): the Display tab's
-//! background, centers radius and colormap, the Environment tab's background and grid,
+//! background, centers radius and colormap, the Environment tab's background and grid and
+//! the XR controls of the features present (Q-336),
 //! and the Settings tab's tables. Each edits `SettingsRes`, the source of truth that
 //! `sync_settings` maps into the world and the debounce saves (Q-207); `[audio]` is
 //! `audio`'s section and the tier and governor are `governor`'s.
@@ -13,10 +14,11 @@ use ftgsxr_io::Settings;
 use ftgsxr_render::SplatTierState;
 
 use super::{SettingsRes, pick_tier};
+use crate::intent::{Feature, Intent};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
 use crate::platform::{AskPermissionAgain, DeniedPermissions, Permission};
-use crate::ui::UiCue;
+use crate::ui::{FeatureState, UiCue, XrFeatures};
 
 /// The values `ftgsxr-io` accepts for the string keys (§1.11).
 const TIERS: &[&str] = &[
@@ -138,12 +140,90 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
     });
 }
 
-/// The Environment tab on the desktop: background and grid (§1.7 Panels).
+/// The Environment tab (§1.7 Panels, §1.9): the VR-mode controls, background and grid,
+/// everywhere; the XR controls only for the features `XrFeatures` reports (Q-336): with
+/// passthrough the mode switch, the style sliders and contact shadows; with occlusion its
+/// switch, soft or hard, δ and hand removal, with a note while the running tier's
+/// `occlusion` flag turns it off (Q-338); under a `Denied` feature "Ask again", which
+/// writes its toggle again (§1.15 E-XR-PERMISSION). The mode switch writes
+/// `Toggle(Feature::Passthrough)`, whose consumer is the XR crate (Q-335); the other
+/// controls edit the settings directly.
+// Q-335, Q-336, Q-338
 pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
     let training = training_background(world);
+    let features = world
+        .get_resource::<XrFeatures>()
+        .cloned()
+        .unwrap_or_default();
+    let passthrough = features.passthrough != FeatureState::Absent;
+    let occlusion = features.occlusion != FeatureState::Absent;
+    // Q-338: the running tier whose `occlusion` flag turns occlusion off, for the note.
+    let tier_off = world
+        .get_resource::<SplatTierState>()
+        .filter(|t| !t.tier.occlusion)
+        .map(|t| t.tier.name.clone());
+    let mut toggles = Vec::new();
     edit(world, ui, |s, ui| {
         background(ui, &mut s.environment.background, training);
         ui.checkbox(&mut s.display.grid, "floor grid");
+        let e = &mut s.environment;
+        if passthrough {
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("mode");
+                let in_passthrough = e.mode == "passthrough";
+                if ui.selectable_label(!in_passthrough, "VR").clicked() && in_passthrough {
+                    toggles.push(Feature::Passthrough);
+                }
+                if ui.selectable_label(in_passthrough, "passthrough").clicked() && !in_passthrough {
+                    toggles.push(Feature::Passthrough);
+                }
+            });
+            if features.passthrough == FeatureState::Denied {
+                ask_again(ui, "passthrough", Feature::Passthrough, &mut toggles);
+            }
+            ui.add(egui::Slider::new(&mut e.passthrough_brightness, -1.0..=1.0).text("brightness"));
+            ui.add(egui::Slider::new(&mut e.passthrough_contrast, -1.0..=1.0).text("contrast"));
+            ui.add(egui::Slider::new(&mut e.passthrough_saturation, -1.0..=1.0).text("saturation"));
+            ui.checkbox(&mut e.contact_shadows, "contact shadows");
+        }
+        if occlusion {
+            ui.separator();
+            ui.checkbox(&mut e.occlusion, "occlusion");
+            if let Some(tier) = &tier_off {
+                ui.label(format!("off in the {tier} tier"));
+            }
+            if features.occlusion == FeatureState::Denied {
+                ask_again(ui, "occlusion", Feature::Occlusion, &mut toggles);
+            }
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut e.occlusion_soft, true, "soft");
+                ui.selectable_value(&mut e.occlusion_soft, false, "hard");
+            });
+            // §1.9: δ's slider over 0–20 cm.
+            let mut cm = e.occlusion_delta_m * 100.0;
+            if ui
+                .add(egui::Slider::new(&mut cm, 0.0..=20.0).text("δ (cm)"))
+                .changed()
+            {
+                e.occlusion_delta_m = cm / 100.0;
+            }
+            ui.checkbox(&mut e.hand_removal, "hand removal");
+        }
+    });
+    for feature in toggles {
+        world.write_message(Intent::Toggle(feature));
+        world.write_message(UiCue::Click);
+    }
+}
+
+/// A denied feature's line: why it is off and "Ask again" (§1.15 E-XR-PERMISSION).
+fn ask_again(ui: &mut egui::Ui, name: &str, feature: Feature, toggles: &mut Vec<Feature>) {
+    ui.horizontal(|ui| {
+        ui.label(format!("{name}: permission denied"));
+        if ui.button("Ask again").clicked() {
+            toggles.push(feature);
+        }
     });
 }
 
@@ -524,6 +604,100 @@ mod tests {
             frame_of(&ctx, &mut world, events, comfort_section);
         }
         assert!(!world.resource::<SettingsRes>().0.xr.keep_upright);
+    }
+
+    /// The Environment tab's XR controls (§1.9, §1.15, Q-336, `cpu`): with every feature
+    /// `Absent` (the desktop) only the VR-mode controls; with passthrough the mode switch,
+    /// the style sliders and contact shadows; with occlusion its switch, soft or hard, δ
+    /// and hand removal; a `Denied` feature's "Ask again" writes its toggle again.
+    #[test]
+    fn the_environment_tab_shows_the_xr_controls_of_the_features_present() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        let ctx = egui::Context::default();
+        let has =
+            |texts: &[(String, egui::Pos2)], label: &str| texts.iter().any(|(t, _)| t == label);
+        frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        let desktop = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        assert!(has(&desktop, "floor grid"), "{desktop:?}");
+        for label in [
+            "passthrough",
+            "contact shadows",
+            "occlusion",
+            "hand removal",
+        ] {
+            assert!(!has(&desktop, label), "{label} on the desktop: {desktop:?}");
+        }
+        world.insert_resource(XrFeatures {
+            passthrough: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        let pt = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        for label in [
+            "passthrough",
+            "brightness",
+            "contrast",
+            "saturation",
+            "contact shadows",
+        ] {
+            assert!(has(&pt, label), "{label}: {pt:?}");
+        }
+        assert!(!has(&pt, "occlusion") && !has(&pt, "Ask again"), "{pt:?}");
+        world.insert_resource(XrFeatures {
+            passthrough: FeatureState::Available,
+            occlusion: FeatureState::Denied,
+            ..XrFeatures::default()
+        });
+        let denied = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        for label in ["occlusion", "soft", "hard", "hand removal", "Ask again"] {
+            assert!(has(&denied, label), "{label}: {denied:?}");
+        }
+        world.resource_mut::<Messages<Intent>>().clear();
+        for events in click(at(&denied, "Ask again")) {
+            frame_of(&ctx, &mut world, events, environment_section);
+        }
+        let written: Vec<Intent> = world.resource_mut::<Messages<Intent>>().drain().collect();
+        assert_eq!(written, [Intent::Toggle(Feature::Occlusion)]);
+        // The mode switch's other mode writes the passthrough toggle (Q-335).
+        let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        for events in click(at(&texts, "passthrough")) {
+            frame_of(&ctx, &mut world, events, environment_section);
+        }
+        let written: Vec<Intent> = world.resource_mut::<Messages<Intent>>().drain().collect();
+        assert_eq!(written, [Intent::Toggle(Feature::Passthrough)]);
+        assert_eq!(world.resource::<SettingsRes>().0.environment.mode, "vr");
+    }
+
+    /// Q-338: the occlusion control shows whenever the runtime offers the extension, with
+    /// a note when the running tier's `occlusion` flag turns it off (`desktop`), none when
+    /// the tier allows it (`quest-high`).
+    #[test]
+    fn the_environment_tab_notes_a_tier_that_turns_occlusion_off() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.insert_resource(XrFeatures {
+            passthrough: FeatureState::Available,
+            occlusion: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        let note = "off in the desktop tier";
+        let ctx = egui::Context::default();
+        world.insert_resource(SplatTierState::of(&ftgsxr_render::QualityTier::desktop()));
+        frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        let off = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        assert!(off.iter().any(|(t, _)| t == "occlusion"), "{off:?}");
+        assert!(off.iter().any(|(t, _)| t == note), "{off:?}");
+        world.insert_resource(SplatTierState::of(&ftgsxr_render::QualityTier::quest_high()));
+        let on = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        assert!(on.iter().any(|(t, _)| t == "occlusion"), "{on:?}");
+        assert!(
+            !on.iter().any(|(t, _)| t.starts_with("off in the")),
+            "{on:?}"
+        );
     }
 
     // Q-240 (#402): the picker's selected text is the running tier, not the saved one.

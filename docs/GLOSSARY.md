@@ -704,6 +704,30 @@ _Avoid_: folder (unqualified), SAF tree
 The point a spatialized soundtrack is heard from, the midpoint of the splat cameras. §1.10, Q-281
 _Avoid_: receiver, audio camera
 
+**Passthrough layer**:
+The composition layer the runtime fills with the room's camera view, submitted under the projection layer in passthrough mode. §1.9, D-14
+_Avoid_: camera feed, background layer, MR layer
+
+**Passthrough style**:
+The brightness, contrast and saturation controls applied to the passthrough layer's colors. §1.9
+_Avoid_: color map (the extension's mechanism), filter, tint (E14's slider)
+
+**Depth provider**:
+The runtime object that produces the environment depth, created once per session and started while occlusion is on. §1.9, E13
+_Avoid_: depth sensor, depth API (the platform's name), scene model
+
+**Contact shadow**:
+The soft dark disc drawn on the floor under a model instance's footprint in passthrough mode. §1.9
+_Avoid_: drop shadow, ambient occlusion, floor shadow
+
+**Spatial anchor**:
+A runtime-tracked pose in the room, persisted under a UUID, on which a saved scene's content group is placed again. §1.9, D-26
+_Avoid_: anchor (unqualified, where the grab point could be meant), world lock, marker
+
+**Scene anchor**:
+The one spatial anchor a scene file keeps, created at the content group's origin when the scene is saved in passthrough mode. §1.9, §1.11, D-26
+_Avoid_: scene origin, root anchor
+
 ### Files
 
 **File format**:

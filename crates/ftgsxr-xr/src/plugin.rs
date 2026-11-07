@@ -22,6 +22,8 @@ use bevy_mod_xr::session::{XrSessionPlugin, XrState};
 use ftgsxr_render::SortMode;
 use openxr::EnvironmentBlendMode;
 
+use crate::anchors::AnchorsPlugin;
+use crate::depth::DepthPlugin;
 use crate::display::DisplayPlugin;
 use crate::error::{XrError, log_runtime, log_warning};
 use crate::panel::PanelPlugin;
@@ -34,11 +36,13 @@ use crate::xr_input::XrInputPlugin;
 /// render, camera and action plugins with the player's app info, Appendix E.1's
 /// extensions where the runtime offers them, an OPAQUE (D-14) `Rgba8UnormSrgb` (Q-91)
 /// session, D-24's reference spaces and the eyes as `SplatCamera`s. Add it through
-/// [`add_xr`] (Q-120). `passthrough` is carried and logged (M-6); `hands` asks for §1.8's
+/// [`add_xr`] (Q-120). `hands` asks for §1.8's
 /// hand extensions (PRD #452, #454); `sort` is each eye's `SplatCamera.sort` (Q-121).
+/// `passthrough` builds `passthrough`'s layer, switch and style (§1.9, D-14), which run
+/// where the runtime offers XR\_FB\_passthrough; without it the mode stays VR.
 #[derive(Clone, Copy, Debug)]
 pub struct XrPlugin {
-    /// Whether passthrough is wanted (M-6).
+    /// Whether passthrough is wanted: true on the Quest and for `play --xr` (§1.9).
     pub passthrough: bool,
     /// Whether hand tracking is wanted: true on the Quest and for `play --xr` (PRD #452).
     pub hands: bool,
@@ -54,7 +58,7 @@ fn extensions(hands: bool) -> OxrExtensions {
     let raw = exts.raw_mut();
     raw.khr_vulkan_enable2 = true;
     raw.ext_local_floor = true;
-    // For `Environment.passthrough_available` only in M-3.
+    // §1.9: `passthrough`'s layer, and `Environment.passthrough_available`.
     raw.fb_passthrough = true;
     raw.fb_display_refresh_rate = true;
     raw.fb_foveation = true;
@@ -63,6 +67,14 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.fb_swapchain_update_state = true;
     raw.fb_swapchain_update_state_vulkan = true;
     raw.meta_recommended_layer_resolution = true;
+    // §1.9's anchors (D-26, #571): the entity, its query by UUID and its persistence.
+    raw.fb_spatial_entity = true;
+    raw.fb_spatial_entity_query = true;
+    raw.meta_spatial_entity_persistence = true;
+    // Q-358: spike check 5's fallback, the discovery by UUID.
+    raw.meta_spatial_entity_discovery = true;
+    // §1.9's depth occlusion (E13, #570).
+    raw.meta_environment_depth = true;
     // The Touch Plus profile (Appendix D.2) through `tracking`'s bindings.
     raw.meta_touch_controller_plus = true;
     // §1.8 Hands (PRD #452, #454); the frequency hint by name, since no pinned openxr
@@ -130,7 +142,7 @@ fn app_info() -> AppInfo {
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
         info!(
-            "XrPlugin: passthrough {} (M-6) and hands {} wanted, sort {:?}",
+            "XrPlugin: passthrough {} and hands {} wanted, sort {:?}",
             self.passthrough, self.hands, self.sort
         );
         app.add_plugins(XrSessionPlugin { auto_handle: true })
@@ -204,6 +216,7 @@ pub fn runtime_unavailable(app: &App) -> Option<XrError> {
 struct XrTail {
     sort: SortMode,
     hands: bool,
+    passthrough: bool,
 }
 
 impl Plugin for XrTail {
@@ -231,10 +244,23 @@ impl Plugin for XrTail {
             PostUpdate,
             passthrough::devices_drawn.before(tracking::DrawDevices),
         )
+        // The scene anchor's handshake and the store (#571), after `session`, whose
+        // twist it uses, and `tracking`, whose permission flow it shares.
+        .add_plugins(AnchorsPlugin)
         // The panel and the wrist menu (#462), after `xr_input` (§2.1's module order).
         .add_plugins(PanelPlugin)
         // After the events plugin and `session`, whose re-creation it uses (Q-124).
-        .add_plugins(DisplayPlugin);
+        .add_plugins(DisplayPlugin)
+        // §1.9 (#569, Q-342): the contact shadows, drawn in passthrough mode only, where
+        // Bevy's `PbrPlugin` is in the group.
+        .add_plugins(passthrough::ContactShadowPlugin);
+        // §1.9, D-14 (#568): the layer, the switch and the style; without it nothing is
+        // created and the mode stays VR (M-3's behaviour).
+        if self.passthrough {
+            app.add_plugins(passthrough::PassthroughPlugin);
+            // §1.9 Depth occlusion (#570): the Depth API needs passthrough (E.2).
+            app.add_plugins(DepthPlugin);
+        }
     }
 }
 
@@ -249,6 +275,7 @@ pub fn add_xr(plugins: impl PluginGroup, xr: XrPlugin) -> PluginGroupBuilder {
         .add(XrTail {
             sort: xr.sort,
             hands: xr.hands,
+            passthrough: xr.passthrough,
         })
 }
 

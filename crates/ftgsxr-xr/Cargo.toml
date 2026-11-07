@@ -19,7 +19,8 @@ path = "tests/integration.rs"
 
 # M-3 (#222): the XR crates of §2.1's row and §2.3, and the app for `Permission` (§2.1's
 # `XrError::Permission`). bevy_mod_openxr's default feature `vulkan` is the backend both
-# builds use (§2.4); `fb_passthrough` and the other features join with their modules.
+# builds use (§2.4); `passthrough` drives XR_FB_passthrough through the raw table, so its
+# `fb_passthrough` feature is not enabled.
 # #223: bevy (the render features, as `ftgsxr-render`), the io crate for `XrSettings` and
 # the render crate for `SplatCamera`.
 # #227: the core crate for `Pose` (`TrackedHand`, `XrHands`).

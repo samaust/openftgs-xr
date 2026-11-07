@@ -101,7 +101,10 @@ pub enum OutputSpace {
 /// One environment depth image with its camera and planes (E13).
 #[derive(Clone, Debug)]
 pub struct DepthFrame {
-    /// The depth image.
+    /// The depth image: a 2D image whose first channel holds the stored depth, zero at
+    /// `near` and one at `far` (Q-340), in a format that samples as an unfilterable
+    /// float (a depth format, `R16Unorm`, `R32Float`); `ftgsxr_xr::depth` draws the
+    /// runtime's image into it each frame by a conversion pass (Q-339, Q-360).
     pub image: Handle<Image>,
     /// The camera the image was taken from.
     pub camera: Camera,
@@ -114,7 +117,10 @@ pub struct DepthFrame {
 }
 
 /// The environment depth E13 occludes with, one frame per view (the runtime's left and
-/// right). Declared for M-6; occlusion stays off until then.
+/// right). Read from the render world (Q-339): the draw node gives the i-th live splat
+/// camera in camera order `frames[i]` (Q-125: the left eye first), and draws a view
+/// without a frame, or every view while the running tier's `occlusion` flag is false
+/// (Q-338), unoccluded.
 #[derive(Resource, Clone, Debug)]
 pub struct SplatOcclusion {
     /// One depth frame per view.

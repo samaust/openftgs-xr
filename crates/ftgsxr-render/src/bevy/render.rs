@@ -20,9 +20,11 @@ use ::bevy::ecs::prelude::*;
 use ::bevy::log::{error, warn};
 use ::bevy::math::UVec2;
 use ::bevy::render::camera::ExtractedCamera;
+use ::bevy::render::render_asset::RenderAssets;
 use ::bevy::render::render_resource::{StoreOp, TextureFormat};
 use ::bevy::render::renderer::{RenderContext, ViewQuery};
 use ::bevy::render::sync_world::RenderEntity;
+use ::bevy::render::texture::GpuImage;
 use ::bevy::render::view::{ExtractedView, Msaa, ViewDepthTexture, ViewTarget};
 use ::bevy::render::{Extract, ExtractSchedule, Render, RenderSystems};
 use ::bevy::transform::components::GlobalTransform;
@@ -32,16 +34,16 @@ use super::camera::view_camera;
 use super::depth_copy::DepthCopy;
 use super::load::{GpuModels, SplatGpu};
 use super::{
-    OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOverlays, SplatShLimit,
-    SplatStats, SplatTierState, SplatTime, SplatTransform,
+    DepthFrame, OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOcclusion,
+    SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform,
 };
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::sort_pose;
 // The view target the resolve is compiled for (Q-91).
 use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
 use crate::gpu::{
-    Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, Overlays, QualityTier,
-    RenderError, RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
+    Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, OcclusionInput,
+    Overlays, QualityTier, RenderError, RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
 };
 
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
@@ -143,6 +145,9 @@ struct ViewState {
     instances: Vec<Instance>,
     key: Option<PrepareKey>,
     prepare: bool,
+    /// The view's place among the live splat cameras in camera order (Q-125): the index
+    /// of its frame in `SplatOcclusion.frames`.
+    index: usize,
 }
 
 /// The splat cameras' states by render entity, and the passes by (layer format, shared
@@ -342,6 +347,35 @@ fn prepare_views(
             }
         }
     }
+    let ordered = camera_order(views.states.keys().copied(), &extracted.orders);
+    for (index, entity) in ordered.into_iter().enumerate() {
+        if let Some(state) = views.states.get_mut(&entity) {
+            state.index = index;
+        }
+    }
+}
+
+/// The live splat cameras in camera order: by `Camera.order`, ties to the lower render
+/// entity (Q-125; `ftgsxr_xr` orders the eyes by index, so the left eye comes first).
+fn camera_order(
+    entities: impl Iterator<Item = Entity>,
+    orders: &HashMap<Entity, isize>,
+) -> Vec<Entity> {
+    let mut entities: Vec<Entity> = entities.collect();
+    entities.sort_by_key(|e| (orders.get(e).copied().unwrap_or(0), *e));
+    entities
+}
+
+/// The depth frame the view at `index` in camera order draws against (PRD #565, "Which
+/// frame an eye draws against"): `frames[index]`, or none when the running tier's
+/// `occlusion` flag is false (Q-338) or no frame has arrived for the view.
+// Q-338
+fn view_frame(tier_occlusion: bool, frames: &[DepthFrame], index: usize) -> Option<&DepthFrame> {
+    if tier_occlusion {
+        frames.get(index)
+    } else {
+        None
+    }
 }
 
 /// The passes cache's key: the layer format and whether the sort is shared center.
@@ -536,6 +570,7 @@ fn prepare_view(
             instances: Vec::new(),
             key: None,
             prepare: true,
+            index: 0,
         },
     };
     let mut state = state;
@@ -645,11 +680,28 @@ fn prepare_node(view: ViewQuery<&ExtractedView>, views: Res<Views>, mut ctx: Ren
 fn draw_node(
     view: ViewQuery<(&ExtractedCamera, &ViewTarget, &ViewDepthTexture)>,
     views: Res<Views>,
+    tier: Res<RenderTier>,
+    occlusion: Option<Res<SplatOcclusion>>,
+    images: Res<RenderAssets<GpuImage>>,
     mut ctx: RenderContext,
 ) {
     let Some(state) = views.states.get(&view.entity()) else {
         return;
     };
+    // E13's input of this view (Q-339: `SplatOcclusion` lives in the render world): its
+    // frame's image as prepared by Bevy, with the frame's camera and planes.
+    let occlusion = occlusion.as_deref().and_then(|o| {
+        let frame = view_frame(tier.0.occlusion, &o.frames, state.index)?;
+        let image = images.get(&frame.image)?;
+        Some(OcclusionInput {
+            depth: &image.texture_view,
+            camera: frame.camera,
+            near: frame.near,
+            far: frame.far,
+            soft: o.soft,
+            delta_m: o.delta_m,
+        })
+    });
     if matches!(state.camera.output, OutputSpace::LinearOver { .. }) && state.layer.is_none() {
         // No pass, so no draw's timestamps marked for a later `encode_stats` (Q-81).
         return;
@@ -675,7 +727,7 @@ fn draw_node(
             }
             state
                 .passes
-                .encode_draw(pass.wgpu_pass(), frame, &state.view, None);
+                .encode_draw(pass.wgpu_pass(), frame, &state.view, occlusion.as_ref());
         }
         (OutputSpace::LinearOver { background }, Some((layer, _))) => {
             // Q-164: below render scale 1, the view's depth at the layer's size first.
@@ -721,7 +773,7 @@ fn draw_node(
                 });
                 state
                     .passes
-                    .encode_draw(pass.wgpu_pass(), frame, &state.view, None);
+                    .encode_draw(pass.wgpu_pass(), frame, &state.view, occlusion.as_ref());
             }
             let color = [Some(target.get_color_attachment())];
             let mut pass = ctx.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
@@ -753,13 +805,11 @@ fn poll_stats(views: Res<Views>, extracted: Res<Extracted>, inbox: Res<StatsInbo
     let Some(dev) = &views.dev else {
         return;
     };
-    let order = |e: &Entity| extracted.orders.get(e).copied().unwrap_or(0);
-    let mut entities: Vec<&Entity> = views.states.keys().collect();
-    entities.sort_by_key(|e| (order(e), **e));
-    let first = entities.first().copied().copied();
+    let entities = camera_order(views.states.keys().copied(), &extracted.orders);
+    let first = entities.first().copied();
     for entity in entities {
-        if let Some(stats) = FrameStats::poll(&views.states[entity].frame, dev) {
-            inbox.push(Some(*entity) == first, stats);
+        if let Some(stats) = FrameStats::poll(&views.states[&entity].frame, dev) {
+            inbox.push(Some(entity) == first, stats);
         }
     }
 }
@@ -792,6 +842,43 @@ mod tests {
         assert_eq!(layer_size(UVec2::new(5, 3), 0.6), UVec2::new(3, 2));
         assert_eq!(layer_size(UVec2::new(1, 1), 0.6), UVec2::new(1, 1));
         assert_eq!(layer_size(UVec2::new(3, 1), 0.1), UVec2::new(1, 1));
+    }
+
+    // Q-338, PRD #565: the i-th view draws against frames[i], none past the end, and
+    // none at all when the running tier's occlusion flag is false.
+    #[test]
+    fn view_frame_is_the_indexed_frame_when_the_tier_allows_it() {
+        let frame = |near: f32| DepthFrame {
+            image: ::bevy::asset::Handle::default(),
+            camera: ftgsxr_core::Camera {
+                width: 1,
+                height: 1,
+                k: ftgsxr_core::DMat3::IDENTITY,
+                world_to_camera: ftgsxr_core::DMat4::IDENTITY,
+            },
+            near,
+            far: 10.0,
+            age_frames: 0,
+        };
+        let frames = [frame(0.1), frame(0.2)];
+        assert_eq!(view_frame(true, &frames, 0).map(|f| f.near), Some(0.1));
+        assert_eq!(view_frame(true, &frames, 1).map(|f| f.near), Some(0.2));
+        assert!(view_frame(true, &frames, 2).is_none());
+        assert!(view_frame(true, &[], 0).is_none());
+        assert!(view_frame(false, &frames, 0).is_none());
+    }
+
+    // Q-125: camera order, ties to the lower entity (`Entity`'s own order), a camera
+    // without an order at 0.
+    #[test]
+    fn camera_order_sorts_by_order_then_entity() {
+        let e = |i: u32| Entity::from_raw_u32(i).expect("a valid index");
+        let orders = HashMap::from([(e(1), 1), (e(2), 0), (e(3), 0), (e(4), -1)]);
+        let sorted = camera_order([e(1), e(3), e(2), e(4)].into_iter(), &orders);
+        let (lo, hi) = (e(2).min(e(3)), e(2).max(e(3)));
+        assert_eq!(sorted, vec![e(4), lo, hi, e(1)]);
+        let sorted = camera_order([e(1), e(5)].into_iter(), &orders);
+        assert_eq!(sorted, vec![e(5), e(1)], "no order is order 0");
     }
 
     #[test]

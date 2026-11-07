@@ -13,9 +13,10 @@ pub use crate::bevy::{
     SplatModel, SplatOcclusion, SplatOverlays, SplatPlugin, SplatShLimit, SplatStats,
     SplatTierState, SplatTime, SplatTransform, load_splat_asset,
 };
+pub use gpu::import_vulkan_texture; // Q-339
 pub use gpu::{
     BudgetSource, Capacity, ColorTransform, Colormap, Foveation, FrameBuffers, FrameContents,
     FrameStats, GpuModel, GpuTimes, HeadlessRenderer, MemoryBudget, ModelDraw, ModelId,
     OcclusionInput, Overlays, QualityTier, RecordView, RenderError, RenderMode, SortKey, SortMode,
     SortPose, SplatDevice, SplatPasses, ViewParams,
-};
+}; // Q-339
