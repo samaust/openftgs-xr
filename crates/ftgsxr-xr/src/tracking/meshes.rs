@@ -70,8 +70,8 @@ const RING_M: (f32, f32) = (0.04, 0.004);
 // Q-288
 const GREY: f32 = 0.5;
 
-/// The hands' and controllers' material: unlit sRGB grey, shared with the tracked hands
-/// drawn in passthrough (`occluders`, §1.9).
+/// The hands' and controllers' material: unlit sRGB grey, shared with the gauntlets
+/// "draw gauntlets" draws in passthrough (`occluders`, §1.9).
 pub(crate) fn grey() -> StandardMaterial {
     StandardMaterial {
         base_color: Color::srgb(GREY, GREY, GREY),

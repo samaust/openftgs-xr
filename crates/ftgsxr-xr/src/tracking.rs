@@ -8,22 +8,24 @@
 //! plugin. Thresholds, haptic pulses and intents are `xr_input`'s. Hands (M-5, #459):
 //! the permission, one tracker per side, one raw locate per hand per frame with the aim
 //! state chained (`hands`), the per-side ownership rule, the frequency hint, and the hand
-//! capsules and controller meshes in VR mode (`meshes`), and the tracked hands drawn in
-//! passthrough mode (`occluders`, §1.9).
+//! capsules and controller meshes in VR mode (`meshes`), and the tracked hands' gauntlets
+//! in passthrough mode, depth only or grey (`occluders`, §1.9).
 
 // Dv-8's device side (#463, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod dv8;
-// "Occlude with tracked hands" (§1.9, #608).
 pub(crate) mod hands;
 mod meshes;
+// "Occlude with tracked hands" (§1.9, #608).
 mod occluders;
 
 pub(crate) use hands::FREQUENCY_HINT_EXT;
 pub(crate) use meshes::DevicesDrawn;
 #[cfg(test)]
 pub(crate) use meshes::grey;
-pub(crate) use occluders::{OccluderShape, OccludersDrawn};
+#[cfg(test)]
+pub(crate) use occluders::{DepthOnlyMaterial, add_material as add_depth_only_material};
+pub(crate) use occluders::{Occluders, OccludersDrawn};
 
 /// The set of the system that places the hands' and controllers' meshes, which
 /// `passthrough`'s mode check runs before.
@@ -204,6 +206,8 @@ impl Plugin for TrackingPlugin {
                 return;
             }
         };
+        // §1.9: the gauntlets' depth-only material, where Bevy's `PbrPlugin` is.
+        occluders::add_material(app);
         app.insert_resource(actions)
             .add_systems(OxrSendActionBindings, suggest_bindings)
             .add_systems(
@@ -242,7 +246,7 @@ impl Plugin for TrackingPlugin {
             );
         app.add_systems(
             PostUpdate,
-            occluders::draw_occluders
+            occluders::draw_gauntlets
                 .in_set(DrawDevices)
                 .after(hands::locate_hands)
                 .after(TransformSystems::Propagate)

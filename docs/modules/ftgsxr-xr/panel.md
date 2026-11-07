@@ -14,7 +14,7 @@ The two wrist functions take a *palm frame*, not a raw grip: a pose at the grip 
 
 ## The quads
 
-`PanelPlugin` follows `xr_input` in the XR tail (`session.md`). With the `Headset` marker (Q-266), the first `XrSessionCreated` spawns both quads, each a unit `Rectangle` scaled to its size with an unlit `StandardMaterial` showing a new render-target image, its texture's top-left at the quad's top-left (Q-210), and both hidden (Q-307):
+`PanelPlugin` follows `xr_input` in the XR tail (`session.md`). With the `Headset` marker (Q-266), the first `XrSessionCreated` spawns both quads, each a unit `Rectangle` scaled to its size with an unlit `StandardMaterial` showing a new render-target image, in the alpha-mask phase with a cutoff of 0 (it discards nothing; drawn after the opaque phase, so the tracked hands' gauntlets hide it where the real hand is in front, Q-368), its texture's top-left at the quad's top-left (Q-210), and both hidden (Q-307):
 
 - the main panel: `WorldPanel`, `MainPanel { follow: Summon }` and `PanelQuad` at §1.8's default size and resolution;
 - the wrist menu: `WorldPanel`, `WristMenu` and `PanelQuad` at Q-265's size and resolution.

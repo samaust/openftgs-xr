@@ -721,7 +721,7 @@ The soft dark disc drawn on the floor under a model instance's footprint in pass
 _Avoid_: drop shadow, ambient occlusion, floor shadow
 
 **Gauntlet**:
-A tracked hand drawn in passthrough as the bone capsules and two palm capsules, each of its joint radius plus 1.5 cm, in the hands' grey, while "occlude with tracked hands" and "draw gauntlets" are on; it covers the real hand and hides what lies behind it. §1.9, D-16
+A tracked hand's occluder in passthrough while "occlude with tracked hands" is on: the bone capsules and two palm capsules, each of its joint radius plus a margin the player chooses, writing depth only, so the real hand shows and the gauntlet hides what lies behind it, or drawn in the hands' grey with "draw gauntlets". §1.9, D-16
 _Avoid_: hand mesh (VR mode's hand, of the joint radii), hand occluder (the setting's name, not the geometry), hand proxy
 
 **Spatial anchor**:

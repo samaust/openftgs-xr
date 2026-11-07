@@ -29,7 +29,7 @@ mod dv6;
 mod layer;
 // The contact shadows (Q-342, #569).
 mod shadow;
-// The tracked hands drawn in passthrough, on the GPU (#608, Q-364).
+// The tracked hands' gauntlets on the GPU (#608, Q-364, Q-368).
 #[cfg(test)]
 mod occluders_gpu;
 
@@ -56,7 +56,7 @@ use ftgsxr_render::{OutputSpace, SplatCamera};
 
 use crate::XrError;
 use crate::error::log_warning;
-use crate::tracking::{DevicesDrawn, OccluderShape, OccludersDrawn};
+use crate::tracking::{DevicesDrawn, Occluders, OccludersDrawn};
 
 /// The extension the passthrough layer needs (Appendix E.1).
 const EXTENSION: &str = "XR_FB_passthrough";
@@ -316,10 +316,10 @@ fn eyes_follow_mode(
 
 /// The mode check of `tracking`'s hand and controller meshes (§1.8 Controllers and
 /// Hands: drawn in VR mode, not in passthrough mode): `DevicesDrawn` follows
-/// `Environment.mode`, false without an `Environment`; and of its tracked hands in
+/// `Environment.mode`, false without an `Environment`; and of its gauntlets in
 /// passthrough (§1.9): `OccludersDrawn` in passthrough mode with `[environment]
-/// hand_occluders` on, as gauntlets with `hand_gauntlets` (without `SettingsRes`, the
-/// defaults: off).
+/// hand_occluders` on, drawn grey with `hand_gauntlets`, of `hand_gauntlet_margin_m`
+/// (without `SettingsRes`, the defaults: off).
 pub(crate) fn devices_drawn(
     env: Option<Res<Environment>>,
     settings: Option<Res<SettingsRes>>,
@@ -333,13 +333,11 @@ pub(crate) fn devices_drawn(
     }
     let default = Settings::default();
     let e = &settings.as_deref().map_or(&default, |s| &s.0).environment;
-    let shape = if e.hand_gauntlets {
-        OccluderShape::Gauntlet
-    } else {
-        OccluderShape::Hand
-    };
     let want = OccludersDrawn(
-        (mode == Some(EnvironmentMode::Passthrough) && e.hand_occluders).then_some(shape),
+        (mode == Some(EnvironmentMode::Passthrough) && e.hand_occluders).then_some(Occluders {
+            grey: e.hand_gauntlets,
+            margin_m: e.hand_gauntlet_margin_m,
+        }),
     );
     if *occluders != want {
         *occluders = want;
@@ -602,9 +600,9 @@ mod tests {
         assert_eq!(*app.world().resource::<DevicesDrawn>(), DevicesDrawn(false));
     }
 
-    /// §1.9, D-16: the tracked hands are drawn in passthrough mode with `hand_occluders`
-    /// on only, as VR mode's hand, or as gauntlets with `hand_gauntlets`; off by default,
-    /// in VR mode and without an `Environment`.
+    /// §1.9, D-16: the gauntlets are on in passthrough mode with `hand_occluders` on only,
+    /// depth only, or drawn with `hand_gauntlets`, of the chosen margin; off by default, in
+    /// VR mode and without an `Environment`.
     #[test]
     fn devices_drawn_draws_the_occluders_in_passthrough_with_the_option() {
         let mut app = App::new();
@@ -626,14 +624,26 @@ mod tests {
         assert_eq!(drawn(&app), None, "VR mode");
         app.world_mut().resource_mut::<Environment>().mode = EnvironmentMode::Passthrough;
         app.update();
-        assert_eq!(drawn(&app), Some(OccluderShape::Hand), "VR mode's hand");
+        let gauntlet = |grey, margin_m| Some(Occluders { grey, margin_m });
+        assert_eq!(
+            drawn(&app),
+            gauntlet(false, 0.005),
+            "depth only, D-16's margin"
+        );
         app.world_mut()
             .resource_mut::<SettingsRes>()
             .0
             .environment
             .hand_gauntlets = true;
         app.update();
-        assert_eq!(drawn(&app), Some(OccluderShape::Gauntlet), "draw gauntlets");
+        assert_eq!(drawn(&app), gauntlet(true, 0.005), "draw gauntlets");
+        app.world_mut()
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .hand_gauntlet_margin_m = 0.012;
+        app.update();
+        assert_eq!(drawn(&app), gauntlet(true, 0.012), "the slider's margin");
         app.world_mut()
             .resource_mut::<SettingsRes>()
             .0

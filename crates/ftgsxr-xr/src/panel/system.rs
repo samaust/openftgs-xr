@@ -9,6 +9,7 @@ use bevy::app::{App, Plugin, Update};
 use bevy::asset::{Assets, Handle, RenderAssetUsages};
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::image::Image;
+use bevy::material::AlphaMode;
 use bevy::math::primitives::Rectangle;
 use bevy::math::{UVec2, Vec2, Vec3};
 use bevy::mesh::{Mesh, Mesh3d};
@@ -134,7 +135,8 @@ fn target(images: &mut Assets<Image>, size_px: UVec2) -> Handle<Image> {
 
 /// A quad's pieces: a unit rectangle (scaled by the transform to `size_m`), facing +z
 /// with its texture's top-left at the quad's top-left (Q-210), and an unlit material
-/// showing `image`.
+/// showing `image`, drawn in the alpha-mask phase after the opaque one, so the tracked
+/// hands' depth-only gauntlets hide it where the real hand is in front (Q-368).
 fn quad(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -145,6 +147,8 @@ fn quad(
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color_texture: Some(image.clone()),
             unlit: true,
+            // Q-368: a cutoff of 0 discards nothing and writes alpha 1, as opaque does.
+            alpha_mode: AlphaMode::Mask(0.0),
             ..Default::default()
         })),
     )
@@ -1045,5 +1049,20 @@ mod tests {
         );
         app.update();
         assert_eq!(wrist(&mut app).1, Visibility::Hidden);
+    }
+
+    /// Q-368: the quads' material is unlit, shows the panel's image, and draws in the
+    /// alpha-mask phase with a cutoff of 0, which discards nothing and writes alpha 1 as
+    /// the opaque mode does.
+    #[test]
+    fn quad_material_draws_in_the_alpha_mask_phase_without_discarding() {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let image = Handle::<Image>::default();
+        let (_, m) = quad(&mut meshes, &mut materials, &image);
+        let m = materials.get(&m.0).expect("the quad's material");
+        assert_eq!(m.alpha_mode, AlphaMode::Mask(0.0));
+        assert!(m.unlit);
+        assert_eq!(m.base_color_texture.as_ref(), Some(&image));
     }
 }
