@@ -7,7 +7,7 @@
 use bevy::ecs::entity::Entity;
 use bevy::math::{Vec2, Vec3};
 use bevy::prelude::{Event, Message};
-use ftgsxr_core::{EndRule, LoopMode, Pose};
+use ftgsxr_core::{EndRule, LoopMode, Pose, Trim};
 use ftgsxr_render::RenderMode;
 
 /// Which hand, or the desktop's mouse, an intent comes from.
@@ -96,6 +96,10 @@ pub enum InstanceAction {
     Select,
     /// Deselect it.
     Deselect,
+    /// Set its trim (E17): a trim that is on takes well-formed shapes (`Trim::is_valid`).
+    SetTrim(Trim),
+    /// Turn its trim off and restore the initial shapes (E17, §1.5 Poses).
+    ResetTrim,
 }
 
 /// The one message both input adapters produce and every feature consumes (§1.7, §1.8).

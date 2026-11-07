@@ -25,11 +25,11 @@ use bevy::math::{Quat, Vec3};
 use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 use ftgsxr_core::{
-    Aabb, Grab, ModelKind, Pose, Preset, ScaleLimits, SceneManifest, TwoHandGrab, fit_pose,
-    ray_hit, read_scene_manifest, snap_to_floor,
+    Aabb, Grab, ModelKind, Pose, Preset, ScaleLimits, SceneManifest, Trim, TrimMode, TwoHandGrab,
+    fit_pose, ray_hit, read_scene_manifest, snap_to_floor,
 };
 use ftgsxr_io::{ModelRef, PoseStore, SavedPose};
-use ftgsxr_render::{SplatAsset, SplatMode, SplatModel};
+use ftgsxr_render::{SplatAsset, SplatBounds, SplatMode, SplatModel, SplatTrim};
 
 use crate::intent::{GizmoMode, Hand, InstanceAction, Intent};
 use crate::library::{LibraryCommand, LoadedModel};
@@ -476,6 +476,10 @@ fn on_loaded(
     let extras = match poses.0.get(&m.identity) {
         Some(saved) => {
             *t = transform_of(saved.pose);
+            // §1.5 Poses: the trim saved with the pose loads with it (E17). Q-374
+            if let Some(trim) = saved.trim {
+                commands.entity(add.entity).insert(SplatTrim(trim));
+            }
             PoseExtras {
                 preset: saved.preset,
                 fit_size_m: saved.fit_size_m,
@@ -488,7 +492,7 @@ fn on_loaded(
             let bounds = model
                 .zip(assets.as_ref())
                 .and_then(|(model, a)| a.get(&model.0))
-                .map(|a| fit_box(a, content));
+                .map(|a| asset_fit_box(a, content));
             if headset.is_some()
                 && let Some(b) = bounds
                 && !(AUTO_FIT_RANGE_M.0..=AUTO_FIT_RANGE_M.1).contains(&b.size().max_element())
@@ -549,7 +553,7 @@ type Instances<'w, 's> = Query<
         Entity,
         &'static mut Transform,
         &'static LoadedModel,
-        Option<&'static SplatModel>,
+        Option<&'static SplatBounds>,
         Option<&'static PoseExtras>,
         Option<&'static Hovered>,
         Option<&'static Grabbed>,
@@ -591,42 +595,39 @@ fn set_stage_pose(q: &mut Instances, groups: &GroupTransforms, e: Entity, pose: 
     }
 }
 
-/// Every instance's (entity, stage pose, B_m); an instance whose asset is gone has no
-/// box.
-fn boxes(
-    q: &Instances,
-    groups: &GroupTransforms,
-    assets: &Assets<SplatAsset>,
-) -> Vec<(Entity, Pose, Aabb)> {
+/// Every instance's (entity, stage pose, B_m), B_m its `SplatBounds`, trimmed while a
+/// trim is on (E17); an instance whose boxes are not known yet has no box.
+fn boxes(q: &Instances, groups: &GroupTransforms) -> Vec<(Entity, Pose, Aabb)> {
     q.iter()
-        .filter_map(|(e, t, _, m, .., parent)| {
-            Some((e, staged(t, parent, groups), assets.get(&m?.0)?.bounds))
-        })
+        .filter_map(|(e, t, _, b, .., parent)| Some((e, staged(t, parent, groups), b?.aabb)))
         .collect()
 }
 
-fn bounds_of(q: &Instances, assets: &Assets<SplatAsset>, e: Entity) -> Option<Aabb> {
-    let (_, _, _, m, ..) = q.get(e).ok()?;
-    Some(assets.get(&m?.0)?.bounds)
+fn bounds_of(q: &Instances, e: Entity) -> Option<Aabb> {
+    let (_, _, _, b, ..) = q.get(e).ok()?;
+    Some(b?.aabb)
 }
 
-/// §1.5's fit box: E10's B_c under "Fit to: content", else B_m.
-fn fit_box(asset: &SplatAsset, content: bool) -> Aabb {
-    if content {
-        asset.content_bounds
-    } else {
-        asset.bounds
-    }
+/// §1.5's fit box: B_c under "Fit to: content", else B_m, both trimmed while a trim is on
+/// (E17).
+fn fit_box(bounds: &SplatBounds, content: bool) -> Aabb {
+    if content { bounds.content } else { bounds.aabb }
 }
 
-fn fit_box_of(
-    q: &Instances,
-    assets: &Assets<SplatAsset>,
-    e: Entity,
-    content: bool,
-) -> Option<Aabb> {
-    let (_, _, _, m, ..) = q.get(e).ok()?;
-    Some(fit_box(assets.get(&m?.0)?, content))
+/// §1.5's fit box of an untrimmed asset, for the automatic fit at its load, where an
+/// instance without a saved pose has no trim (Q-374).
+fn asset_fit_box(asset: &SplatAsset, content: bool) -> Aabb {
+    let untrimmed = SplatBounds {
+        aabb: asset.bounds,
+        content: asset.content_bounds,
+        kept_none: false,
+    };
+    fit_box(&untrimmed, content)
+}
+
+fn fit_box_of(q: &Instances, e: Entity, content: bool) -> Option<Aabb> {
+    let (_, _, _, b, ..) = q.get(e).ok()?;
+    Some(fit_box(b?, content))
 }
 
 /// After a pose changed outside a grab, the grab takes hold again from the new pose.
@@ -670,7 +671,11 @@ fn run_intents(
     mut q: Instances,
     groups: GroupTransforms,
     selected: Query<Entity, With<Selected>>,
-    assets: Res<Assets<SplatAsset>>,
+    (assets, models, trims): (
+        Res<Assets<SplatAsset>>,
+        Query<&SplatModel>,
+        Query<&SplatTrim>,
+    ),
     cameras: HeadCameras,
     settings: Res<ManipulateSettings>,
     mut poses: ResMut<Poses>,
@@ -696,7 +701,7 @@ fn run_intents(
     }
     let pick = |q: &Instances, ray: Option<(Vec3, Vec3)>| {
         let (o, d) = ray?;
-        pick_instance(o, d, &boxes(q, &groups, &assets), s.ray_max_m)
+        pick_instance(o, d, &boxes(q, &groups), s.ray_max_m)
     };
     // The hands with a `Pointer` this frame: only they hover (Q-263).
     let mut pointed: Vec<Hand> = Vec::new();
@@ -727,7 +732,7 @@ fn run_intents(
                 // The desktop gizmo's handles come before the instances behind them.
                 if hand == Hand::Mouse
                     && let (mode, Some(e), Some(ray)) = (gizmo.mode, sel, ray)
-                    && let Some(bounds) = bounds_of(&q, &assets, e)
+                    && let Some(bounds) = bounds_of(&q, e)
                     && let Some(pose) = stage_pose(&q, &groups, e)
                 {
                     let center = posed_center(&bounds, &pose);
@@ -944,6 +949,8 @@ fn run_intents(
                             preset: x.preset,
                             fit_size_m: x.fit_size_m,
                             saved_at: now_rfc3339(),
+                            // §1.5 Poses: the trim too, as it stands (E17). Q-374
+                            trim: trims.get(instance).ok().map(|tr| tr.0),
                         };
                         let id = m.identity.clone();
                         poses.0.set(&id, saved);
@@ -961,11 +968,29 @@ fn run_intents(
                         rebase(&mut hs, instance, p);
                     }
                 }
+                InstanceAction::SetTrim(trim) => {
+                    // Q-374: well-formed shapes whatever the mode (E17), so a trim the
+                    // instance holds can always be saved (Q-372).
+                    if q.contains(instance) && trim.is_valid() {
+                        commands.entity(instance).insert(SplatTrim(trim));
+                    }
+                }
+                InstanceAction::ResetTrim => {
+                    // E17: off, with the initial shapes of the untrimmed B_m. Q-374
+                    if q.contains(instance)
+                        && let Some(asset) =
+                            models.get(instance).ok().and_then(|sm| assets.get(&sm.0))
+                    {
+                        commands
+                            .entity(instance)
+                            .insert(SplatTrim(Trim::initial(&asset.bounds)));
+                    }
+                }
                 InstanceAction::Fit | InstanceAction::SnapToFloor => {
                     // The fit's head and the floor are in stage space.
                     // §1.5: both on the fit box.
                     let (Some(b), Some(current), Ok((.., x, _, _, _))) = (
-                        fit_box_of(&q, &assets, instance, s.fit_to_content),
+                        fit_box_of(&q, instance, s.fit_to_content),
                         stage_pose(&q, &groups, instance),
                         q.get(instance),
                     ) else {
@@ -1010,7 +1035,7 @@ fn run_intents(
     // last ray of the frame over the instances as they now stand, a hand without one
     // hovering nothing (Q-263, rewording Q-182); an instance two rays hit carries the
     // nearer (Q-182).
-    let all = boxes(&q, &groups, &assets);
+    let all = boxes(&q, &groups);
     let mut hovered: HashMap<Entity, Hovered> = HashMap::new();
     for &hand in &pointed {
         let Some((o, d)) = hs.hands.get(&hand).and_then(|h| h.ray) else {
@@ -1213,6 +1238,38 @@ pub(crate) fn highlight_colors(high_contrast: bool) -> (Color, Color) {
         (HOVER, ACCENT)
     }
 }
+
+/// The trim shape's color (§1.4 Selection and debug views: distinct from the accent):
+/// magenta, apart from the hover, accent and high-contrast colors. Q-374
+const TRIM_COLOR: Color = Color::srgb(1.0, 0.2, 0.85);
+
+/// The segments drawn per great circle of a sphere trim.
+const CIRCLE_SEGMENTS: u32 = 64;
+
+/// E17's shape of the selected instance in thin lines, through its pose: the box's edges,
+/// or the sphere's three great circles in the model's axis planes; nothing when off.
+fn trim_lines(gizmos: &mut Gizmos, trim: &Trim, pose: &Pose) {
+    match trim.mode {
+        TrimMode::Off => {}
+        TrimMode::Box => {
+            if let Some(b) = trim.shape_bounds() {
+                box_lines(gizmos, &b, pose, TRIM_COLOR);
+            }
+        }
+        TrimMode::Sphere => {
+            for (u, v) in [(Vec3::X, Vec3::Y), (Vec3::Y, Vec3::Z), (Vec3::Z, Vec3::X)] {
+                let at = |k: u32| {
+                    let th = k as f32 * std::f32::consts::TAU / CIRCLE_SEGMENTS as f32;
+                    pose.transform_point(trim.center + trim.radius * (th.cos() * u + th.sin() * v))
+                };
+                for k in 0..CIRCLE_SEGMENTS {
+                    gizmos.line(at(k), at(k + 1), TRIM_COLOR);
+                }
+            }
+        }
+    }
+}
+
 const AXIS_COLORS: [Color; 3] = [
     Color::srgb(0.9, 0.2, 0.2),
     Color::srgb(0.2, 0.9, 0.2),
@@ -1221,40 +1278,41 @@ const AXIS_COLORS: [Color; 3] = [
 
 type DrawItem = (
     &'static Transform,
-    &'static SplatModel,
+    &'static SplatBounds,
+    Option<&'static SplatTrim>,
     Has<Hovered>,
     Has<Selected>,
     Option<&'static ChildOf>,
 );
 
-/// §1.4: the hovered box in thin lines, the selected one in the accent color, and the
-/// selected instance's gizmo handles.
+/// §1.4: the hovered box in thin lines, the selected one in the accent color, the selected
+/// instance's trim shape while it is on (E17), and its gizmo handles. The boxes are B_m,
+/// trimmed while a trim is on.
 fn draw(
     mut gizmos: Gizmos,
     q: Query<DrawItem, With<LoadedModel>>,
     groups: GroupTransforms,
-    assets: Res<Assets<SplatAsset>>,
     cameras: HeadCameras,
     gizmo: Res<GizmoState>,
     contrast: Res<HighContrast>,
 ) {
     let (hover, accent) = highlight_colors(contrast.0);
     let eye = head_pose(&cameras).unwrap_or(Pose::IDENTITY).translation;
-    for (t, m, hovered, selected, parent) in &q {
-        let Some(asset) = assets.get(&m.0) else {
-            continue;
-        };
+    for (t, bounds, trim, hovered, selected, parent) in &q {
         let pose = staged(t, parent, &groups);
         if selected {
-            box_lines(&mut gizmos, &asset.bounds, &pose, accent);
+            box_lines(&mut gizmos, &bounds.aabb, &pose, accent);
         } else if hovered {
-            box_lines(&mut gizmos, &asset.bounds, &pose, hover);
+            box_lines(&mut gizmos, &bounds.aabb, &pose, hover);
         }
         if !selected {
             continue;
         }
+        if let Some(trim) = trim {
+            trim_lines(&mut gizmos, &trim.0, &pose);
+        }
         let mode = gizmo.mode;
-        let c = posed_center(&asset.bounds, &pose);
+        let c = posed_center(&bounds.aabb, &pose);
         let size = gizmo_size(c, eye);
         for (a, color) in AXES.into_iter().zip(AXIS_COLORS) {
             match mode {

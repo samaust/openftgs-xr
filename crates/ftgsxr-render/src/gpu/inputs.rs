@@ -3,7 +3,7 @@
 //! The frame inputs of `SplatPasses` (§2.1): the views, the sort pose, and one `ModelDraw`
 //! per instance with its pose, time, render mode, color transform and overlays.
 
-use ftgsxr_core::{Camera, Pose, UVec2, Vec3};
+use ftgsxr_core::{Camera, Pose, Trim, UVec2, Vec3};
 use ftgsxr_io::ManualLighting;
 
 use super::model::GpuModel;
@@ -122,6 +122,9 @@ pub struct ModelDraw<'a> {
     pub sh_degree: u8,
     /// The debug overlays (not drawn in M-2).
     pub overlays: Overlays,
+    /// E17's trim, in model space: the cull skips the rows whose moved center lies
+    /// outside it (§1.4 stage 2). `HeadlessRenderer::render` draws with it off.
+    pub trim: Trim,
 }
 
 /// E13's inputs: the environment depth of a view with its camera and planes.

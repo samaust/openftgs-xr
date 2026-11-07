@@ -28,14 +28,14 @@ use ::bevy::render::texture::GpuImage;
 use ::bevy::render::view::{ExtractedView, Msaa, ViewDepthTexture, ViewTarget};
 use ::bevy::render::{Extract, ExtractSchedule, Render, RenderSystems};
 use ::bevy::transform::components::GlobalTransform;
-use ftgsxr_core::Pose;
+use ftgsxr_core::{Pose, Trim};
 
 use super::camera::view_camera;
 use super::depth_copy::DepthCopy;
 use super::load::{GpuModels, SplatGpu};
 use super::{
     DepthFrame, OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOcclusion,
-    SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform,
+    SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform, SplatTrim,
 };
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::sort_pose;
@@ -106,6 +106,8 @@ struct Instance {
     mode: RenderMode,
     transform: ColorTransform,
     overlays: Overlays,
+    /// E17's trim; off without a `SplatTrim`.
+    trim: Trim,
 }
 
 /// What the frame's extraction found: the device, the visible instances whose models are
@@ -128,7 +130,7 @@ struct Extracted {
 #[derive(Clone, PartialEq)]
 struct PrepareKey {
     view: ViewParams,
-    instances: Vec<(usize, Pose, u64, RenderMode, ColorTransform, u8)>,
+    instances: Vec<(usize, Pose, u64, RenderMode, ColorTransform, u8, Trim)>,
 }
 
 /// One splat camera's state: its passes and frame buffers, the layer (`LinearOver`),
@@ -241,6 +243,7 @@ type InstanceQuery<'w, 's> = Query<
         Option<&'static SplatMode>,
         Option<&'static SplatTransform>,
         Option<&'static SplatOverlays>,
+        Option<&'static SplatTrim>,
     ),
 >;
 
@@ -261,9 +264,9 @@ fn extract(
     out.render_scale = tier_state.render_scale;
     let mut found: Vec<(Entity, Instance)> = instances
         .iter()
-        .filter(|(.., vis, _, _, _, _)| vis.is_none_or(|v| v.get()))
+        .filter(|(.., vis, _, _, _, _, _)| vis.is_none_or(|v| v.get()))
         .filter_map(
-            |(entity, model, transform, _, time, mode, color, overlays)| {
+            |(entity, model, transform, _, time, mode, color, overlays, trim)| {
                 let asset = model.0.id();
                 let gpu_model = models.ready.get(&asset)?;
                 Some((
@@ -277,6 +280,7 @@ fn extract(
                         mode: mode.map_or(RenderMode::Splats, |m| m.0),
                         transform: color.map_or(ColorTransform::IDENTITY, |c| c.0),
                         overlays: overlays.map_or(Overlays::default(), |o| o.0),
+                        trim: trim.map_or(Trim::default(), |t| t.0),
                     },
                 ))
             },
@@ -544,6 +548,7 @@ fn prepare_view(
                     i.mode,
                     i.transform,
                     i.sh_degree,
+                    i.trim,
                 )
             })
             .collect(),
@@ -652,6 +657,7 @@ fn draws(instances: &[Instance]) -> Vec<ModelDraw<'_>> {
             transform: i.transform,
             sh_degree: i.sh_degree,
             overlays: i.overlays,
+            trim: i.trim,
         })
         .collect()
 }

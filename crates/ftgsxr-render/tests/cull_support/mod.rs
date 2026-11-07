@@ -106,6 +106,7 @@ pub fn draw<'a>(model: &'a GpuModel, pose: Pose, tau: f64, mode: RenderMode) -> 
         transform: ColorTransform { gain: Vec3::ONE },
         sh_degree: 3,
         overlays: Overlays::default(),
+        trim: ftgsxr_core::Trim::default(),
     }
 }
 

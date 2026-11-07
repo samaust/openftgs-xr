@@ -201,6 +201,7 @@ fn headset_fit_a_saved_pose_wins() {
             preset: Preset::YUp,
             fit_size_m: 1.0,
             saved_at: "2026-11-04T00:00:00.000000000Z".into(),
+            trim: None,
         },
     );
     let mut t = app("headset_fit_saved", true, Some(store));

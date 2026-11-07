@@ -49,6 +49,7 @@ mod r12_occlusion;
 mod r13_centers_mode;
 mod r14_light_transform;
 mod r19_transmittance_bound;
+mod r20_trim_cull;
 mod shared_center_records;
 mod stereo_stats;
 mod u20_manual_transform;

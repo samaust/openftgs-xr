@@ -19,6 +19,7 @@ mod dock;
 mod panel;
 mod pointer_hand;
 mod touch;
+mod trim_row;
 
 pub(crate) use panel::{PanelCamera, panel_zoom};
 
@@ -220,6 +221,8 @@ pub struct HudData {
     pub overflow: bool,
     /// The non-finite rows (E6).
     pub non_finite: u32,
+    /// The rows outside their instance's trim (E17, §1.13).
+    pub trimmed: u32,
     /// The instances' static GPU bytes.
     pub gpu_bytes_used: u64,
     /// The budget in bytes.
@@ -1020,6 +1023,7 @@ fn fill_hud(
         hud.capacity = s.capacity;
         hud.overflow = s.overflow;
         hud.non_finite = s.non_finite;
+        hud.trimmed = s.trimmed;
     }
     if let Some(t) = tier {
         hud.tier = t.tier.name.clone();

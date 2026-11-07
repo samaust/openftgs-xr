@@ -192,6 +192,7 @@ fn i04_a_saved_pose_applies_when_the_instance_appears() {
             preset: Preset::ZUp,
             fit_size_m: 2.0,
             saved_at: "2026-11-02T00:00:00.000000000Z".into(),
+            trim: None,
         },
     );
     let mut t = TestApp::with("i04_appear", Setup::default(), |app| {

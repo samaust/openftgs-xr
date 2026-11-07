@@ -24,9 +24,9 @@ One `FrameBuffers` set per view (per-view mode) holds, sized once per tier and c
 - **records**: C slots in the tier's record layout. Splat records fill slots from 0; center records follow them, from slot min(splats, C) (Q-78).
 - **keys and payloads**, two pairs: the sort's (k̄, slot) pairs, sorted into the first pair (`sort.md`).
 - **histograms**: the sort's per-block digit counts (Q-85).
-- **counters**: the splat draw's indirect arguments (words 0–3), the centers draw's (words 4–7), the overflow flag, and the rows that passed E3's test (Q-79).
+- **counters**: the splat draw's indirect arguments (words 0–3), the centers draw's (words 4–7), the overflow flag, the rows that passed E3's test (Q-79), the non-finite count (Q-118) and the rows trimmed (E17, Q-373).
 - **sort dispatch**: stage 3's indirect dispatch arguments for the sort (Q-85).
-- **statistics**: the 80-byte block of stage 8 (§1.4, revision 13): the splat and center counts, the overflow flag, C and the count of primitives culled for a non-finite projection (E6) in words 0–4, three pad words, then the six 64-bit timestamps from byte 32; and four staging buffers it is copied into (Q-81).
+- **statistics**: the 80-byte block of stage 8 (§1.4, revision 13): the splat and center counts, the overflow flag, C and the count of primitives culled for a non-finite projection (E6) in words 0–4, the count of rows trimmed (E17, revision 45) in word 5, two pad words, then the six 64-bit timestamps from byte 32; and four staging buffers it is copied into (Q-81).
 - **draw constants**: one block per instance, written by `encode_prepare` and kept for `encode_draw` (Q-87): E7's constants of the instance's model (D-39), then the centers' colormap, ρ and scales (Q-92, Q-93).
 
 Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 and E7 constants, its temporal index and the 99th percentile of its speeds (Q-93).

@@ -11,9 +11,12 @@ use bevy::transform::components::Transform;
 use bevy_egui::{EguiContext, PrimaryEguiContext, egui};
 use ftgsxr_core::{EndRule, LoopMode, PlayState, Preset};
 use ftgsxr_io::{EntryKind, SourceSpec, Url};
-use ftgsxr_render::{Colormap, RenderMode, SplatMode, SplatTime};
+use ftgsxr_render::{
+    Colormap, RenderMode, SplatAsset, SplatBounds, SplatMode, SplatModel, SplatTime, SplatTrim,
+};
 
 use super::cameras::{self, JumpToCamera, TrainingCameras, TrainingView};
+use super::trim_row::{TrimInfo, trim_row};
 use super::{
     Confirm, DockHooks, InstanceLighting, RecentScenes, SceneLoadConfirmed, Tab, ToastLevel, UiCue,
     UiState,
@@ -625,8 +628,8 @@ fn fit_to_label(content: bool) -> &'static str {
     }
 }
 
-/// Scene: the instances, their visibility, mode, pose, time offset and end rule; save
-/// and load.
+/// Scene: the instances, their visibility, mode, pose, time offset and end rule, color
+/// transform and trim (§1.7 Trim, E17); save and load.
 fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Option<egui::Id>) {
     ui.horizontal(|ui| {
         if button(ui, "Save scene", out, hv) {
@@ -646,6 +649,26 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         Option<&PoseExtras>,
         Option<&SplatTime>,
     )>();
+    // E17: each loaded instance's trim, boxes and untrimmed B_m, for its trim row.
+    let mut trims = std::collections::HashMap::new();
+    let mut tq = world.query::<(
+        Entity,
+        &SplatModel,
+        Option<&SplatTrim>,
+        Option<&SplatBounds>,
+    )>();
+    if let Some(assets) = world.get_resource::<bevy::asset::Assets<SplatAsset>>() {
+        for (e, m, trim, bounds) in tq.iter(world) {
+            if let Some(a) = assets.get(&m.0) {
+                let info = TrimInfo {
+                    trim: trim.map(|t| t.0),
+                    bounds: bounds.copied(),
+                    untrimmed: a.bounds,
+                };
+                trims.insert(e, info);
+            }
+        }
+    }
     let mut ask = None;
     let mut lightings = Vec::new();
     let mut extras_out = Vec::new();
@@ -815,6 +838,10 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
                     .suffix(" m"),
             );
         });
+        // §1.7 Trim: the trim row, labelled through the preset (E17).
+        if let Some(info) = trims.get(&e) {
+            trim_row(ui, e, x.preset, *info, out, hv);
+        }
         if next != x {
             extras_out.push(SetPoseExtras {
                 instance: e,
@@ -1645,6 +1672,155 @@ mod tests {
         assert_eq!(
             actions(&click(&mut world, scene_tab, "Splats")),
             vec![(e, InstanceAction::SetMode(RenderMode::Splats))]
+        );
+    }
+
+    /// An instance of P1 with its asset loaded, at `preset`, with `trim` and `bounds`.
+    fn trimmed_instance(
+        world: &mut World,
+        preset: ftgsxr_core::Preset,
+        trim: Option<ftgsxr_core::Trim>,
+        kept_none: bool,
+    ) -> (Entity, ftgsxr_core::Aabb) {
+        use bevy::asset::Assets;
+        use ftgsxr_render::{SplatAsset, SplatBounds, SplatModel, SplatTrim, load_splat_asset};
+        let e = instance(world, RenderMode::Splats, false);
+        let bytes = std::fs::read(fixtures_dir().join("probes/P1.safetensors")).unwrap();
+        let asset = load_splat_asset(
+            &ftgsxr_io::ModelBytes::Owned(bytes),
+            None,
+            &ftgsxr_core::GpuLayoutOptions::default(),
+            None,
+        )
+        .unwrap();
+        let b = asset.bounds;
+        if !world.contains_resource::<Assets<SplatAsset>>() {
+            world.insert_resource(Assets::<SplatAsset>::default());
+        }
+        let h = world.resource_mut::<Assets<SplatAsset>>().add(asset);
+        let mut ec = world.entity_mut(e);
+        ec.insert((
+            SplatModel(h),
+            crate::manipulate::PoseExtras {
+                preset,
+                fit_size_m: 1.0,
+            },
+            SplatBounds {
+                aabb: b,
+                content: b,
+                kept_none,
+            },
+        ));
+        if let Some(t) = trim {
+            ec.insert(SplatTrim(t));
+        }
+        (e, b)
+    }
+
+    fn texts(world: &mut World) -> Vec<String> {
+        let ctx = egui::Context::default();
+        frame(&ctx, world, Vec::new(), scene_tab)
+            .0
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect()
+    }
+
+    // Private (I-23's panel cases, which have no public seam, Q-375; §1.7 Trim, E17's
+    // table): the box limits are named through the orientation preset, and as x, y and z
+    // min and max under a custom one.
+    #[test]
+    fn scene_tab_trim_labels_follow_the_preset() {
+        use ftgsxr_core::{Preset, Quat, Trim, TrimMode};
+        let cases = [
+            (
+                Preset::YUp,
+                [
+                    "left (x min)",
+                    "right (x max)",
+                    "bottom (y min)",
+                    "top (y max)",
+                    "back (z min)",
+                    "front (z max)",
+                ],
+            ),
+            (
+                Preset::ZUp,
+                [
+                    "left (x min)",
+                    "right (x max)",
+                    "bottom (z min)",
+                    "top (z max)",
+                    "back (y max)",
+                    "front (y min)",
+                ],
+            ),
+            (
+                Preset::NegYUp,
+                [
+                    "left (x min)",
+                    "right (x max)",
+                    "bottom (y max)",
+                    "top (y min)",
+                    "back (z max)",
+                    "front (z min)",
+                ],
+            ),
+            (
+                Preset::Custom(Quat::from_rotation_x(0.3)),
+                ["x min", "x max", "y min", "y max", "z min", "z max"],
+            ),
+        ];
+        for (preset, labels) in cases {
+            let mut world = World::new();
+            let b = ftgsxr_core::Aabb {
+                min: bevy::math::Vec3::splat(-1.0),
+                max: bevy::math::Vec3::splat(1.0),
+            };
+            let trim = Trim {
+                mode: TrimMode::Box,
+                ..Trim::initial(&b)
+            };
+            trimmed_instance(&mut world, preset, Some(trim), false);
+            let drawn = texts(&mut world);
+            for l in labels {
+                assert!(drawn.iter().any(|t| t == l), "{preset:?}: {l} in {drawn:?}");
+            }
+            assert!(drawn.iter().any(|t| t == "model units"));
+        }
+    }
+
+    // Private (I-23's panel cases, Q-375; E17, §1.7): turning the box on from no trim
+    // sends the initial shapes, the box the untrimmed B_m; "Reset trim" sends ResetTrim;
+    // the notice shows when nothing is kept.
+    #[test]
+    fn scene_tab_trim_turns_on_resets_and_warns() {
+        use ftgsxr_core::{Preset, Trim, TrimMode};
+        let mut world = World::new();
+        let (e, b) = trimmed_instance(&mut world, Preset::YUp, None, false);
+        let want = Trim {
+            mode: TrimMode::Box,
+            ..Trim::initial(&b)
+        };
+        assert_eq!(
+            actions(&click(&mut world, scene_tab, "box")),
+            vec![(e, InstanceAction::SetTrim(want))]
+        );
+        assert_eq!(
+            actions(&click(&mut world, scene_tab, "Reset trim")),
+            vec![(e, InstanceAction::ResetTrim)]
+        );
+        assert!(
+            !texts(&mut world)
+                .iter()
+                .any(|t| t == "Trim keeps no primitives")
+        );
+        let mut world = World::new();
+        trimmed_instance(&mut world, Preset::YUp, Some(want), true);
+        assert!(
+            texts(&mut world)
+                .iter()
+                .any(|t| t == "Trim keeps no primitives")
         );
     }
 

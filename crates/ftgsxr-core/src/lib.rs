@@ -27,7 +27,7 @@ pub use formats::{
 pub use pose::{Grab, Preset, ScaleLimits, TwoHandGrab, fit_pose, ray_hit, snap_to_floor};
 pub use types::{
     Aabb, Camera, CoreError, Fov, Intrinsics, Model, ModelInfo, ModelKind, Pose, RenderConventions,
-    TimeSpan,
+    TimeSpan, Trim, TrimMode,
 };
 
 pub use sh::{SH_C0, sh_basis, sh_color};
@@ -43,7 +43,7 @@ pub use index::{DispatchRange, TemporalIndex};
 pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 pub use layout::{
     GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, max_field_bytes_per_primitive,
-    memory_estimate, pack_for_gpu, reduce_to_budget,
+    memory_estimate, pack_for_gpu, reduce_to_budget, trimmed_bounds,
 }; // Q-369: max_field_bytes_per_primitive
 pub use loader::{
     SAFETENSORS_PREFIX, checkpoint_dir, header_len, hex, open_model, read_checkpoint,

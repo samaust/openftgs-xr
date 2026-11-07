@@ -8,7 +8,6 @@
 //! D-44's haptic pulses from what the frame changed (Q-270).
 
 use bevy::app::{App, Plugin, PostUpdate, PreUpdate};
-use bevy::asset::Assets;
 use bevy::color::Color;
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::gizmos::config::GizmoConfigStore;
@@ -26,7 +25,7 @@ use ftgsxr_app::{
     PlayUiSound, Selected, SettingsRes, UiSound, panel_hit, pick_instance, stick_response,
 };
 use ftgsxr_core::{Aabb, Pose, ray_hit};
-use ftgsxr_render::{Colormap, RenderMode, SplatAsset, SplatMode, SplatModel};
+use ftgsxr_render::{Colormap, RenderMode, SplatBounds, SplatMode};
 
 use super::{SIDES, XrInputConfig, XrInputState, aim_ray, hands_to_intents};
 use crate::XrError;
@@ -205,15 +204,12 @@ pub(crate) fn teleport_arc(aim: &Pose) -> Option<Vec<Vec3>> {
 
 /// Every instance's (entity, stage pose, B_m) for E10, as `manipulate` picks them: its
 /// pose relative to the content group followed by the group's (§1.14), the scale from
-/// x; an instance whose asset is not loaded has none.
+/// x, B_m its `SplatBounds`, trimmed while a trim is on (E17); an instance whose boxes are
+/// not known yet has none.
 fn instance_boxes(
-    instances: &Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    instances: &Query<(Entity, &Transform, &SplatBounds, Option<&ChildOf>), With<LoadedModel>>,
     groups: &Query<&Transform, Without<LoadedModel>>,
-    assets: Option<&Assets<SplatAsset>>,
 ) -> Vec<(Entity, Pose, Aabb)> {
-    let Some(assets) = assets else {
-        return Vec::new();
-    };
     let pose = |t: &Transform| Pose {
         translation: t.translation,
         rotation: t.rotation,
@@ -221,11 +217,11 @@ fn instance_boxes(
     };
     instances
         .iter()
-        .filter_map(|(e, t, m, parent)| {
+        .map(|(e, t, b, parent)| {
             let group = parent
                 .and_then(|c| groups.get(c.parent()).ok())
                 .map_or(Pose::IDENTITY, pose);
-            Some((e, pose(t).then(&group), assets.get(&m.0)?.bounds))
+            (e, pose(t).then(&group), b.aabb)
         })
         .collect()
 }
@@ -254,9 +250,8 @@ fn write_intents(
     time: Option<Res<Time>>,
     selected: Query<(Entity, Option<&SplatMode>), With<Selected>>,
     grabbed: Query<&Grabbed>,
-    instances: Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    instances: Query<(Entity, &Transform, &SplatBounds, Option<&ChildOf>), With<LoadedModel>>,
     groups: Query<&Transform, Without<LoadedModel>>,
-    assets: Option<Res<Assets<SplatAsset>>>,
     manipulate: Option<Res<ManipulateSettings>>,
     quads: Query<(
         Entity,
@@ -294,7 +289,7 @@ fn write_intents(
         })
         .collect();
     let dt = time.map_or(0.0, |t| t.delta_secs());
-    let boxes = instance_boxes(&instances, &groups, assets.as_deref());
+    let boxes = instance_boxes(&instances, &groups);
     let ray_max_m = manipulate.map_or(RAY_M, |m| m.ray_max_m);
 
     // The arbitration: a tracked hand that holds no instance and points at a quad nearer
@@ -480,12 +475,11 @@ fn colors(high_contrast: bool) -> (Color, Color) {
 // Q-304
 fn ray_ends(
     mut frame: ResMut<Frame>,
-    instances: Query<(Entity, &Transform, &SplatModel, Option<&ChildOf>), With<LoadedModel>>,
+    instances: Query<(Entity, &Transform, &SplatBounds, Option<&ChildOf>), With<LoadedModel>>,
     groups: Query<&Transform, Without<LoadedModel>>,
-    assets: Option<Res<Assets<SplatAsset>>>,
     manipulate: Option<Res<ManipulateSettings>>,
 ) {
-    let boxes = instance_boxes(&instances, &groups, assets.as_deref());
+    let boxes = instance_boxes(&instances, &groups);
     let ray_max_m = manipulate.map_or(RAY_M, |m| m.ray_max_m);
     let rays = frame.rays;
     frame.ends = rays.map(|slot| {
@@ -710,7 +704,9 @@ fn apply_pulses(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::asset::Assets;
     use bevy::math::Quat;
+    use ftgsxr_render::{SplatAsset, SplatModel};
 
     fn aim_at(x: f32, y: f32, z: f32, rotation: Quat) -> Pose {
         Pose {

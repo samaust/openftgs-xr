@@ -57,4 +57,6 @@ mod u34_core_error_catalog;
 mod u35_skeleton;
 mod u36_scene_manifest;
 mod u38_model_bounds;
+mod u39_trim;
+mod u40_trimmed_bounds;
 mod write_exchange;

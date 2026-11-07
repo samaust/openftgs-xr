@@ -14,7 +14,6 @@ use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bevy::app::{App, Plugin, PostUpdate, Startup, Update};
-use bevy::asset::Assets;
 use bevy::camera::Camera;
 use bevy::ecs::prelude::*;
 use bevy::log::warn;
@@ -24,7 +23,7 @@ use bevy::transform::TransformSystems;
 use bevy::transform::components::GlobalTransform;
 use ftgsxr_core::PlayState;
 use ftgsxr_io::{IoError, ModelBytes, ModelRef, SoundSwitches, open_ref};
-use ftgsxr_render::{SplatAsset, SplatCamera, SplatModel};
+use ftgsxr_render::{SplatBounds, SplatCamera};
 
 use crate::intent::{Feature, Hand, Intent, VolumeChannel};
 use crate::library::LoadedModel;
@@ -873,8 +872,7 @@ fn spatialize(
     headset: Option<Res<Headset>>,
     state: Res<AudioState>,
     cameras: Query<(&Camera, &GlobalTransform), With<SplatCamera>>,
-    instances: Query<(&GlobalTransform, &SplatModel)>,
-    assets: Option<Res<Assets<SplatAsset>>>,
+    instances: Query<(&GlobalTransform, &SplatBounds)>,
     slots: Res<Slots>,
     output: Res<AudioOutputRes>,
     mut spatial_last: Local<bool>,
@@ -900,10 +898,11 @@ fn spatialize(
         let Slot::Ready { sink, .. } = slot else {
             continue;
         };
-        let emitter = instances.get(*e).ok().and_then(|(g, m)| {
-            let b = assets.as_ref()?.get(&m.0)?.bounds;
-            Some(g.transform_point(b.center()))
-        });
+        // §1.10 at B_m's center, trimmed while a trim is on (E17).
+        let emitter = instances
+            .get(*e)
+            .ok()
+            .map(|(g, b)| g.transform_point(b.aabb.center()));
         let (factor, pan) = match (listener, emitter) {
             (Some((at, forward)), Some(emitter)) => spatial_mix(at, forward, emitter),
             _ => (1.0, 0.0),

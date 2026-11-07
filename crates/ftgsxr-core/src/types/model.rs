@@ -118,6 +118,56 @@ pub(crate) fn moved_position_f64(
     (p + v * dt).as_vec3()
 }
 
+/// E10's percentile box over `points`: along each axis, from the nearest-rank 1st to the
+/// 99th percentile (the ⌈0.01 n⌉-th and ⌈0.99 n⌉-th smallest of n values); `None` for no
+/// point. Shared by `Model::content_bounds` and E17's trimmed B_c (`layout`).
+pub(crate) fn percentile_box(points: &[Vec3]) -> Option<Aabb> {
+    let n = points.len();
+    if n == 0 {
+        return None;
+    }
+    // Nearest rank, 1-based, in integers: ⌈k n / 100⌉.
+    let rank = |k: usize| (k * n).div_ceil(100);
+    let (lo, hi) = (rank(1) - 1, rank(99) - 1);
+    let mut min = Vec3::ZERO;
+    let mut max = Vec3::ZERO;
+    let mut axis: Vec<f32> = Vec::with_capacity(n);
+    for a in 0..3 {
+        axis.clear();
+        axis.extend(points.iter().map(|p| p[a]));
+        min[a] = *axis.select_nth_unstable_by(lo, f32::total_cmp).1;
+        max[a] = *axis.select_nth_unstable_by(hi, f32::total_cmp).1;
+    }
+    Some(Aabb { min, max })
+}
+
+/// E10's visible interval of one row clipped to `span` = \[τ₀, τ₁\]: `None` when the row is
+/// not counted (σ ≤ α_skip, or its interval misses the span); with a single timestamp the
+/// one time τ₀. Shared by `Model::bounds` and E17's trimmed box (`layout`), the latter in
+/// rebased time.
+pub(crate) fn visible_interval(
+    opacity: f32,
+    alpha_skip: f32,
+    duration: f64,
+    time_center: f64,
+    span: (f64, f64),
+    single: bool,
+) -> Option<(f64, f64)> {
+    let (tau0, tau1) = span;
+    if opacity <= alpha_skip {
+        return None;
+    }
+    if single {
+        return Some((tau0, tau0));
+    }
+    // E10's visible times σ_eff(τ) > α_skip (E2's cull), the ends taken in: E3's
+    // half-width without the index's widening.
+    let ratio = f64::from(opacity) / f64::from(alpha_skip);
+    let h = duration * (2.0 * ratio.ln()).sqrt();
+    let (a, b) = ((time_center - h).max(tau0), (time_center + h).min(tau1));
+    (a <= b).then_some((a, b))
+}
+
 /// Rows from which the model's per-row work runs in parallel with rayon: `validate`'s
 /// checks here, the readers' conversions in `loader` (PRD #1, "Reader internals").
 pub(crate) const PARALLEL_ROWS: usize = 1 << 16;
@@ -204,29 +254,10 @@ impl Model {
         } else {
             rows.iter().map(mid).collect()
         };
-        let n = points.len();
-        if n == 0 {
-            // No row at all (a model reduced to nothing): B_m's empty box.
-            return self.bounds();
-        }
-        // Nearest rank, 1-based, in integers: ⌈k n / 100⌉.
-        let rank = |k: usize| (k * n).div_ceil(100);
-        let (lo, hi) = (rank(1) - 1, rank(99) - 1);
-        let mut min = Vec3::ZERO;
-        let mut max = Vec3::ZERO;
-        let mut axis: Vec<f32> = Vec::with_capacity(n);
-        for a in 0..3 {
-            axis.clear();
-            axis.extend(points.iter().map(|p| p[a]));
-            min[a] = *axis.select_nth_unstable_by(lo, f32::total_cmp).1;
-            max[a] = *axis.select_nth_unstable_by(hi, f32::total_cmp).1;
-        }
-        let b = Aabb { min, max };
-        if b.size().max_element() > 0.0 {
-            b
-        } else {
-            self.bounds()
-        }
+        // No row at all (a model reduced to nothing) gives B_m's empty box.
+        percentile_box(&points)
+            .filter(|b| b.size().max_element() > 0.0)
+            .unwrap_or_else(|| self.bounds())
     }
 
     /// E10's counted rows, each with its visible interval: with no counted row, every
@@ -246,22 +277,14 @@ impl Model {
     /// Row `i`'s visible interval clipped to \[τ₀, τ₁\] (E10); `None` when it is not
     /// counted.
     fn visible_interval(&self, i: usize) -> Option<(f64, f64)> {
-        let (tau0, tau1) = (self.time.tau0, self.time.tau1);
-        let alpha_skip = self.conventions.alpha_skip;
-        let opacity = self.opacity[i];
-        if opacity <= alpha_skip {
-            return None;
-        }
-        if self.is_single_timestamp() {
-            return Some((tau0, tau0));
-        }
-        // E10's visible times σ_eff(τ) > α_skip (E2's cull), the ends taken in: E3's
-        // half-width without the index's widening.
-        let ratio = f64::from(opacity) / f64::from(alpha_skip);
-        let h = self.duration[i] * (2.0 * ratio.ln()).sqrt();
-        let c = self.time_center[i];
-        let (a, b) = ((c - h).max(tau0), (c + h).min(tau1));
-        (a <= b).then_some((a, b))
+        visible_interval(
+            self.opacity[i],
+            self.conventions.alpha_skip,
+            self.duration[i],
+            self.time_center[i],
+            (self.time.tau0, self.time.tau1),
+            self.is_single_timestamp(),
+        )
     }
 
     /// Row `i`'s μx(τ) (E1, in float64, rounded once; D-42).

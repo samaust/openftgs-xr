@@ -9,8 +9,9 @@
 // direction stays zero, Q-27), E5 (the pose and Σ^S), E6 (camera space, the near and far
 // culls, the Jacobian with its clamp, Σ′ + εI, the determinant guard, the opacity-aware
 // extent and its cap, whole-pixel radii, the box cull, the conic as (a, b, c), Q-21, and
-// the non-finite cull), E8 (the key k̄ = 2³² − 1 − bits(z)) and E14 (the gains in linear
-// light). Every E6 and E7 constant comes from the model's uniform block (D-39).
+// the non-finite cull), E8 (the key k̄ = 2³² − 1 − bits(z)), E14 (the gains in linear
+// light) and E17 (the trim's closed test on μx(τ) in model space, after E3's, Q-373).
+// Every E6 and E7 constant comes from the model's uniform block (D-39).
 //
 // Records (§1.4 stage 2, words of 32 bits, little-endian):
 // - per view (12 words): μ′ (2 f32), the conic (3 f32), z_c (f32), the radii (2 f32),
@@ -55,8 +56,13 @@ struct Instance {
     sh_degree: u32,
     instance: u32,
     pixel_radius: f32,
-    pad0: u32,
+    // E17: 0 off, 1 box, 2 sphere.
+    trim_mode: u32,
     pad1: u32,
+    // E17's shapes as whole vec4 words (#226): b_min, b_max, then c and r.
+    trim_min: vec4<f32>,
+    trim_max: vec4<f32>,
+    trim_sphere: vec4<f32>,
 }
 
 // A cull view (E6): R_w, then (t_w, W), (f, c) and (H, 0, 0, 0), the same bytes as
@@ -91,13 +97,19 @@ const FLAG_COUNT_ACTIVE: u32 = 2u;
 
 // The counters' words (the indirect arguments of `frame.rs`): the splat draw (0–3), the
 // centers draw (4–7), the overflow flag (8), the rows that passed E3's test (9), the
-// primitives culled for a non-finite projection (10, E6, §1.4 stage 8).
+// primitives culled for a non-finite projection (10, E6, §1.4 stage 8), the rows trimmed
+// (11, E17).
 const SPLAT_COUNT: u32 = 1u;
 const CENTER_COUNT: u32 = 5u;
 const OVERFLOW: u32 = 8u;
 const ACTIVE: u32 = 9u;
 // Q-118
 const NON_FINITE: u32 = 10u;
+// Q-373
+const TRIMMED: u32 = 11u;
+
+const TRIM_BOX: u32 = 1u;
+const TRIM_SPHERE: u32 = 2u;
 
 // The sort's block, keys per workgroup of its count and scatter passes (§1.4 stage 3),
 // set from `sort.rs`'s `SORT_BLOCK`.
@@ -460,6 +472,26 @@ fn count_non_finite() {
     }
 }
 
+// E17's closed test on the moved center in model space; true when the trim is off.
+fn trim_keeps(mu: vec3<f32>) -> bool {
+    if inst.trim_mode == TRIM_BOX {
+        return all(mu >= inst.trim_min.xyz) && all(mu <= inst.trim_max.xyz);
+    }
+    if inst.trim_mode == TRIM_SPHERE {
+        let d = mu - inst.trim_sphere.xyz;
+        let r = inst.trim_sphere.w;
+        return dot(d, d) <= r * r;
+    }
+    return true;
+}
+
+// E17: a row the trim skips, counted once per instance as the non-finite cull is (Q-118).
+fn count_trimmed() {
+    if (inst.flags & FLAG_COUNT_ACTIVE) != 0u {
+        atomicAdd(&counters[TRIMMED], 1u);
+    }
+}
+
 fn mark_active() {
     if (inst.flags & FLAG_COUNT_ACTIVE) != 0u {
         atomicAdd(&counters[ACTIVE], 1u);
@@ -482,6 +514,11 @@ fn cull_splats(
         return;
     }
     mark_active();
+    // E17, after E3's test: a row outside the trim is counted and skipped (Q-373).
+    if !trim_keeps(t.mu) {
+        count_trimmed();
+        return;
+    }
     let mu_s = inst.scale * (inst.rotation * t.mu) + inst.translation;
     // Q-118: a non-finite μ^S is counted here, as in `cull_centers`, not left to reach
     // z_c through the view's rotation.
@@ -598,6 +635,11 @@ fn cull_centers(
         return;
     }
     mark_active();
+    // Q-373
+    if !trim_keeps(t.mu) {
+        count_trimmed();
+        return;
+    }
     let mu_s = inst.scale * (inst.rotation * t.mu) + inst.translation;
     if !finite(mu_s.x) || !finite(mu_s.y) || !finite(mu_s.z) {
         count_non_finite();
@@ -655,8 +697,8 @@ fn cull_centers(
 // Stage 3: the counts clamped to C (splats first, then centers in what remains), the draw
 // arguments completed, the sort's dispatches (⌈count / SORT_BLOCK⌉ blocks, then the scan's
 // single workgroup), and the statistics
-// block's counts, overflow flag, capacity and non-finite count, its pad and timestamps
-// zeroed (§1.4 stage 8).
+// block's counts, overflow flag, capacity, non-finite and trimmed counts, its pad and
+// timestamps zeroed (§1.4 stage 8).
 @compute @workgroup_size(1)
 fn size() {
     let cap = size_frame.capacity;
@@ -690,7 +732,8 @@ fn size() {
     size_stats[2] = over;
     size_stats[3] = cap;
     size_stats[4] = atomicLoad(&size_counters[NON_FINITE]);
-    for (var i = 5u; i < 20u; i++) {
+    size_stats[5] = atomicLoad(&size_counters[TRIMMED]); // Q-373
+    for (var i = 6u; i < 20u; i++) {
         size_stats[i] = 0u;
     }
 }
