@@ -492,6 +492,8 @@ fn library_tab(
     let Some(library) = world.get_resource::<Library>() else {
         return;
     };
+    // The dock's or panel's width, before a row wider than it widens this `Ui` (#620).
+    let width = ui.available_width();
     let sources: Vec<String> = library
         .sources
         .iter()
@@ -583,8 +585,7 @@ fn library_tab(
                 EntryState::Loaded(_) => {
                     ui.label("loaded");
                 }
-                EntryState::Failed(text) => {
-                    ui.colored_label(ui.visuals().error_fg_color, text);
+                EntryState::Failed(_) => {
                     if button(ui, "Retry", out, hv) {
                         out.push(Out::Library(LibraryCommand::Load { entry: i, reduce }));
                     }
@@ -603,6 +604,15 @@ fn library_tab(
                 }
             }
         });
+        // #620: the message on its own line below, wrapped to the tab's width, which the
+        // row above would run it past (§1.5 Library, §1.15).
+        if let EntryState::Failed(text) = &e.state {
+            let text = egui::RichText::new(text).color(ui.visuals().error_fg_color);
+            ui.scope(|ui| {
+                ui.set_max_width(width);
+                ui.add(egui::Label::new(text).wrap());
+            });
+        }
     }
 }
 
@@ -1221,8 +1231,8 @@ fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
 mod tests {
     use super::{
         Colormap, Entity, InstanceAction, Intent, LoadedModel, Out, RenderMode, SplatMode,
-        Transform, Visibility, World, display_tab, egui, load_choices, playback_tab, replay_lines,
-        replay_loaded_degree, scene_tab, show_dock_panel, source_from_input,
+        Transform, Visibility, World, display_tab, egui, library_tab, load_choices, playback_tab,
+        replay_lines, replay_loaded_degree, scene_tab, show_dock_panel, source_from_input,
     };
     use crate::SplatEvent;
     use crate::manipulate::Selected;
@@ -1754,5 +1764,182 @@ mod tests {
         ];
         world.insert_resource(crate::ui::RecentScenes(recent.clone()));
         assert_eq!(load_choices(&world), recent);
+    }
+
+    // #620: a failed entry's message (§1.5 Library, "failed (with the message)"; the
+    // §1.15 texts) is drawn whole inside a dock at §1.7's narrowest width, with the
+    // entry's name and its Retry button.
+    const LONG: &str = "E-MEM-BUDGET: Needs 162 MB, budget 134 MB; reduce to budget or \
+                        choose a tier (N = 3000000)";
+
+    /// A world whose library holds one entry, `kitchen`, in `state`.
+    fn library_with(state: crate::library::EntryState) -> World {
+        let mut world = World::new();
+        world.init_resource::<crate::ui::UiState>();
+        let mut library = crate::library::Library::default();
+        library.entries.push(crate::library::LibraryEntry {
+            source: 0,
+            entry: ftgsxr_io::Entry {
+                name: "kitchen".into(),
+                kind: ftgsxr_io::EntryKind::Exchange,
+                location: "/m/kitchen.safetensors".into(),
+                size: None,
+                mtime: None,
+                sha256: None,
+                thumbnail: None,
+                audio: None,
+                scene: None,
+            },
+            info: None,
+            identity: None,
+            thumbnail: None,
+            state,
+        });
+        world.insert_resource(library);
+        world
+    }
+
+    /// A context with the system font the app installs (Q-211), so texts have widths.
+    fn font_context() -> egui::Context {
+        let ctx = egui::Context::default();
+        assert!(crate::ui::load_system_font(&ctx), "a system font");
+        ctx
+    }
+
+    /// One frame of the Library tab in a column `width` points wide, with `events`: each
+    /// text drawn with its rectangle, and what the user did.
+    fn library_frame(
+        ctx: &egui::Context,
+        world: &mut World,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) -> (Vec<(String, egui::Rect)>, Vec<Out>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 1000.0),
+            )),
+            events,
+            ..egui::RawInput::default()
+        };
+        let (mut out, mut hv) = (Vec::new(), None);
+        let column = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 1000.0));
+        let mut full = ctx.run_ui(input, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
+                library_tab(world, ui, &mut out, &mut hv)
+            });
+        });
+        full.textures_delta.clear();
+        let mut texts = Vec::new();
+        fn walk(s: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::Shape::Text(t) => texts.push((
+                    t.galley.text().to_string(),
+                    t.galley.rect.translate(t.pos.to_vec2()),
+                )),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts)),
+                _ => {}
+            }
+        }
+        full.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
+        (texts, out)
+    }
+
+    /// The texts drawn by two frames of the Library tab `width` points wide (the second
+    /// laid out from the first's state).
+    fn library_texts(world: &mut World, width: f32) -> Vec<(String, egui::Rect)> {
+        let ctx = font_context();
+        library_frame(&ctx, world, width, Vec::new());
+        library_frame(&ctx, world, width, Vec::new()).0
+    }
+
+    /// Draws the Library tab `width` points wide and clicks `label`: what the user did.
+    fn library_click(world: &mut World, width: f32, label: &str) -> Vec<Out> {
+        let ctx = font_context();
+        library_frame(&ctx, world, width, Vec::new());
+        let (texts, _) = library_frame(&ctx, world, width, Vec::new());
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == label)
+            .map(|(_, r)| r.center())
+            .unwrap_or_else(|| panic!("{label} is drawn: {texts:?}"));
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mut out = Vec::new();
+        for events in [
+            vec![egui::Event::PointerMoved(at)],
+            vec![press(true)],
+            vec![press(false)],
+        ] {
+            out.extend(library_frame(&ctx, world, width, events).1);
+        }
+        out
+    }
+
+    fn loads(out: &[Out]) -> Vec<crate::library::LibraryCommand> {
+        out.iter()
+            .filter_map(|o| match o {
+                Out::Library(c @ crate::library::LibraryCommand::Load { .. }) => Some(c.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_long_failure_text_wraps_inside_the_narrowest_dock() {
+        let width = 160.0;
+        let mut world = library_with(crate::library::EntryState::Failed(LONG.into()));
+        let texts = library_texts(&mut world, width);
+        for label in [LONG, "kitchen", "Retry"] {
+            assert!(
+                texts.iter().any(|(t, _)| t == label),
+                "{label} is drawn: {texts:?}"
+            );
+        }
+        // The entry's own row; the source controls above it are not #620's.
+        for (t, r) in texts
+            .iter()
+            .filter(|(t, _)| [LONG, "kitchen", "Retry"].contains(&&**t))
+        {
+            assert!(r.min.x >= -0.5 && r.max.x <= width + 0.5, "{t:?} at {r:?}");
+        }
+    }
+
+    #[test]
+    fn retry_of_a_long_failure_loads_the_entry_with_the_reduce_flag() {
+        for reduce in [false, true] {
+            let mut world = library_with(crate::library::EntryState::Failed(LONG.into()));
+            world.resource_mut::<crate::ui::UiState>().reduce = reduce;
+            let out = library_click(&mut world, 160.0, "Retry");
+            assert_eq!(
+                loads(&out),
+                vec![crate::library::LibraryCommand::Load { entry: 0, reduce }]
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_failure_shows_the_name_its_text_and_retry() {
+        let text = "E-IO: Could not read /m/kitchen.safetensors";
+        let mut world = library_with(crate::library::EntryState::Failed(text.into()));
+        let texts = library_texts(&mut world, 320.0);
+        for label in [text, "kitchen", "Retry"] {
+            assert!(
+                texts.iter().any(|(t, _)| t == label),
+                "{label} is drawn: {texts:?}"
+            );
+        }
+        let out = library_click(&mut world, 320.0, "Retry");
+        assert_eq!(
+            loads(&out),
+            vec![crate::library::LibraryCommand::Load {
+                entry: 0,
+                reduce: false
+            }]
+        );
     }
 }
