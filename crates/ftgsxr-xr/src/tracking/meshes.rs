@@ -70,6 +70,16 @@ const RING_M: (f32, f32) = (0.04, 0.004);
 // Q-288
 const GREY: f32 = 0.5;
 
+/// The hands' and controllers' material: unlit sRGB grey, shared with the tracked hands
+/// drawn in passthrough (`occluders`, §1.9).
+pub(crate) fn grey() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgb(GREY, GREY, GREY),
+        unlit: true,
+        ..StandardMaterial::default()
+    }
+}
+
 /// One capsule of a hand: its side and bone; its mesh is made at the first frame both
 /// joints are located, from that frame's length and radii (a bone's length is fixed).
 #[derive(Component, Clone, Copy)]
@@ -178,13 +188,7 @@ pub(crate) fn draw_hands_and_controllers(
         return;
     };
     let grey = material
-        .get_or_insert_with(|| {
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(GREY, GREY, GREY),
-                unlit: true,
-                ..StandardMaterial::default()
-            })
-        })
+        .get_or_insert_with(|| materials.add(grey()))
         .clone();
     if controllers.is_empty() {
         spawn(&mut commands, &mut meshes, &grey, root);

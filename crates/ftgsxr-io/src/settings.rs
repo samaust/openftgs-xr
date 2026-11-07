@@ -98,9 +98,13 @@ pub struct EnvironmentSettings {
     pub occlusion_delta_m: f32,
     /// The depth provider's hand removal (§1.9, D-16).
     pub hand_removal: bool,
-    /// "Occlude with tracked hands": each tracked hand drawn as a depth-only gauntlet in
-    /// passthrough mode, the provider's hand removal on while it is (§1.9, D-16).
+    /// "Occlude with tracked hands": each tracked hand drawn in passthrough mode, opaque in
+    /// the hands' grey, the provider's hand removal on while it is (§1.9, D-16).
     pub hand_occluders: bool,
+    /// "Draw gauntlets": the tracked hands drawn as gauntlets, each capsule's radius its
+    /// joint radius plus 1.5 cm, instead of VR mode's hand, while `hand_occluders` is on
+    /// (§1.9, D-16).
+    pub hand_gauntlets: bool,
     /// `off`, `manual`, `auto-global` or `auto-local` (§1.9, Q-50).
     pub lighting_mode: String,
     /// The manual mode's sliders (E14).
@@ -322,6 +326,7 @@ impl Default for EnvironmentSettings {
             occlusion_delta_m: 0.05, // D-16
             hand_removal: false,     // D-16
             hand_occluders: false,   // D-16
+            hand_gauntlets: false,   // D-16
             lighting_mode: "off".into(),
             lighting_manual: ManualLighting::default(),
             lighting_gamma: 0.5,
@@ -890,6 +895,7 @@ impl Reader {
                 "occlusion_delta_m",
                 "hand_removal",
                 "hand_occluders",
+                "hand_gauntlets",
                 "lighting_mode",
                 "lighting_manual",
                 "lighting_gamma",
@@ -940,6 +946,9 @@ impl Reader {
             hand_occluders: self
                 .take(t, p, "hand_occluders", flag())
                 .unwrap_or(d.hand_occluders),
+            hand_gauntlets: self
+                .take(t, p, "hand_gauntlets", flag())
+                .unwrap_or(d.hand_gauntlets),
             lighting_mode: self
                 .take(t, p, "lighting_mode", choice(LIGHTING_MODES))
                 .unwrap_or(d.lighting_mode),
@@ -1279,6 +1288,7 @@ fn document(s: &Settings) -> Table {
         ("occlusion_delta_m", float(e.occlusion_delta_m)),
         ("hand_removal", Value::Boolean(e.hand_removal)),
         ("hand_occluders", Value::Boolean(e.hand_occluders)),
+        ("hand_gauntlets", Value::Boolean(e.hand_gauntlets)),
         ("lighting_mode", Value::String(e.lighting_mode.clone())),
         (
             "lighting_manual",

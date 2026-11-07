@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The tracked-hand gauntlet on the GPU (§1.9 Depth occlusion, §1.4 Depth and occlusion,
-//! D-16, Q-364, #608): a headless app with `SplatPlugin`, `ContactShadowPlugin` and the
-//! gauntlet's material, an image-target `SplatCamera` of `LinearOver { background: None }`
-//! (D-14) looking straight down at a model standing on the floor, and a capsule of
-//! the gauntlet's material between them. Where the capsule is, the primitive and the
-//! contact shadow are hidden (alpha 0, nothing written); everywhere else the target's
-//! color and alpha are the render's without the capsule, bit for bit. The capsule sits in
-//! the opaque phase and the shadow in the alpha-mask phase after it (Q-364), so the
-//! shadow is hidden whatever the bin order.
+//! A tracked hand drawn in passthrough on the GPU (§1.9 Depth occlusion, §1.4 Depth and
+//! occlusion, D-16, Q-364, #608): a headless app with `SplatPlugin`,
+//! `ContactShadowPlugin` and Bevy's PBR, an image-target `SplatCamera` of
+//! `LinearOver { background: None }` (D-14) looking straight down at a model standing on
+//! the floor, and a capsule of the hands' grey material (`tracking::grey`) between them.
+//! Where the capsule is, the target is the capsule's one opaque grey, the primitive and
+//! the contact shadow behind it hidden; everywhere else the target's color and alpha are
+//! the render's without the capsule, bit for bit.
 //!
-//! Private, since the gauntlet's material is crate-private; under `passthrough`, which
-//! may use `tracking` (§2.1's module order) and owns the shadow.
+//! Private, since the hands' material is crate-private; under `passthrough`, which may
+//! use `tracking` (§2.1's module order) and owns the shadow.
 
 use std::sync::{Arc, Mutex};
 
@@ -28,7 +27,7 @@ use bevy::image::{Image, ImagePlugin};
 use bevy::math::primitives::Capsule3d;
 use bevy::math::{Quat, Vec3};
 use bevy::mesh::{Mesh, Mesh3d, MeshPlugin};
-use bevy::pbr::MeshMaterial3d;
+use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::render::error_handler::{RenderErrorHandler, RenderErrorPolicy};
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
@@ -46,7 +45,7 @@ use ftgsxr_render::{
 use ftgsxr_testkit::{exchange_bytes, layer_messages};
 
 use super::{ContactShadowPlugin, Environment, EnvironmentMode, PassthroughStyle};
-use crate::tracking::{GauntletMaterial, add_gauntlet_material};
+use crate::tracking::grey;
 
 const MAX_FRAMES: usize = 600;
 const SETTLE_FRAMES: usize = 4;
@@ -62,6 +61,8 @@ const CAPSULE_HALF: f32 = 0.6;
 /// Pixels whose ray passes within this distance of the capsule's surface are neither
 /// inside nor outside it (a pixel spans about 9 mm at the capsule).
 const EDGE_M: f32 = 0.015;
+/// The spread of Bevy's deband dither on an 8-bit channel (one step each way).
+const DITHER: u8 = 1;
 
 #[derive(Resource)]
 struct RenderErrored;
@@ -172,7 +173,6 @@ impl Scene {
             main_world.insert_resource(RenderErrored);
             RenderErrorPolicy::StopRendering
         }));
-        assert!(add_gauntlet_material(&mut app), "PbrPlugin is in the app");
         while app.plugins_state() == PluginsState::Adding {
             bevy::tasks::tick_global_task_pools_on_main_thread();
         }
@@ -247,8 +247,8 @@ impl Scene {
             .add(Capsule3d::new(CAPSULE_R, 2.0 * CAPSULE_HALF));
         let material = app
             .world_mut()
-            .resource_mut::<Assets<GauntletMaterial>>()
-            .add(GauntletMaterial {});
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(grey());
         let capsule = app
             .world_mut()
             .spawn((
@@ -373,19 +373,26 @@ fn inside(u: usize, v: usize) -> Option<bool> {
     }
 }
 
-/// Checks the capsule's render against the one without it: nothing inside the capsule,
-/// the same pixels outside; returns how many inside pixels had alpha ≥ `covered` before.
-fn compare(without: &[[u8; 4]], with: &[[u8; 4]], covered: f32) -> usize {
+/// Checks the capsule's render against the one without it: inside the capsule one opaque
+/// grey (alpha 255, each channel within `DITHER` of the first inside pixel's, Bevy's
+/// deband dither on the unlit color), which it returns; outside, the same pixels. Also
+/// returns how many inside pixels had alpha ≥ `covered` before.
+fn compare(without: &[[u8; 4]], with: &[[u8; 4]], covered: f32) -> ([u8; 4], usize) {
     let side = SIDE as usize;
     let mut hidden = 0;
     let (mut ins, mut outs) = (0, 0);
+    let mut grey: Option<[u8; 4]> = None;
     for v in 0..side {
         for u in 0..side {
             let (a, b) = (without[v * side + u], with[v * side + u]);
             match inside(u, v) {
                 Some(true) => {
                     ins += 1;
-                    assert_eq!(b, [0, 0, 0, 0], "inside the capsule at ({u}, {v})");
+                    let g = *grey.get_or_insert(b);
+                    assert!(
+                        b[3] == 255 && (0..3).all(|c| b[c].abs_diff(g[c]) <= DITHER),
+                        "one grey inside the capsule at ({u}, {v}): {b:?}, not {g:?}"
+                    );
                     if f32::from(a[3]) / 255.0 >= covered {
                         hidden += 1;
                     }
@@ -399,26 +406,32 @@ fn compare(without: &[[u8; 4]], with: &[[u8; 4]], covered: f32) -> usize {
         }
     }
     assert!(ins > 100 && outs > 10_000, "{ins} inside, {outs} outside");
-    hidden
+    let g = grey.expect("pixels inside");
+    assert!(
+        g[3] == 255 && g[0].abs_diff(g[1]) <= DITHER && g[1].abs_diff(g[2]) <= DITHER,
+        "grey: {g:?}"
+    );
+    (g, hidden)
 }
 
 #[test]
 #[ignore = "gpu"]
-fn gpu_gauntlet_capsule_hides_what_is_behind_it_and_nothing_else() {
+fn gpu_drawn_hand_capsule_hides_what_is_behind_it_and_nothing_else() {
     let _layer = layer_messages(); // R-16, Q-105
     let mut scene = Scene::settled();
 
-    // A depth-only capsule in front of a primitive hides it, and leaves the target's
-    // color and alpha untouched elsewhere.
+    // A capsule of the hands' material in front of a primitive hides it behind its grey,
+    // and leaves the target's color and alpha untouched elsewhere.
     let splat = scene.pixels();
     scene.show_capsule(true);
-    let hidden = compare(&splat, &scene.pixels(), 0.1);
+    let (grey, hidden) = compare(&splat, &scene.pixels(), 0.1);
     assert!(
         hidden > 50,
-        "the capsule hides the primitive over pixels: {hidden}"
+        "the capsule covers the primitive over pixels: {hidden}"
     );
 
-    // Q-364: the contact shadow under it is hidden too (alpha 0 there, 0.3 elsewhere).
+    // The contact shadow under it is hidden too (Q-364): the same grey there, the
+    // shadow's 0.3 elsewhere.
     scene.show_capsule(false);
     scene.set_shadows(true);
     let shadowed = scene.pixels();
@@ -428,9 +441,13 @@ fn gpu_gauntlet_capsule_hides_what_is_behind_it_and_nothing_else() {
         .count();
     assert!(at_shadow > 50, "the shadow's 0.3 over pixels: {at_shadow}");
     scene.show_capsule(true);
-    let hidden = compare(&shadowed, &scene.pixels(), 0.29);
+    let (over_shadow, hidden) = compare(&shadowed, &scene.pixels(), 0.29);
+    assert!(
+        (0..4).all(|c| over_shadow[c].abs_diff(grey[c]) <= DITHER),
+        "the capsule's grey whatever is behind it: {over_shadow:?}, {grey:?}"
+    );
     assert!(
         hidden > 50,
-        "the capsule hides the shadow over pixels: {hidden}"
+        "the capsule covers the shadow over pixels: {hidden}"
     );
 }

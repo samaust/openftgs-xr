@@ -170,7 +170,7 @@ pub(crate) fn wanted(mode: EnvironmentMode, setting: bool, tier: bool) -> bool {
 }
 
 /// The provider's hand removal (§1.9, D-16): on while "occlude with tracked hands" is on,
-/// so the depth image's older copy of the hand does not occlude besides the gauntlet;
+/// so the depth image's older copy of the hand does not occlude besides the drawn hand;
 /// otherwise `[environment] hand_removal`.
 pub(crate) fn effective_hand_removal(hand_removal: bool, hand_occluders: bool) -> bool {
     hand_removal || hand_occluders
