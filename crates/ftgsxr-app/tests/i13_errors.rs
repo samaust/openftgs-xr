@@ -126,14 +126,13 @@ fn gpu_i13_over_budget_then_reduced() {
 #[test]
 #[ignore = "gpu"]
 fn gpu_i13_over_the_binding_limit_then_reduced() {
+    let _layer = layer_messages(); // R-16, Q-105
     use bevy::asset::RenderAssetUsages;
     use bevy::camera::{Camera, Camera3d, PerspectiveProjection, Projection, RenderTarget};
     use bevy::prelude::*;
     use bevy::render::render_resource::{TextureFormat, TextureUsages};
     use ftgsxr_app::SplatCamera;
     use ftgsxr_render::{Capacity, OutputSpace, SortMode, SplatStats};
-
-    let _layer = layer_messages(); // R-16, Q-105
     // Q-369 (#617): a 1 MiB binding against 10 000 degree-3 rows in float32 (`desktop`): the
     // SH array takes 192 bytes a row, 1 920 000 in all, while the budget holds them all.
     let limit: u64 = 1 << 20;
