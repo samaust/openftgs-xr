@@ -233,14 +233,6 @@ impl SplatDevice {
         &self.limits
     }
 
-    /// The largest storage-buffer binding the device takes, in bytes
-    /// (`max_storage_buffer_binding_size` as created): a model whose largest field's buffer
-    /// exceeds it is refused like one over the budget (Q-369).
-    pub fn max_binding_bytes(&self) -> u64 {
-        // Q-369
-        self.limits.max_storage_buffer_binding_size
-    }
-
     /// The device's features, as created.
     pub(crate) fn features(&self) -> wgpu::Features {
         self.features

@@ -189,7 +189,7 @@ fn speed_percentile_99(arrays: &GpuArrays) -> f32 {
 /// its bind group could not be made.
 // Q-369
 fn check_bindings(dev: &SplatDevice, arrays: &GpuArrays) -> Result<(), RenderError> {
-    let limit = dev.max_binding_bytes();
+    let limit = dev.limits().max_storage_buffer_binding_size;
     for (i, name) in FIELD_NAMES.iter().enumerate() {
         let bytes = buffer_size(field(arrays, i).len()) as u64;
         if bytes > limit {
@@ -810,7 +810,7 @@ mod tests {
         let (log, _subscriber) = capture_log();
         let limit = 65_536;
         let dev = device_with_binding_limit(limit);
-        assert_eq!(dev.max_binding_bytes(), limit);
+        assert_eq!(dev.limits().max_storage_buffer_binding_size, limit);
         let conv = RenderConventions::default();
         let over = std::sync::Arc::new(degree3_arrays(400));
         let refused = |r: Result<(), RenderError>| match r {

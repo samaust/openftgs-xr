@@ -675,7 +675,10 @@ fn reduce_count(info: &ModelInfo, gpu: Option<&SplatGpu>, tier: &SplatTierState)
         .static_bytes
         .max(1);
     let widest = max_field_bytes_per_primitive(info.sh_degree, &opts).max(1);
-    let count = (remaining / per).min(dev.max_binding_bytes() / 4 * 4 / widest);
+    // A buffer is padded to whole 4-byte words (Q-22), so its rows fit in the limit's
+    // whole words.
+    let binding = dev.device().limits().max_storage_buffer_binding_size / 4 * 4;
+    let count = (remaining / per).min(binding / widest);
     (count < info.n).then(|| usize::try_from(count).unwrap_or(usize::MAX))
 }
 
