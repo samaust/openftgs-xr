@@ -35,6 +35,7 @@ fn saved(preset: Preset, size: f32) -> SavedPose {
         preset,
         fit_size_m: size,
         saved_at: "2026-10-29T18:04:05.123456789Z".into(),
+        trim: None,
     }
 }
 
@@ -137,6 +138,7 @@ fn u30_pose_store_version_rules() {
             preset: Preset::ZUp,
             fit_size_m: 1.5,
             saved_at: "2026-10-29T12:00:00Z".into(),
+            trim: None,
         })
     );
     let extra = r#""comment": "hand-written", "ABC": {"scale": "not a pose"},"#;

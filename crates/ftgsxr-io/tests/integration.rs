@@ -36,3 +36,4 @@ mod u30_scene;
 mod u31_list_dir;
 mod u31_sources;
 mod u34_io_error_catalog;
+mod u41_trim_files;

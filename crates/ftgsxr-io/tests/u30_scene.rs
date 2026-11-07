@@ -52,6 +52,7 @@ fn model(location: &str, identity_digit: char) -> SceneModel {
             tint: 0.1,
         }),
         audio: Some("dancer.ogg".into()),
+        trim: None,
     }
 }
 

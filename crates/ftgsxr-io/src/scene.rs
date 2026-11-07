@@ -2,12 +2,12 @@
 
 //! The player's scene files (`ftgsxr-scene` v1) and its pose store `poses.json`
 //! (`ftgsxr-poses` v1): §1.5 Scene files and Poses, §1.11, D-23. The JSON shapes are
-//! Q-52's, the reader rules and errors Q-53's.
+//! Q-52's, the reader rules and errors Q-53's; the optional `trim` is E17's (Q-372).
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ftgsxr_core::{CoreError, EndRule, LoopMode, Pose, Preset, Quat, Vec3};
+use ftgsxr_core::{CoreError, EndRule, LoopMode, Pose, Preset, Quat, Trim, TrimMode, Vec3};
 use serde_json::{Map, Number, Value};
 
 use crate::settings::{
@@ -31,6 +31,8 @@ const END_RULES: &[&str] = &["hold", "extrapolate"];
 const CAMERA_MODES: &[&str] = &["fly", "orbit"];
 /// The presets' spellings (§1.11).
 const PRESETS: &[&str] = &["y-up", "z-up", "neg-y-up", "custom"];
+/// The trim modes' spellings (§1.11, E17).
+const TRIM_MODES: &[&str] = &["off", "box", "sphere"];
 
 /// The playback clock a scene restores (§1.6).
 #[derive(Clone, Debug, PartialEq)]
@@ -98,6 +100,9 @@ pub struct SceneModel {
     pub lighting: Option<ManualLighting>,
     /// The audio sidecar's path or URL, as given (§1.10, Q-3).
     pub audio: Option<String>,
+    /// The trim (E17); `None` when the file has none, which means off with the initial
+    /// shapes (§1.11).
+    pub trim: Option<Trim>,
 }
 
 /// The pose store `poses.json`: saved poses by model identity (§1.5 Poses, §1.11).
@@ -117,6 +122,8 @@ pub struct SavedPose {
     pub fit_size_m: f32,
     /// When it was saved, RFC 3339.
     pub saved_at: String,
+    /// The trim saved with the pose (E17, §1.5 Poses); `None` when the entry has none.
+    pub trim: Option<Trim>,
 }
 
 /// Reads a scene file (`ftgsxr-scene` v1, §1.11) from its bytes. E-JSON when they are not
@@ -216,6 +223,9 @@ impl PoseStore {
             let path = format!("{identity}.fit_size_m");
             entry.insert("fit_size_m".into(), float(saved.fit_size_m, &path)?);
             entry.insert("saved_at".into(), saved.saved_at.clone().into());
+            if let Some(trim) = &saved.trim {
+                entry.insert("trim".into(), trim_doc(trim, &format!("{identity}.trim"))?);
+            }
             map.insert(identity.clone(), Value::Object(entry));
         }
         Ok(Value::Object(map))
@@ -456,6 +466,62 @@ fn model_of(v: &Value, at: &str) -> Result<SceneModel, IoError> {
         audio: optional(map, "audio")
             .map(|a| text(a, &sub("audio")).map(String::from))
             .transpose()?,
+        trim: trim_in(map, at),
+    })
+}
+
+/// The optional `trim` of the entry `map` at `at` (§1.11, E17): `None` when absent or
+/// null. A `trim` that breaks its schema, or whose shapes `Trim::is_valid` refuses (a
+/// non-finite value, min > max on an axis, r ≤ 0), is reported as a warning and read as
+/// absent rather than refusing the file (Q-372).
+// Q-372
+fn trim_in(map: &Map<String, Value>, at: &str) -> Option<Trim> {
+    let v = optional(map, "trim")?;
+    let at = format!("{at}.trim");
+    let trim = trim_of(v, &at).and_then(|trim| {
+        if trim.is_valid() {
+            Ok(trim)
+        } else {
+            Err(schema(&at, "min > max on an axis, or a radius ≤ 0"))
+        }
+    });
+    match trim {
+        Ok(trim) => Some(trim),
+        Err(e) => {
+            tracing::warn!("the trim is ignored: {e}");
+            None
+        }
+    }
+}
+
+/// A `trim` object `{"mode", "box": {"min", "max"}, "sphere": {"center", "radius"}}`, both
+/// shapes required whatever the mode (§1.11, Q-372).
+fn trim_of(v: &Value, at: &str) -> Result<Trim, IoError> {
+    let map = object(v, at)?;
+    let sub = |key: &str| format!("{at}.{key}");
+    let mode = match choice(field(map, "mode", at)?, &sub("mode"), TRIM_MODES)? {
+        "off" => TrimMode::Off,
+        "box" => TrimMode::Box,
+        _ => TrimMode::Sphere,
+    };
+    let (b_at, s_at) = (sub("box"), sub("sphere"));
+    let b = object(field(map, "box", at)?, &b_at)?;
+    let s = object(field(map, "sphere", at)?, &s_at)?;
+    Ok(Trim {
+        mode,
+        box_min: Vec3::from_array(numbers32::<3>(
+            field(b, "min", &b_at)?,
+            &format!("{b_at}.min"),
+        )?),
+        box_max: Vec3::from_array(numbers32::<3>(
+            field(b, "max", &b_at)?,
+            &format!("{b_at}.max"),
+        )?),
+        center: Vec3::from_array(numbers32::<3>(
+            field(s, "center", &s_at)?,
+            &format!("{s_at}.center"),
+        )?),
+        radius: number32(field(s, "radius", &s_at)?, &format!("{s_at}.radius"))?,
     })
 }
 
@@ -633,6 +699,7 @@ fn store_of(doc: &Value) -> Result<PoseStore, IoError> {
                 preset,
                 fit_size_m,
                 saved_at,
+                trim: trim_in(map, key),
             },
         );
     }
@@ -771,6 +838,50 @@ fn model_doc(m: &SceneModel, at: &str) -> Result<Value, IoError> {
         "audio".into(),
         m.audio.clone().map_or(Value::Null, Value::from),
     );
+    if let Some(trim) = &m.trim {
+        map.insert("trim".into(), trim_doc(trim, &sub("trim"))?);
+    }
+    Ok(Value::Object(map))
+}
+
+/// A `trim` object with both shapes (§1.11). A trim `Trim::is_valid` refuses is
+/// E-SCENE-FORMAT, writing nothing, so that a written file reads back unchanged (Q-53,
+/// Q-372).
+// Q-372
+fn trim_doc(trim: &Trim, at: &str) -> Result<Value, IoError> {
+    if !trim.is_valid() {
+        return Err(schema(
+            at,
+            "a non-finite value, min > max on an axis, or a radius ≤ 0",
+        ));
+    }
+    let mode = match trim.mode {
+        TrimMode::Off => "off",
+        TrimMode::Box => "box",
+        TrimMode::Sphere => "sphere",
+    };
+    let mut b = Map::new();
+    b.insert(
+        "min".into(),
+        floats(&trim.box_min.to_array(), &format!("{at}.box.min"))?,
+    );
+    b.insert(
+        "max".into(),
+        floats(&trim.box_max.to_array(), &format!("{at}.box.max"))?,
+    );
+    let mut s = Map::new();
+    s.insert(
+        "center".into(),
+        floats(&trim.center.to_array(), &format!("{at}.sphere.center"))?,
+    );
+    s.insert(
+        "radius".into(),
+        float(trim.radius, &format!("{at}.sphere.radius"))?,
+    );
+    let mut map = Map::new();
+    map.insert("mode".into(), mode.into());
+    map.insert("box".into(), Value::Object(b));
+    map.insert("sphere".into(), Value::Object(s));
     Ok(Value::Object(map))
 }
 

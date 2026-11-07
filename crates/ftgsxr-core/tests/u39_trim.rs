@@ -121,7 +121,12 @@ fn u39_initial_of_a_hand_worked_box() {
         mode: TrimMode::Sphere,
         ..t
     };
-    for corner in [b.min, b.max, Vec3::new(0.0, 2.0, 4.0), Vec3::new(2.0, -2.0, 0.0)] {
+    for corner in [
+        b.min,
+        b.max,
+        Vec3::new(0.0, 2.0, 4.0),
+        Vec3::new(2.0, -2.0, 0.0),
+    ] {
         assert!(boxed.contains(corner) && round.contains(corner), "{corner}");
     }
 }
