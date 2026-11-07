@@ -44,12 +44,15 @@ const SOURCE_FORMAT: TextureFormat = TextureFormat::Depth16Unorm;
 /// float, as `DepthFrame` asks.
 pub(crate) const FORMAT: TextureFormat = TextureFormat::R32Float;
 
-/// The conversion pass (Q-360): a full-screen triangle whose fragment loads its own
-/// texel of one layer of the runtime's depth image and writes it to red. Inline, as
-/// Q-354's shader, so that every `.wgsl` file stays the render crate's (U-35).
-// Q-360, Q-354
+/// The conversion pass (Q-360): a full-screen triangle whose fragment loads its
+/// texel of one layer of the runtime's depth image, rows flipped, and writes it to red.
+/// The runtime stores row 0 at the bottom (Q-362, #600) and `DepthFrame.image` is read
+/// top row first (E6's pixel coordinates), so output row y takes source row H − 1 − y.
+/// Inline, as Q-354's shader, so that every `.wgsl` file stays the render crate's (U-35).
+// Q-360, Q-362, Q-354
 const CONVERSION_WGSL: &str = r"// SPDX-License-Identifier: Apache-2.0
-// Q-360: one layer of the runtime's depth image, texel for texel, into red.
+// Q-360: one layer of the runtime's depth image, texel for texel, into red;
+// Q-362: the runtime's row 0 is the bottom one, so the rows are flipped.
 @group(0) @binding(0) var src: texture_depth_2d;
 
 @vertex
@@ -60,7 +63,8 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
-    let d = textureLoad(src, vec2<i32>(p.xy), 0);
+    let h = i32(textureDimensions(src).y);
+    let d = textureLoad(src, vec2<i32>(i32(p.x), h - 1 - i32(p.y)), 0);
     return vec4<f32>(d, 0.0, 0.0, 1.0);
 }
 ";
