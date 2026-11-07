@@ -238,9 +238,10 @@ pub(crate) struct AnchorsPlugin;
 pub(crate) fn missing_extensions(enabled: &openxr::ExtensionSet) -> Vec<&'static str> {
     [
         ("XR_FB_spatial_entity", enabled.fb_spatial_entity),
+        // Q-358: the query by UUID through either extension.
         (
-            "XR_FB_spatial_entity_query",
-            enabled.fb_spatial_entity_query,
+            "XR_META_spatial_entity_discovery or XR_FB_spatial_entity_query",
+            enabled.meta_spatial_entity_discovery || enabled.fb_spatial_entity_query,
         ),
         (
             "XR_META_spatial_entity_persistence",
