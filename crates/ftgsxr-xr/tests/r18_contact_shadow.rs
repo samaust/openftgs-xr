@@ -147,7 +147,14 @@ impl Scene {
                 close_when_requested: false,
                 ..WindowPlugin::default()
             },
-            RenderPlugin::default(),
+            // #291 (§2.4 Threads): with bevy's `multi_threaded`, which the workspace's
+            // build unifies in, `PipelineCache` compiles on the async pool, and the
+            // shadow's pipeline is queued a frame or more after the switch turns on, after
+            // `pixels`' settle has returned; compiled at once, the frames it runs draw it.
+            RenderPlugin {
+                synchronous_pipeline_compilation: true,
+                ..RenderPlugin::default()
+            },
             ImagePlugin::default(),
             MeshPlugin,
             CameraPlugin,
