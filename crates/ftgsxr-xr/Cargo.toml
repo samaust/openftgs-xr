@@ -19,7 +19,8 @@ path = "tests/integration.rs"
 
 # M-3 (#222): the XR crates of §2.1's row and §2.3, and the app for `Permission` (§2.1's
 # `XrError::Permission`). bevy_mod_openxr's default feature `vulkan` is the backend both
-# builds use (§2.4); `fb_passthrough` and the other features join with their modules.
+# builds use (§2.4); `passthrough` drives XR_FB_passthrough through the raw table, so its
+# `fb_passthrough` feature is not enabled.
 # #223: bevy (the render features, as `ftgsxr-render`), the io crate for `XrSettings` and
 # the render crate for `SplatCamera`.
 # #227: the core crate for `Pose` (`TrackedHand`, `XrHands`).
@@ -32,9 +33,7 @@ path = "tests/integration.rs"
 # §2.1; Q-321: bevy_pbr, bevy_gizmos and bevy_color, approved by the owner.
 # Q-321
 bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bevy_log", "bevy_pbr", "bevy_gizmos", "bevy_color"] }
-# #568: `fb_passthrough` for `passthrough`'s layer (§1.9, D-14), a feature of a §2.3
-# row as Q-154 and Q-321 allowed.
-bevy_mod_openxr = { workspace = true, features = ["fb_passthrough"] }
+bevy_mod_openxr.workspace = true
 bevy_mod_xr.workspace = true
 ftgsxr-app.workspace = true
 ftgsxr-core.workspace = true
