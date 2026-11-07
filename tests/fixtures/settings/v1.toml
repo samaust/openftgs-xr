@@ -73,6 +73,7 @@ occlusion_delta_m = 0.12
 hand_removal = true
 hand_occluders = true
 hand_gauntlets = true
+hand_gauntlet_margin_m = 0.012
 lighting_mode = "auto-local"
 lighting_manual = { exposure_ev = -1.5, temperature = 0.25, tint = -0.75 }
 lighting_gamma = 0.8
