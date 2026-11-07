@@ -5,8 +5,10 @@
 //! For each visible model instance, while `Environment.mode` is passthrough, the `Headset`
 //! marker exists and `[environment] contact_shadows` is on: an ellipse at y = 0 under the
 //! posed box B_m (its stage-space half extents in x and z), alpha 0.3 inside, falling by
-//! smoothstep to 0 over the outer 10 cm of its radius. It is drawn in the opaque pass with
-//! depth (§1.4 Depth and occlusion), as premultiplied (0, 0, 0, a) under a blend that keeps
+//! smoothstep to 0 over the outer 10 cm of its radius. It is drawn in the main opaque pass
+//! with depth (§1.4 Depth and occlusion), in its alpha-mask phase after the opaque phase,
+//! so the tracked-hand gauntlets' depth hides it whatever the bin order (Q-364), as
+//! premultiplied (0, 0, 0, a) under a blend that keeps
 //! the target's color and takes the maximum alpha, so overlapping footprints join; the
 //! splats composite over it through the resolve's mesh branch (Q-101) and the compositor
 //! blends the view target over the room (D-14). Nothing is drawn in VR mode or on the
@@ -19,6 +21,7 @@ use bevy::app::{App, Plugin, PostUpdate};
 use bevy::asset::{Asset, Assets, Handle, uuid_handle};
 use bevy::camera::visibility::{InheritedVisibility, Visibility};
 use bevy::ecs::prelude::*;
+use bevy::material::AlphaMode;
 use bevy::math::primitives::Plane3d;
 use bevy::math::{Vec2, Vec3, Vec4};
 use bevy::mesh::{Mesh, Mesh3d, MeshBuilder, MeshVertexBufferLayoutRef, Meshable};
@@ -116,8 +119,16 @@ impl Material for ShadowMaterial {
         SHADER.into()
     }
 
+    /// Q-364: the alpha-mask phase, which Bevy's main opaque pass draws after the opaque
+    /// phase (source-log 373), so every gauntlet's depth is written first; the blend is
+    /// still `specialize`'s and the shader ignores the cutoff.
+    // Q-364
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Mask(0.5)
+    }
+
     // The prepass and the shadow maps are not the floor's: the shadow is drawn in the
-    // opaque pass only.
+    // main opaque pass only.
     fn enable_prepass() -> bool {
         false
     }

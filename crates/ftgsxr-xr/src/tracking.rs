@@ -8,14 +8,20 @@
 //! plugin. Thresholds, haptic pulses and intents are `xr_input`'s. Hands (M-5, #459):
 //! the permission, one tracker per side, one raw locate per hand per frame with the aim
 //! state chained (`hands`), the per-side ownership rule, the frequency hint, and the hand
-//! capsules and controller meshes in VR mode (`meshes`).
+//! capsules and controller meshes in VR mode (`meshes`), and the depth-only gauntlets in
+//! passthrough mode (`gauntlet`, §1.9).
 
 // Dv-8's device side (#463, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod dv8;
+// "Occlude with tracked hands" (§1.9, #608).
+mod gauntlet;
 pub(crate) mod hands;
 mod meshes;
 
+pub(crate) use gauntlet::GauntletsDrawn;
+#[cfg(test)]
+pub(crate) use gauntlet::{GauntletMaterial, add_material as add_gauntlet_material};
 pub(crate) use hands::FREQUENCY_HINT_EXT;
 pub(crate) use meshes::DevicesDrawn;
 
@@ -174,6 +180,7 @@ impl Plugin for TrackingPlugin {
         app.init_resource::<XrHands>()
             .init_resource::<HapticLog>()
             .init_resource::<DevicesDrawn>()
+            .init_resource::<GauntletsDrawn>()
             .insert_resource(hands::HandsWanted(self.hands))
             .init_resource::<hands::HandsPermission>()
             .init_resource::<hands::LocatedHands>()
@@ -197,6 +204,8 @@ impl Plugin for TrackingPlugin {
                 return;
             }
         };
+        // §1.9: the gauntlets' material, where Bevy's `PbrPlugin` is in the group.
+        let gauntlets = gauntlet::add_material(app);
         app.insert_resource(actions)
             .add_systems(OxrSendActionBindings, suggest_bindings)
             .add_systems(
@@ -207,7 +216,10 @@ impl Plugin for TrackingPlugin {
                 XrPreDestroySession,
                 (despawn_spaces, hands::destroy_trackers, clear_hud),
             )
-            .add_systems(Update, hands::poll_permission)
+            .add_systems(
+                Update,
+                (hands::poll_permission, hands::write_feature).chain(),
+            )
             .add_systems(
                 PreUpdate,
                 sync.before(OxrActionSetSyncSet)
@@ -230,6 +242,16 @@ impl Plugin for TrackingPlugin {
                     .after(TransformSystems::Propagate)
                     .run_if(openxr_session_running),
             );
+        if gauntlets {
+            app.add_systems(
+                PostUpdate,
+                gauntlet::draw_gauntlets
+                    .in_set(DrawDevices)
+                    .after(hands::locate_hands)
+                    .after(TransformSystems::Propagate)
+                    .run_if(openxr_session_running),
+            );
+        }
         // Dv-8 (#463): inert until the quest runner's entity names it (Q-308).
         #[cfg(target_os = "android")]
         dv8::add(app);

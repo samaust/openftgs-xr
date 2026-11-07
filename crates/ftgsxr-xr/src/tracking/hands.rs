@@ -16,8 +16,8 @@ use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_openxr::spaces::OxrSpaceExt;
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
 use ftgsxr_app::{
-    AskPermissionAgain, DeniedPermissions, Permission, PermissionHandle, PlatformRes, Toast,
-    ToastLevel,
+    AskPermissionAgain, DeniedPermissions, FeatureState, Permission, PermissionHandle, PlatformRes,
+    Toast, ToastLevel, XrFeatures,
 };
 use openxr::sys;
 
@@ -350,6 +350,47 @@ pub(crate) fn poll_permission(
         && let (Some(session), Some(exts)) = (session, exts)
     {
         commands.insert_resource(create_trackers(&session, &exts));
+    }
+}
+
+/// `XrFeatures.hands` (Q-366): `Absent` unless `XrPlugin.hands` asked for hands, the
+/// runtime offers them (`hands_available`) and a session exists; `Denied` while the
+/// permission is denied; `Available` otherwise.
+// Q-366
+pub(crate) fn hands_feature(
+    wanted: bool,
+    available: bool,
+    session: bool,
+    flow: Flow,
+) -> FeatureState {
+    if !(wanted && available && session) {
+        FeatureState::Absent
+    } else if flow == Flow::Denied {
+        FeatureState::Denied
+    } else {
+        FeatureState::Available
+    }
+}
+
+/// Writes `XrFeatures.hands` each frame (Q-366), as `depth` and `anchors` write theirs.
+// Q-366
+pub(crate) fn write_feature(
+    wanted: Res<HandsWanted>,
+    exts: Option<Res<OxrEnabledExtensions>>,
+    session: Option<Res<OxrSession>>,
+    permission: Res<HandsPermission>,
+    features: Option<ResMut<XrFeatures>>,
+) {
+    let state = hands_feature(
+        wanted.0,
+        exts.as_deref().is_some_and(hands_available),
+        session.is_some(),
+        permission.flow,
+    );
+    if let Some(mut f) = features
+        && f.hands != state
+    {
+        f.hands = state;
     }
 }
 
@@ -864,5 +905,23 @@ mod tests {
     #[test]
     fn ask_without_a_platform_is_granted() {
         assert_eq!(ask(None), Flow::Granted);
+    }
+
+    /// Q-366: `Absent` without hands wanted, without the extensions or without a
+    /// session; `Denied` while the permission is denied; `Available` otherwise, asking
+    /// included.
+    #[test]
+    fn hands_feature_follows_the_extensions_the_session_and_the_permission() {
+        use FeatureState::{Absent, Available, Denied};
+        let asking = Flow::Asking(PermissionHandle(0));
+        for flow in [Flow::Idle, asking, Flow::Granted, Flow::Denied] {
+            assert_eq!(hands_feature(false, true, true, flow), Absent);
+            assert_eq!(hands_feature(true, false, true, flow), Absent);
+            assert_eq!(hands_feature(true, true, false, flow), Absent);
+        }
+        assert_eq!(hands_feature(true, true, true, Flow::Denied), Denied);
+        for flow in [Flow::Idle, asking, Flow::Granted] {
+            assert_eq!(hands_feature(true, true, true, flow), Available);
+        }
     }
 }
