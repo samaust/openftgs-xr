@@ -30,7 +30,7 @@ use bevy::pbr::{
 };
 use bevy::prelude::{
     ChildOf, Commands, Component, DetectChangesMut, Entity, GlobalTransform, Local, Query, Res,
-    ResMut, Resource, Transform, Visibility, With,
+    ResMut, Resource, Transform, Visibility, With, Without,
 };
 use bevy::reflect::TypePath;
 use bevy::render::render_resource::{
@@ -194,13 +194,17 @@ pub(crate) fn draw_gauntlets(
     materials: Option<ResMut<Assets<GauntletMaterial>>>,
     root: Query<(Entity, &GlobalTransform), With<XrTrackingRoot>>,
     hands: Res<LocatedHands>,
-    mut capsules: Query<(
-        Entity,
-        &mut GauntletCapsule,
-        &mut Transform,
-        &mut GlobalTransform,
-        &mut Visibility,
-    )>,
+    // Without the root, whose global transform `root` reads (B0001).
+    mut capsules: Query<
+        (
+            Entity,
+            &mut GauntletCapsule,
+            &mut Transform,
+            &mut GlobalTransform,
+            &mut Visibility,
+        ),
+        Without<XrTrackingRoot>,
+    >,
     mut material: Local<Option<Handle<GauntletMaterial>>>,
     mut commands: Commands,
 ) {
@@ -326,5 +330,66 @@ mod tests {
         }
         let untracked = [sys::HandJointLocationEXT::default(); JOINTS];
         assert!(gauntlet(&untracked).iter().all(Option::is_none));
+    }
+
+    /// `draw_gauntlets` in an app (#608: its queries once conflicted, B0001, which only
+    /// shows when the system runs): it spawns 2 × 26 hidden capsules under the tracking
+    /// root, then shows a tracked hand's 26 where the root puts them, with their global
+    /// transforms set this frame; nothing while `GauntletsDrawn` is off.
+    #[test]
+    fn draw_gauntlets_places_a_tracked_hands_capsules_under_the_root() {
+        use bevy::app::{App, Update};
+        use bevy::ecs::world::World;
+
+        use super::super::hands::RawHand;
+
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<GauntletMaterial>>()
+            .init_resource::<LocatedHands>()
+            .insert_resource(GauntletsDrawn(false))
+            .add_systems(Update, draw_gauntlets);
+        let lift = Transform::from_xyz(0.0, 0.5, 0.0);
+        app.world_mut()
+            .spawn((XrTrackingRoot, lift, GlobalTransform::from(lift)));
+        app.update();
+        let shown = |world: &mut World| {
+            let mut q = world.query::<(&GauntletCapsule, &Visibility, &GlobalTransform)>();
+            q.iter(world)
+                .filter(|(_, v, _)| **v == Visibility::Visible)
+                .map(|(c, _, g)| (c.side, c.index, g.translation()))
+                .collect::<Vec<_>>()
+        };
+        let all = app
+            .world_mut()
+            .query::<&GauntletCapsule>()
+            .iter(app.world())
+            .count();
+        assert_eq!(all, 2 * 26, "spawned hidden");
+        assert!(shown(app.world_mut()).is_empty());
+
+        app.world_mut().resource_mut::<LocatedHands>().raw[1] = Some(RawHand {
+            joints: joints(),
+            aim: None,
+        });
+        app.update();
+        assert!(shown(app.world_mut()).is_empty(), "GauntletsDrawn off");
+
+        app.insert_resource(GauntletsDrawn(true));
+        app.update();
+        let s = shown(app.world_mut());
+        assert_eq!(s.len(), 26, "the tracked hand's capsules: {s:?}");
+        let j = joints();
+        for (side, index, at) in s {
+            assert_eq!(side, 1);
+            let (a, b) = CAPSULES[index];
+            let mid = (transform_of(&j[a].pose).translation + transform_of(&j[b].pose).translation)
+                * 0.5
+                + Vec3::new(0.0, 0.5, 0.0);
+            assert!(
+                at.distance(mid) < 1e-5,
+                "capsule {index} at {at}, not {mid}"
+            );
+        }
     }
 }
