@@ -15,6 +15,7 @@ mod dv3_sort;
 mod dv4_conformance;
 mod dv6_passthrough;
 mod dv8_hands;
+mod dv9_anchors;
 mod i13_xr_unsupported_toast;
 mod i15_xr_session;
 mod i16_xr_input;

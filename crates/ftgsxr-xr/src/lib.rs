@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 // §2.6: this crate may use `unsafe`, each block with a `// SAFETY:` comment.
 
+mod anchors;
 mod display;
 mod error;
 mod panel;
@@ -16,6 +17,8 @@ mod session;
 mod tracking;
 mod xr_input;
 
+// §2.1 `AnchorId`, `AnchorStore`, `NoAnchors` (§1.9, D-26, #571; Q-343).
+pub use anchors::{AnchorId, AnchorStore, NoAnchors};
 // §2.1 (#228, Q-124).
 pub use display::DisplaySettings;
 // Q-133: `DisplaySettings.foveation`'s type, for `ftgsxr-quest`, whose band (§2.1)

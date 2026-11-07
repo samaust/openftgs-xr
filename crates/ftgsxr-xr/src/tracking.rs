@@ -13,7 +13,7 @@
 // Dv-8's device side (#463, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod dv8;
-mod hands;
+pub(crate) mod hands;
 mod meshes;
 
 pub(crate) use hands::FREQUENCY_HINT_EXT;
