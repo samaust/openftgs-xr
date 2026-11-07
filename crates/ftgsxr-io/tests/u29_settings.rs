@@ -43,6 +43,7 @@ fn u29_defaults_are_section_1s() {
             governor: true,
             ui_scale: 1.0,
             log_level: "info".into(),
+            fit_to: "content".into(),
         }
     );
     assert!(s.sources.is_empty());
@@ -177,6 +178,7 @@ fn non_default() -> Settings {
             governor: false,
             ui_scale: 1.25,
             log_level: "debug".into(),
+            fit_to: "content".into(),
         },
         sources: vec![
             SourceSpec {
@@ -346,6 +348,39 @@ fn u29_keep_upright_round_trips_and_is_on_when_absent() {
     );
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(absent.xr.keep_upright, "absent: on by default");
+}
+
+/// §1.5 Poses' "Fit to" (§1.11 `[general] fit_to`): `whole` round-trips, a file without
+/// the key reads it as `content` with no warning, and an unknown value is reported and
+/// taken as `content`, the other keys of `[general]` still loading.
+#[test]
+fn u29_fit_to_round_trips_is_content_when_absent_and_an_unknown_value_is_content() {
+    let path = scratch("fit_to").join("settings.toml");
+    let mut whole = Settings::default();
+    whole.general.fit_to = "whole".into();
+    save_settings(&path, &whole).expect("save");
+    let text = std::fs::read_to_string(&path).expect("read back");
+    assert!(text.contains("fit_to = \"whole\""), "{text}");
+    let (loaded, warnings) = load_settings(&path).expect("load");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(loaded, whole);
+    let (_, absent, warnings) = load_text(
+        "fit_to_absent",
+        "format = \"ftgsxr-settings\"\nversion = 1\n[general]\nlog_level = \"info\"\n",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        absent.general.fit_to, "content",
+        "absent: content by default"
+    );
+    let (_, unknown, warnings) = load_text(
+        "fit_to_unknown",
+        "format = \"ftgsxr-settings\"\nversion = 1\n[general]\nfit_to = \"floor\"\nlog_level = \"debug\"\n",
+    );
+    assert_eq!(unknown.general.fit_to, "content");
+    assert_eq!(unknown.general.log_level, "debug");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("`general.fit_to`"), "{warnings:?}");
 }
 
 /// Writes `text` as `settings.toml` in a fresh directory `name` and loads it.

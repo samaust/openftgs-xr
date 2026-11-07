@@ -8,6 +8,8 @@ How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's po
 
 `[xr] keep_upright` and `ManipulateSettings.keep_upright` are kept equal by a small system of their own beside the two-way mapping, with the same rule: the settings' value goes into the world at the first frame and when it changes, and a value changed in the world goes back into the settings (Q-330).
 
+`[general] fit_to` and `ManipulateSettings.fit_to_content` are kept equal the same way by `fit_to_sync` (Q-371): `content` is true, and a value changed in the world goes back as `content` or `whole`; an unknown spelling never reaches it, since the reader takes it as `content` with a warning.
+
 `persist/panels.rs` draws the Display, Environment and Settings tabs' sections through `ui`'s `DockHooks`, each editing `SettingsRes` (Q-218; the Environment tab's XR controls below); `[audio]` is `audio`'s section and the governor `governor`'s. The tier pickers (the Display tab's showing the running tier, the Settings tab's the saved one) write `[general] tier` and a crate-private `TierPick` that `governor` switches to (Q-240).
 
 The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startup, before the dock's first draw, `[desktop] dock_width` and `dock_open` become `ui`'s dock state, and Help's first run opens the dock after them (Q-226); while the UI is on the window, a drag of the dock's handle (in whole points, a change under half a point being none) or a collapse goes back into `[desktop]`. A window too narrow for the saved width, or a larger UI scale, clamps only the drawing, and the saved width is drawn again once the window is wide enough (Q-252, owner, #441); the Settings tab does not draw the two keys (Q-253).

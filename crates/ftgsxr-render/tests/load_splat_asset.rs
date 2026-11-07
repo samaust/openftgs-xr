@@ -29,7 +29,8 @@ fn exchange_bytes_load_without_a_hint() {
     assert_eq!(a.info.sh_degree, model.sh_degree);
     assert_eq!(a.info.file_bytes, len);
     assert_eq!(a.identity, model.identity);
-    assert_eq!(a.bounds, model.bounds(8));
+    assert_eq!(a.bounds, model.bounds());
+    assert_eq!(a.content_bounds, model.content_bounds());
 }
 
 #[test]
@@ -168,6 +169,7 @@ fn reduce_to_n_or_more_keeps_the_full_model() {
         .unwrap();
         assert_eq!(a.info.n, model.len() as u64);
         assert_eq!(a.bounds, full.bounds);
+        assert_eq!(a.content_bounds, full.content_bounds);
         assert_eq!(a.identity, model.identity);
     }
 }

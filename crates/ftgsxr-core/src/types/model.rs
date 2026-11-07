@@ -162,53 +162,111 @@ impl Model {
         self.position.len()
     }
 
-    /// E10's B_m in model space: the box over μx(τ) at τ = τ₀ + k T_τ/`samples`,
-    /// k = 0 … `samples` (τ₀ alone for a single timestamp or `samples` = 0), of every
-    /// primitive with opacity > α_skip, expanded by 3 · the largest scale of those
-    /// primitives. With no such primitive the box covers every primitive (D-42).
+    /// E10's B_m in model space: the box over the counted rows, each adding its
+    /// positions μx at its visible interval's two ends, expanded on every side by 3 · its
+    /// own largest scale. A row with opacity σ > α_skip is counted over
+    /// \[time_center − h, time_center + h\] ∩ \[τ₀, τ₁\], h = duration·√(2 ln(σ/α_skip))
+    /// (E2's cull, without the temporal index's widening), and not counted when that
+    /// interval is empty; with a single timestamp every row with σ > α_skip is counted at
+    /// τ₀. When no row is counted, every row is, over \[τ₀, τ₁\] (D-42).
     // D-42
-    pub fn bounds(&self, samples: usize) -> Aabb {
-        let alpha_skip = self.conventions.alpha_skip;
-        let visible: Vec<usize> = (0..self.len())
-            .filter(|&i| self.opacity[i] > alpha_skip)
+    pub fn bounds(&self) -> Aabb {
+        let rows = self.counted_rows();
+        let one = |&(i, a, b): &(usize, f64, f64)| {
+            let pa = self.position_at(i, a);
+            let pb = self.position_at(i, b);
+            let margin = Vec3::splat(3.0 * Vec3::from_array(self.scale[i]).max_element());
+            (pa.min(pb) - margin, pa.max(pb) + margin)
+        };
+        let empty = || (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        let join = |(a0, a1): (Vec3, Vec3), (b0, b1): (Vec3, Vec3)| (a0.min(b0), a1.max(b1));
+        let (min, max) = if rows.len() >= PARALLEL_ROWS {
+            rows.par_iter().map(one).reduce(empty, join)
+        } else {
+            rows.iter().map(one).fold(empty(), join)
+        };
+        Aabb { min, max }
+    }
+
+    /// E10's content box B_c in model space: along each axis, from the nearest-rank 1st
+    /// to the 99th percentile (the ⌈0.01 n⌉-th and ⌈0.99 n⌉-th smallest of n values) of
+    /// the counted rows' positions μx at their visible intervals' midpoints, with no
+    /// margin. The rows are `bounds`'s; in its fallback (no counted row) every row's
+    /// interval is \[τ₀, τ₁\], so its midpoint is (τ₀ + τ₁)/2. `bounds` when B_c's longest
+    /// side is 0 (a single counted row, or all of them at one point), and for a model
+    /// without rows.
+    // D-42
+    pub fn content_bounds(&self) -> Aabb {
+        let rows = self.counted_rows();
+        let mid = |&(i, a, b): &(usize, f64, f64)| self.position_at(i, 0.5 * (a + b));
+        let points: Vec<Vec3> = if rows.len() >= PARALLEL_ROWS {
+            rows.par_iter().map(mid).collect()
+        } else {
+            rows.iter().map(mid).collect()
+        };
+        let n = points.len();
+        if n == 0 {
+            // No row at all (a model reduced to nothing): B_m's empty box.
+            return self.bounds();
+        }
+        // Nearest rank, 1-based, in integers: ⌈k n / 100⌉.
+        let rank = |k: usize| (k * n).div_ceil(100);
+        let (lo, hi) = (rank(1) - 1, rank(99) - 1);
+        let mut min = Vec3::ZERO;
+        let mut max = Vec3::ZERO;
+        let mut axis: Vec<f32> = Vec::with_capacity(n);
+        for a in 0..3 {
+            axis.clear();
+            axis.extend(points.iter().map(|p| p[a]));
+            min[a] = *axis.select_nth_unstable_by(lo, f32::total_cmp).1;
+            max[a] = *axis.select_nth_unstable_by(hi, f32::total_cmp).1;
+        }
+        let b = Aabb { min, max };
+        if b.size().max_element() > 0.0 {
+            b
+        } else {
+            self.bounds()
+        }
+    }
+
+    /// E10's counted rows, each with its visible interval: with no counted row, every
+    /// row over \[τ₀, τ₁\] (D-42).
+    fn counted_rows(&self) -> Vec<(usize, f64, f64)> {
+        let rows: Vec<(usize, f64, f64)> = (0..self.len())
+            .filter_map(|i| self.visible_interval(i).map(|(a, b)| (i, a, b)))
             .collect();
-        let rows: Vec<usize> = if visible.is_empty() {
-            (0..self.len()).collect()
+        if rows.is_empty() {
+            let (tau0, tau1) = (self.time.tau0, self.time.tau1);
+            (0..self.len()).map(|i| (i, tau0, tau1)).collect()
         } else {
-            visible
-        };
-        let steps = if self.is_single_timestamp() {
-            0
-        } else {
-            samples
-        };
-        let (tau0, span) = (self.time.tau0, self.time.span());
-        let mut min = Vec3::splat(f32::INFINITY);
-        let mut max = Vec3::splat(f32::NEG_INFINITY);
-        let mut largest_scale = 0.0f32;
-        for &i in &rows {
-            largest_scale = largest_scale.max(Vec3::from_array(self.scale[i]).max_element());
-            for k in 0..=steps {
-                let tau = if steps == 0 {
-                    tau0
-                } else {
-                    tau0 + k as f64 * span / steps as f64
-                };
-                let p = moved_position_f64(
-                    self.position[i],
-                    self.velocity[i],
-                    self.time_center[i],
-                    tau,
-                );
-                min = min.min(p);
-                max = max.max(p);
-            }
+            rows
         }
-        let margin = Vec3::splat(3.0 * largest_scale);
-        Aabb {
-            min: min - margin,
-            max: max + margin,
+    }
+
+    /// Row `i`'s visible interval clipped to \[τ₀, τ₁\] (E10); `None` when it is not
+    /// counted.
+    fn visible_interval(&self, i: usize) -> Option<(f64, f64)> {
+        let (tau0, tau1) = (self.time.tau0, self.time.tau1);
+        let alpha_skip = self.conventions.alpha_skip;
+        let opacity = self.opacity[i];
+        if opacity <= alpha_skip {
+            return None;
         }
+        if self.is_single_timestamp() {
+            return Some((tau0, tau0));
+        }
+        // E10's visible times σ_eff(τ) > α_skip (E2's cull), the ends taken in: E3's
+        // half-width without the index's widening.
+        let ratio = f64::from(opacity) / f64::from(alpha_skip);
+        let h = self.duration[i] * (2.0 * ratio.ln()).sqrt();
+        let c = self.time_center[i];
+        let (a, b) = ((c - h).max(tau0), (c + h).min(tau1));
+        (a <= b).then_some((a, b))
+    }
+
+    /// Row `i`'s μx(τ) (E1, in float64, rounded once; D-42).
+    fn position_at(&self, i: usize, tau: f64) -> Vec3 {
+        moved_position_f64(self.position[i], self.velocity[i], self.time_center[i], tau)
     }
 
     /// §1.2's reader rules on the arrays in memory, reporting the first rule broken in

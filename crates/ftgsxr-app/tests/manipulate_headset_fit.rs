@@ -2,15 +2,18 @@
 
 //! D-11's automatic fit on the headset (`cpu`, #455; source of truth §1.5 Poses: "on the
 //! headset the fit is applied automatically on the first load of a model without a saved
-//! pose when B_m's longest side lies outside [0.1 m, 5 m]"; "a saved pose wins over the
-//! identity and the auto-fit"; D-11; I-4's fit and tolerance; Q-266: the headset is the
-//! `Headset` marker; Q-180: the head without a camera is the stage origin facing −z;
-//! Q-284).
+//! pose when the fit box's longest side lies outside [0.1 m, 5 m]", the fit box B_c under
+//! "Fit to: content", the default, and B_m under "whole model" (revision 44); "a saved
+//! pose wins over the identity and the auto-fit"; D-11; I-4's fit and tolerance; Q-266:
+//! the headset is the `Headset` marker; Q-180: the head without a camera is the stage
+//! origin facing −z; Q-284; Q-371).
 
 use crate::support::{Setup, TestApp};
 
 use bevy::prelude::*;
-use ftgsxr_app::{ContentGroup, Headset, LibraryCommand, LoadedModel, ModelRef, Poses};
+use ftgsxr_app::{
+    ContentGroup, Headset, LibraryCommand, LoadedModel, ModelRef, Poses, SettingsRes,
+};
 use ftgsxr_core::{Aabb, Pose, Preset};
 use ftgsxr_io::{PoseStore, SavedPose};
 use ftgsxr_render::{SplatAsset, SplatModel};
@@ -18,10 +21,16 @@ use ftgsxr_render::{SplatAsset, SplatModel};
 /// I-4's tolerance.
 const TOL: f32 = 1e-4;
 
-/// An exchange model whose rows lie along x over `len_m`, small and still, so B_m's
-/// longest side is `len_m` give or take a few millimetres, written into its own folder
-/// (no manifest beside it: Y-up, L_fit = 1 m).
+/// An exchange model whose rows lie along x over `len_m`, small and still, so both its
+/// boxes' longest side is `len_m` give or take a few millimetres, written into its own
+/// folder (no manifest beside it: Y-up, L_fit = 1 m).
 fn model_file(t: &TestApp, len_m: f32) -> std::path::PathBuf {
+    model_file_with(t, len_m, 0.0005)
+}
+
+/// `model_file`, with the last row's scale `last_scale`: its margin 3·`last_scale`
+/// widens B_m alone (E10).
+fn model_file_with(t: &TestApp, len_m: f32, last_scale: f32) -> std::path::PathBuf {
     let mut m = ftgsxr_testkit::random_model(11, 8, 0);
     let n = m.position.len();
     for i in 0..n {
@@ -30,7 +39,8 @@ fn model_file(t: &TestApp, len_m: f32) -> std::path::PathBuf {
         m.scale[i] = [0.0005; 3];
         m.opacity[i] = 0.9;
     }
-    let dir = t.dir.join(format!("model_{len_m}"));
+    m.scale[n - 1] = [last_scale; 3];
+    let dir = t.dir.join(format!("model_{len_m}_{last_scale}"));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("model.safetensors");
     std::fs::write(&path, ftgsxr_testkit::exchange_bytes(&m)).unwrap();
@@ -76,14 +86,18 @@ fn pose(t: &TestApp, e: Entity) -> Pose {
     }
 }
 
-fn bounds(t: &TestApp, e: Entity) -> Aabb {
+fn asset(t: &TestApp, e: Entity) -> &SplatAsset {
     let h = &t.app.world().get::<SplatModel>(e).unwrap().0;
     t.app
         .world()
         .resource::<Assets<SplatAsset>>()
         .get(h)
         .unwrap()
-        .bounds
+}
+
+/// The fit box under the default "Fit to: content": E10's B_c.
+fn bounds(t: &TestApp, e: Entity) -> Aabb {
+    asset(t, e).content_bounds
 }
 
 fn is_identity(p: Pose) -> bool {
@@ -232,5 +246,38 @@ fn headset_fit_ignores_a_panel_camera() {
     let path = model_file(&t, 20.0);
     let e = load(&mut t, path);
     let b = bounds(&t, e);
+    assert_fitted(&b, pose(&t, e));
+}
+
+/// A 1 m row of primitives whose last one has scale 1: B_c is 1 m long, B_m about 7 m
+/// (its 3 m margin on every side).
+fn wide_margin(t: &TestApp) -> std::path::PathBuf {
+    model_file_with(t, 1.0, 1.0)
+}
+
+#[test]
+fn headset_fit_checks_the_content_box_by_default() {
+    let mut t = app("headset_fit_content", true, None);
+    let path = wide_margin(&t);
+    let e = load(&mut t, path);
+    assert!(asset(&t, e).bounds.size().max_element() > 5.0);
+    assert!((0.1..=5.0).contains(&bounds(&t, e).size().max_element()));
+    assert!(is_identity(pose(&t, e)), "{:?}", pose(&t, e));
+}
+
+#[test]
+fn headset_fit_to_whole_checks_and_fits_b_m() {
+    let mut t = app("headset_fit_whole", true, None);
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .general
+        .fit_to = "whole".into();
+    t.frames(1);
+    let path = wide_margin(&t);
+    let e = load(&mut t, path);
+    let b = asset(&t, e).bounds;
+    assert!(b.size().max_element() > 5.0, "{b:?}");
     assert_fitted(&b, pose(&t, e));
 }
