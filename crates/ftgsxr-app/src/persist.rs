@@ -89,7 +89,8 @@ pub struct SettingsWarnings(pub Vec<String>);
 
 /// The scene anchor's handshake with the XR crate (§1.9 Floor, shadows and anchors,
 /// Q-343): `persist` sets `Creating` at a scene save under the `Headset` marker in
-/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)`, and sets
+/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)`, `None` at
+/// any other save (written with a null anchor) unless a save waits, and sets
 /// `Locating(uuid)` at the load of a file with an anchor on the headset; the XR crate
 /// answers `Ready` once located, or `Lost(uuid)`, which `persist` toasts.
 /// `scene_from_world` writes `anchor` from `Ready`. While a save waits, any other answer
@@ -594,6 +595,12 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
                     world.insert_resource(SceneAnchor::Creating);
                     world.resource_mut::<AnchorWait>().0 = Some((path, now));
                 } else {
+                    // §1.9: an anchor only for a save in passthrough mode on the headset,
+                    // so this one writes null and the earlier anchor is let go (a save
+                    // still waiting in `Creating` keeps its wait).
+                    if *world.resource::<SceneAnchor>() != SceneAnchor::Creating {
+                        world.insert_resource(SceneAnchor::None);
+                    }
                     write_scene_file(world, &path);
                 }
             }
