@@ -71,7 +71,7 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.fb_spatial_entity = true;
     raw.fb_spatial_entity_query = true;
     raw.meta_spatial_entity_persistence = true;
-    // Q-358: spike check 5's fallback, the discovery by UUID.
+    // D-26: spike check 5's fallback, the discovery by UUID.
     raw.meta_spatial_entity_discovery = true;
     // §1.9's depth occlusion (E13, #570).
     raw.meta_environment_depth = true;

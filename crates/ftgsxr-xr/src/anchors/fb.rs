@@ -361,8 +361,8 @@ impl FbAnchors {
     }
 
     /// Starts the discovery of the saved anchor `uuid` by XR\_META\_spatial\_entity\_discovery
-    /// (PRD #565's spike check 5 fallback, Q-358).
-    // Q-358
+    /// (PRD #565's spike check 5 fallback, D-26).
+    // D-26
     fn discover(&mut self, uuid: &AnchorId) -> Result<(), XrError> {
         let fp = self
             .session
@@ -400,7 +400,7 @@ impl FbAnchors {
 
     /// The discovery `req`'s results available now (two calls; results already taken
     /// are not returned again, source-log row 364).
-    // Q-358
+    // D-26
     fn retrieve_discovered(&mut self, req: u64) {
         let Some(uuid) = self.discoveries.get(&req).cloned() else {
             return;
@@ -586,7 +586,7 @@ impl AnchorDriver for FbAnchors {
             self.queries.insert(uuid.0.clone(), Query::Found);
             return Ok(());
         }
-        // Q-358: discovery where the runtime offers it; on the Quest 3 the FB query by
+        // D-26: discovery where the runtime offers it; on the Quest 3 the FB query by
         // UUID fails with XR_ERROR_VALIDATION_FAILURE (Dv-9, spike check 5).
         if self
             .session
