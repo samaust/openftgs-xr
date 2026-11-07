@@ -12,7 +12,7 @@
 //! cameras; it passes when every counted frame had them, then turns occlusion off and
 //! passes when the provider stops, with no failed runtime call in the session. The detail
 //! carries PRD #565's spike checks: the swapchain's size and length (check 1: the format
-//! and layer count are the registry's D16 and 2, which the copies rely on; a mismatch is a
+//! and layer count are the registry's D16 and 2, which the conversion relies on; a mismatch is a
 //! validation error in the log) and whether each view's GPU texture kept its id across the
 //! counted frames (check 2).
 
@@ -57,8 +57,7 @@ pub(crate) struct Frame {
     running: bool,
     /// The frames given this frame.
     frames: usize,
-    /// Both frames' planes are finite and positive (near; far may be infinite only by
-    /// being below near, E13).
+    /// Both frames' planes are usable (`planes_ok`).
     planes: bool,
     /// The two frames' cameras differ.
     distinct: bool,
@@ -82,10 +81,12 @@ impl Frame {
     }
 }
 
-/// Whether a frame's planes are usable: a finite positive near, and a far that is finite
-/// or, by the registry's infinite-projection form, below near.
+/// Whether a frame's planes are usable: a finite positive near, and a far that is
+/// finite, the registry's infinite form (below near), or +∞, which the Quest 3 reports
+/// and E13's decode reads as the infinite far plane (Q-340, Q-T570.4).
+// Q-T570.4
 fn planes_ok(near: f32, far: f32) -> bool {
-    near.is_finite() && near > 0.0 && (far.is_finite() || far < near)
+    near.is_finite() && near > 0.0 && (far.is_finite() || far == f32::INFINITY)
 }
 
 /// What the render world saw while counting.
@@ -345,7 +346,7 @@ impl Dv7 {
             "near {} far {} max age {} frames",
             f.near, f.far, seen.max_age
         ));
-        // Spike check 1: the swapchain the copies read (registry: D16, two layers).
+        // Spike check 1: the swapchain the conversion reads (registry: D16, two layers).
         match f.swapchain {
             Some((size, n)) => self.parts.push(format!(
                 "swapchain {} x {}, {n} images, D16 x 2 layers per the registry",
@@ -415,14 +416,19 @@ mod tests {
         );
     }
 
-    /// E13's planes: a finite positive near; a finite far, or an infinite one written as a
-    /// far below near.
+    /// E13's planes: a finite positive near; a finite far, the infinite form written as a
+    /// far below near, or +∞ (Q-T570.4); never NaN.
     #[test]
     fn planes_ok_takes_finite_planes_and_the_infinite_form() {
         assert!(planes_ok(0.1, 20.0));
         assert!(planes_ok(0.1, 0.0), "far < near: an infinite far plane");
         assert!(!planes_ok(0.0, 20.0));
         assert!(!planes_ok(f32::NAN, 20.0));
-        assert!(!planes_ok(0.1, f32::INFINITY));
+        assert!(
+            planes_ok(0.1, f32::INFINITY),
+            "+∞: the Quest 3's infinite far plane"
+        );
+        assert!(!planes_ok(0.1, f32::NAN));
+        assert!(!planes_ok(0.1, f32::NEG_INFINITY));
     }
 }
