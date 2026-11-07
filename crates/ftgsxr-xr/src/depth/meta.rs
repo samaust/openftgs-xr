@@ -91,7 +91,7 @@ fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
 const MEDIAN_WGSL: &str = r"// SPDX-License-Identifier: Apache-2.0
 // Q-363: the per-texel median of three converted captures, clamped to the range of
 // the newest capture's 3 x 3 neighbourhood inside the image (#607).
-@group(0) @binding(0) var a: texture_2d<f32>;
+@group(0) @binding(0) var newest: texture_2d<f32>;
 @group(0) @binding(1) var b: texture_2d<f32>;
 @group(0) @binding(2) var c: texture_2d<f32>;
 
@@ -104,16 +104,16 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 @fragment
 fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
     let q = vec2<i32>(p.xy);
-    let x = textureLoad(a, q, 0).r;
+    let x = textureLoad(newest, q, 0).r;
     let y = textureLoad(b, q, 0).r;
     let z = textureLoad(c, q, 0).r;
     let m = max(min(x, y), min(max(x, y), z));
-    let top = vec2<i32>(textureDimensions(a)) - 1;
+    let top = vec2<i32>(textureDimensions(newest)) - 1;
     var lo = x;
     var hi = x;
     for (var j = -1; j <= 1; j++) {
         for (var i = -1; i <= 1; i++) {
-            let n = textureLoad(a, clamp(q + vec2<i32>(i, j), vec2<i32>(0), top), 0).r;
+            let n = textureLoad(newest, clamp(q + vec2<i32>(i, j), vec2<i32>(0), top), 0).r;
             lo = min(lo, n);
             hi = max(hi, n);
         }
@@ -1289,29 +1289,34 @@ mod tests {
     }
 
     /// Three captures `a`, `b`, `c` (`c` the newest) in the ring, with the newest in
-    /// slot 2 and, after a fourth capture, in slot 0: the left image both times.
-    fn median_of((w, h): (u32, u32), a: &Layer<'_>, b: &Layer<'_>, c: &Layer<'_>) -> [Vec<f32>; 2] {
-        [
-            left_after(
-                w,
-                h,
-                &[
-                    (a, step(0, Read::Newest)),
-                    (b, step(1, Read::Newest)),
-                    (c, step(2, Read::Median)),
-                ],
-            ),
-            left_after(
-                w,
-                h,
-                &[
-                    (a, step(0, Read::Newest)),
-                    (a, step(1, Read::Newest)),
-                    (b, step(2, Read::Median)),
-                    (c, step(0, Read::Median)),
-                ],
-            ),
-        ]
+    /// slot 2, then (after one or two more captures `a` first) in slot 0 and in slot 1:
+    /// the left image in each of the three arrangements of the median's bindings.
+    fn left_with_newest_in_each_slot(
+        (w, h): (u32, u32),
+        a: &Layer<'_>,
+        b: &Layer<'_>,
+        c: &Layer<'_>,
+    ) -> [Vec<f32>; 3] {
+        [0, 1, 2].map(|extra| {
+            let mut captures = Vec::new();
+            for k in 0..extra {
+                captures.push((a, k));
+            }
+            captures.extend([(a, extra), (b, extra + 1), (c, extra + 2)]);
+            let steps: Vec<_> = captures
+                .iter()
+                .enumerate()
+                .map(|(n, &(f, _))| {
+                    let read = if n + 1 >= RING {
+                        Read::Median
+                    } else {
+                        Read::Newest
+                    };
+                    (f, step(n % RING, read))
+                })
+                .collect();
+            left_after(w, h, &steps)
+        })
     }
 
     /// Asserts that `got` is `want(x, y)` (as `D16_UNORM`) at every texel of `w` × `h`.
@@ -1329,11 +1334,17 @@ mod tests {
 
     const FAR: u16 = 40000;
     const NEAR: u16 = 10000;
+    const INVALID: u16 = u16::MAX;
 
     /// A 5 × 5 block at x, y in 1..=5 of an 8 × 7 image (a 7 × 7 layer, 98 bytes, would
     /// put the second layer off the 4-byte offset Vulkan asks of a depth upload).
     fn in_block(x: u32, y: u32) -> bool {
         (1..=5).contains(&x) && (1..=5).contains(&y)
+    }
+
+    /// The block's interior: the texels whose 3 × 3 neighbourhood lies inside it.
+    fn in_interior(x: u32, y: u32) -> bool {
+        (2..=4).contains(&x) && (2..=4).contains(&y)
     }
 
     /// Q-363 (#607): a uniform region that changed depth in the newest capture (far, far,
@@ -1346,46 +1357,39 @@ mod tests {
         let size = (8, 7);
         let far = |_, _| FAR;
         let near = |x, y| if in_block(x, y) { NEAR } else { FAR };
-        let interior = |x, y| {
-            if (2..=4).contains(&x) && (2..=4).contains(&y) {
-                NEAR
-            } else {
-                FAR
-            }
-        };
-        for (i, l) in median_of(size, &far, &far, &near).iter().enumerate() {
-            assert_image(l, size, &interior, &format!("run {i}"));
+        let want = |x, y| if in_interior(x, y) { NEAR } else { FAR };
+        let runs = left_with_newest_in_each_slot(size, &far, &far, &near);
+        for (i, l) in runs.iter().enumerate() {
+            assert_image(l, size, &want, &format!("run {i}"));
         }
     }
 
-    /// Q-363 (#607): at a silhouette (near left of x = 4, far from it), texels of the near
-    /// side's last column flipped to far in the newest capture, and of the far side's
-    /// first column flipped to near in the oldest: the newest neighbourhood of a flipped
-    /// texel spans both sides, so the median passes and both flips are rejected.
+    /// Q-363 (#607), Q-340: at a silhouette (near left of x = 4, the background from it,
+    /// far or invalid), texels of the near side's last column flipped to the background
+    /// in the newest capture, of the background's first column flipped to near in the
+    /// oldest, and of its second column flipped to near in the newest: the newest
+    /// neighbourhood of each spans both sides, so the median passes and every flip is
+    /// rejected; with an invalid background, the texels invalid in 2 of 3 captures stay
+    /// d = 1, their newest neighbourhood holding an invalid sample.
     #[test]
     #[ignore = "gpu"]
     fn gpu_median_pass_clamp_keeps_the_median_at_a_silhouette() {
         let size = (8, 5);
-        let steady = |x, _| if x < 4 { NEAR } else { FAR };
-        let oldest = |x, y| {
-            if x == 4 && y % 2 == 0 {
-                NEAR
-            } else {
-                steady(x, y)
+        for background in [FAR, INVALID] {
+            let steady = |x, _| if x < 4 { NEAR } else { background };
+            let oldest = |x, y| match (x, y % 2) {
+                (4, 0) => NEAR,
+                _ => steady(x, y),
+            };
+            let newest = |x, y| match (x, y % 2) {
+                (3, 1) => background,
+                (5, 0) => NEAR,
+                _ => steady(x, y),
+            };
+            let runs = left_with_newest_in_each_slot(size, &oldest, &steady, &newest);
+            for (i, l) in runs.iter().enumerate() {
+                assert_image(l, size, &steady, &format!("{background}, run {i}"));
             }
-        };
-        let newest = |x, y| {
-            if x == 3 && y % 2 == 1 {
-                FAR
-            } else {
-                steady(x, y)
-            }
-        };
-        for (i, l) in median_of(size, &oldest, &steady, &newest)
-            .iter()
-            .enumerate()
-        {
-            assert_image(l, size, &steady, &format!("run {i}"));
         }
     }
 
@@ -1396,37 +1400,35 @@ mod tests {
     fn gpu_median_pass_clamp_makes_a_newly_invalid_block_invalid_at_once() {
         let size = (8, 7);
         let valid = |_, _| FAR;
-        let invalid = |x, y| if in_block(x, y) { u16::MAX } else { FAR };
-        for (i, l) in median_of(size, &valid, &valid, &invalid).iter().enumerate() {
-            let interior = (3 * 8 + 3) as usize;
-            assert_eq!(l[interior], 1.0, "run {i}: the block's centre");
-            assert_image(
-                l,
-                size,
-                &|x, y| {
-                    if (2..=4).contains(&x) && (2..=4).contains(&y) {
-                        u16::MAX
-                    } else {
-                        FAR
-                    }
-                },
-                &format!("run {i}"),
-            );
+        let invalid = |x, y| if in_block(x, y) { INVALID } else { FAR };
+        let want = |x, y| if in_interior(x, y) { INVALID } else { FAR };
+        let runs = left_with_newest_in_each_slot(size, &valid, &valid, &invalid);
+        for (i, l) in runs.iter().enumerate() {
+            assert_image(l, size, &want, &format!("run {i}"));
         }
     }
 
-    /// Q-363 (#607): the neighbourhood of a texel on the image's border holds only the
-    /// texels inside the image: with near, near, far everywhere, every texel, the edges
-    /// and corners included, takes the far depth (a texel outside read as 0 would lower
-    /// the range and let the near median through).
+    /// Q-363 (#607): the neighbourhood of a texel on the image's border is the texels
+    /// inside the image, all of them and no others. With near, near, far everywhere,
+    /// every texel, the edges and corners included, takes the far depth (a texel outside
+    /// read as 0 would lower the range and let the near median through); with the newest
+    /// capture near at (1, 1) alone, the border texels next to it, the corner (0, 0)
+    /// included, keep the near median (a neighbourhood short of (1, 1) would give far).
     #[test]
     #[ignore = "gpu"]
     fn gpu_median_pass_clamp_reads_only_texels_inside_the_image_at_its_border() {
         let size = (5, 4);
         let near = |_, _| NEAR;
         let far = |_, _| FAR;
-        for (i, l) in median_of(size, &near, &near, &far).iter().enumerate() {
-            assert_image(l, size, &far, &format!("run {i}"));
+        let runs = left_with_newest_in_each_slot(size, &near, &near, &far);
+        for (i, l) in runs.iter().enumerate() {
+            assert_image(l, size, &far, &format!("uniform, run {i}"));
+        }
+        let far_but_one = |x, y| if (x, y) == (1, 1) { NEAR } else { FAR };
+        let want = |x, y| if x <= 2 && y <= 2 { NEAR } else { FAR };
+        let runs = left_with_newest_in_each_slot(size, &near, &near, &far_but_one);
+        for (i, l) in runs.iter().enumerate() {
+            assert_image(l, size, &want, &format!("near at (1, 1), run {i}"));
         }
     }
 }
