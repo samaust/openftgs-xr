@@ -301,8 +301,8 @@ pub struct XrFeatures {
     pub occlusion: FeatureState,
     /// Spatial anchors (XR_FB_spatial_entity, XR_META_spatial_entity_persistence).
     pub anchors: FeatureState,
-    /// Hand tracking (XR_EXT_hand_tracking with XR_FB_hand_tracking_aim), which "occlude
-    /// with tracked hands" needs (§1.9, Q-366).
+    /// Hand tracking (XR_EXT_hand_tracking with XR_FB_hand_tracking_aim), which the tracked
+    /// hands' gauntlets need (§1.9, Q-366).
     // Q-366
     pub hands: FeatureState,
 }
