@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `EnvironmentDepth` adapter over XR\_META\_environment\_depth (§1.9 Depth
-//! occlusion, E13, D-16, Appendix E.1 and E.2; source-log rows T570.1 and T570.2), in the
+//! occlusion, E13, D-16, Appendix E.1 and E.2; source-log rows 357 and 358), in the
 //! render world.
 //!
 //! The provider is created at the first `start`, after `Permission::Scene` is granted
@@ -344,7 +344,7 @@ impl MetaDepth {
         };
         // SAFETY: the provider is live and started (`running`), and the call falls
         // between this frame's xrBeginFrame and xrEndFrame (the render world's Prepare,
-        // after bevy_mod_openxr's begin, source-log T570.5), once per frame (`Views`);
+        // after bevy_mod_openxr's begin, source-log row 361), once per frame (`Views`);
         // `info`, `image` and the timestamp chained on its `next` are valid typed
         // structures alive for the call, which writes `image` and the timestamp.
         let r = unsafe { (t.acquire_environment_depth_image)(self.provider, &info, &mut image) };
@@ -375,7 +375,7 @@ impl MetaDepth {
             // this acquire returned. Its usages are sampled and depth-attachment (Dv-7's
             // validation layer, spike check 1), not the transfer-source usage the helper's
             // contract names: the texture is only sampled here (the conversion pass,
-            // Q-T570.5), never copied, so no command needs it. Q-T570.2: wgpu tracks it
+            // Q-T570.5), never copied, so no command needs it. Q-356: wgpu tracks it
             // from UNINITIALIZED.
             let texture =
                 unsafe { import_vulkan_texture(gpu.device(), raw, size, LAYERS, SOURCE_FORMAT) };
@@ -499,7 +499,7 @@ impl EnvironmentDepth for MetaDepth {
         if self.provider == sys::EnvironmentDepthProviderMETA::NULL {
             self.create()?;
         }
-        // Q-T570.3: a system without hand removal still gives depth.
+        // Q-357: a system without hand removal still gives depth.
         if let Err(e) = self.hand_removal(hand_removal) {
             warn!("depth: {e}");
         }

@@ -103,6 +103,7 @@ pub(crate) struct FbAnchors {
     creations: HashMap<u64, Creation>,
     queries: HashMap<String, Query>,
     query_requests: HashMap<u64, String>,
+    discoveries: HashMap<u64, String>,
     saves: HashMap<u64, String>,
     statuses: HashMap<u64, StatusRequest>,
     erases: HashMap<u64, String>,
@@ -154,6 +155,7 @@ impl FbAnchors {
             creations: HashMap::new(),
             queries: HashMap::new(),
             query_requests: HashMap::new(),
+            discoveries: HashMap::new(),
             saves: HashMap::new(),
             statuses: HashMap::new(),
             erases: HashMap::new(),
@@ -338,17 +340,113 @@ impl FbAnchors {
         }
         out.truncate(results.result_count_output as usize);
         for found in out {
-            let text = uuid_text(&found.uuid);
-            if text != uuid {
-                continue;
-            }
-            self.hold(text.clone(), found.space);
-            self.queries.insert(text.clone(), Query::Found);
-            if self.enabled(found.space, sys::SpaceComponentTypeFB::LOCATABLE) != Some(true)
-                && let Err(e) = self.enable(&text, sys::SpaceComponentTypeFB::LOCATABLE)
-            {
-                warn!("anchor {text}: {e}");
-            }
+            self.found(&uuid, &found.uuid, found.space);
+        }
+    }
+
+    /// A query's or a discovery's result for the anchor `wanted`: held, and LOCATABLE
+    /// enabled when off.
+    fn found(&mut self, wanted: &str, uuid: &sys::Uuid, raw: sys::Space) {
+        let text = uuid_text(uuid);
+        if text != wanted || self.anchors.contains_key(&text) {
+            return;
+        }
+        self.hold(text.clone(), raw);
+        self.queries.insert(text.clone(), Query::Found);
+        if self.enabled(raw, sys::SpaceComponentTypeFB::LOCATABLE) != Some(true)
+            && let Err(e) = self.enable(&text, sys::SpaceComponentTypeFB::LOCATABLE)
+        {
+            warn!("anchor {text}: {e}");
+        }
+    }
+
+    /// Starts the discovery of the saved anchor `uuid` by XR\_META\_spatial\_entity\_discovery
+    /// (PRD #565's spike check 5 fallback, Q-358).
+    // Q-358
+    fn discover(&mut self, uuid: &AnchorId) -> Result<(), XrError> {
+        let fp = self
+            .session
+            .instance()
+            .exts()
+            .meta_spatial_entity_discovery
+            .ok_or(XrError::Unsupported("XR_META_spatial_entity_discovery"))?;
+        let raw = parse_uuid(&uuid.0)
+            .ok_or_else(|| XrError::Runtime(format!("anchor {}: not a UUID", uuid.0)))?;
+        let filter = sys::SpaceFilterUuidMETA {
+            ty: sys::SpaceFilterUuidMETA::TYPE,
+            next: ptr::null(),
+            uuid_count: 1,
+            uuids: &raw,
+        };
+        let filters: [*const sys::SpaceFilterBaseHeaderMETA; 1] = [(&raw const filter).cast()];
+        let info = sys::SpaceDiscoveryInfoMETA {
+            ty: sys::SpaceDiscoveryInfoMETA::TYPE,
+            next: ptr::null(),
+            filter_count: 1,
+            filters: filters.as_ptr(),
+        };
+        let mut req = sys::AsyncRequestIdFB::from_raw(0);
+        // SAFETY: the table is the runtime's (the extension enabled); the session is
+        // alive; `info`, its one filter pointer and the filter's one UUID are initialised
+        // with their TYPEs and outlive the call.
+        let r = unsafe { (fp.discover_spaces)(self.session.as_raw(), &info, &mut req) };
+        if !ok(r) {
+            return Err(XrError::Runtime(format!("xrDiscoverSpacesMETA: {r:?}")));
+        }
+        self.discoveries.insert(req.into_raw(), uuid.0.clone());
+        self.queries.insert(uuid.0.clone(), Query::Pending);
+        Ok(())
+    }
+
+    /// The discovery `req`'s results available now (two calls; results already taken
+    /// are not returned again, source-log row 364).
+    // Q-358
+    fn retrieve_discovered(&mut self, req: u64) {
+        let Some(uuid) = self.discoveries.get(&req).cloned() else {
+            return;
+        };
+        let Some(fp) = self.session.instance().exts().meta_spatial_entity_discovery else {
+            return;
+        };
+        let session = self.session.as_raw();
+        let id = sys::AsyncRequestIdFB::from_raw(req);
+        let mut results = sys::SpaceDiscoveryResultsMETA {
+            ty: sys::SpaceDiscoveryResultsMETA::TYPE,
+            next: ptr::null(),
+            result_capacity_input: 0,
+            result_count_output: 0,
+            results: ptr::null_mut(),
+        };
+        // SAFETY: the table is the runtime's; the session is alive; `results` asks for
+        // the count only (capacity 0, null array).
+        let r = unsafe { (fp.retrieve_space_discovery_results)(session, id, &mut results) };
+        if !ok(r) {
+            warn!("anchor {uuid}: xrRetrieveSpaceDiscoveryResultsMETA: {r:?}");
+            return;
+        }
+        let n = results.result_count_output as usize;
+        if n == 0 {
+            return;
+        }
+        let mut out = vec![
+            sys::SpaceDiscoveryResultMETA {
+                space: sys::Space::NULL,
+                uuid: sys::Uuid { data: [0; 16] },
+            };
+            n
+        ];
+        results.result_capacity_input = n as u32;
+        results.results = out.as_mut_ptr();
+        // SAFETY: as above, with `results` pointing at `n` writable elements, the count
+        // the first call gave.
+        let r = unsafe { (fp.retrieve_space_discovery_results)(session, id, &mut results) };
+        if !ok(r) {
+            warn!("anchor {uuid}: xrRetrieveSpaceDiscoveryResultsMETA: {r:?}");
+            return;
+        }
+        out.truncate(results.result_count_output as usize);
+        for found in out {
+            self.found(&uuid, &found.uuid, found.space);
         }
     }
 
@@ -484,6 +582,21 @@ impl AnchorDriver for FbAnchors {
     }
 
     fn query(&mut self, uuid: &AnchorId) -> Result<(), XrError> {
+        if self.anchors.contains_key(&uuid.0) {
+            self.queries.insert(uuid.0.clone(), Query::Found);
+            return Ok(());
+        }
+        // Q-358: discovery where the runtime offers it; on the Quest 3 the FB query by
+        // UUID fails with XR_ERROR_VALIDATION_FAILURE (Dv-9, spike check 5).
+        if self
+            .session
+            .instance()
+            .exts()
+            .meta_spatial_entity_discovery
+            .is_some()
+        {
+            return self.discover(uuid);
+        }
         let fp = self
             .session
             .instance()
@@ -610,6 +723,30 @@ impl AnchorDriver for FbAnchors {
                         Query::Failed(format!("xrQuerySpacesFB completed with {:?}", e.result()))
                     };
                     info!("anchor {uuid}: query complete, {q:?}");
+                    self.queries.insert(uuid, q);
+                }
+            }
+            Event::SpaceDiscoveryResultsAvailableMETA(e) => {
+                self.retrieve_discovered(e.request_id().into_raw());
+            }
+            Event::SpaceDiscoveryCompleteMETA(e) => {
+                let req = e.request_id().into_raw();
+                if ok(e.result()) {
+                    self.retrieve_discovered(req);
+                }
+                let Some(uuid) = self.discoveries.remove(&req) else {
+                    return;
+                };
+                if matches!(self.queries.get(&uuid), Some(Query::Pending)) {
+                    let q = if ok(e.result()) {
+                        Query::NotFound
+                    } else {
+                        Query::Failed(format!(
+                            "xrDiscoverSpacesMETA completed with {:?}",
+                            e.result()
+                        ))
+                    };
+                    info!("anchor {uuid}: discovery complete, {q:?}");
                     self.queries.insert(uuid, q);
                 }
             }

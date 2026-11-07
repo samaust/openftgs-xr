@@ -7,7 +7,7 @@
 //!   passthrough, `[environment] occlusion` is on and the running tier's `occlusion` flag
 //!   is true (Q-338), once `Permission::Scene` is granted (Q-348, asked on the first
 //!   turn-on; a denial turns the setting off with Q-261's toast, and turning it on again
-//!   asks again, Q-T570.1). It writes `XrFeatures.occlusion` (Q-336), `HudData.depth_image`
+//!   asks again, Q-355). It writes `XrFeatures.occlusion` (Q-336), `HudData.depth_image`
 //!   (Q-345) and the main world's `SplatOcclusion` from the previous frame (Q-339), and
 //!   creates the two views' `DepthFrame.image`s once the swapchain's size is known.
 //! - The drive (render world, after the frame's begin and Bevy's prepared assets, before
@@ -171,7 +171,7 @@ pub(crate) fn wanted(mode: EnvironmentMode, setting: bool, tier: bool) -> bool {
 /// Q-341: a depth view's camera in the stage space. `view` is the view's pose in the
 /// primary reference space the acquire named; it is composed with the tracking root's
 /// global transform `root`, as the eyes' views are (bevy\_mod\_openxr's render-world
-/// view update, source-log T570.5), and built with E6's `Fov::Angles` at the image's
+/// view update, source-log row 361), and built with E6's `Fov::Angles` at the image's
 /// `size`.
 // Q-341
 pub(crate) fn depth_camera(
@@ -220,7 +220,7 @@ impl Shared {
 }
 
 /// The main world's control state: the permission flow (kept across sessions, as the
-/// hands' and anchors'), the setting last seen (Q-T570.1), the images, whether the
+/// hands' and anchors'), the setting last seen (Q-355), the images, whether the
 /// instance enabled the extension and the session's warning.
 #[derive(Resource, Default)]
 pub(crate) struct Control {
@@ -322,11 +322,11 @@ fn ask(platform: Option<&PlatformRes>) -> Flow {
     }
 }
 
-/// The main world's frame: the run condition (Q-338), the permission (Q-348, Q-T570.1),
+/// The main world's frame: the run condition (Q-338), the permission (Q-348, Q-355),
 /// the request, the images once the swapchain's size is known (Q-339), the previous
 /// frame's occlusion into the main world's `SplatOcclusion` and `HudData.depth_image`
 /// (Q-345), `XrFeatures.occlusion` (Q-336).
-// Q-261, Q-336, Q-338, Q-339, Q-345, Q-348, Q-T570.1
+// Q-261, Q-336, Q-338, Q-339, Q-345, Q-348, Q-355
 #[allow(clippy::too_many_arguments)]
 fn control(
     mut control: ResMut<Control>,
@@ -375,7 +375,7 @@ fn control(
     let tier_on = tier.is_some_and(|t| t.tier.occlusion);
     let want = available && wanted(mode, setting, tier_on);
 
-    // Q-348, Q-T570.1: asked on the first turn-on; while denied, turning the setting on
+    // Q-348, Q-355: asked on the first turn-on; while denied, turning the setting on
     // again (the Environment tab's "Ask again" toggles it) or the Comfort tab's "ask
     // again" asks once more.
     let mut listed = |on: bool| {
@@ -407,7 +407,7 @@ fn control(
             Poll::Ready(false) => {
                 control.flow = Flow::Denied;
                 listed(true);
-                // Q-T570.1: the feature is off, and so is its switch.
+                // Q-355: the feature is off, and so is its switch.
                 if let Some(s) = settings.as_deref_mut() {
                     s.0.environment.occlusion = false;
                 }
@@ -537,7 +537,7 @@ fn drive(
             );
             match (depth.running(), frame, space) {
                 (true, Some(frame), Some(space)) => {
-                    // The eyes' rule (bevy_mod_openxr's `locate_views`, source-log T570.5).
+                    // The eyes' rule (bevy_mod_openxr's `locate_views`, source-log row 361).
                     let time = if pipelined.is_some() {
                         openxr::Time::from_nanos(
                             frame.predicted_display_time.as_nanos()
@@ -586,7 +586,7 @@ fn drive(
 /// Starts or stops `depth` as `request` asks, hand removal at the start and on change
 /// (D-16); a failed start waits for the request to go off; an unsupported system is
 /// reported.
-// D-16, Q-338, Q-T570.3
+// D-16, Q-338, Q-357
 pub(crate) fn step(
     depth: &mut dyn DepthDriver,
     request: &DepthRequest,
@@ -774,7 +774,7 @@ mod tests {
         }
     }
 
-    /// Q-338, D-16, Q-T570.3: started with hand removal when the request runs, hand removal
+    /// Q-338, D-16, Q-357: started with hand removal when the request runs, hand removal
     /// sent again only on change, stopped when the request stops; a refused start is not
     /// retried until the request goes off, and an unsupported system is reported.
     #[test]
@@ -850,7 +850,7 @@ mod tests {
         }
     }
 
-    /// Q-348, Q-261, Q-T570.1, Q-336: in passthrough with the setting and the tier on, the
+    /// Q-348, Q-261, Q-355, Q-336: in passthrough with the setting and the tier on, the
     /// first turn-on asks; a denial toasts naming "occlusion", lists the permission, marks
     /// the feature `Denied`, turns the setting off and does not run; turning the setting on
     /// again asks again, and a grant runs the provider.

@@ -10,7 +10,7 @@
 //! swapchain's size and length and whether the views' GPU textures kept their ids, and the
 //! driver runs with the validation layer the debug APK bundles (Q-123) and requires it
 //! loaded and silent (a format, layer-count, usage or image-layout mismatch of the
-//! conversion pass, Q-T570.2, Q-T570.5).
+//! conversion pass, Q-356, Q-T570.5).
 //! Prerequisites: `dv_support`'s.
 
 use crate::dv_support;
@@ -71,6 +71,6 @@ fn dv_dv7_depth_frames_every_frame_and_a_clean_stop() {
         detail.contains("kept across frames: true"),
         "spike check 2: {detail}"
     );
-    // Spike check 1 and Q-T570.2: no format, usage or layout message about the conversion pass.
+    // Spike check 1 and Q-356: no format, usage or layout message about the conversion pass.
     validation.assert_clean();
 }

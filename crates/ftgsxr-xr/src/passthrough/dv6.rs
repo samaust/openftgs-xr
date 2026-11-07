@@ -9,8 +9,9 @@
 //! Once the session runs and the layer exists, the test flips `[environment] mode` to
 //! passthrough and back, twice (the second time with a brightness of 0.2, so a style
 //! change is sent). It passes when, in passthrough mode, the render world's layer list
-//! holds `layer`'s provider first of two and the layer is resumed, in VR mode the
-//! projection layer alone and the layer paused, each held for [`HOLD`] with no frame
+//! holds `layer`'s provider first of two, the layer resumed and the passthrough feature
+//! started, in VR mode the projection layer alone and the layer and the feature paused
+//! (the cameras off, owner #568), each held for [`HOLD`] with no frame
 //! breaking it, the session's blend mode OPAQUE in every frame, and every pause, resume
 //! and style call accepted (PRD #565's spike check 3 is the host driver's scan of the
 //! log for compositor errors over the same switches).
@@ -25,11 +26,11 @@ use bevy::prelude::{
 };
 use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy_mod_openxr::environment_blend_mode::OxrEnvironmentBlendModes;
-use bevy_mod_openxr::resources::{OxrPassthroughLayerFB, OxrRenderLayers};
+use bevy_mod_openxr::resources::OxrRenderLayers;
 use bevy_mod_xr::session::XrState;
 use ftgsxr_app::SettingsRes;
 
-use super::layer::Record;
+use super::layer::{Owned, Record};
 use super::{Environment, EnvironmentMode, LayerRequest, PassthroughStyle, style_map};
 
 /// The name of the entity the quest runner spawns to start the test (Q-308).
@@ -61,6 +62,8 @@ pub(crate) struct Frame {
     len: usize,
     /// The layer is resumed.
     resumed: bool,
+    /// The passthrough feature is started.
+    running: bool,
     /// The style last sent and whether it was accepted.
     style: Option<(PassthroughStyle, bool)>,
     /// The pause, resume and style calls that failed in the session.
@@ -73,14 +76,19 @@ impl Frame {
     fn holds(&self, mode: EnvironmentMode) -> bool {
         self.mode == mode
             && match mode {
-                EnvironmentMode::Passthrough => self.first && self.len == 2 && self.resumed,
-                EnvironmentMode::Vr => !self.in_list && self.len == 1 && !self.resumed,
+                EnvironmentMode::Passthrough => {
+                    self.first && self.len == 2 && self.resumed && self.running
+                }
+                EnvironmentMode::Vr => {
+                    !self.in_list && self.len == 1 && !self.resumed && !self.running
+                }
             }
     }
 }
 
-/// What the render world saw: the last frame, the frames seen and those whose blend mode
-/// was not OPAQUE.
+/// What the render world saw: the last frame, the frames with a blend mode (the crate
+/// extracts it once the session exists; a frame without it ends no frame) and those whose
+/// blend mode was not OPAQUE.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Seen {
     last: Frame,
@@ -121,6 +129,8 @@ pub(crate) struct Dv6 {
     /// Frames that broke a held mode, with the first such frame.
     broken: u32,
     first_broken: Option<Frame>,
+    /// The style seen at the end of the second passthrough hold (Q-337).
+    style: Option<(PassthroughStyle, bool)>,
     parts: Vec<String>,
     pass: bool,
 }
@@ -156,6 +166,7 @@ fn detect(names: Query<&Name>, mut commands: Commands) {
             since: Instant::now(),
             broken: 0,
             first_broken: None,
+            style: None,
             parts: Vec::new(),
             pass: true,
         });
@@ -168,7 +179,7 @@ fn observe(
     request: Option<Res<LayerRequest>>,
     record: Option<Res<Record>>,
     layers: Option<Res<OxrRenderLayers>>,
-    layer: Option<Res<OxrPassthroughLayerFB>>,
+    owned: Option<Res<Owned>>,
     blend: Option<Res<OxrEnvironmentBlendModes>>,
     shared: Res<SeenShared>,
 ) {
@@ -177,20 +188,23 @@ fn observe(
     };
     let frame = Frame {
         mode: request.mode,
-        created: layer.is_some(),
+        created: owned.is_some(),
         first: record.first_of(&layers),
         in_list: record.in_list(&layers),
         len: layers.len(),
         resumed: record.resumed,
+        running: record.running,
         style: record.style,
         failures: record.failures,
     };
-    let opaque = blend.is_some_and(|b| b.blend_mode() == openxr::EnvironmentBlendMode::OPAQUE);
+    let opaque = blend.map(|b| b.blend_mode() == openxr::EnvironmentBlendMode::OPAQUE);
     if let Ok(mut seen) = shared.0.lock() {
         seen.last = frame;
-        seen.frames += 1;
-        if !opaque {
-            seen.not_opaque += 1;
+        if let Some(opaque) = opaque {
+            seen.frames += 1;
+            if !opaque {
+                seen.not_opaque += 1;
+            }
         }
     }
 }
@@ -226,7 +240,8 @@ fn run(
             if running && !env.passthrough_available {
                 test.fail("passthrough unavailable on this runtime".to_owned());
             } else if running && seen.last.created {
-                test.parts.push("layer created paused".to_owned());
+                test.parts
+                    .push("passthrough and layer created paused".to_owned());
                 ask(settings.as_deref_mut(), EnvironmentMode::Passthrough, 0.0);
                 test.enter(0, EnvironmentMode::Passthrough);
             } else if now - test.since > START_TIMEOUT {
@@ -265,6 +280,9 @@ fn run(
                     }
                     if now - at >= HOLD {
                         test.parts.push(describe(cycle, mode, &seen.last));
+                        if (cycle, mode) == (1, EnvironmentMode::Passthrough) {
+                            test.style = seen.last.style;
+                        }
                         match (cycle, mode) {
                             (_, EnvironmentMode::Passthrough) => {
                                 ask(settings.as_deref_mut(), EnvironmentMode::Vr, 0.0);
@@ -291,12 +309,13 @@ fn run(
 fn describe(cycle: u32, mode: EnvironmentMode, f: &Frame) -> String {
     match mode {
         EnvironmentMode::Passthrough => format!(
-            "cycle {cycle} passthrough: provider first of {}, resumed, held {} s",
+            "cycle {cycle} passthrough: provider first of {}, layer resumed, passthrough \
+             running, held {} s",
             f.len,
             HOLD.as_secs()
         ),
         EnvironmentMode::Vr => format!(
-            "cycle {cycle} vr: projection layer alone, paused, held {} s",
+            "cycle {cycle} vr: projection layer alone, layer and passthrough paused, held {} s",
             HOLD.as_secs()
         ),
     }
@@ -340,7 +359,7 @@ impl Dv6 {
             brightness: BRIGHTNESS,
             ..PassthroughStyle::default()
         };
-        match seen.last.style {
+        match self.style {
             Some((s, true)) if s == want => {
                 let (b, c, sat) = style_map(s);
                 self.parts.push(format!(
@@ -382,6 +401,7 @@ mod tests {
             in_list: true,
             len: 2,
             resumed: true,
+            running: true,
             ..Frame::default()
         };
         assert!(pt.holds(EnvironmentMode::Passthrough));
@@ -397,6 +417,14 @@ mod tests {
         assert!(
             !Frame { first: false, ..pt }.holds(EnvironmentMode::Passthrough),
             "not first"
+        );
+        assert!(
+            !Frame {
+                running: false,
+                ..pt
+            }
+            .holds(EnvironmentMode::Passthrough),
+            "a paused passthrough"
         );
         let vr = Frame {
             mode: EnvironmentMode::Vr,
@@ -421,6 +449,14 @@ mod tests {
             }
             .holds(EnvironmentMode::Vr),
             "a resumed layer"
+        );
+        assert!(
+            !Frame {
+                running: true,
+                ..vr
+            }
+            .holds(EnvironmentMode::Vr),
+            "a running passthrough"
         );
     }
 }
