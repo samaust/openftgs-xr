@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! "Occlude with tracked hands" (§1.9 Depth occlusion, §1.8 Hands, D-16, #608, spec
-//! revision 41): in passthrough mode with `[environment] hand_occluders` on, each tracked
-//! hand is drawn as a gauntlet: one capsule per bone of §1.8's capsules (`meshes::BONES`,
-//! the wrist to each fingertip) and two palm capsules, from the wrist to the index and to
-//! the little finger's metacarpophalangeal joints, each of its joints' mean radius (as
-//! Q-288's) plus the margin m, `[environment] hand_gauntlet_margin_m`.
+//! The tracked hands' gauntlets (§1.9 Depth occlusion, §1.8 Hands, D-16, #608, spec
+//! revision 42): while hand tracking runs, the Quest's runtime removes the tracked hands
+//! from the depth image whatever the hand-removal option says, so in passthrough mode
+//! with `[environment] hand_removal` off each tracked hand occludes as a gauntlet: one
+//! capsule per bone of §1.8's capsules (`meshes::BONES`, the wrist to each fingertip) and
+//! two palm capsules, from the wrist to the index and to the little finger's
+//! metacarpophalangeal joints, each of its joints' mean radius (as Q-288's) plus the
+//! margin m, `[environment] hand_gauntlet_margin_m`.
 //!
 //! The gauntlet writes depth only and no color, so the real hand stays visible and the
 //! gauntlet hides what lies behind it, the splats (which test against the opaque depth,
@@ -55,7 +57,7 @@ pub(crate) struct Occluders {
 }
 
 /// The tracked hands' gauntlets, `None` when there are none: in passthrough mode with
-/// `[environment] hand_occluders` on (§1.9). `passthrough`, after `tracking` in §2.1's
+/// `[environment] hand_removal` off (§1.9). `passthrough`, after `tracking` in §2.1's
 /// order, sets it each frame before the capsules are placed; `None` until then.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct OccludersDrawn(pub(crate) Option<Occluders>);

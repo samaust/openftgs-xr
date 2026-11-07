@@ -317,9 +317,10 @@ fn eyes_follow_mode(
 /// The mode check of `tracking`'s hand and controller meshes (§1.8 Controllers and
 /// Hands: drawn in VR mode, not in passthrough mode): `DevicesDrawn` follows
 /// `Environment.mode`, false without an `Environment`; and of its gauntlets in
-/// passthrough (§1.9): `OccludersDrawn` in passthrough mode with `[environment]
-/// hand_occluders` on, drawn grey with `hand_gauntlets`, of `hand_gauntlet_margin_m`
-/// (without `SettingsRes`, the defaults: off).
+/// passthrough (§1.9, revision 42): `OccludersDrawn` in passthrough mode while
+/// `[environment] hand_removal` is off, since the runtime removes the tracked hands from
+/// the depth image itself, drawn grey with `hand_gauntlets`, of `hand_gauntlet_margin_m`
+/// (without `SettingsRes`, the defaults: hand removal off, depth only).
 pub(crate) fn devices_drawn(
     env: Option<Res<Environment>>,
     settings: Option<Res<SettingsRes>>,
@@ -334,7 +335,7 @@ pub(crate) fn devices_drawn(
     let default = Settings::default();
     let e = &settings.as_deref().map_or(&default, |s| &s.0).environment;
     let want = OccludersDrawn(
-        (mode == Some(EnvironmentMode::Passthrough) && e.hand_occluders).then_some(Occluders {
+        (mode == Some(EnvironmentMode::Passthrough) && !e.hand_removal).then_some(Occluders {
             grey: e.hand_gauntlets,
             margin_m: e.hand_gauntlet_margin_m,
         }),
@@ -600,19 +601,18 @@ mod tests {
         assert_eq!(*app.world().resource::<DevicesDrawn>(), DevicesDrawn(false));
     }
 
-    /// §1.9, D-16: the gauntlets are on in passthrough mode with `hand_occluders` on only,
-    /// depth only, or drawn with `hand_gauntlets`, of the chosen margin; off by default, in
-    /// VR mode and without an `Environment`.
+    /// §1.9 (revision 42), D-16: the gauntlets are on in passthrough mode while hand
+    /// removal is off (the default, so without `SettingsRes` too), depth only, or drawn
+    /// with `hand_gauntlets`, of the chosen margin; off with hand removal on, in VR mode
+    /// and without an `Environment`.
     #[test]
-    fn devices_drawn_draws_the_occluders_in_passthrough_with_the_option() {
+    fn devices_drawn_draws_the_occluders_in_passthrough_without_hand_removal() {
         let mut app = App::new();
         app.init_resource::<DevicesDrawn>()
             .init_resource::<OccludersDrawn>()
             .add_systems(Update, devices_drawn);
         let drawn = |app: &App| app.world().resource::<OccludersDrawn>().0;
-        let mut settings = Settings::default();
-        settings.environment.hand_occluders = true;
-        app.insert_resource(SettingsRes(settings));
+        app.insert_resource(SettingsRes(Settings::default()));
         app.update();
         assert_eq!(drawn(&app), None, "no Environment");
         app.insert_resource(Environment {
@@ -648,11 +648,15 @@ mod tests {
             .resource_mut::<SettingsRes>()
             .0
             .environment
-            .hand_occluders = false;
+            .hand_removal = true;
         app.update();
-        assert_eq!(drawn(&app), None, "the option off");
+        assert_eq!(drawn(&app), None, "hand removal on");
         app.world_mut().remove_resource::<SettingsRes>();
         app.update();
-        assert_eq!(drawn(&app), None, "the default is off");
+        assert_eq!(
+            drawn(&app),
+            gauntlet(false, 0.005),
+            "the defaults: hand removal off"
+        );
     }
 }
