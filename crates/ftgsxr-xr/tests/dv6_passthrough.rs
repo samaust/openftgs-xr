@@ -4,8 +4,8 @@
 //! passthrough submits the passthrough layer, and back; the blend mode stays OPAQUE. The
 //! device flips `[environment] mode` to passthrough and back twice and prints PASS when,
 //! in passthrough mode, the render world's layer list holds `passthrough`'s provider
-//! first and the layer is resumed, in VR mode the projection layer alone and the layer
-//! paused, the blend mode OPAQUE in every frame, and every pause, resume and style call
+//! first, the layer resumed and the passthrough feature started, in VR mode the
+//! projection layer alone and the layer and the feature paused (owner, #568), the blend mode OPAQUE in every frame, and every pause, resume and style call
 //! accepted (the style reported, Q-337). The driver installs, launches `dv6`, reads the
 //! verdict and, for PRD #565's spike check 3, checks the app's log of the run has no
 //! error line (an end-frame failure, a failed passthrough call) and prints the system's
@@ -64,6 +64,10 @@ fn dv_dv6_passthrough_layer_submitted_and_removed_blend_mode_opaque() {
     );
     assert!(pass, "dv6 FAIL {detail}");
     assert!(detail.contains("cycle 1 vr"), "both cycles ran: {detail}");
+    assert!(
+        detail.contains("layer and passthrough paused"),
+        "the feature paused in VR mode: {detail}"
+    );
     assert!(
         detail.contains("style applied"),
         "the style was sent: {detail}"
