@@ -62,12 +62,13 @@ const LITTLE_MCP: usize = 22;
 /// The gauntlet's capsules as joint pairs: §1.8's 24 bones, then the two palm capsules
 /// (§1.9).
 pub(crate) const CAPSULES: [(usize, usize); BONES.len() + 2] = {
-    let mut c = [(WRIST, INDEX_MCP); BONES.len() + 2];
+    let mut c = [(0, 0); BONES.len() + 2];
     let mut i = 0;
     while i < BONES.len() {
         c[i] = BONES[i];
         i += 1;
     }
+    c[BONES.len()] = (WRIST, INDEX_MCP);
     c[BONES.len() + 1] = (WRIST, LITTLE_MCP);
     c
 };
@@ -118,7 +119,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 ";
 
-/// The gauntlet's material: opaque, in the opaque phase, with its color writes off.
+/// The gauntlet's material: opaque, in the opaque phase, with its color writes off; the
+/// contact shadow's alpha-mask phase comes after it (Q-364). Its depth hides every
+/// depth-tested surface behind it, not only the splats (Q-367).
+// Q-364, Q-367
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug, Default)]
 pub(crate) struct GauntletMaterial {}
 
@@ -169,8 +173,8 @@ pub(crate) fn add_material(app: &mut App) -> bool {
     true
 }
 
-/// One capsule of a gauntlet: its side, its index in `CAPSULES`, and its mesh's radius
-/// and length once made (at the first frame both joints are located, as Q-288's).
+/// One capsule of a gauntlet: its side, its index in `CAPSULES`, and whether its mesh is
+/// made (at the first frame both joints are located, as Q-288's).
 #[derive(Component, Clone, Copy)]
 pub(crate) struct GauntletCapsule {
     side: usize,
@@ -298,8 +302,15 @@ mod tests {
             let s = s.expect("every joint is located");
             assert!((s.a - Vec3::new(a as f32 * 0.01, 1.0, 0.0)).length() < 1e-6);
             assert!((s.b - Vec3::new(b as f32 * 0.01, 1.0, 0.0)).length() < 1e-6);
-            let want = (j[a].radius + j[b].radius) / 2.0 + 0.015;
-            assert!((s.radius - want).abs() < 1e-7, "{a}-{b}: {}", s.radius);
+        }
+        // Radii worked by hand from the joints' (1 + i/10) mm: the mean of the two joints'
+        // plus 15 mm. Wrist (1.1 mm) to the thumb's metacarpal (1.2 mm): 16.15 mm; the
+        // index's distal (1.9 mm) to its tip (2.0 mm): 16.95 mm; the palm capsules, wrist
+        // to the index's proximal (1.7 mm): 16.4 mm, to the little finger's (3.2 mm):
+        // 17.15 mm.
+        for (k, want) in [(0, 0.01615), (8, 0.01695), (24, 0.0164), (25, 0.01715)] {
+            let r = g[k].expect("located").radius;
+            assert!((r - want).abs() < 1e-7, "capsule {k}: {r}");
         }
     }
 

@@ -122,6 +122,7 @@ impl Material for ShadowMaterial {
     /// Q-364: the alpha-mask phase, which Bevy's main opaque pass draws after the opaque
     /// phase (source-log 373), so every gauntlet's depth is written first; the blend is
     /// still `specialize`'s and the shader ignores the cutoff.
+    // Q-364
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Mask(0.5)
     }
