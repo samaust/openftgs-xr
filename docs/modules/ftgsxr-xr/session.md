@@ -10,7 +10,7 @@ bevy\_mod\_openxr 0.6.0 runs the session: its init, session, events and render p
 
 `XrPlugin` itself:
 
-- asks for the extensions of Appendix E.1 that the built milestones use, the hand extensions only with `hands` (`tracking.md`), and XR\_FB\_passthrough, the three spatial-entity extensions of the anchors and XR\_META\_environment\_depth (M-6); the crate drops those the runtime lacks with a warning;
+- asks for the extensions of Appendix E.1 that the built milestones use, the hand extensions only with `hands` (`tracking.md`), and XR\_FB\_passthrough, the spatial-entity extensions of the anchors (with XR\_META\_spatial\_entity\_discovery, Q-358) and XR\_META\_environment\_depth (M-6); the crate drops those the runtime lacks with a warning;
 - configures an OPAQUE session (D-14) with the swapchain format `Rgba8UnormSrgb` (Q-91);
 - on Android, adds the instance extension `VK_KHR_get_surface_capabilities2` through the crate's `OxrManualGraphicsConfig`, which the Quest runtime's surface extension requires (Q-139);
 - logs E-XR-RUNTIME once when the instance could not be created, as `session` does when the session could not be created: a warning on the desktop, which continues without XR, an error on the Quest, which exits 2 (§1.13, §1.15);
