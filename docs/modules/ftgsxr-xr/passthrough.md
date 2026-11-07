@@ -14,7 +14,7 @@ The switch runs in the main world while a session exists, in one chain: the togg
 - **The toggle.** On the headset, `Intent::Toggle(Feature::Passthrough)`, from the wrist menu's button or the Environment tab's mode switch, flips the setting; nothing else consumes it, and without the XR crate the control is absent anyway (Q-335, Q-336).
 - **The effective mode.** Each frame `Environment.mode` is written as passthrough when the setting asks for it, the marker exists and `passthrough_available`, VR otherwise; without a session it is VR. The style is written beside it from the three `passthrough_*` settings.
 - **A mode the device cannot show.** When the setting asks for passthrough on a headset whose runtime lacks the extension, the setting is written back to `vr` and E-XR-UNSUPPORTED is logged as a warning each time, with its toast once per session (Q-161, Q-335), so the setting never holds a mode the device cannot show. The `xr` test `xr_passthrough_unsupported.rs` runs this clause on Monado beside I-15.
-- **`XrFeatures.passthrough`.** `Available` on the headset where the runtime offers the extension, `Absent` otherwise, so the passthrough controls show only there (Q-336, §1.9 "On the desktop the Environment tab shows the VR-mode controls only").
+- **`XrFeatures.passthrough`.** `Available` on the headset while a session exists and the runtime offers the extension, `Absent` otherwise (without a session too, as occlusion), so the passthrough controls show only there (Q-336, §1.9 "On the desktop the Environment tab shows the VR-mode controls only").
 
 ## The eyes' output per mode
 
