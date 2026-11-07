@@ -44,6 +44,8 @@ const TIERS: &[&str] = &[
 ];
 /// §1.13's log levels.
 const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
+/// §1.5's fit boxes, `[general] fit_to`.
+const FIT_TO: &[&str] = &["content", "whole"];
 /// §1.6's loop modes.
 pub(crate) const LOOP_MODES: &[&str] = &["loop", "ping-pong", "once"];
 /// §1.5's render modes.
@@ -146,6 +148,10 @@ pub struct GeneralSettings {
     pub ui_scale: f32,
     /// `error`, `warn`, `info`, `debug` or `trace` (§1.13).
     pub log_level: String,
+    /// The fit box (§1.5 Poses): `content`, E10's B_c, or `whole`, its B_m. An unknown
+    /// value is reported and taken as `content`.
+    // Q-371
+    pub fit_to: String,
 }
 
 /// `[playback]` (§1.6, §1.11, Q-49).
@@ -363,6 +369,7 @@ impl Default for GeneralSettings {
             governor: true,
             ui_scale: 1.0,
             log_level: "info".into(),
+            fit_to: "content".into(),
         }
     }
 }
@@ -744,7 +751,11 @@ impl Reader {
     fn general(&mut self, root: Option<&Table>) -> GeneralSettings {
         let p = "general";
         let t = self.table(root, "", p);
-        self.unknown(t, p, &["tier", "governor", "ui_scale", "log_level"]);
+        self.unknown(
+            t,
+            p,
+            &["tier", "governor", "ui_scale", "log_level", "fit_to"],
+        );
         let d = GeneralSettings::default();
         GeneralSettings {
             tier: self.take(t, p, "tier", choice(TIERS)).unwrap_or(d.tier),
@@ -755,6 +766,9 @@ impl Reader {
             log_level: self
                 .take(t, p, "log_level", choice(LOG_LEVELS))
                 .unwrap_or(d.log_level),
+            fit_to: self
+                .take(t, p, "fit_to", choice(FIT_TO))
+                .unwrap_or(d.fit_to),
         }
     }
 
@@ -1351,6 +1365,7 @@ fn document(s: &Settings) -> Table {
                 ("governor", Value::Boolean(g.governor)),
                 ("ui_scale", float(g.ui_scale)),
                 ("log_level", Value::String(g.log_level.clone())),
+                ("fit_to", Value::String(g.fit_to.clone())),
             ])),
         ),
         ("sources", Value::Array(sources)),
