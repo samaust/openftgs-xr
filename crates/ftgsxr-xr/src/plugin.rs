@@ -22,6 +22,7 @@ use bevy_mod_xr::session::{XrSessionPlugin, XrState};
 use ftgsxr_render::SortMode;
 use openxr::EnvironmentBlendMode;
 
+use crate::anchors::AnchorsPlugin;
 use crate::display::DisplayPlugin;
 use crate::error::{XrError, log_runtime, log_warning};
 use crate::panel::PanelPlugin;
@@ -65,6 +66,10 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.fb_swapchain_update_state = true;
     raw.fb_swapchain_update_state_vulkan = true;
     raw.meta_recommended_layer_resolution = true;
+    // §1.9's anchors (D-26, #571): the entity, its query by UUID and its persistence.
+    raw.fb_spatial_entity = true;
+    raw.fb_spatial_entity_query = true;
+    raw.meta_spatial_entity_persistence = true;
     // The Touch Plus profile (Appendix D.2) through `tracking`'s bindings.
     raw.meta_touch_controller_plus = true;
     // §1.8 Hands (PRD #452, #454); the frequency hint by name, since no pinned openxr
@@ -234,10 +239,16 @@ impl Plugin for XrTail {
             PostUpdate,
             passthrough::devices_drawn.before(tracking::DrawDevices),
         )
+        // The scene anchor's handshake and the store (#571), after `session`, whose
+        // twist it uses, and `tracking`, whose permission flow it shares.
+        .add_plugins(AnchorsPlugin)
         // The panel and the wrist menu (#462), after `xr_input` (§2.1's module order).
         .add_plugins(PanelPlugin)
         // After the events plugin and `session`, whose re-creation it uses (Q-124).
-        .add_plugins(DisplayPlugin);
+        .add_plugins(DisplayPlugin)
+        // §1.9 (#569, Q-342): the contact shadows, drawn in passthrough mode only, where
+        // Bevy's `PbrPlugin` is in the group.
+        .add_plugins(passthrough::ContactShadowPlugin);
         // §1.9, D-14 (#568): the layer, the switch and the style; without it nothing is
         // created and the mode stays VR (M-3's behaviour).
         if self.passthrough {

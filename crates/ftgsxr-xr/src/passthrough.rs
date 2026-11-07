@@ -15,6 +15,8 @@
 //! - The layer (render world, `layer`): created at session creation, submitted first in
 //!   bevy\_mod\_openxr's layer list and resumed in passthrough mode, paused and removed in
 //!   VR mode; the session stays OPAQUE (D-14).
+//! - The contact shadows (`shadow`, Q-342): `ContactShadowPlugin`, an ellipse on the floor
+//!   under each visible instance in passthrough mode on the headset.
 //! - `XrFeatures.passthrough` (Q-336): `Available` on the headset where the runtime offers
 //!   the extension, else `Absent`.
 //!
@@ -25,6 +27,10 @@
 #[cfg(any(test, target_os = "android"))]
 mod dv6;
 mod layer;
+// The contact shadows (Q-342, #569).
+mod shadow;
+
+pub use shadow::ContactShadowPlugin;
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::ecs::message::MessageReader;
