@@ -39,6 +39,7 @@ use bevy::prelude::{
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureUsages};
+use bevy::render::renderer::RenderDevice;
 use bevy::render::texture::GpuImage;
 use bevy::render::{Extract, ExtractSchedule, Render, RenderApp, RenderSystems};
 use bevy_mod_openxr::exts::OxrEnabledExtensions;
@@ -86,7 +87,7 @@ pub(crate) enum Acquired {
     /// A new image: its left and right views' frames, aged 0.
     New(Box<[DepthFrame; 2]>),
     /// No image newer than the last (none yet, or the same capture): the last frames,
-    /// whose copied images still hold it, one frame older.
+    /// whose converted images still hold it, one frame older.
     Same,
     /// The acquire failed: no frames.
     Failed,
@@ -445,7 +446,7 @@ fn control(
                 RenderAssetUsages::default(),
             );
             image.texture_descriptor.usage =
-                TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING;
+                TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
             images.add(image)
         };
         control.images = Some([make(), make()]);
@@ -511,6 +512,7 @@ fn drive(
     shared: Res<Shared>,
     gpu: Res<RenderGpu>,
     gpu_images: Res<RenderAssets<GpuImage>>,
+    render: Res<RenderDevice>,
     frame: Option<Res<OxrFrameState>>,
     pipelined: Option<Res<Pipelined>>,
     space: Option<Res<XrPrimaryReferenceSpace>>,
@@ -546,8 +548,8 @@ fn drive(
                     };
                     let targets = request.images.as_ref().and_then(|[l, r]| {
                         Some([
-                            (l.clone(), gpu_images.get(l)?.texture.clone()),
-                            (r.clone(), gpu_images.get(r)?.texture.clone()),
+                            (l.clone(), gpu_images.get(l)?.texture_view.clone()),
+                            (r.clone(), gpu_images.get(r)?.texture_view.clone()),
                         ])
                     });
                     depth.begin_frame(FrameCtx {
@@ -555,6 +557,7 @@ fn drive(
                         space: space.0.0.as_raw_openxr_space(),
                         root: root.map_or(GlobalTransform::IDENTITY, |r| r.0),
                         gpu: gpu.0.clone(),
+                        render: Some(render.clone()),
                         targets,
                     });
                     frames_of(depth)

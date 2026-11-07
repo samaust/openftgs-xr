@@ -9,18 +9,24 @@
 //! `D16_UNORM` arrays (0 left, 1 right) on Vulkan; it lives for the session. Each frame's
 //! first `acquire` makes the runtime's one acquire at the frame's predicted display time
 //! in the primary reference space (Q-341), imports the acquired swapchain image into
-//! wgpu once (Q-339, `ftgsxr_render::import_vulkan_texture`), copies each layer into its
-//! view's `DepthFrame.image`, and builds each view's camera through the tracking root;
-//! `Views` gives the left then the right frame (Q-349).
+//! wgpu once (Q-339, `ftgsxr_render::import_vulkan_texture`), draws each layer into its
+//! view's `DepthFrame.image` through a conversion pass (Q-T570.5), and builds each view's
+//! camera through the tracking root; `Views` gives the left then the right frame (Q-349).
 
 use bevy::asset::Handle;
 use bevy::image::Image;
 use bevy::log::{info, warn};
 use bevy::prelude::{GlobalTransform, Quat, Transform, Vec3};
 use bevy::render::render_resource::{
-    CommandEncoderDescriptor, Extent3d, Origin3d, PollType, TexelCopyTextureInfo, Texture,
-    TextureAspect, TextureFormat,
+    BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
+    ColorTargetState, ColorWrites, CommandEncoderDescriptor, LoadOp, MultisampleState, Operations,
+    PipelineCompilationOptions, PipelineLayoutDescriptor, PollType, PrimitiveState,
+    RawFragmentState, RawRenderPipelineDescriptor, RawVertexState, RenderPassColorAttachment,
+    RenderPassDescriptor, RenderPipeline, ShaderModuleDescriptor, ShaderSource, ShaderStages,
+    StoreOp, Texture, TextureAspect, TextureFormat, TextureSampleType, TextureView,
+    TextureViewDescriptor, TextureViewDimension,
 };
+use bevy::render::renderer::RenderDevice;
 use ftgsxr_app::Permission;
 use ftgsxr_core::{Fov, UVec2};
 use ftgsxr_render::{DepthFrame, SplatGpu, import_vulkan_texture};
@@ -31,13 +37,97 @@ use super::{Acquired, DepthDriver, EXTENSION, EnvironmentDepth, Views, depth_cam
 use crate::error::XrError;
 
 /// The swapchain images' format on Vulkan (registry, XR\_META\_environment\_depth: the
-/// runtime must create `VK_FORMAT_D16_UNORM`; spike check 1 confirms it on the Quest 3).
-pub(crate) const FORMAT: TextureFormat = TextureFormat::Depth16Unorm;
+/// runtime must create `VK_FORMAT_D16_UNORM`; spike check 1 confirmed it on the Quest 3).
+const SOURCE_FORMAT: TextureFormat = TextureFormat::Depth16Unorm;
+/// The views' `DepthFrame.image` format: the stored depth d unchanged in the red channel,
+/// a colour target the conversion pass can draw (Q-T570.5); it binds as an unfilterable
+/// float, as `DepthFrame` asks.
+pub(crate) const FORMAT: TextureFormat = TextureFormat::R32Float;
+
+/// The conversion pass (Q-T570.5): a full-screen triangle whose fragment loads its own
+/// texel of one layer of the runtime's depth image and writes it to red. Inline, as
+/// Q-354's shader, so that every `.wgsl` file stays the render crate's (U-35).
+// Q-T570.5, Q-354
+const CONVERSION_WGSL: &str = r"// SPDX-License-Identifier: Apache-2.0
+// Q-T570.5: one layer of the runtime's depth image, texel for texel, into red.
+@group(0) @binding(0) var src: texture_depth_2d;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let d = textureLoad(src, vec2<i32>(p.xy), 0);
+    return vec4<f32>(d, 0.0, 0.0, 1.0);
+}
+";
+
+/// The conversion pass's layout and pipeline, made once per session.
+struct Pass {
+    layout: BindGroupLayout,
+    pipeline: RenderPipeline,
+}
+
+impl Pass {
+    fn new(render: &RenderDevice) -> Pass {
+        let module = render.create_and_validate_shader_module(ShaderModuleDescriptor {
+            label: Some("ftgsxr depth conversion"),
+            source: ShaderSource::Wgsl(CONVERSION_WGSL.into()),
+        });
+        let layout = render.create_bind_group_layout(
+            "ftgsxr depth conversion",
+            &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Depth,
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        );
+        let pipeline_layout = render.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("ftgsxr depth conversion"),
+            bind_group_layouts: &[Some(&*layout)],
+            immediate_size: 0,
+        });
+        let pipeline = render.create_render_pipeline(&RawRenderPipelineDescriptor {
+            label: Some("ftgsxr depth conversion"),
+            layout: Some(&pipeline_layout),
+            vertex: RawVertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            fragment: Some(RawFragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: PipelineCompilationOptions::default(),
+                targets: &[Some(ColorTargetState {
+                    format: FORMAT,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        Pass { layout, pipeline }
+    }
+}
 /// The swapchain images' array layers: one per view (the registry's "array textures of
 /// length 2").
 const LAYERS: u32 = 2;
 
-/// What one frame gives the copy: the time and space of the acquire, the tracking root,
+/// What one frame gives the conversion: the time and space of the acquire, the tracking root,
 /// the device, and each view's `DepthFrame.image` with its prepared GPU texture.
 #[derive(Clone)]
 pub(crate) struct FrameCtx {
@@ -45,7 +135,8 @@ pub(crate) struct FrameCtx {
     pub(crate) space: sys::Space,
     pub(crate) root: GlobalTransform,
     pub(crate) gpu: Option<SplatGpu>,
-    pub(crate) targets: Option<[(Handle<Image>, Texture); 2]>,
+    pub(crate) render: Option<RenderDevice>,
+    pub(crate) targets: Option<[(Handle<Image>, TextureView); 2]>,
 }
 
 /// The adapter.
@@ -58,6 +149,9 @@ pub(crate) struct MetaDepth {
     size: Option<UVec2>,
     /// Each swapchain image imported, once (Q-339).
     imported: Vec<Option<Texture>>,
+    /// The conversion pass and each image's two layers' bind groups (Q-T570.5).
+    pass: Option<Pass>,
+    groups: Vec<Option<[BindGroup; 2]>>,
     running: bool,
     views: Views,
     ctx: Option<FrameCtx>,
@@ -94,6 +188,8 @@ impl MetaDepth {
             images: Vec::new(),
             size: None,
             imported: Vec::new(),
+            pass: None,
+            groups: Vec::new(),
             running: false,
             views: Views::default(),
             ctx: None,
@@ -193,6 +289,7 @@ impl MetaDepth {
         out.truncate(count as usize);
         self.images = out.iter().map(|i| i.image).collect();
         self.imported = vec![None; self.images.len()];
+        self.groups = vec![None; self.images.len()];
         self.size = Some(UVec2::new(state.width, state.height));
         info!(
             "depth: provider and swapchain created, {} images of {} x {}",
@@ -203,7 +300,7 @@ impl MetaDepth {
         Ok(())
     }
 
-    /// The runtime's one acquire of the frame, the copy, the two views' frames.
+    /// The runtime's one acquire of the frame, the conversion pass, the two views' frames.
     fn acquire_image(&mut self) -> Acquired {
         let (Some(ctx), Some(size), Ok(t)) = (self.ctx.clone(), self.size, self.table()) else {
             return Acquired::Failed;
@@ -275,46 +372,68 @@ impl MetaDepth {
             // count (2) and the swapchain state its size; its images live as long as the
             // swapchain, which outlives this texture (`Drop` waits for the GPU and drops
             // the textures before destroying it); it was written by the runtime before
-            // this acquire returned. Its sampled and transfer-source usages are assumed:
-            // the registry lets the app queue GPU work on it without naming the usages,
-            // and Dv-7's validation scan is the check (spike check 1). Q-T570.2: wgpu
-            // tracks it from UNINITIALIZED.
-            let texture = unsafe { import_vulkan_texture(gpu.device(), raw, size, LAYERS, FORMAT) };
+            // this acquire returned. Its usages are sampled and depth-attachment (Dv-7's
+            // validation layer, spike check 1), not the transfer-source usage the helper's
+            // contract names: the texture is only sampled here (the conversion pass,
+            // Q-T570.5), never copied, so no command needs it. Q-T570.2: wgpu tracks it
+            // from UNINITIALIZED.
+            let texture =
+                unsafe { import_vulkan_texture(gpu.device(), raw, size, LAYERS, SOURCE_FORMAT) };
             Texture::from(texture)
         });
-        let dev = gpu.device();
-        let mut enc = dev
-            .device()
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("ftgsxr depth copy"),
-            });
+        // Q-T570.5: the runtime's images have no transfer-source usage (Dv-7's validation
+        // layer, spike check 1), so each layer is drawn into its view's image by the
+        // conversion pass, which samples it.
+        let Some(render) = ctx.render else {
+            return Acquired::Failed;
+        };
+        let pass = self.pass.get_or_insert_with(|| Pass::new(&render));
+        let groups = self.groups[index].get_or_insert_with(|| {
+            [0u32, 1].map(|layer| {
+                let view = source.create_view(&TextureViewDescriptor {
+                    label: Some("ftgsxr depth layer"),
+                    dimension: Some(TextureViewDimension::D2),
+                    aspect: TextureAspect::DepthOnly,
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..TextureViewDescriptor::default()
+                });
+                render.create_bind_group(
+                    "ftgsxr depth layer",
+                    &pass.layout,
+                    &[BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(&view),
+                    }],
+                )
+            })
+        });
+        let mut enc = render.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("ftgsxr depth conversion"),
+        });
         for (layer, (_, target)) in targets.iter().enumerate() {
-            enc.copy_texture_to_texture(
-                TexelCopyTextureInfo {
-                    texture: source,
-                    mip_level: 0,
-                    origin: Origin3d {
-                        x: 0,
-                        y: 0,
-                        z: layer as u32,
+            let mut rp = enc.begin_render_pass(&RenderPassDescriptor {
+                label: Some("ftgsxr depth conversion"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
                     },
-                    aspect: TextureAspect::All,
-                },
-                TexelCopyTextureInfo {
-                    texture: target,
-                    mip_level: 0,
-                    origin: Origin3d::ZERO,
-                    aspect: TextureAspect::All,
-                },
-                Extent3d {
-                    width: size.x,
-                    height: size.y,
-                    depth_or_array_layers: 1,
-                },
-            );
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rp.set_pipeline(&pass.pipeline);
+            rp.set_bind_group(0, &*groups[layer], &[]);
+            rp.draw(0..3, 0..1);
         }
         // Before the camera passes, which Bevy submits in `Render`.
-        dev.queue().submit([enc.finish()]);
+        gpu.device().queue().submit([enc.finish()]);
         let capture = stamp.capture_time.as_nanos();
         let new = capture == 0 || capture != self.capture;
         self.capture = capture;
@@ -457,6 +576,7 @@ impl Drop for MetaDepth {
         if let Some(gpu) = self.ctx.as_ref().and_then(|c| c.gpu.as_ref()) {
             let _ = gpu.device().device().poll(PollType::wait_indefinitely());
         }
+        self.groups.clear();
         self.imported.clear();
         let Ok(t) = self.table() else { return };
         if self.swapchain != sys::EnvironmentDepthSwapchainMETA::NULL {
