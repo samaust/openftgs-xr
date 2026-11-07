@@ -207,7 +207,10 @@ impl Plugin for TrackingPlugin {
                 XrPreDestroySession,
                 (despawn_spaces, hands::destroy_trackers, clear_hud),
             )
-            .add_systems(Update, hands::poll_permission)
+            .add_systems(
+                Update,
+                (hands::poll_permission, hands::write_feature).chain(),
+            )
             .add_systems(
                 PreUpdate,
                 sync.before(OxrActionSetSyncSet)
