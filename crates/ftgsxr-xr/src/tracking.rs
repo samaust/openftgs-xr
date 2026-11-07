@@ -8,15 +8,15 @@
 //! plugin. Thresholds, haptic pulses and intents are `xr_input`'s. Hands (M-5, #459):
 //! the permission, one tracker per side, one raw locate per hand per frame with the aim
 //! state chained (`hands`), the per-side ownership rule, the frequency hint, and the hand
-//! capsules and controller meshes in VR mode (`meshes`), and the tracked hands drawn in
-//! passthrough mode (`occluders`, §1.9).
+//! capsules and controller meshes in VR mode (`meshes`), and the tracked hands' gauntlets
+//! in passthrough mode, depth only or grey (`occluders`, §1.9).
 
 // Dv-8's device side (#463, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 pub(crate) mod dv8;
-// "Occlude with tracked hands" (§1.9, #608).
 pub(crate) mod hands;
 mod meshes;
+// "Occlude with tracked hands" (§1.9, #608).
 mod occluders;
 
 pub(crate) use hands::FREQUENCY_HINT_EXT;

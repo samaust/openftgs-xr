@@ -504,6 +504,33 @@ help = "F1"
 /// one of at least 160 loads as given, however wide (the dock applies the window's 60 %
 /// bound when drawn).
 // Q-251
+/// U-29 range (Q-50): `[environment] hand_gauntlet_margin_m` loads within §1.9's slider,
+/// 0–2 cm, and a value outside takes D-16's 0.5 cm with a warning naming it.
+#[test]
+fn u29_a_gauntlet_margin_outside_0_to_2_cm_takes_the_default_with_a_warning() {
+    for (text, want, warned) in [
+        ("0.02", 0.02, false),
+        ("0", 0.0, false),
+        ("0.021", 0.005, true),
+        ("-0.001", 0.005, true),
+    ] {
+        let (_, s, warnings) = load_text(
+            "gauntlet_margin",
+            &format!(
+                "format = \"ftgsxr-settings\"\nversion = 1\n\n[environment]\nhand_gauntlet_margin_m = {text}\n"
+            ),
+        );
+        assert_eq!(s.environment.hand_gauntlet_margin_m, want, "{text}");
+        assert_eq!(
+            warnings
+                .iter()
+                .any(|w| w.contains("`environment.hand_gauntlet_margin_m`")),
+            warned,
+            "{text}: {warnings:?}"
+        );
+    }
+}
+
 #[test]
 fn u29_a_dock_width_below_160_or_not_finite_takes_the_default_with_a_warning() {
     for (name, value) in [

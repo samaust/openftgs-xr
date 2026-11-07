@@ -49,7 +49,7 @@ use super::meshes::{BONES, bone_transform, grey};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Occluders {
     /// "Draw gauntlets": opaque in the hands' grey; otherwise depth only.
-    pub(crate) drawn: bool,
+    pub(crate) grey: bool,
     /// The margin m over each capsule's joint radius, metres.
     pub(crate) margin_m: f32,
 }
@@ -278,10 +278,10 @@ pub(crate) fn draw_gauntlets(
                 .entity(e)
                 .insert(Mesh3d(meshes.add(Capsule3d::new(radius, len))));
         }
-        if capsule.grey != Some(o.drawn) {
-            capsule.grey = Some(o.drawn);
+        if capsule.grey != Some(o.grey) {
+            capsule.grey = Some(o.grey);
             let mut entity = commands.entity(e);
-            if o.drawn {
+            if o.grey {
                 entity
                     .remove::<MeshMaterial3d<DepthOnlyMaterial>>()
                     .insert(MeshMaterial3d(m.grey.clone()));
@@ -437,27 +437,43 @@ mod tests {
                 );
             }
         };
-        let set = |app: &mut App, drawn: bool, margin_m: f32| {
-            app.insert_resource(OccludersDrawn(Some(Occluders { drawn, margin_m })));
+        let set = |app: &mut App, grey: bool, margin_m: f32| {
+            app.insert_resource(OccludersDrawn(Some(Occluders { grey, margin_m })));
             app.update();
             app.update();
+        };
+        let handles = |world: &mut World| {
+            let mut q = world.query::<(&GauntletCapsule, &Mesh3d)>();
+            let mut h: Vec<_> = q.iter(world).map(|(c, m)| (c.index, m.0.id())).collect();
+            h.sort_by_key(|(i, _)| *i);
+            h
         };
         set(&mut app, false, 0.005);
         check(&shown(app.world_mut()), false);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 26);
+        let before = handles(app.world_mut());
         set(&mut app, true, 0.005);
         check(&shown(app.world_mut()), true);
         assert_eq!(
-            app.world().resource::<Assets<Mesh>>().len(),
-            26,
-            "same meshes"
+            handles(app.world_mut()),
+            before,
+            "the same meshes for the same margin"
         );
         set(&mut app, true, 0.01);
         check(&shown(app.world_mut()), true);
+        let after = handles(app.world_mut());
+        assert_eq!(after.len(), 26);
+        assert!(
+            after
+                .iter()
+                .zip(&before)
+                .all(|(a, b)| a.0 == b.0 && a.1 != b.1),
+            "every mesh made again for the new margin"
+        );
         assert_eq!(
             app.world().resource::<Assets<Mesh>>().len(),
             26,
-            "the meshes replaced for the new margin"
+            "the old meshes removed"
         );
     }
 }

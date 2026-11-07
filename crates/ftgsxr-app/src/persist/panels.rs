@@ -826,7 +826,7 @@ mod tests {
         }
         assert!(world.resource::<SettingsRes>().0.environment.hand_occluders);
 
-        // §1.9 (revision 40): "draw gauntlets" is offered while the option is on, and
+        // §1.9 (revision 41): "draw gauntlets" is offered while the option is on, and
         // clicking it turns `[environment] hand_gauntlets` on.
         let gauntlets = "draw gauntlets";
         let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);

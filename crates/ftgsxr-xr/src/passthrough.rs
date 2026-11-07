@@ -335,7 +335,7 @@ pub(crate) fn devices_drawn(
     let e = &settings.as_deref().map_or(&default, |s| &s.0).environment;
     let want = OccludersDrawn(
         (mode == Some(EnvironmentMode::Passthrough) && e.hand_occluders).then_some(Occluders {
-            drawn: e.hand_gauntlets,
+            grey: e.hand_gauntlets,
             margin_m: e.hand_gauntlet_margin_m,
         }),
     );
@@ -624,7 +624,7 @@ mod tests {
         assert_eq!(drawn(&app), None, "VR mode");
         app.world_mut().resource_mut::<Environment>().mode = EnvironmentMode::Passthrough;
         app.update();
-        let gauntlet = |drawn, margin_m| Some(Occluders { drawn, margin_m });
+        let gauntlet = |grey, margin_m| Some(Occluders { grey, margin_m });
         assert_eq!(
             drawn(&app),
             gauntlet(false, 0.005),
