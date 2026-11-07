@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr_core::types` items no §3 row pins on their own (`cpu` lane), each against a
-//! hand-worked literal: `Model::bounds` (E10's B_m, D-42), `Model::cap_sh`'s shape
+//! hand-worked literal: `Model::bounds` and `Model::content_bounds` (E10's B_m and B_c, D-42), `Model::cap_sh`'s shape
 //! (§1.2 load option 1; its color clause is U-9's), `TimeSpan` (E9's r, D-32), `Pose`
 //! (E5) and `Aabb`.
 
@@ -39,44 +39,37 @@ fn two_rows() -> Model {
 
 #[test]
 fn bounds_cover_the_moving_visible_rows_expanded_by_three_scales() {
-    // E10: A spans x ∈ [−1, 1] over τ ∈ [0, 2]; B is below α_skip and leaves the box and
-    // the margin; the margin is 3 · 0.1.
-    let b = two_rows().bounds(8);
+    // E10: A's visible interval (h = √(2 ln 127.5) ≈ 3.1 about τ = 1) covers [0, 2], so
+    // it spans x ∈ [−1, 1] with its margin 3 · 0.1; B is below α_skip and adds nothing.
+    let b = two_rows().bounds();
     assert_vec3(b.min, Vec3::new(-1.3, -0.3, -0.3), 1e-6);
     assert_vec3(b.max, Vec3::new(1.3, 0.3, 0.3), 1e-6);
 }
 
 #[test]
-fn bounds_sample_at_the_requested_times() {
-    // Two samples (k = 0, 1, 2 at τ = 0, 1, 2) reach the same ends; at τ = 1.0 only.
-    let b = two_rows().bounds(2);
-    assert_vec3(b.min, Vec3::new(-1.3, -0.3, -0.3), 1e-6);
-    let mut m = two_rows();
-    m.time_center = vec![0.5, 1.0]; // A at x = −0.5 at τ₀ and 1.5 at τ₁
-    let b = m.bounds(1);
-    assert_vec3(b.min, Vec3::new(-0.8, -0.3, -0.3), 1e-6);
-    assert_vec3(b.max, Vec3::new(1.8, 0.3, 0.3), 1e-6);
-}
-
-#[test]
-fn bounds_of_a_single_timestamp_take_one_sample() {
+fn bounds_of_a_single_timestamp_count_the_rows_at_tau0() {
     let mut m = two_rows();
     m.time.tau0 = 1.0;
     m.time.tau1 = 1.0;
     m.velocity[0] = [0.0; 3];
-    let b = m.bounds(8);
+    let b = m.bounds();
     assert_vec3(b.min, Vec3::splat(-0.3), 1e-6);
     assert_vec3(b.max, Vec3::splat(0.3), 1e-6);
 }
 
 #[test]
-fn bounds_without_a_visible_row_cover_every_row() {
-    // D-42: with every opacity ≤ α_skip, the box is over all rows.
+fn bounds_without_a_counted_row_cover_every_row() {
+    // D-42: with every opacity ≤ α_skip, every row counts over [τ₀, τ₁], each with its
+    // own margin: A's 0.3 about x ∈ [−1, 1], B's 0.6 about (0, 5, 0).
     let mut m = two_rows();
     m.opacity = vec![0.001, 0.001];
-    let b = m.bounds(8);
-    assert_vec3(b.min, Vec3::new(-1.6, -0.6, -0.6), 1e-6);
-    assert_vec3(b.max, Vec3::new(1.6, 5.6, 0.6), 1e-6);
+    let b = m.bounds();
+    assert_vec3(b.min, Vec3::new(-1.3, -0.3, -0.6), 1e-6);
+    assert_vec3(b.max, Vec3::new(1.3, 5.6, 0.6), 1e-6);
+    // B_c at the span's midpoint τ = 1: A at the origin, B at (0, 5, 0).
+    let c = m.content_bounds();
+    assert_vec3(c.min, Vec3::ZERO, 1e-6);
+    assert_vec3(c.max, Vec3::new(0.0, 5.0, 0.0), 1e-6);
 }
 
 #[test]

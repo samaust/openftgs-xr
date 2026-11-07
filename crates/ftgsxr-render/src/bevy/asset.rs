@@ -19,9 +19,6 @@ use ftgsxr_io::ModelBytes;
 use crate::gpu::RenderError;
 use crate::gpu::model::packed_speed_p99;
 
-/// The samples E10's box takes over the span: τ₀ + k T_τ/8, k = 0 … 8.
-const BOX_SAMPLES: usize = 8;
-
 /// A model packed for the GPU, shared by every instance of the asset and kept until the
 /// asset is dropped, so the upload can be made again.
 pub(crate) struct Packed {
@@ -32,14 +29,17 @@ pub(crate) struct Packed {
     pub(crate) speed_p99: f32,
 }
 
-/// A loaded model, ready to upload (§2.1): its header information, E10's box B_m in model
-/// space, its identity (D-40), and the packed arrays and temporal index.
+/// A loaded model, ready to upload (§2.1): its header information, E10's boxes B_m and B_c
+/// in model space, its identity (D-40), and the packed arrays and temporal index.
 #[derive(Asset, TypePath)]
 pub struct SplatAsset {
     /// What the file's header tells, with the size of the file the identity hashes (Q-76).
     pub info: ModelInfo,
     /// E10's B_m, in model space.
     pub bounds: Aabb,
+    /// E10's content box B_c, in model space: the fit box under `fit_to = "content"`
+    /// (§1.5 Poses).
+    pub content_bounds: Aabb,
     /// The SHA-256 of the file's bytes, of `params.safetensors` for a checkpoint (D-40).
     pub identity: [u8; 32],
     /// §1.6's Δ_frame in seconds (D-32), from the loaded model's time centers while they
@@ -84,7 +84,8 @@ pub fn load_splat_asset(
         kind: model.kind,
         file_bytes,
     };
-    let bounds = model.bounds(BOX_SAMPLES);
+    let bounds = model.bounds();
+    let content_bounds = model.content_bounds();
     // Q-174
     let frame_step_s = ftgsxr_core::ModelTime::from_span(&model.time).frame_step_s(&model);
     let (index, order) = TemporalIndex::build(&model);
@@ -93,6 +94,7 @@ pub fn load_splat_asset(
     Ok(SplatAsset {
         info,
         bounds,
+        content_bounds,
         identity: model.identity,
         frame_step_s,
         packed: Arc::new(Packed {
