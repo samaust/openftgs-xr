@@ -19,6 +19,7 @@ fn block(total_ms: f32) -> FrameStats {
         capacity: 0,
         overflow: false,
         non_finite: 0,
+        trimmed: 0,
         gpu_times_ms: GpuTimes {
             cull: 0.0,
             sort: 0.0,

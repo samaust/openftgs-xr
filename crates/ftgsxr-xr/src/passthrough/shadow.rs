@@ -38,7 +38,7 @@ use bevy::transform::TransformSystems;
 use bevy::transform::components::{GlobalTransform, Transform};
 use ftgsxr_app::{Headset, SettingsRes};
 use ftgsxr_io::Settings;
-use ftgsxr_render::{SplatAsset, SplatModel};
+use ftgsxr_render::{SplatBounds, SplatModel};
 
 use super::{Environment, EnvironmentMode};
 
@@ -209,10 +209,9 @@ fn sync_shadows(
     env: Option<Res<Environment>>,
     headset: Option<Res<Headset>>,
     settings: Option<Res<SettingsRes>>,
-    assets: Option<Res<Assets<SplatAsset>>>,
     instances: Query<(
         Entity,
-        &SplatModel,
+        &SplatBounds,
         &GlobalTransform,
         Option<&InheritedVisibility>,
     )>,
@@ -237,15 +236,15 @@ fn sync_shadows(
             || Settings::default().environment.contact_shadows,
             |s| s.0.environment.contact_shadows,
         );
-    let mut wanted: Vec<(Entity, Vec4)> = match (&assets, on) {
-        (Some(assets), true) => instances
+    // §1.9 under B_m's footprint, trimmed while a trim is on (E17, §1.5 Poses).
+    let mut wanted: Vec<(Entity, Vec4)> = if on {
+        instances
             .iter()
             .filter(|(.., vis)| vis.is_none_or(|v| v.get()))
-            .filter_map(|(e, model, pose, _)| {
-                Some((e, footprint(&assets.get(&model.0)?.bounds, pose)))
-            })
-            .collect(),
-        _ => Vec::new(),
+            .map(|(e, bounds, pose, _)| (e, footprint(&bounds.aabb, pose)))
+            .collect()
+    } else {
+        Vec::new()
     };
     for (shadow, of, mut transform, mut global, material) in &mut shadows {
         let Some(at) = wanted.iter().position(|(e, _)| *e == of.0) else {

@@ -28,7 +28,7 @@ use ftgsxr_core::{Aabb, Pose};
 use ftgsxr_io::{
     CameraState, DesktopSettings, DisplaySettings, EnvironmentSettings, LocomotionSettings,
 };
-use ftgsxr_render::{OutputSpace, SortMode, SplatAsset, SplatCamera, SplatLoad, SplatModel};
+use ftgsxr_render::{OutputSpace, SortMode, SplatBounds, SplatCamera, SplatLoad, SplatModel};
 
 use crate::intent::{CameraCommand, Intent};
 use crate::library::LoadedModel;
@@ -444,7 +444,7 @@ fn look_at(eye: Vec3, target: Vec3) -> Quat {
 type Instances<'w, 's> = Query<
     'w,
     's,
-    (&'static Transform, &'static SplatModel),
+    (&'static Transform, &'static SplatBounds),
     (With<Selected>, Without<DesktopCamera>, Without<PlayerRig>),
 >;
 
@@ -461,14 +461,11 @@ type Groups<'w, 's> = Query<
     ),
 >;
 
-/// The selected instance's posed box (B_m) as its eight stage-space corners.
-fn selected_corners(
-    selected: &Instances,
-    groups: &Groups<'_, '_>,
-    assets: &Assets<SplatAsset>,
-) -> Option<[Vec3; 8]> {
-    let (t, m) = selected.iter().next()?;
-    let b: Aabb = assets.get(&m.0)?.bounds;
+/// The selected instance's posed box (B_m, trimmed while a trim is on, E17) as its eight
+/// stage-space corners.
+fn selected_corners(selected: &Instances, groups: &Groups<'_, '_>) -> Option<[Vec3; 8]> {
+    let (t, bounds) = selected.iter().next()?;
+    let b: Aabb = bounds.aabb;
     let group = groups.iter().next().map(pose_of).unwrap_or(Pose::IDENTITY);
     let pose = pose_of(t).then(&group);
     let mut out = [Vec3::ZERO; 8];
@@ -508,7 +505,6 @@ fn run_camera(
     newly_selected: Query<(), Added<Selected>>,
     mut deselected: RemovedComponents<Selected>,
     groups: Groups<'_, '_>,
-    assets: Option<Res<Assets<SplatAsset>>>,
     time: Res<Time>,
 ) {
     let Ok((mut local, mut projection)) = cameras.single_mut() else {
@@ -528,10 +524,7 @@ fn run_camera(
     let retarget = if !ctl.orbit {
         None
     } else if !newly_selected.is_empty() {
-        assets
-            .as_ref()
-            .and_then(|a| selected_corners(&selected, &groups, a))
-            .map(|c| c.iter().sum::<Vec3>() / 8.0)
+        selected_corners(&selected, &groups).map(|c| c.iter().sum::<Vec3>() / 8.0)
     } else if emptied {
         Some(Vec3::ZERO)
     } else {
@@ -573,9 +566,7 @@ fn run_camera(
             CameraCommand::ToggleOrbit => {
                 ctl.orbit = !ctl.orbit;
                 if ctl.orbit {
-                    ctl.target = assets
-                        .as_ref()
-                        .and_then(|a| selected_corners(&selected, &groups, a))
+                    ctl.target = selected_corners(&selected, &groups)
                         .map_or(Vec3::ZERO, |c| c.iter().sum::<Vec3>() / 8.0);
                     ctl.distance = pose
                         .translation
@@ -603,10 +594,7 @@ fn run_camera(
                 pose.translation = ctl.target - pose.rotation * Vec3::NEG_Z * ctl.distance;
             }
             CameraCommand::Frame => {
-                let Some(c) = assets
-                    .as_ref()
-                    .and_then(|a| selected_corners(&selected, &groups, a))
-                else {
+                let Some(c) = selected_corners(&selected, &groups) else {
                     continue;
                 };
                 let center = c.iter().sum::<Vec3>() / 8.0;
@@ -762,11 +750,10 @@ fn recenter(
     rig: Res<RigEntities>,
     mut groups: Query<&mut Transform, (With<ContentGroup>, Without<SplatModel>)>,
     instances: Query<
-        (&Transform, &SplatModel, Has<Selected>, Option<&ChildOf>),
+        (&Transform, &SplatBounds, Has<Selected>, Option<&ChildOf>),
         (With<LoadedModel>, Without<ContentGroup>),
     >,
     cameras: HeadCameras,
-    assets: Option<Res<Assets<SplatAsset>>>,
 ) {
     if intents
         .read()
@@ -776,19 +763,17 @@ fn recenter(
     {
         return;
     }
-    let (Some(assets), Ok(mut group_t)) = (assets, groups.get_mut(rig.group)) else {
+    let Ok(mut group_t) = groups.get_mut(rig.group) else {
         return;
     };
     let group = pose_of(&group_t);
     let centers: Vec<(Vec3, bool)> = instances
         .iter()
         .filter(|(.., parent)| parent.is_some_and(|c| c.parent() == rig.group))
-        .filter_map(|(t, m, selected, _)| {
-            let b = assets.get(&m.0)?.bounds;
-            Some((
-                pose_of(t).then(&group).transform_point(b.center()),
-                selected,
-            ))
+        .map(|(t, bounds, selected, _)| {
+            // E17: B_m, trimmed while a trim is on.
+            let c = bounds.aabb.center();
+            (pose_of(t).then(&group).transform_point(c), selected)
         })
         .collect();
     let center = match centers.iter().find(|(_, s)| *s) {

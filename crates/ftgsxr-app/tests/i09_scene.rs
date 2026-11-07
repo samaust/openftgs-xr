@@ -597,6 +597,7 @@ fn save_a_pose_for(t: &mut TestApp, identity: &str) {
             preset: Preset::ZUp,
             fit_size_m: 1.0,
             saved_at: "2026-11-04T00:00:00Z".into(),
+            trim: None,
         },
     );
 }

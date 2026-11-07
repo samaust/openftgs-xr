@@ -25,7 +25,7 @@ use ftgsxr_io::{
     PoseStore, SceneFile, SceneModel, Settings, SourceSpec, Url, load_settings, read_scene,
     save_settings, write_scene,
 };
-use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays};
+use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays, SplatTrim};
 
 use crate::audio::AudioState;
 use crate::intent::{Feature, InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
@@ -867,10 +867,11 @@ pub fn scene_from_world(world: &World) -> SceneFile {
         Option<&SplatMode>,
         Option<&ShowOnUpload>,
         Option<&InstanceLighting>,
+        Option<&SplatTrim>,
     )>() {
         let mut rows: Vec<_> = q.iter(world).collect();
         rows.sort_by_key(|r| r.0);
-        for (_, m, t, vis, mode, show, light) in rows {
+        for (_, m, t, vis, mode, show, light, trim) in rows {
             let (kind, location) = ref_location(&m.source, &models_dir);
             let visible = match show {
                 Some(s) => s.0,
@@ -894,6 +895,8 @@ pub fn scene_from_world(world: &World) -> SceneFile {
                     .filter(|l| l.0 != ManualLighting::default())
                     .map(|l| l.0.clone()),
                 audio: m.audio.as_ref().map(|a| ref_location(a, &models_dir).1),
+                // E17, §1.11: the instance's trim as it stands; none without one.
+                trim: trim.map(|tr| tr.0),
             });
         }
     }
@@ -1117,6 +1120,15 @@ fn apply_pending_instances(
         }
         ec.try_insert(SplatMode(mode_of(&p.mode, display)));
         ec.try_insert(SplatOverlays(overlays_of(&display.overlays)));
+        // E17, §1.11: the scene's trim; an absent one is off, over a saved pose's. Q-374
+        match p.trim {
+            Some(trim) => {
+                ec.try_insert(SplatTrim(trim));
+            }
+            None => {
+                ec.try_remove::<SplatTrim>();
+            }
+        }
         if !p.visible {
             ec.try_insert((ShowOnUpload(false), Visibility::Hidden));
         }
