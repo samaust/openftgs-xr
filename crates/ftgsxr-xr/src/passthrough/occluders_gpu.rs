@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use bevy::MinimalPlugins;
 use bevy::app::{App, PluginsState};
-use bevy::asset::{AssetPlugin, Assets, Handle, RenderAssetUsages};
+use bevy::asset::{AssetPlugin, Assets, RenderAssetUsages};
 use bevy::camera::visibility::Visibility;
 use bevy::camera::{
     Camera, Camera3d, CameraPlugin, PerspectiveProjection, Projection, RenderTarget,
@@ -129,10 +129,12 @@ fn settle_pipelines(app: &mut App) {
 struct Scene {
     app: App,
     seen: Seen,
-    capsule: Entity,
+    /// The depth-only capsule and the grey one.
+    capsules: [Entity; 2],
+    /// Whether the capsule is shown, and which.
+    shown: bool,
+    grey: bool,
     quad: Entity,
-    grey: Handle<StandardMaterial>,
-    depth: Handle<DepthOnlyMaterial>,
 }
 
 impl Drop for Scene {
@@ -286,23 +288,35 @@ impl Scene {
                 Visibility::Hidden,
             ))
             .id();
-        let capsule = app
-            .world_mut()
-            .spawn((
-                Mesh3d(mesh),
-                MeshMaterial3d(depth.clone()),
-                Transform::from_xyz(0.0, CAPSULE_Y, 0.0)
-                    .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-                Visibility::Hidden,
-            ))
-            .id();
+        // One capsule per material, each keeping it, as `draw_gauntlets` spawns them
+        // (#608: a material swapped on one entity quit the app).
+        let place = Transform::from_xyz(0.0, CAPSULE_Y, 0.0)
+            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2));
+        let capsules = [
+            app.world_mut()
+                .spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(depth),
+                    place,
+                    Visibility::Hidden,
+                ))
+                .id(),
+            app.world_mut()
+                .spawn((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(grey),
+                    place,
+                    Visibility::Hidden,
+                ))
+                .id(),
+        ];
         let mut scene = Scene {
             app,
             seen,
-            capsule,
+            capsules,
+            shown: false,
+            grey: false,
             quad,
-            grey,
-            depth,
         };
         for _ in 0..MAX_FRAMES {
             scene.frames(1);
@@ -372,15 +386,20 @@ impl Scene {
     }
 
     fn show_capsule(&mut self, shown: bool) {
-        *self
-            .app
-            .world_mut()
-            .get_mut::<Visibility>(self.capsule)
-            .unwrap() = if shown {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
+        self.shown = shown;
+        self.sync_capsules();
+    }
+
+    /// The shown capsule's material's entity visible, the other hidden.
+    fn sync_capsules(&mut self) {
+        for (k, e) in self.capsules.into_iter().enumerate() {
+            let on = self.shown && (k == 1) == self.grey;
+            *self.app.world_mut().get_mut::<Visibility>(e).unwrap() = if on {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+        }
     }
 
     fn show_quad(&mut self, shown: bool) {
@@ -395,17 +414,10 @@ impl Scene {
         };
     }
 
-    /// "Draw gauntlets": the capsule in the hands' grey, or depth only.
+    /// "Draw gauntlets": the grey capsule, or the depth-only one.
     fn set_drawn(&mut self, drawn: bool) {
-        let (grey, depth) = (self.grey.clone(), self.depth.clone());
-        let mut e = self.app.world_mut().entity_mut(self.capsule);
-        if drawn {
-            e.remove::<MeshMaterial3d<DepthOnlyMaterial>>()
-                .insert(MeshMaterial3d(grey));
-        } else {
-            e.remove::<MeshMaterial3d<StandardMaterial>>()
-                .insert(MeshMaterial3d(depth));
-        }
+        self.grey = drawn;
+        self.sync_capsules();
     }
 
     fn set_shadows(&mut self, on: bool) {
