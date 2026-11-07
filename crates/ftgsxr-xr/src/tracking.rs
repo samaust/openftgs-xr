@@ -16,7 +16,7 @@
 pub(crate) mod dv8;
 pub(crate) mod hands;
 mod meshes;
-// "Occlude with tracked hands" (§1.9, #608).
+// The tracked hands' gauntlets (§1.9, #608).
 mod occluders;
 
 pub(crate) use hands::FREQUENCY_HINT_EXT;
