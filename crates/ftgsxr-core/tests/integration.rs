@@ -23,6 +23,7 @@ fn test_file_stem() -> &'static str {
         .expect("a test file's stem is UTF-8")
 }
 
+mod ds_kitchen_boxes;
 mod types_api;
 mod u01_read_exchange;
 mod u01_render_conventions;
