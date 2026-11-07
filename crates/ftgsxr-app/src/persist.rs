@@ -601,6 +601,7 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
                     // §1.9: an anchor only for a save in passthrough mode on the headset,
                     // so this one writes null and the earlier anchor is let go (a save
                     // still waiting in `Creating` keeps its wait).
+                    // Q-TF.1
                     if world.get_resource::<SceneAnchor>() != Some(&SceneAnchor::Creating) {
                         world.insert_resource(SceneAnchor::None);
                     }

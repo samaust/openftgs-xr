@@ -120,6 +120,28 @@ fn a_vr_mode_save_after_an_anchored_one_writes_a_null_anchor() {
     assert_eq!(anchor(&t), SceneAnchor::None);
 }
 
+/// Q-TF.1: a VR-mode save while a passthrough save waits for its anchor writes null at
+/// once and leaves the wait alone, so the waiting file still gets its UUID.
+// Q-TF.1
+#[test]
+fn a_vr_mode_save_during_a_wait_keeps_the_wait() {
+    let mut t = app("anchor_straddle", true, "passthrough");
+    save(&mut t, "j");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .mode = "vr".into();
+    save(&mut t, "k");
+    assert_eq!(read(&file(&t, "k")).anchor, None);
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    set_anchor(&mut t, SceneAnchor::Ready("0123-abcd".into()));
+    assert_eq!(read(&file(&t, "j")).anchor.as_deref(), Some("0123-abcd"));
+    assert!(texts(&t).is_empty(), "{:?}", texts(&t));
+}
+
 // Q-350
 #[test]
 fn a_failed_creation_writes_a_null_anchor_and_toasts() {
