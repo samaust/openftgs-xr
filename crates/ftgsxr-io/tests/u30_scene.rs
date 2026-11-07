@@ -88,7 +88,6 @@ fn full_scene() -> SceneFile {
             occlusion_soft: false,
             occlusion_delta_m: 0.08,
             hand_removal: true,
-            hand_occluders: true,
             hand_gauntlets: true,
             hand_gauntlet_margin_m: 0.012,
             lighting_mode: "auto-local".into(),
@@ -213,7 +212,7 @@ fn scene_json(version: &str, source: &str, extra: &str) -> String {
     "mode": "vr", "background": [0.1, 0.1, 0.1],
     "passthrough_brightness": 0, "passthrough_contrast": 0, "passthrough_saturation": 0,
     "occlusion": true, "occlusion_soft": true, "occlusion_delta_m": 0.05,
-    "hand_removal": false, "hand_occluders": false, "hand_gauntlets": false, "hand_gauntlet_margin_m": 0.005, "lighting_mode": "off",
+    "hand_removal": false, "hand_gauntlets": false, "hand_gauntlet_margin_m": 0.005, "lighting_mode": "off",
     "lighting_manual": {{"exposure_ev": 0, "temperature": 0, "tint": 0}},
     "lighting_gamma": 0.5, "lighting_reference": null, "contact_shadows": true
   }},
@@ -309,7 +308,6 @@ fn u30_scene_missing_environment_keys_take_the_default() {
             occlusion_delta_m: 0.05,
             hand_removal: true,
             // Q-50's default (D-16).
-            hand_occluders: false,
             hand_gauntlets: false,
             // Q-50's default (D-16).
             hand_gauntlet_margin_m: 0.005,

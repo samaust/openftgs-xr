@@ -98,11 +98,8 @@ pub struct EnvironmentSettings {
     pub occlusion_delta_m: f32,
     /// The depth provider's hand removal (§1.9, D-16).
     pub hand_removal: bool,
-    /// "Occlude with tracked hands": each tracked hand occluding as a depth-only gauntlet in
-    /// passthrough mode, the provider's hand removal on while it is (§1.9, D-16).
-    pub hand_occluders: bool,
-    /// "Draw gauntlets": the gauntlets drawn opaque in the hands' grey rather than depth
-    /// only, while `hand_occluders` is on (§1.9, D-16).
+    /// "Draw gauntlets": the tracked hands' gauntlets, which occlude while `hand_removal`
+    /// is off, drawn opaque in the hands' grey rather than depth only (§1.9, D-16).
     pub hand_gauntlets: bool,
     /// The gauntlet's margin m over each capsule's joint radius, metres, in \[0, 0.02\]
     /// (§1.9's slider, D-16).
@@ -327,7 +324,6 @@ impl Default for EnvironmentSettings {
             occlusion_soft: true,          // D-16
             occlusion_delta_m: 0.05,       // D-16
             hand_removal: false,           // D-16
-            hand_occluders: false,         // D-16
             hand_gauntlets: false,         // D-16
             hand_gauntlet_margin_m: 0.005, // D-16
             lighting_mode: "off".into(),
@@ -897,7 +893,6 @@ impl Reader {
                 "occlusion_soft",
                 "occlusion_delta_m",
                 "hand_removal",
-                "hand_occluders",
                 "hand_gauntlets",
                 "hand_gauntlet_margin_m",
                 "lighting_mode",
@@ -947,9 +942,6 @@ impl Reader {
             hand_removal: self
                 .take(t, p, "hand_removal", flag())
                 .unwrap_or(d.hand_removal),
-            hand_occluders: self
-                .take(t, p, "hand_occluders", flag())
-                .unwrap_or(d.hand_occluders),
             hand_gauntlets: self
                 .take(t, p, "hand_gauntlets", flag())
                 .unwrap_or(d.hand_gauntlets),
@@ -1294,7 +1286,6 @@ fn document(s: &Settings) -> Table {
         ("occlusion_soft", Value::Boolean(e.occlusion_soft)),
         ("occlusion_delta_m", float(e.occlusion_delta_m)),
         ("hand_removal", Value::Boolean(e.hand_removal)),
-        ("hand_occluders", Value::Boolean(e.hand_occluders)),
         ("hand_gauntlets", Value::Boolean(e.hand_gauntlets)),
         ("hand_gauntlet_margin_m", float(e.hand_gauntlet_margin_m)),
         ("lighting_mode", Value::String(e.lighting_mode.clone())),
