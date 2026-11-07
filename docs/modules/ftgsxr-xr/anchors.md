@@ -52,7 +52,7 @@ Q-254's three private tests (a 2° tilt, a 30° yaw under a tilt, a 3 cm height)
 Dv-9's clauses live here, since they need the crate-private store; they stay inert until the quest runner spawns the entity `ftgsxr-test: dv9`, and print the verdict line themselves (Q-308, Q-122). The host driver grants USE\_ANCHOR\_API, then launches the app twice (Q-346):
 
 1. The first launch creates an anchor Q-346's distance ahead of the content group's origin, persists it, and prints its UUID and created pose in the primary reference space in the verdict's detail, with the frames and milliseconds the creation's and the save's events took (PRD #565's spike check 4).
-2. The driver passes that part of the detail to the second launch in the intent extra `ftgsxr-anchor`, which the runner turns into a second entity, `ftgsxr-anchor: <detail>`. The second launch finds the UUID through the adapter's query (Q-358) (spike check 5: found after a restart, or not), locates it, and passes when the located position lies within Q-346's distance of the created one and the erase succeeds.
+2. The driver passes that part of the detail to the second launch in the intent extra `ftgsxr-anchor`, which the runner turns into a second entity, `ftgsxr-anchor: <detail>`. The second launch finds the UUID through the adapter's query (Q-358) (spike check 5: found after a restart, or not), locates it, and passes when the located position lies within Q-346's distance of the created one and the erase succeeds. Dv-9 passed on the Quest 3 with the discovery query (#571, Q-358).
 
 ## Q-n rows relied on
 
