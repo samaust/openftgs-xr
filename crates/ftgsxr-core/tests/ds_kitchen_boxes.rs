@@ -2,9 +2,11 @@
 
 //! E10's two boxes on a trained room-scale model (`ds` lane, #622): on `kitchen`'s
 //! exchange file, B_m (`Model::bounds`) and the content box B_c (`Model::content_bounds`)
-//! have the sizes #622's triage measured, within 1 % (the agent brief's criterion; the
-//! figures are the triage notes' table on github.com/samaust/openftgs-xr/issues/622,
-//! measured with a script kept outside the repository). The figures are those of the file
+//! have the sizes #622's triage measured, within 1 % (the agent brief's criterion, from
+//! a script kept outside the repository). B_m is the brief's figure; B_c is this
+//! implementation's E10 on that file (5.246 × 2.763 × 2.344), since the brief's
+//! 5.25 × 2.82 × 2.38 could not be reproduced under any reading of the midpoint (owner
+//! decision, 2026-11-07, #622). The figures are those of the file
 //! the triage measured, openftgs-m17's `kitchen/default-395` (N = 3,000,000, τ in
 //! [0, 9.97] s); a `kitchen` trained again gives other figures. The test reads it at
 //! `$OPENFTGS_DATASETS/xr-fixtures/kitchen.safetensors`, where Q-108 puts M-8's
@@ -51,5 +53,5 @@ fn ds_kitchen_boxes_have_the_measured_sizes() {
     let content = model.content_bounds();
     eprintln!("kitchen: B_m {whole:?}, B_c {content:?}");
     assert_size("B_m", whole.size(), [24.2, 30.2, 23.0]);
-    assert_size("B_c", content.size(), [5.25, 2.82, 2.38]);
+    assert_size("B_c", content.size(), [5.25, 2.76, 2.34]);
 }
