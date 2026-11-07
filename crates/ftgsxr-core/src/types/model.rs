@@ -118,6 +118,29 @@ pub(crate) fn moved_position_f64(
     (p + v * dt).as_vec3()
 }
 
+/// E10's percentile box over `points`: along each axis, from the nearest-rank 1st to the
+/// 99th percentile (the ⌈0.01 n⌉-th and ⌈0.99 n⌉-th smallest of n values); `None` for no
+/// point. Shared by `Model::content_bounds` and E17's trimmed B_c (`layout`).
+pub(crate) fn percentile_box(points: &[Vec3]) -> Option<Aabb> {
+    let n = points.len();
+    if n == 0 {
+        return None;
+    }
+    // Nearest rank, 1-based, in integers: ⌈k n / 100⌉.
+    let rank = |k: usize| (k * n).div_ceil(100);
+    let (lo, hi) = (rank(1) - 1, rank(99) - 1);
+    let mut min = Vec3::ZERO;
+    let mut max = Vec3::ZERO;
+    let mut axis: Vec<f32> = Vec::with_capacity(n);
+    for a in 0..3 {
+        axis.clear();
+        axis.extend(points.iter().map(|p| p[a]));
+        min[a] = *axis.select_nth_unstable_by(lo, f32::total_cmp).1;
+        max[a] = *axis.select_nth_unstable_by(hi, f32::total_cmp).1;
+    }
+    Some(Aabb { min, max })
+}
+
 /// Rows from which the model's per-row work runs in parallel with rayon: `validate`'s
 /// checks here, the readers' conversions in `loader` (PRD #1, "Reader internals").
 pub(crate) const PARALLEL_ROWS: usize = 1 << 16;
@@ -204,29 +227,10 @@ impl Model {
         } else {
             rows.iter().map(mid).collect()
         };
-        let n = points.len();
-        if n == 0 {
-            // No row at all (a model reduced to nothing): B_m's empty box.
-            return self.bounds();
-        }
-        // Nearest rank, 1-based, in integers: ⌈k n / 100⌉.
-        let rank = |k: usize| (k * n).div_ceil(100);
-        let (lo, hi) = (rank(1) - 1, rank(99) - 1);
-        let mut min = Vec3::ZERO;
-        let mut max = Vec3::ZERO;
-        let mut axis: Vec<f32> = Vec::with_capacity(n);
-        for a in 0..3 {
-            axis.clear();
-            axis.extend(points.iter().map(|p| p[a]));
-            min[a] = *axis.select_nth_unstable_by(lo, f32::total_cmp).1;
-            max[a] = *axis.select_nth_unstable_by(hi, f32::total_cmp).1;
-        }
-        let b = Aabb { min, max };
-        if b.size().max_element() > 0.0 {
-            b
-        } else {
-            self.bounds()
-        }
+        // No row at all (a model reduced to nothing) gives B_m's empty box.
+        percentile_box(&points)
+            .filter(|b| b.size().max_element() > 0.0)
+            .unwrap_or_else(|| self.bounds())
     }
 
     /// E10's counted rows, each with its visible interval: with no counted row, every

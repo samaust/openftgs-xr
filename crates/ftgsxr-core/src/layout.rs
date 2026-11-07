@@ -3,12 +3,15 @@
 //! Packing a model for the GPU (§2.1 `ftgsxr_core::layout`): §1.2's load options 1–3 and
 //! 5 applied to the arrays the GPU holds, the static memory estimate of §1.12 that load
 //! option 4 compares with the tier's budget, and the opt-in reduction to that budget
-//! (D-12, D-13).
+//! (D-12, D-13), and E17's trimmed boxes over the packed arrays (D-56).
 
 use half::f16;
 use rayon::prelude::*;
 
-use crate::types::Model;
+use glam::{DVec3, Vec3};
+
+use crate::types::model::{PARALLEL_ROWS, moved_position_f64, percentile_box};
+use crate::types::{Aabb, Model, Trim, TrimMode};
 
 /// Which fields are stored on the GPU as IEEE half floats (§1.2 load option 2, D-12).
 /// Position, the rebased time center and the duration are always float32.
@@ -297,4 +300,172 @@ fn gather_bytes(values: &[f32], width: usize, keep: usize, order: &[u32], half: 
             }
         });
     out
+}
+
+/// E17's trimmed boxes (B_m, B_c) over the uploaded arrays, in model space; `None` when
+/// the trim keeps no row, and when it is off.
+///
+/// The rows are E10's counted rows, read from `arrays` at their stored precision: a row
+/// with opacity σ > `alpha_skip` over its visible interval
+/// \[time_center − h, time_center + h\] ∩ \[τ₀, τ₁\], h = duration·√(2 ln(σ/α_skip)), or at
+/// τ₀ alone for a single timestamp; with no counted row, every row over \[τ₀, τ₁\]. Each
+/// row's kept interval is the part of its interval where μx(τ) (E1) lies inside the trim,
+/// one interval or none since μx is linear in τ and both shapes are convex. B_m is the box
+/// of the kept rows' positions at their kept intervals' ends, each expanded by 3 · its own
+/// largest scale; B_c is E10's percentile box of their positions at the kept intervals'
+/// midpoints, or B_m when its longest side is 0. The caller turns `None` into the shape's
+/// own box (E17, `Trim::shape_bounds`).
+pub fn trimmed_bounds(arrays: &GpuArrays, alpha_skip: f32, trim: &Trim) -> Option<(Aabb, Aabb)> {
+    if trim.mode == TrimMode::Off {
+        return None;
+    }
+    let n = arrays.n as usize;
+    let span = arrays.tau1 - arrays.tau0; // Q-97: the rebased τ₁
+    let counted: Vec<(usize, f64, f64)> = (0..n)
+        .filter_map(|k| visible_interval(arrays, alpha_skip, span, k).map(|(a, b)| (k, a, b)))
+        .collect();
+    let rows = if counted.is_empty() {
+        (0..n).map(|k| (k, 0.0, span)).collect()
+    } else {
+        counted
+    };
+    // Each kept row: its box at the kept interval's ends with its margin, and its midpoint.
+    let one = |&(k, a, b): &(usize, f64, f64)| -> Option<(Vec3, Vec3, Vec3)> {
+        let (p, v, tc) = row_motion(arrays, k);
+        let (a, b) = kept_interval(trim, p, v, tc, a, b)?;
+        let at = |tau: f64| moved_position_f64(p, v, tc, tau);
+        let (pa, pb) = (at(a), at(b));
+        let margin = Vec3::splat(
+            3.0 * Vec3::from_array(read3(&arrays.scale, arrays.half.scale, k)).max_element(),
+        );
+        Some((pa.min(pb) - margin, pa.max(pb) + margin, at(0.5 * (a + b))))
+    };
+    let kept: Vec<(Vec3, Vec3, Vec3)> = if rows.len() >= PARALLEL_ROWS {
+        rows.par_iter().filter_map(one).collect()
+    } else {
+        rows.iter().filter_map(one).collect()
+    };
+    if kept.is_empty() {
+        return None;
+    }
+    let (min, max) = kept.iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(lo, hi), &(a, b, _)| (lo.min(a), hi.max(b)),
+    );
+    let whole = Aabb { min, max };
+    let mids: Vec<Vec3> = kept.iter().map(|&(_, _, m)| m).collect();
+    let content = percentile_box(&mids)
+        .filter(|b| b.size().max_element() > 0.0)
+        .unwrap_or(whole);
+    Some((whole, content))
+}
+
+/// Row `k`'s E10 visible interval in rebased time, clipped to \[0, τ₁ − τ₀\]; `None` when
+/// it is not counted.
+fn visible_interval(
+    arrays: &GpuArrays,
+    alpha_skip: f32,
+    span: f64,
+    k: usize,
+) -> Option<(f64, f64)> {
+    let opacity = read_value(&arrays.opacity, arrays.half.opacity, k);
+    if opacity <= alpha_skip {
+        return None;
+    }
+    if arrays.single {
+        return Some((0.0, 0.0));
+    }
+    let ratio = f64::from(opacity) / f64::from(alpha_skip);
+    let h = f64::from(arrays.duration[k]) * (2.0 * ratio.ln()).sqrt();
+    let c = f64::from(arrays.time_center[k]);
+    let (a, b) = ((c - h).max(0.0), (c + h).min(span));
+    (a <= b).then_some((a, b))
+}
+
+/// Row `k`'s position, velocity and rebased time center, as E1 takes them.
+fn row_motion(arrays: &GpuArrays, k: usize) -> ([f32; 3], [f32; 3], f64) {
+    let p = [
+        arrays.position[3 * k],
+        arrays.position[3 * k + 1],
+        arrays.position[3 * k + 2],
+    ];
+    let v = read3(&arrays.velocity, arrays.half.velocity, k);
+    (p, v, f64::from(arrays.time_center[k]))
+}
+
+/// The part of \[a, b\] where p + v (τ − tc) lies inside `trim` (box or sphere), in f64;
+/// `None` when it is empty.
+fn kept_interval(
+    trim: &Trim,
+    p: [f32; 3],
+    v: [f32; 3],
+    tc: f64,
+    a: f64,
+    b: f64,
+) -> Option<(f64, f64)> {
+    let p = DVec3::from_array(p.map(f64::from));
+    let v = DVec3::from_array(v.map(f64::from));
+    let (mut lo, mut hi) = (a, b);
+    match trim.mode {
+        TrimMode::Off => {}
+        TrimMode::Box => {
+            let (bmin, bmax) = (trim.box_min.as_dvec3(), trim.box_max.as_dvec3());
+            for axis in 0..3 {
+                if v[axis] == 0.0 {
+                    if p[axis] < bmin[axis] || p[axis] > bmax[axis] {
+                        return None;
+                    }
+                } else {
+                    // The times τ = tc + (limit − p)/v at which the axis crosses each limit.
+                    let t0 = tc + (bmin[axis] - p[axis]) / v[axis];
+                    let t1 = tc + (bmax[axis] - p[axis]) / v[axis];
+                    lo = lo.max(t0.min(t1));
+                    hi = hi.min(t0.max(t1));
+                }
+            }
+        }
+        TrimMode::Sphere => {
+            // ‖w + v s‖² ≤ r² with w = p − c and s = τ − tc: A s² + B s + C ≤ 0.
+            let w = p - trim.center.as_dvec3();
+            let r = f64::from(trim.radius);
+            let (qa, qb, qc) = (
+                v.length_squared(),
+                2.0 * v.dot(w),
+                w.length_squared() - r * r,
+            );
+            if qa == 0.0 {
+                if qc > 0.0 {
+                    return None;
+                }
+            } else {
+                let disc = qb * qb - 4.0 * qa * qc;
+                if disc < 0.0 {
+                    return None;
+                }
+                let root = disc.sqrt();
+                lo = lo.max(tc + (-qb - root) / (2.0 * qa));
+                hi = hi.min(tc + (-qb + root) / (2.0 * qa));
+            }
+        }
+    }
+    (lo <= hi).then_some((lo, hi))
+}
+
+/// Value `m` of a `GpuArrays` byte array, float32 or binary16 (`GpuArrays`' layout).
+fn read_value(bytes: &[u8], half: bool, m: usize) -> f32 {
+    if half {
+        f16::from_bits(u16::from_le_bytes([bytes[2 * m], bytes[2 * m + 1]])).to_f32()
+    } else {
+        f32::from_le_bytes([
+            bytes[4 * m],
+            bytes[4 * m + 1],
+            bytes[4 * m + 2],
+            bytes[4 * m + 3],
+        ])
+    }
+}
+
+/// Row `k`'s three values of a `GpuArrays` byte array of width 3.
+fn read3(bytes: &[u8], half: bool, k: usize) -> [f32; 3] {
+    std::array::from_fn(|i| read_value(bytes, half, 3 * k + i))
 }

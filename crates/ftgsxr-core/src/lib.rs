@@ -43,7 +43,7 @@ pub use index::{DispatchRange, TemporalIndex};
 pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 pub use layout::{
     GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, max_field_bytes_per_primitive,
-    memory_estimate, pack_for_gpu, reduce_to_budget,
+    memory_estimate, pack_for_gpu, reduce_to_budget, trimmed_bounds,
 }; // Q-369: max_field_bytes_per_primitive
 pub use loader::{
     SAFETENSORS_PREFIX, checkpoint_dir, header_len, hex, open_model, read_checkpoint,
