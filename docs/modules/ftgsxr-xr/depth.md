@@ -19,7 +19,7 @@ The provider runs while three inputs allow it: the effective mode is passthrough
 
 `Permission::Scene` is asked through the platform port the first time occlusion turns on in passthrough mode (Q-348), and the provider runs once it is granted; the shim answers at once for an install-time permission. A denial gives Q-261's toast, writes `[environment] occlusion` off, sets `XrFeatures.occlusion` to `Denied` and lists the permission in `DeniedPermissions` (Q-355). While denied, the setting turning on again (the Environment tab's "Ask again", its checkbox, or a settings change) or `AskPermissionAgain(Permission::Scene)` from the Comfort tab asks once more (Q-322, Q-355), so one click asks again and the switch shows what the feature does. The flow is kept across sessions, as the hands' and the anchors' are.
 
-`XrFeatures.occlusion` is `Absent` where the instance did not enable the extension or the runtime refused the provider as unsupported, `Denied` after a denial, `Available` otherwise (Q-336). The occlusion control shows whenever the feature is not `Absent`, whatever the tier says (Q-338).
+`XrFeatures.occlusion` is `Absent` where the instance did not enable the extension, no session exists, or the runtime refused the provider as unsupported, `Denied` after a denial, `Available` otherwise (Q-336). The occlusion control shows whenever the feature is not `Absent`, whatever the tier says (Q-338).
 
 ## One acquire, two views
 
