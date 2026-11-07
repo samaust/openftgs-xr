@@ -823,6 +823,9 @@ mod tests {
             .hand_occluders = false;
         frame_of(&ctx, &mut world, Vec::new(), environment_section);
         let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-        assert!(!has(&texts, gauntlets), "not offered with the option off: {texts:?}");
+        assert!(
+            !has(&texts, gauntlets),
+            "not offered with the option off: {texts:?}"
+        );
     }
 }
