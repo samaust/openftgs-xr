@@ -587,9 +587,12 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
             PersistCommand::SaveScene(p) => {
                 let files = world.resource::<Files>().clone();
                 let path = scene_path(&files.scenes, &p);
-                // Q-343, Q-335: on the headset in passthrough mode the anchor first.
-                let passthrough = world.contains_resource::<Headset>()
-                    && world.resource::<SettingsRes>().0.environment.mode == "passthrough";
+                // Q-343, Q-335: on the headset in passthrough mode the anchor first, the
+                // mode as gated (`passthrough_mode`).
+                let passthrough = passthrough_mode(
+                    &world.resource::<SettingsRes>().0,
+                    world.contains_resource::<Headset>(),
+                );
                 if passthrough {
                     let now = world.resource::<Time<Real>>().elapsed();
                     world.insert_resource(SceneAnchor::Creating);
