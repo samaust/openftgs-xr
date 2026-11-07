@@ -143,11 +143,12 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
 /// The Environment tab (§1.7 Panels, §1.9): the VR-mode controls, background and grid,
 /// everywhere; the XR controls only for the features `XrFeatures` reports (Q-336): with
 /// passthrough the mode switch, the style sliders and contact shadows; with occlusion its
-/// switch, soft or hard, δ and hand removal; under a `Denied` feature "Ask again", which
+/// switch, soft or hard, δ and hand removal, with a note while the running tier's
+/// `occlusion` flag turns it off (Q-338); under a `Denied` feature "Ask again", which
 /// writes its toggle again (§1.15 E-XR-PERMISSION). The mode switch writes
 /// `Toggle(Feature::Passthrough)`, whose consumer is the XR crate (Q-335); the other
 /// controls edit the settings directly.
-// Q-335, Q-336
+// Q-335, Q-336, Q-338
 pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
     let training = training_background(world);
     let features = world
@@ -156,6 +157,11 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .unwrap_or_default();
     let passthrough = features.passthrough != FeatureState::Absent;
     let occlusion = features.occlusion != FeatureState::Absent;
+    // Q-338: the running tier whose `occlusion` flag turns occlusion off, for the note.
+    let tier_off = world
+        .get_resource::<SplatTierState>()
+        .filter(|t| !t.tier.occlusion)
+        .map(|t| t.tier.name.clone());
     let mut toggles = Vec::new();
     edit(world, ui, |s, ui| {
         background(ui, &mut s.environment.background, training);
@@ -184,6 +190,9 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         if occlusion {
             ui.separator();
             ui.checkbox(&mut e.occlusion, "occlusion");
+            if let Some(tier) = &tier_off {
+                ui.label(format!("off in the {tier} tier"));
+            }
             if features.occlusion == FeatureState::Denied {
                 ask_again(ui, "occlusion", Feature::Occlusion, &mut toggles);
             }
@@ -659,6 +668,36 @@ mod tests {
         let written: Vec<Intent> = world.resource_mut::<Messages<Intent>>().drain().collect();
         assert_eq!(written, [Intent::Toggle(Feature::Passthrough)]);
         assert_eq!(world.resource::<SettingsRes>().0.environment.mode, "vr");
+    }
+
+    /// Q-338: the occlusion control shows whenever the runtime offers the extension, with
+    /// a note when the running tier's `occlusion` flag turns it off (`desktop`), none when
+    /// the tier allows it (`quest-high`).
+    #[test]
+    fn the_environment_tab_notes_a_tier_that_turns_occlusion_off() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.insert_resource(XrFeatures {
+            passthrough: FeatureState::Available,
+            occlusion: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        let note = "off in the desktop tier";
+        let ctx = egui::Context::default();
+        world.insert_resource(SplatTierState::of(&ftgsxr_render::QualityTier::desktop()));
+        frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        let off = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        assert!(off.iter().any(|(t, _)| t == "occlusion"), "{off:?}");
+        assert!(off.iter().any(|(t, _)| t == note), "{off:?}");
+        world.insert_resource(SplatTierState::of(&ftgsxr_render::QualityTier::quest_high()));
+        let on = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+        assert!(on.iter().any(|(t, _)| t == "occlusion"), "{on:?}");
+        assert!(
+            !on.iter().any(|(t, _)| t.starts_with("off in the")),
+            "{on:?}"
+        );
     }
 
     // Q-240 (#402): the picker's selected text is the running tier, not the saved one.

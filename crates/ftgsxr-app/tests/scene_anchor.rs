@@ -6,7 +6,8 @@
 //! passthrough mode waits in `Creating` for `Ready(uuid)` and writes the uuid; a failure
 //! or 2 s without an answer writes a null anchor and toasts; a load of a file with an
 //! anchor asks for `Locating(uuid)`; `Lost` toasts "anchor not found; using the saved
-//! pose"; without the marker a save writes at once with a null anchor.
+//! pose"; without the marker, or in VR mode, a save writes at once with a null anchor
+//! and clears the state, so no earlier save's anchor is written.
 
 use crate::support;
 
@@ -97,6 +98,48 @@ fn a_vr_mode_save_on_the_headset_writes_at_once() {
     save(&mut t, "c");
     assert_eq!(anchor(&t), SceneAnchor::None);
     assert_eq!(read(&file(&t, "c")).anchor, None);
+}
+
+/// §1.9: the anchor is created when a scene is saved in passthrough mode on the headset;
+/// a later save in VR mode writes a null anchor, not the earlier save's, and clears it.
+// Q-343
+#[test]
+fn a_vr_mode_save_after_an_anchored_one_writes_a_null_anchor() {
+    let mut t = app("anchor_stale", true, "passthrough");
+    save(&mut t, "h");
+    set_anchor(&mut t, SceneAnchor::Ready("0123-abcd".into()));
+    assert_eq!(read(&file(&t, "h")).anchor.as_deref(), Some("0123-abcd"));
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .mode = "vr".into();
+    save(&mut t, "i");
+    assert_eq!(read(&file(&t, "i")).anchor, None);
+    assert_eq!(anchor(&t), SceneAnchor::None);
+}
+
+/// Q-361: a VR-mode save while a passthrough save waits for its anchor writes null at
+/// once and leaves the wait alone, so the waiting file still gets its UUID.
+// Q-361
+#[test]
+fn a_vr_mode_save_during_a_wait_keeps_the_wait() {
+    let mut t = app("anchor_straddle", true, "passthrough");
+    save(&mut t, "j");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .mode = "vr".into();
+    save(&mut t, "k");
+    assert_eq!(read(&file(&t, "k")).anchor, None);
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    set_anchor(&mut t, SceneAnchor::Ready("0123-abcd".into()));
+    assert_eq!(read(&file(&t, "j")).anchor.as_deref(), Some("0123-abcd"));
+    assert!(texts(&t).is_empty(), "{:?}", texts(&t));
 }
 
 // Q-350

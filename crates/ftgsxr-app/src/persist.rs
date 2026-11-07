@@ -89,7 +89,8 @@ pub struct SettingsWarnings(pub Vec<String>);
 
 /// The scene anchor's handshake with the XR crate (§1.9 Floor, shadows and anchors,
 /// Q-343): `persist` sets `Creating` at a scene save under the `Headset` marker in
-/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)`, and sets
+/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)`, `None` at
+/// any other save (written with a null anchor) unless a save waits, and sets
 /// `Locating(uuid)` at the load of a file with an anchor on the headset; the XR crate
 /// answers `Ready` once located, or `Lost(uuid)`, which `persist` toasts.
 /// `scene_from_world` writes `anchor` from `Ready`. While a save waits, any other answer
@@ -586,14 +587,24 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
             PersistCommand::SaveScene(p) => {
                 let files = world.resource::<Files>().clone();
                 let path = scene_path(&files.scenes, &p);
-                // Q-343, Q-335: on the headset in passthrough mode the anchor first.
-                let passthrough = world.contains_resource::<Headset>()
-                    && world.resource::<SettingsRes>().0.environment.mode == "passthrough";
+                // Q-343, Q-335: on the headset in passthrough mode the anchor first, the
+                // mode as gated (`passthrough_mode`).
+                let headset = world.contains_resource::<Headset>();
+                let passthrough = world
+                    .get_resource::<SettingsRes>()
+                    .is_some_and(|s| passthrough_mode(&s.0, headset));
                 if passthrough {
                     let now = world.resource::<Time<Real>>().elapsed();
                     world.insert_resource(SceneAnchor::Creating);
                     world.resource_mut::<AnchorWait>().0 = Some((path, now));
                 } else {
+                    // §1.9: an anchor only for a save in passthrough mode on the headset,
+                    // so this one writes null and the earlier anchor is let go (a save
+                    // still waiting in `Creating` keeps its wait).
+                    // Q-361
+                    if world.get_resource::<SceneAnchor>() != Some(&SceneAnchor::Creating) {
+                        world.insert_resource(SceneAnchor::None);
+                    }
                     write_scene_file(world, &path);
                 }
             }

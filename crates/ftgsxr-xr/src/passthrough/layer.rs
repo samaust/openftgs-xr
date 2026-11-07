@@ -125,8 +125,8 @@ pub(crate) struct Record {
 }
 
 impl Record {
-    /// Whether `layers` holds this module's provider first, and only it and one more
-    /// (the projection layer).
+    /// Whether `layers` holds this module's provider first, before every other provider
+    /// (the projection layer's among them); what follows it is not checked.
     #[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
     pub(crate) fn first_of(&self, layers: &OxrRenderLayers) -> bool {
         self.inserted

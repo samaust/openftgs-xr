@@ -17,8 +17,8 @@
 //!   VR mode; the session stays OPAQUE (D-14).
 //! - The contact shadows (`shadow`, Q-342): `ContactShadowPlugin`, an ellipse on the floor
 //!   under each visible instance in passthrough mode on the headset.
-//! - `XrFeatures.passthrough` (Q-336): `Available` on the headset where the runtime offers
-//!   the extension, else `Absent`.
+//! - `XrFeatures.passthrough` (Q-336): `Available` on the headset while a session exists
+//!   and the runtime offers the extension, else `Absent`.
 //!
 //! Built only with `XrPlugin.passthrough`; without it nothing is created and the mode
 //! stays VR (M-3's behaviour).
@@ -84,7 +84,9 @@ pub struct PassthroughStyle {
 /// the style.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Environment {
-    /// The current mode; `Vr` in M-3.
+    /// The effective mode (Q-335): passthrough while a session exists, the setting asks
+    /// for it, the `Headset` marker exists and the runtime offers XR\_FB\_passthrough;
+    /// `Vr` otherwise.
     pub mode: EnvironmentMode,
     /// Whether XR\_FB\_passthrough was enabled on the instance.
     pub passthrough_available: bool,
@@ -260,8 +262,19 @@ fn switch_mode(
     }
 }
 
-/// Without a session there is no layer: VR mode.
-fn no_session(mut env: ResMut<Environment>, mut request: ResMut<LayerRequest>) {
+/// Without a session there is no layer: VR mode, and the feature `Absent` (Q-336, as
+/// occlusion's).
+// Q-336
+fn no_session(
+    mut env: ResMut<Environment>,
+    mut request: ResMut<LayerRequest>,
+    features: Option<ResMut<XrFeatures>>,
+) {
+    if let Some(mut f) = features
+        && f.passthrough != FeatureState::Absent
+    {
+        f.passthrough = FeatureState::Absent;
+    }
     if env.mode != EnvironmentMode::Vr {
         env.mode = EnvironmentMode::Vr;
     }
@@ -523,6 +536,24 @@ mod tests {
                 "available {available}, headset {headset}"
             );
         }
+    }
+
+    /// Q-336: after the session ends, `XrFeatures.passthrough` goes back to `Absent` (as
+    /// occlusion's does), and the mode to VR.
+    #[test]
+    fn no_session_reports_the_feature_absent() {
+        let mut app = switch_app(true, true, "passthrough");
+        app.update();
+        assert_eq!(
+            app.world().resource::<XrFeatures>().passthrough,
+            FeatureState::Available
+        );
+        app.world_mut().run_system_cached(no_session).unwrap();
+        assert_eq!(
+            app.world().resource::<XrFeatures>().passthrough,
+            FeatureState::Absent
+        );
+        assert_eq!(mode(&app), EnvironmentMode::Vr);
     }
 
     /// §1.8: the meshes are drawn in VR mode only, and not without an `Environment`.

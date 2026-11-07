@@ -98,7 +98,7 @@ impl Plugin for ContactShadowPlugin {
                 SHADER.id(),
                 Shader::from_wgsl(SHADER_WGSL, "ftgsxr_xr/passthrough/contact_shadow.wgsl"),
             )
-            .expect("the shader's handle is a UUID one");
+            .expect("invariant: the shader's handle is a UUID one, which `insert` accepts");
         app.add_plugins(MaterialPlugin::<ShadowMaterial>::default())
             .add_systems(PostUpdate, sync_shadows.after(TransformSystems::Propagate));
     }
