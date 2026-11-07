@@ -23,6 +23,7 @@ use ftgsxr_render::SortMode;
 use openxr::EnvironmentBlendMode;
 
 use crate::anchors::AnchorsPlugin;
+use crate::depth::DepthPlugin;
 use crate::display::DisplayPlugin;
 use crate::error::{XrError, log_runtime, log_warning};
 use crate::panel::PanelPlugin;
@@ -72,6 +73,8 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.meta_spatial_entity_persistence = true;
     // Q-T571.4: spike check 5's fallback, the discovery by UUID.
     raw.meta_spatial_entity_discovery = true;
+    // §1.9's depth occlusion (E13, #570).
+    raw.meta_environment_depth = true;
     // The Touch Plus profile (Appendix D.2) through `tracking`'s bindings.
     raw.meta_touch_controller_plus = true;
     // §1.8 Hands (PRD #452, #454); the frequency hint by name, since no pinned openxr
@@ -255,6 +258,8 @@ impl Plugin for XrTail {
         // created and the mode stays VR (M-3's behaviour).
         if self.passthrough {
             app.add_plugins(passthrough::PassthroughPlugin);
+            // §1.9 Depth occlusion (#570): the Depth API needs passthrough (E.2).
+            app.add_plugins(DepthPlugin);
         }
     }
 }
