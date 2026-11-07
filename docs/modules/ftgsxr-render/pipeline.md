@@ -1,6 +1,6 @@
 # The per-frame pipeline in `ftgsxr-render`
 
-How `ftgsxr_render::gpu` runs the eight stages of §1.4's per-frame pipeline for one view: which `SplatPasses` call encodes each stage, which buffers and textures it reads and writes, and how the statistics come back two frames later. The spec items are §1.4 (the per-frame pipeline, several models, stereo, depth and occlusion, backgrounds), E1–E8, E13, E14, D-3–D-6, D-14, D-33–D-35, §2.4 and, for the M-4 section, §1.12, E16 and §1.2 load option 1; the sort itself is `sort.md`'s subject and the headless renderer `conformance.md`'s. This doc explains them and never overrides them.
+How `ftgsxr_render::gpu` runs the eight stages of §1.4's per-frame pipeline for one view: which `SplatPasses` call encodes each stage, which buffers and textures it reads and writes, and how the statistics come back two frames later. The spec items are §1.4 (the per-frame pipeline, several models, stereo, depth and occlusion, backgrounds), E1–E8, E13, E14, D-3–D-6, D-14, D-33–D-35, §2.4 and, for the M-4 section, §1.12, E16 and §1.2 load option 1, and for the M-6 section §1.9 Depth occlusion, D-45, §2.1 `DepthFrame`, `SplatOcclusion` and `OcclusionInput`, and §2.6; the sort itself is `sort.md`'s subject and the headless renderer `conformance.md`'s. This doc explains them and never overrides them.
 
 ## The calls and the passes they encode
 
@@ -10,7 +10,7 @@ How `ftgsxr_render::gpu` runs the eight stages of §1.4's per-frame pipeline for
 | 2 Cull | `encode_prepare` | the "prepare" compute pass, one dispatch per instance and kind | `cull.wgsl` (`cull_splats`, `cull_centers`) |
 | 3 Size | `encode_prepare` | the same compute pass, one workgroup | `cull.wgsl` (`size`) |
 | 4 Sort | `encode_prepare` | a compute pass of its own, every dispatch indirect | `sort_count.wgsl`, `sort_scan.wgsl`, `sort_scatter.wgsl` |
-| 5 Draw splats | `encode_draw` | in the caller's render pass on the layer | `splat.wgsl` |
+| 5 Draw splats | `encode_draw` | in the caller's render pass on the layer | `occlusion.wgsl` prepended to `splat.wgsl` |
 | 6 Draw centers | `encode_draw` | the same render pass, after the splats (Q-96) | `centers.wgsl` |
 | 7 Resolve | `encode_resolve` | in the caller's render pass on the view target | `resolve.wgsl` |
 | 8 Statistics | `encode_stats` | copies on the caller's encoder | none |
@@ -41,7 +41,7 @@ Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 a
 
 **4 Sort.** Reads the counters and the sort dispatch arguments; sorts the splats' pairs through the histograms into the first key and payload pair (`sort.md`). Centers are not sorted.
 
-**5 Draw splats.** Reads the records, the first payload buffer (draw order), the draw constants and a view block; one indirect draw from counter words 0–3, blended `One, OneMinusSrcAlpha` into the layer, depth-tested without depth write when a depth format was given (Q-87). In shared-center mode nothing is drawn until the per-eye projection of R-9 (Q-87).
+**5 Draw splats.** Reads the records, the first payload buffer (draw order), the draw constants and a view block; one indirect draw from counter words 0–3, blended `One, OneMinusSrcAlpha` into the layer, depth-tested without depth write when a depth format was given (Q-87). With an `OcclusionInput` each fragment's α is weighed by E13 against the environment depth (below; `conformance.md`). In shared-center mode nothing is drawn until the per-eye projection of R-9 (Q-87).
 
 **6 Draw centers.** Reads the records, the counters (bound read-only: instance i draws slot `visible_splats + i`, where `visible_splats` is word 1 after stage 3), the draw constants and the view block; one indirect draw from counter words 4–7. Each disc is the pixels whose sample point lies within ρ camera pixels of the record's μ′, written opaque in the instance's colormap color (Q-92; the time-center map spans \[τ₀, τ₁\], whose τ₁ `GpuArrays` carries, and a single-timestamp model maps every center to its low end, Q-97), with depth written when depth-tested. In `Both` mode a disc replaces its splat's pixels (Q-96).
 
@@ -82,10 +82,22 @@ The main world loads on the async compute task pool (`SplatLoad`, Q-99), uploads
 
 On the headset each eye is its own `SplatCamera` (`ftgsxr-xr/session.md`), so per-view mode (D-4 per view, which M-3's builds use, Q-121) runs the whole pipeline once per eye: each eye has its own `FrameBuffers` and statistics block, prepares, sorts and draws into its own array layer of the swapchain, and the passes are shared. Since both eyes yield a `FrameStats` per frame, `SplatStats` publishes the first splat camera's, the live one of lowest camera order with ties to the lower render entity; the XR crate orders the eyes by index, so it is the left eye, and a primitive counts once in the visible and non-finite counts, as in shared-center mode; the per-eye blocks are not summed (Q-125). `SplatEvent::Overflow` still fires for each view's frame that dropped records (D-34). The draws stay indirect on the Quest at C = 1,000,000 (D-30): wgpu's indirect-call validation, which empties every indirect draw on the Quest 3's Adreno, is off on Android for the headless device and the XR path's, through the vendored bevy\_mod\_openxr, wgpu-core and wgpu-hal (Q-139), and with it Dv-2 holds 72 Hz in both eyes; D-30's full-capacity fallback, measured at 40.9 Hz, is not used.
 
+## The occlusion path (M-6)
+
+E13's environment depth reaches stage 5 through `encode_draw`'s `occlusion` argument (D-45, R-12; #566).
+
+**One splat pipeline.** `SplatPasses` keeps one splat pipeline, whose bind group gains the depth view, a non-filtering sampler and E13's part of the view block (PRD #565, "One splat pipeline"). Without an `OcclusionInput` the block's flag is 0 and a 1 × 1 placeholder depth, made once in `SplatPasses::new`, is bound, so the headless renderer and every earlier test draw as before. The depth view may be any single-sample 2D view that samples as an unfilterable float, a depth format such as the runtime's 16-bit one, `R16Unorm` or `R32Float`, its first channel the stored depth, read at its nearest texel (Q-340). `occlusion.wgsl` holds E13's two functions, the stored depth to metres and the weight, and is prepended to `splat.wgsl` when the pipeline is built. The view block carries, with the flag, the mode and δ, both cameras' intrinsics, the depth image's size and planes, and the view's camera space to the depth camera's, composed in float64 on the CPU. What the fragment does with them is `conformance.md`'s.
+
+**Which frame a view draws against.** The render world holds `SplatOcclusion` (Q-339): `ftgsxr_xr::depth` writes it there each frame, after its acquire (`ftgsxr-xr/depth.md`). The adapter's draw node gives the i-th live splat camera in camera order, Q-125's order with ties to the lower render entity, so the left eye first, `frames[i]` as its `OcclusionInput`, its image as Bevy prepared it with the frame's camera and planes; a camera past the end of `frames`, and every camera while the running tier's `occlusion` flag is false, gets none and draws unoccluded (Q-338), so a frame that has not arrived leaves its eye unoccluded rather than wrongly occluded. `tests/bevy_adapter_m6.rs` checks the i-th camera, a camera without a frame, empty frames and the tier's flag.
+
+**The import helper.** `import_vulkan_texture` in `gpu` turns a Vulkan image made outside wgpu, the runtime's depth swapchain image, into a `wgpu::Texture` of the given size, layer count and format, through wgpu-hal, the `unsafe` §2.6 allows in this crate (Q-339). Its memory stays the image's owner's; the caller vouches for the image's device, shape, usages and life. The texture is tracked by wgpu from an uninitialized state, which Q-356 accepts for the runtime's images. It panics on a device that is not Vulkan. `tests/import_vulkan_texture.rs` stands in for the runtime with a two-layer 16-bit depth image of its own device.
+
+**R-12's tier.** No named tier can run R-12 (the conformance and desktop tiers have occlusion off, and the Quest tiers draw no splats before M-8), so R-12 renders with the conformance tier and `occlusion: true` (Q-347), its synthetic depth images written as an OpenXR projection writes them (Q-340), through the display test support's occlusion input.
+
 ## Where the frame skips stages 1–4
 
 §1.4 and §2.4 rule 2: when nothing that stages 1–4 read has changed, they are skipped and the previous frame's records, sorted payloads, counters and draw constants are drawn again, identical by construction. The adapter compares, per view, the view's `ViewParams` (E6's camera and the target size) and each drawn instance's GPU model, pose, τ (bit for bit), render mode, color transform and degree with the previous frame's; a new frame buffer set (another capacity, sort mode or layer format) always prepares, while a change of the output alone, such as a `LinearOver` background, keeps the set and does not (§2.4 rule 4, #201). The draw, the resolve and the statistics copy run every frame: stage 3's statistics block holds the skipped frame's counts already. The headless renderer prepares every render.
 
 ## What waits on later milestones
 
-E13's environment depth is not sampled yet (`occlusion` is unread, R-12); the shared-center vertex projection of splats and centers is R-9's (Q-87); the debug overlays are carried but not drawn (PRD #76); the adapter applies no `RenderLayers` or foveation yet (the render scale and the SH cap are applied since M-4, above), and a shared-center camera prepares per view and draws no splats (Q-87).
+The shared-center vertex projection of splats and centers is R-9's (Q-87); the debug overlays are carried but not drawn (PRD #76); the adapter applies no `RenderLayers` or foveation yet (the render scale and the SH cap are applied since M-4, above), and a shared-center camera prepares per view and draws no splats (Q-87).
