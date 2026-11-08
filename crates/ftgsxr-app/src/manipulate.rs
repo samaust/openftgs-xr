@@ -198,12 +198,12 @@ pub(crate) const FIT_MIN_M: f32 = 0.25;
 pub(crate) const FIT_DEFAULT_M: f32 = 1.0;
 
 /// A fit size as §1.5 takes it: raised to at least 0.25 m, none when it isn't finite.
-// Q-370
+// D-11
 fn fit_size(l: f32) -> Option<f32> {
     l.is_finite().then(|| l.max(FIT_MIN_M))
 }
 
-// Q-181, Q-370
+// Q-181, D-11
 fn set_pose_extras(
     mut reader: MessageReader<SetPoseExtras>,
     current: Query<&PoseExtras>,
@@ -403,7 +403,7 @@ pub(crate) fn head_pose(cameras: &HeadCameras) -> Option<Pose> {
 /// §1.5's hints for a local model: the preset from the first `ftgs-scene` manifest in
 /// its directory (a checkpoint's parent), by file name, and L_fit = 2S from a
 /// checkpoint's spatial scale, raised to at least 0.25 m; else Y-up and 1 m.
-// Q-181, Q-370
+// Q-181, D-11
 fn hints(source: &ModelRef, kind: ModelKind) -> PoseExtras {
     let fit_size_m = match kind {
         ModelKind::Checkpoint { spatial_scale, .. } => fit_size((2.0 * spatial_scale) as f32),
@@ -1537,7 +1537,7 @@ mod extras_tests {
     #[test]
     fn set_pose_extras_ignores_a_size_that_is_not_finite() {
         // Without an upper bound (§1.5, revision 43), a typed "inf" or a NaN is no length:
-        // the instance keeps its L_fit and takes the preset (Q-370, #621).
+        // the instance keeps its L_fit and takes the preset (Q-370, now D-11; #621).
         let mut app = App::new();
         app.add_message::<SetPoseExtras>()
             .add_systems(Update, set_pose_extras);
@@ -1583,7 +1583,7 @@ mod extras_tests {
     #[test]
     fn hints_a_checkpoint_suggests_2s_raised_to_the_minimum() {
         // §1.5 (revision 43): L_fit = max(2S, 0.25 m); S = 5 → 10 m, S = 0.05 → 0.25 m
-        // (#621). An S whose 2S isn't a finite f32 gives the 1 m default (Q-370).
+        // (#621). An S whose 2S isn't a finite f32 gives the 1 m default (Q-370, now D-11).
         let source = ModelRef::File(PathBuf::from("/nonexistent/ckpt"));
         for (s, l) in [
             (5.0, 10.0),
