@@ -8,7 +8,8 @@
 //! trim; Forget pose drops the saved trim; scene save and load restore it; the asset's
 //! box, the thumbnail's, stays untrimmed. The panel's labels and notice are private tests
 //! (`ui::dock::tests::scene_tab_trim_*`), since the Scene tab has no public seam; the boxes
-//! are compared within 10⁻⁶ of hand-worked values and the fit at I-4's 10⁻⁴ (Q-375).
+//! are compared within 10⁻⁶ of hand-worked values and the fit at I-4's 10⁻⁴ (I-23; the
+//! private panel tests, Q-375).
 
 use crate::support;
 
