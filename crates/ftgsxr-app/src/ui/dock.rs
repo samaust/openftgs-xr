@@ -23,7 +23,9 @@ use super::{
 };
 use crate::intent::{InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
 use crate::library::{EntryState, Library, LibraryCommand, LoadedModel, LocateEntry};
-use crate::manipulate::{FIT_DEFAULT_M, FIT_MIN_M, ManipulateSettings, PoseExtras, SetPoseExtras};
+use crate::manipulate::{
+    FIT_DEFAULT_M, FIT_MAX_M, FIT_MIN_M, ManipulateSettings, PoseExtras, SetPoseExtras,
+};
 use crate::platform::PickKind;
 use crate::playback::{Playback, RangeSetting, Scrubbing};
 
@@ -827,13 +829,13 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
         });
         ui.horizontal(|ui| {
             ui.label("fit size");
-            // At least 0.25 m, no upper bound (§1.5); each pixel dragged changes the size
-            // by 1 %, a logarithmic drag, fine near 0.25 m and still usable at tens of
-            // metres (#621).
+            // From 0.25 m to 10⁸ m (§1.5), a typed "inf" taken as 10⁸ m; each pixel dragged
+            // changes the size by 1 %, a logarithmic drag, fine near 0.25 m and still usable
+            // at tens of metres (#621, #630).
             let speed = f64::from(next.fit_size_m) * 0.01;
             ui.add(
                 egui::DragValue::new(&mut next.fit_size_m)
-                    .range(FIT_MIN_M..=f32::INFINITY)
+                    .range(FIT_MIN_M..=FIT_MAX_M)
                     .speed(speed)
                     .suffix(" m"),
             );

@@ -182,7 +182,7 @@ pub(crate) struct PoseExtras {
 }
 
 /// The Scene tab's orientation preset and L_fit for an instance (§1.5 Poses); L_fit is
-/// raised to at least 0.25 m, with no upper bound. The next fit and saved pose use them.
+/// taken into [0.25 m, 10⁸ m]. The next fit and saved pose use them.
 // Q-181
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SetPoseExtras {
@@ -191,16 +191,20 @@ pub(crate) struct SetPoseExtras {
     pub(crate) fit_size_m: f32,
 }
 
-/// §1.5's least L_fit in metres; L_fit has no upper bound.
+/// §1.5's least L_fit in metres.
 pub(crate) const FIT_MIN_M: f32 = 0.25;
+
+/// §1.5's greatest L_fit in metres, which holds a planet at its real size.
+pub(crate) const FIT_MAX_M: f32 = 1e8;
 
 /// §1.5's default L_fit in metres.
 pub(crate) const FIT_DEFAULT_M: f32 = 1.0;
 
-/// A fit size as §1.5 takes it: raised to at least 0.25 m, none when it isn't finite.
+/// A fit size as §1.5 takes it: the nearer bound of [0.25 m, 10⁸ m] when outside it,
+/// ∞ included, none when it isn't a number.
 // D-11
 fn fit_size(l: f32) -> Option<f32> {
-    l.is_finite().then(|| l.max(FIT_MIN_M))
+    (!l.is_nan()).then(|| l.clamp(FIT_MIN_M, FIT_MAX_M))
 }
 
 // Q-181, D-11
@@ -212,8 +216,8 @@ fn set_pose_extras(
     // The sizes set this frame, which the deferred inserts don't show `current` yet.
     let mut set: HashMap<Entity, f32> = HashMap::new();
     for m in reader.read() {
-        // A size that isn't finite is no length: the instance keeps its L_fit (1 m before
-        // it has one, §1.5's default).
+        // A size that isn't a number leaves L_fit as it was (1 m before the instance has
+        // one, §1.5's default).
         let kept = || {
             set.get(&m.instance).copied().unwrap_or_else(|| {
                 current
@@ -402,7 +406,7 @@ pub(crate) fn head_pose(cameras: &HeadCameras) -> Option<Pose> {
 
 /// §1.5's hints for a local model: the preset from the first `ftgs-scene` manifest in
 /// its directory (a checkpoint's parent), by file name, and L_fit = 2S from a
-/// checkpoint's spatial scale, raised to at least 0.25 m; else Y-up and 1 m.
+/// checkpoint's spatial scale, taken into [0.25 m, 10⁸ m]; else Y-up and 1 m.
 // Q-181, D-11
 fn hints(source: &ModelRef, kind: ModelKind) -> PoseExtras {
     let fit_size_m = match kind {
@@ -482,7 +486,8 @@ fn on_loaded(
             }
             PoseExtras {
                 preset: saved.preset,
-                fit_size_m: saved.fit_size_m,
+                // §1.5's range also holds for a size saved before it had an upper bound.
+                fit_size_m: fit_size(saved.fit_size_m).unwrap_or(FIT_DEFAULT_M),
             }
         }
         None => {
@@ -1535,17 +1540,23 @@ mod extras_tests {
     }
 
     #[test]
-    fn set_pose_extras_ignores_a_size_that_is_not_finite() {
-        // Without an upper bound (§1.5, revision 43), a typed "inf" or a NaN is no length:
-        // the instance keeps its L_fit and takes the preset (Q-370, now D-11; #621).
+    fn set_pose_extras_takes_a_size_into_the_range() {
+        // §1.5 (revision 46): a size outside [0.25 m, 10⁸ m], a typed "inf" included, is
+        // taken as the nearer bound; a NaN leaves L_fit as it was; the preset is taken
+        // either way (D-11, #630).
         let mut app = App::new();
         app.add_message::<SetPoseExtras>()
             .add_systems(Update, set_pose_extras);
         let e = app.world_mut().spawn_empty().id();
         for (preset, asked, kept) in [
             (Preset::YUp, 3.0, 3.0),
-            (Preset::ZUp, f32::INFINITY, 3.0),
-            (Preset::NegYUp, f32::NAN, 3.0),
+            (Preset::ZUp, f32::INFINITY, 1e8),
+            (Preset::NegYUp, f32::NAN, 1e8),
+            (Preset::YUp, 1.3e7, 1.3e7),
+            (Preset::ZUp, 1e9, 1e8),
+            (Preset::YUp, 0.1, 0.25),
+            (Preset::NegYUp, f32::NEG_INFINITY, 0.25),
+            (Preset::ZUp, f32::NAN, 0.25),
         ] {
             app.world_mut().write_message(SetPoseExtras {
                 instance: e,
@@ -1561,7 +1572,7 @@ mod extras_tests {
         app.world_mut().write_message(SetPoseExtras {
             instance: fresh,
             preset: Preset::YUp,
-            fit_size_m: f32::INFINITY,
+            fit_size_m: f32::NAN,
         });
         app.update();
         assert_eq!(
@@ -1569,7 +1580,7 @@ mod extras_tests {
             1.0
         );
         // Two messages in one frame: the second keeps the first's size.
-        for asked in [5.0, f32::INFINITY] {
+        for asked in [5.0, f32::NAN] {
             app.world_mut().write_message(SetPoseExtras {
                 instance: e,
                 preset: Preset::YUp,
@@ -1581,15 +1592,17 @@ mod extras_tests {
     }
 
     #[test]
-    fn hints_a_checkpoint_suggests_2s_raised_to_the_minimum() {
-        // §1.5 (revision 43): L_fit = max(2S, 0.25 m); S = 5 → 10 m, S = 0.05 → 0.25 m
-        // (#621). An S whose 2S isn't a finite f32 gives the 1 m default (Q-370, now D-11).
+    fn hints_a_checkpoint_suggests_2s_in_the_range() {
+        // §1.5 (revision 46): L_fit = 2S taken into [0.25 m, 10⁸ m]; S = 5 → 10 m,
+        // S = 0.05 → 0.25 m, S = 10⁸ → 10⁸ m, and 2S beyond f32 (∞) → 10⁸ m; 2S that
+        // isn't a number gives the 1 m default (D-11, #630).
         let source = ModelRef::File(PathBuf::from("/nonexistent/ckpt"));
         for (s, l) in [
             (5.0, 10.0),
             (0.05, 0.25),
             (1.0, 2.0),
-            (1e39, 1.0),
+            (1e8, 1e8),
+            (1e39, 1e8),
             (f64::NAN, 1.0),
         ] {
             let kind = ModelKind::Checkpoint {

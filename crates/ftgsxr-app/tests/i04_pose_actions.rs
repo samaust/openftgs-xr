@@ -214,6 +214,43 @@ fn i04_a_saved_pose_applies_when_the_instance_appears() {
 }
 
 #[test]
+fn i04_a_saved_fit_size_above_the_range_loads_as_the_bound() {
+    // §1.5 (revision 46, D-11, #630): L_fit lies in [0.25 m, 10⁸ m]; a size saved before
+    // the upper bound, 10³⁰ m, is the instance's 10⁸ m, which a save then writes.
+    let path = fixtures_dir().join("probes/P1.safetensors");
+    let id = {
+        let mut t = TestApp::new("i04_saved_fit_id");
+        let e = load(&mut t, path.clone());
+        identity(&t, e)
+    };
+    let mut store = PoseStore::default();
+    store.set(
+        &id,
+        SavedPose {
+            pose: Pose::IDENTITY,
+            preset: Preset::YUp,
+            fit_size_m: 1e30,
+            saved_at: "2026-11-07T00:00:00.000000000Z".into(),
+            trim: None,
+        },
+    );
+    let mut t = TestApp::with("i04_saved_fit", Setup::default(), |app| {
+        app.insert_resource(Poses(store));
+    });
+    let e = load(&mut t, path);
+    act(&mut t, e, InstanceAction::SavePose);
+    let again = t
+        .app
+        .world()
+        .resource::<Poses>()
+        .0
+        .get(&id)
+        .cloned()
+        .unwrap();
+    assert_eq!(again.fit_size_m, 1e8);
+}
+
+#[test]
 fn i04_the_fit_hints_from_a_manifest_and_a_checkpoint() {
     // A checkpoint with the `ftgs-scene` manifest beside it: Z-up, L_fit = 2S.
     let dir = support::scratch("i04_hints_dir");
