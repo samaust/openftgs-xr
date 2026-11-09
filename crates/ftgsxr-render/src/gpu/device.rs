@@ -180,7 +180,7 @@ impl SplatDevice {
         adapter_info: wgpu::AdapterInfo,
         budget: MemoryBudget,
     ) -> SplatDevice {
-        // Q-376: the limits the SH ranges and the binding refusals are sized against, as
+        // Q-377: the limits the SH ranges and the binding refusals are sized against, as
         // wgpu reports them (the `device` lane checks them against the driver's).
         let limits = device.limits();
         info!(

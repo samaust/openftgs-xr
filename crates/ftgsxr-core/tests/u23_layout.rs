@@ -550,7 +550,7 @@ fn u23_reduce_to_budget_top_scores_deterministic() {
     }
 }
 
-/// Q-376 (#642): the largest N whose every field's buffer fits, under a 128 MiB storage
+/// Q-377 (#642): the largest N whose every field's buffer fits, under a 128 MiB storage
 /// binding (eight SH ranges of 128 MiB, 1 GiB) and a 4 GiB largest buffer, from §1.12's
 /// per-field bytes: on the half-precision tiers the float32 position (12 bytes a row) caps
 /// N at ⌊134 217 728 ÷ 12⌋ = 11 184 810 at every L′ (at L′ = 3 the 96-byte half SH ties it:

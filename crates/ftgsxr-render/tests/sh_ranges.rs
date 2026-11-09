@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Q-376 (#642): a model's SH array bound as SH ranges. On a device requested with a
+//! Q-377 (#642): a model's SH array bound as SH ranges. On a device requested with a
 //! lowered `max_storage_buffer_binding_size`, a model whose SH array needs three ranges
 //! uploads and draws with no validation message, and its cull records and layer are
 //! bit-identical to the same model's on a device with the adapter's limits: the same
@@ -85,7 +85,7 @@ fn frame(dev: &SplatDevice, model: &ftgsxr_core::Model) -> (Vec<[u32; 12]>, u32,
     (records, contents.visible_splats, layer)
 }
 
-/// Q-376 (#642): under a 64 KiB storage binding, 1 000 degree-3 rows in float32 (a
+/// Q-377 (#642): under a 64 KiB storage binding, 1 000 degree-3 rows in float32 (a
 /// 192 000-byte SH buffer: three ranges of 65 536 bytes, the last 60 928) give the same
 /// record bits and layer bits as on the adapter's limits, where one binding holds the
 /// array, with no validation message on either device.

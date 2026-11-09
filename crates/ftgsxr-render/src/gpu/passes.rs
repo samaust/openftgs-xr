@@ -61,9 +61,9 @@ const INSTANCE_STRIDE: usize = 256;
 const FRAME_BYTES: usize = 240;
 /// One cull view in the frame block (`cull.wgsl`'s `ViewCam`).
 const VIEW_BYTES: usize = 96;
-/// The cull reads seven model buffers and the SH array's `SH_BINDINGS` SH ranges (Q-376),
+/// The cull reads seven model buffers and the SH array's `SH_BINDINGS` SH ranges (Q-377),
 /// and writes four frame buffers (§2.4 GPU data layout).
-const STORAGE_BUFFERS: u32 = 7 + SH_BINDINGS + 4; // Q-376
+const STORAGE_BUFFERS: u32 = 7 + SH_BINDINGS + 4; // Q-377
 /// The model bind group's first SH-range binding (`cull.wgsl`'s `sh0`).
 const SH_RANGE_BINDING: u32 = 8;
 
@@ -134,7 +134,7 @@ fn uniform_entry(binding: u32, dynamic: bool) -> wgpu::BindGroupLayoutEntry {
 impl SplatPasses {
     /// Compiles the passes for `tier`'s record layout (§1.4) and the given layer and depth
     /// formats; a shader that fails to compile, or a device with fewer than the nineteen
-    /// storage buffers per stage the cull binds (Q-376), is `RenderError::Shader`.
+    /// storage buffers per stage the cull binds (Q-377), is `RenderError::Shader`.
     pub fn new(
         dev: &SplatDevice,
         layer_format: wgpu::TextureFormat,
@@ -155,7 +155,7 @@ impl SplatPasses {
             label: Some("ftgsxr cull.wgsl"),
             source: wgpu::ShaderSource::Wgsl(CULL_WGSL.into()),
         });
-        // The uniform, the seven whole fields and the SH array's ranges (Q-376).
+        // The uniform, the seven whole fields and the SH array's ranges (Q-377).
         let model_entries: Vec<wgpu::BindGroupLayoutEntry> =
             std::iter::once(uniform_entry(0, false))
                 .chain((1..SH_RANGE_BINDING + SH_BINDINGS).map(|b| storage_entry(b, true)))
@@ -1111,7 +1111,7 @@ fn buffer_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_>
     }
 }
 
-/// The SH array `sh`'s `SH_BINDINGS` bindings (Q-376): range k holds bytes k·`range`
+/// The SH array `sh`'s `SH_BINDINGS` bindings (Q-377): range k holds bytes k·`range`
 /// onwards, `range` of them or what is left; the slots past the last range repeat it.
 fn sh_range_entries(sh: &wgpu::Buffer, range: u64) -> Vec<wgpu::BindGroupEntry<'_>> {
     let total = sh.size();
@@ -1275,7 +1275,7 @@ fn frame_uniform(views: &[ViewParams], capacity: u32, sort_pose: &SortPose) -> [
     out
 }
 
-// The model's uniform block is `model.rs`'s; `cull.wgsl` reads it as 64 bytes (Q-376).
+// The model's uniform block is `model.rs`'s; `cull.wgsl` reads it as 64 bytes (Q-377).
 const _: () = assert!(MODEL_UNIFORM_BYTES == 64);
 
 #[cfg(test)]

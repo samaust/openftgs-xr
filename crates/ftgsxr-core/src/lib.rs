@@ -44,7 +44,7 @@ pub use clock::{Clock, EndRule, LoopMode, ModelTime, PlayState};
 pub use layout::{
     GpuArrays, GpuLayoutOptions, HalfFields, MemoryEstimate, SH_BINDINGS, binding_row_cap,
     memory_estimate, pack_for_gpu, reduce_to_budget, trimmed_bounds,
-}; // Q-376: SH_BINDINGS, binding_row_cap
+}; // Q-377: SH_BINDINGS, binding_row_cap
 pub use loader::{
     SAFETENSORS_PREFIX, checkpoint_dir, header_len, hex, open_model, read_checkpoint,
     read_exchange, read_info, read_ply, sha256,

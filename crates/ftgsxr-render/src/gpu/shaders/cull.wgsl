@@ -39,7 +39,7 @@ struct Model {
     sh_degree: u32,
     half_flags: u32,
     single: u32,
-    // W, the words of one SH range (Q-376).
+    // W, the words of one SH range (Q-377).
     sh_range_words: u32,
     pad0: u32,
     pad1: u32,
@@ -140,7 +140,7 @@ const SH_C33: f32 = 0.5900435899266435;
 @group(0) @binding(5) var<storage, read> scale: array<u32>;
 @group(0) @binding(6) var<storage, read> rotation: array<u32>;
 @group(0) @binding(7) var<storage, read> opacity: array<u32>;
-// The SH array as its eight SH ranges of W words (Q-376); the slots past the model's last
+// The SH array as its eight SH ranges of W words (Q-377); the slots past the model's last
 // range repeat it.
 @group(0) @binding(8) var<storage, read> sh0: array<u32>;
 @group(0) @binding(9) var<storage, read> sh1: array<u32>;
@@ -207,7 +207,7 @@ fn opacity_at(m: u32) -> f32 {
     return unpack_value(opacity[field_index(m, half)], m, half);
 }
 
-// Word w of the SH array: word w mod W of range w ÷ W (Q-376).
+// Word w of the SH array: word w mod W of range w ÷ W (Q-377).
 fn sh_word(w: u32) -> u32 {
     let i = w % model.sh_range_words;
     switch w / model.sh_range_words {

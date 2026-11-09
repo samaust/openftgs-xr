@@ -181,17 +181,17 @@ pub fn memory_estimate(
     }
 }
 
-/// The number of SH ranges a model's GPU SH array is bound as, at most (Q-376): every
+/// The number of SH ranges a model's GPU SH array is bound as, at most (Q-377): every
 /// other field is bound whole.
-// Q-376
+// Q-377
 pub const SH_BINDINGS: u32 = 8;
 
 /// The largest N whose every field's GPU buffer, padded to whole 32-bit words, fits the
-/// device (Q-376, Q-369): the SH buffer in `SH_BINDINGS` SH ranges of W words each, W =
+/// device (Q-377, Q-369): the SH buffer in `SH_BINDINGS` SH ranges of W words each, W =
 /// ⌊`binding_limit` ÷ 64⌋ · 16 (whole 64-byte offsets); every buffer in `max_buffer`
 /// bytes; every other field's buffer in one `binding_limit`-byte binding. The bytes per
 /// primitive are §1.12's, at the capped degree L′ = min(L, `opts.sh_cap`).
-// Q-376
+// Q-377
 pub fn binding_row_cap(
     sh_degree: u8,
     opts: &GpuLayoutOptions,

@@ -29,11 +29,11 @@ use super::readback::half_to_f32;
 /// | 36 | the loaded SH degree L′ | u32 |
 /// | 40 | half fields: bit 0 velocity, 1 scale, 2 rotation, 3 opacity, 4 sh | u32 |
 /// | 44 | single timestamp (1) or not (0) | u32 |
-/// | 48 | W, the words of one SH range (Q-376) | u32 |
+/// | 48 | W, the words of one SH range (Q-377) | u32 |
 /// | 52 | 0 (padding to 16-byte rows) | 3 × u32 |
 ///
 /// `transmittance_stop` is not applied (D-7), and the background is the view's (E7).
-pub(crate) const MODEL_UNIFORM_BYTES: usize = 64; // Q-376
+pub(crate) const MODEL_UNIFORM_BYTES: usize = 64; // Q-377
 
 /// The model buffers' extra usage in the crate's unit tests, which read them back.
 const TEST_READ: BufferUsages = if cfg!(test) {
@@ -106,7 +106,7 @@ pub struct GpuModel {
     /// The 99th percentile of the rows' speeds ‖velocity‖ in model units per unit of τ,
     /// the scale of the speed colormap (§1.4 stage 6). // Q-93
     pub(crate) speed_p99: f32,
-    /// The bytes of one SH range, W · 4, on the model's device (Q-376).
+    /// The bytes of one SH range, W · 4, on the model's device (Q-377).
     pub(crate) sh_range_bytes: u64,
     n: u32,
     /// The model's static bytes, reserved on its device until the model is dropped (Q-74).
@@ -196,31 +196,31 @@ fn speed_percentile_99(arrays: &GpuArrays) -> f32 {
     s[rank - 1]
 }
 
-/// The bytes of one SH range on a device of `limits`, W · 4 (Q-376): the largest storage
+/// The bytes of one SH range on a device of `limits`, W · 4 (Q-377): the largest storage
 /// binding rounded down to whole multiples of the storage offset alignment, at least 64
 /// bytes, so that every range's offset is aligned.
-// Q-376
+// Q-377
 pub(crate) fn sh_range_bytes(limits: &wgpu::Limits) -> u64 {
     let align = u64::from(limits.min_storage_buffer_offset_alignment).max(64);
     // At most 4 GiB, so W fits the shader's 32-bit word index.
     limits.max_storage_buffer_binding_size.min(1 << 32) / align * align
 }
 
-/// The SH ranges `bytes` of SH take at `range` bytes each, at least one (Q-376).
+/// The SH ranges `bytes` of SH take at `range` bytes each, at least one (Q-377).
 pub(crate) fn sh_ranges(bytes: u64, range: u64) -> u64 {
     bytes.div_ceil(range.max(1)).max(1)
 }
 
-/// W, the words of one SH range on `dev`, for the model's uniform (Q-376).
+/// W, the words of one SH range on `dev`, for the model's uniform (Q-377).
 fn sh_range_words(dev: &SplatDevice) -> u32 {
     u32::try_from(sh_range_bytes(dev.limits()) / 4).expect("an SH range of at most 4 GiB")
 }
 
-/// `RenderError::Budget` when `arrays` cannot be bound on `dev` (Q-376, Q-369), logged with
+/// `RenderError::Budget` when `arrays` cannot be bound on `dev` (Q-377, Q-369), logged with
 /// N, the field, its buffer's bytes and the limit hit: (1) the SH buffer exceeds
 /// `SH_BINDINGS` SH ranges, (2) a field's buffer exceeds the device's largest buffer, (3)
 /// another field's buffer exceeds one storage binding; each buffer padded to whole words.
-// Q-369, Q-376
+// Q-369, Q-377
 fn check_bindings(dev: &SplatDevice, arrays: &GpuArrays) -> Result<(), RenderError> {
     let limits = dev.limits();
     let refuse = |name: &str, bytes: u64, budget: u64, what: String| {
@@ -271,7 +271,7 @@ fn check_bindings(dev: &SplatDevice, arrays: &GpuArrays) -> Result<(), RenderErr
 }
 
 /// `arrays`' static bytes reserved on `dev`'s budget (Q-74), once every field's buffer fits
-/// the device's bindings (Q-369, Q-376); a refusal is logged with N, the bytes needed and the budget
+/// the device's bindings (Q-369, Q-377); a refusal is logged with N, the bytes needed and the budget
 /// left (§1.2 load option 4, D-13), since `RenderError::Budget` carries no N.
 // Q-117
 fn reserve_logged(dev: &SplatDevice, arrays: &GpuArrays) -> Result<Reservation, RenderError> {
@@ -297,7 +297,7 @@ impl GpuModel {
     /// So is a model whose SH buffer exceeds `SH_BINDINGS` SH ranges, whose buffer exceeds
     /// the device's largest buffer, or whose other field's buffer exceeds one storage
     /// binding, its `needed` the buffer's bytes and its `budget` the limit hit (Q-369,
-    /// Q-376).
+    /// Q-377).
     ///
     /// # Panics
     ///
@@ -398,7 +398,7 @@ const FIELDS: usize = 8;
 /// The SH array's index in `field` order.
 const SH: usize = FIELDS - 1;
 
-/// The fields' names in `field` order, for the binding refusals' log (Q-369, Q-376).
+/// The fields' names in `field` order, for the binding refusals' log (Q-369, Q-377).
 const FIELD_NAMES: [&str; FIELDS] = [
     "position",
     "time center",
@@ -903,7 +903,7 @@ mod tests {
         );
     }
 
-    /// Q-376, Q-369 (#617, #642): on a device whose largest storage binding is 64 KiB (an
+    /// Q-377, Q-369 (#617, #642): on a device whose largest storage binding is 64 KiB (an
     /// SH range of 65 536 bytes at a 64-byte alignment), 1 000 degree-3 rows in float32 (a
     /// 192 000-byte SH buffer) upload and their three ranges bind without a validation
     /// message, while one range's bytes past the limit do not bind; 2 731 rows (524 352
@@ -1095,7 +1095,7 @@ mod tests {
             [0.5, 0.25, 2.0, 8.0, 0.125, 1.5, 0.75, 3.0]
         );
         assert_eq!([u(8), u(9), u(10), u(11)], [7, 2, 0b10101, 1]);
-        // Q-376: W, then padding.
+        // Q-377: W, then padding.
         assert_eq!([u(12), u(13), u(14), u(15)], [4096, 0, 0, 0]);
     }
 }

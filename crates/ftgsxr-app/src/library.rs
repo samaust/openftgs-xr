@@ -659,9 +659,9 @@ fn read_drops(
 /// The reduce-to-budget count (Q-158): the budget's remaining bytes over the static
 /// bytes of one primitive under the tier's layout and the governor's SH cap, floored, and
 /// at most `binding_row_cap`'s rows, whose every field's buffer fits the device's storage
-/// bindings and largest buffer (Q-369, Q-376); `None` without a device or when every row
+/// bindings and largest buffer (Q-369, Q-377); `None` without a device or when every row
 /// fits.
-// Q-158, Q-369, Q-376
+// Q-158, Q-369, Q-377
 fn reduce_count(info: &ModelInfo, gpu: Option<&SplatGpu>, tier: &SplatTierState) -> Option<usize> {
     let dev = gpu?.device();
     let remaining = dev

@@ -4,7 +4,7 @@
 //! `EntryState::Failed` with its E-FILE code (`cpu`); a model over the budget fails with
 //! Q-117's text, and `Load { reduce: true }` then loads it reduced (`gpu`; Q-158); so is a
 //! model whose SH array exceeds its eight SH ranges of the device's largest storage
-//! binding, reduced to fit them and then drawn (`gpu`; Q-369, Q-376).
+//! binding, reduced to fit them and then drawn (`gpu`; Q-369, Q-377).
 
 use crate::support;
 
@@ -133,7 +133,7 @@ fn gpu_i13_over_the_binding_limit_then_reduced() {
     use bevy::render::render_resource::{TextureFormat, TextureUsages};
     use ftgsxr_app::SplatCamera;
     use ftgsxr_render::{Capacity, OutputSpace, SortMode, SplatStats};
-    // Q-369, Q-376 (#617, #642): a 1 MiB binding against 50 000 degree-3 rows in float32
+    // Q-369, Q-377 (#617, #642): a 1 MiB binding against 50 000 degree-3 rows in float32
     // (`desktop`): the SH array takes 192 bytes a row, 9 600 000 in all, over its eight SH
     // ranges' 8 388 608 bytes, while the budget holds them all.
     let limit: u64 = 1 << 20;
