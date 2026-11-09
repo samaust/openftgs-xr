@@ -10,7 +10,7 @@
 //! cannot take the dragged handle but can drag another, the instance cannot be grabbed
 //! during a drag and its handles are hidden while it is grabbed, and a deselect or a trim
 //! change ends the drag. Which handle and whether a drag runs are read from
-//! `TrimHandles` (Q-377) and compared exactly; the trim's values within 10⁻⁶.
+//! `TrimHandles` (Q-378) and compared exactly; the trim's values within 10⁻⁶.
 
 use crate::support;
 

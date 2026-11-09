@@ -50,7 +50,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("gizmo_translate", "KeyG"),
     ("gizmo_rotate", "KeyR"),
     ("gizmo_scale", "KeyT"),
-    ("gizmo_trim", "KeyC"), // Q-376
+    ("gizmo_trim", "KeyC"), // Q-377
     ("nudge_left", "ArrowLeft"),
     ("nudge_right", "ArrowRight"),
     ("nudge_forward", "ArrowUp"),

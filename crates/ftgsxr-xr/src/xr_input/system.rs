@@ -601,7 +601,7 @@ pub(crate) fn select_pulses(
             }
         }
     }
-    // E18: a handle drag gives the hover and grab pulses (§1.8). Q-377
+    // E18: a handle drag gives the hover and grab pulses (§1.8). Q-378
     for t in &now.handles_hovered {
         if !prev.handles_hovered.contains(t) {
             add(t.1, HOVER);
@@ -783,7 +783,7 @@ mod tests {
         Entity::from_raw_u32(n).unwrap()
     }
 
-    /// Q-377 (E18, §1.8): a trim handle's hover gives the hover pulse on its hand, a
+    /// Q-378 (E18, §1.8): a trim handle's hover gives the hover pulse on its hand, a
     /// drag's start and end the grab pulse.
     #[test]
     fn select_pulses_trim_handles_hover_and_drag() {

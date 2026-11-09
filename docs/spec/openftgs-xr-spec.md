@@ -1287,31 +1287,31 @@ The player reads openftgs's `ftgs-if`, `ftgs-checkpoint` and `ftgs-render-reques
 
 ### 2.3 Dependencies and licenses
 
-Every dependency is under a license compatible with an Apache-2.0 release; none is GPL or AGPL. "Verified" means the license was read from the project's license file or crates.io's license field during the planning research of 2026-10-29 (Appendix A); "knowledge" entries are confirmed by the release-time license scan (cargo-deny, below). Versions are those of the pin rule D-1 on 2026-10-29: the newest Bevy minor for which bevy\_mod\_openxr has a crates.io release, with every crate at the version compatible with it; the one `[workspace.dependencies]` table holds them, and moving to a newer Bevy is one edit of that table once the XR crates release for it, re-checked at the start of every milestone.
+Every dependency is under a license compatible with an Apache-2.0 release; none is GPL or AGPL. "Verified" means the license was read from the project's license file or crates.io's license field during the planning research of 2026-10-29 (Appendix A); "knowledge" entries are confirmed by the release-time license scan (cargo-deny, below). Versions are those of the pin rule D-1 on 2026-10-29: the newest Bevy minor for which bevy\_mod\_openxr has a crates.io release, with every crate at the version compatible with it; the one `[workspace.dependencies]` table holds them, and moving to a newer Bevy is one edit of that table once the XR crates release for it, re-checked at the start of every milestone. Scope names the crates of §2.1's Foundation to Platform bands whose rows list the dependency, without the `ftgsxr-` prefix and with §2.1's Android-only qualifier; a ↳ row that no such crate's row lists takes the scope of the row above it, narrowed to the crates its use names. Any other row that no such crate's row lists carries a label instead (dev, dev program, dev tool, build tool, runtime and the like), and "quest, bundled" marks a library that §2.1's `android/` row packages into the Quest app.
 
 | Crate or tool | Version | Use | Scope | License | Checked |
 | --- | --- | --- | --- | --- | --- |
-| bevy | 0.19.1 | engine: ECS, rendering (wgpu 29), windowing (winit 0.30), assets, tasks; bevy\_render 0.19.1 vendored through `[patch.crates-io]` (D-53) | core | MIT OR Apache-2.0 | verified |
-| ↳ wgpu, wgpu-hal, naga | Bevy's pins (29) | the GPU layer of `ftgsxr-render`, through Bevy's re-exports; wgpu-core and wgpu-hal 29.0.4 vendored through `[patch.crates-io]` (D-30, D-52) | core | MIT OR Apache-2.0 | verified |
+| bevy | 0.19.1 | engine: ECS, rendering (wgpu 29), windowing (winit 0.30), assets, tasks; bevy\_render 0.19.1 vendored through `[patch.crates-io]` (D-53) | render, app, xr, desktop, quest | MIT OR Apache-2.0 | verified |
+| ↳ wgpu, wgpu-hal, naga | Bevy's pins (29) | the GPU layer of `ftgsxr-render`, through Bevy's re-exports; wgpu-core and wgpu-hal 29.0.4 vendored through `[patch.crates-io]` (D-30, D-52) | render | MIT OR Apache-2.0 | verified |
 | ↳ glam | Bevy's pin (0.32) | vectors, quaternions, matrices, re-exported by `ftgsxr-core` | core | MIT OR Apache-2.0 | verified |
 | ↳ winit | Bevy's pin (0.30) | the desktop window | desktop | Apache-2.0 | verified |
-| bevy\_mod\_openxr, bevy\_mod\_xr | 0.6.0 | the OpenXR session, swapchains, per-eye cameras, actions, hand tracking, passthrough layer | xr | MIT OR Apache-2.0 | verified (crates.io field, README; license files present) |
+| bevy\_mod\_openxr, bevy\_mod\_xr | 0.6.0 | the OpenXR session, swapchains, per-eye cameras, actions, hand tracking, passthrough layer | xr; bevy\_mod\_xr also quest (Android only) | MIT OR Apache-2.0 | verified (crates.io field, README; license files present) |
 | ↳ openxr, openxr-sys | 0.21.1 (the XR crates' pin) | OpenXR bindings; the extensions of Appendix E | xr | MIT OR Apache-2.0 | verified |
 | ↳ android-activity | =0.6.0 (the XR crates' pin) | the Android activity glue | quest | MIT OR Apache-2.0 | verified |
 | safetensors | 0.8 | reading `ftgs-if`, `params.safetensors`; writing `ftgs-renders` and `ftgs-if` | core | Apache-2.0 | verified |
 | bytemuck | 1.25 | casting tensor bytes | core | Zlib OR Apache-2.0 OR MIT | verified |
 | half | 2.7 | half-precision packing | core | MIT OR Apache-2.0 | verified |
-| serde, serde\_json | 1 | JSON files | core | MIT OR Apache-2.0 | verified |
-| toml | 1.1 | `settings.toml` | core | MIT OR Apache-2.0 | verified |
-| sha2 | 0.10 | identities, checksums | core | MIT OR Apache-2.0 | knowledge |
-| thiserror | 2 | error types | core | MIT OR Apache-2.0 | knowledge |
+| serde, serde\_json | 1 | JSON files | core; serde\_json also io | MIT OR Apache-2.0 | verified |
+| toml | 1.1 | `settings.toml` | io | MIT OR Apache-2.0 | verified |
+| sha2 | 0.10 | identities, checksums | core, io | MIT OR Apache-2.0 | knowledge |
+| thiserror | 2 | error types | core, io | MIT OR Apache-2.0 | knowledge |
 | rayon | 1 | parallel packing and validation on the CPU | core | MIT OR Apache-2.0 | knowledge |
-| ureq | 3.5 | HTTP listings and downloads | core | MIT OR Apache-2.0 | verified |
-| ↳ rustls | 0.23 | TLS, with the `ring` provider | core | Apache-2.0 OR ISC OR MIT | verified |
-| ↳ ring | 0.17 | the TLS crypto provider (D-20) | core | Apache-2.0 AND ISC | verified |
-| ↳ webpki-roots | 1.0 | the root certificates (D-20) | core | CDLA-Permissive-2.0 (a permissive data license; owner accepted 2026-10-29) | verified |
-| url | 2 | URLs | core | MIT OR Apache-2.0 | knowledge |
-| directories | 6 | XDG paths (brings `option-ext`, MPL-2.0, used unmodified) | desktop | MIT OR Apache-2.0 | verified |
+| ureq | 3.5 | HTTP listings and downloads | io | MIT OR Apache-2.0 | verified |
+| ↳ rustls | 0.23 | TLS, with the `ring` provider | io | Apache-2.0 OR ISC OR MIT | verified |
+| ↳ ring | 0.17 | the TLS crypto provider (D-20) | io | Apache-2.0 AND ISC | verified |
+| ↳ webpki-roots | 1.0 | the root certificates (D-20) | io | CDLA-Permissive-2.0 (a permissive data license; owner accepted 2026-10-29) | verified |
+| url | 2 | URLs | io | MIT OR Apache-2.0 | knowledge |
+| directories | 6 | XDG paths (brings `option-ext`, MPL-2.0, used unmodified) | io | MIT OR Apache-2.0 | verified |
 | bevy\_egui | 0.42 | the panels (D-21) | app | MIT | verified |
 | ↳ egui | bevy\_egui's pin | immediate-mode UI | app | MIT OR Apache-2.0 | verified |
 | bevy\_kira\_audio | 0.26 | sounds and soundtracks (D-22) | app | MIT OR Apache-2.0 | verified |
@@ -1319,7 +1319,7 @@ Every dependency is under a license compatible with an Apache-2.0 release; none 
 | image | 0.25 | PNG screenshots and thumbnails | app | MIT OR Apache-2.0 | knowledge |
 | clap | 4 | the command line | desktop | MIT OR Apache-2.0 | knowledge |
 | rfd | 0.17 | file dialogs (XDG portal, GTK fallback) | desktop | MIT | verified |
-| tracing, tracing-subscriber | 0.1, 0.3 | logging | core, app | MIT | verified |
+| tracing, tracing-subscriber | 0.1, 0.3 | logging | tracing in core, io and quest (Android only); tracing-subscriber in app | MIT | verified |
 | android\_logger | 0.15 | logcat | quest | MIT OR Apache-2.0 | verified |
 | jni | 0.20 (the XR crates' pin) | calling the shim | quest | MIT OR Apache-2.0 | verified |
 | ndk-context | 0.1 | the JavaVM and activity handles | quest | MIT OR Apache-2.0 | verified |

@@ -107,11 +107,11 @@ pub(super) fn drag_point(
     }
 }
 
-/// The trim a frame's drags of one instance give (E18, Q-377): one drag gives its start
+/// The trim a frame's drags of one instance give (E18, Q-378): one drag gives its start
 /// trim dragged, `start.drag_handle(handle, δ, ρ)`; with two, the first one's result,
 /// then the second's own value applied to it: a face's limit through `set_box_limit`,
 /// the radius or the center.
-// Q-377
+// Q-378
 pub(super) fn dragged_trim(drags: &[&TrimDrag]) -> Option<Trim> {
     let (first, rest) = drags.split_first()?;
     let mut t = first
