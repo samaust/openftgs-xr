@@ -6,7 +6,7 @@
 //! pick, even behind a nearer instance hit, there are no handles with the trim
 //! off or in another gizmo mode, C is ignored with the trim off and turning the trim off
 //! returns the gizmo to translate. XR, from `Pointer`, `Select` and `Grab*` intents: a
-//! `grab` drag of a face handle moves it by p = o + t₀·d, a `select` drag of the center
+//! `grab` drag of a face handle moves it by p = o + t_h·d, a `select` drag of the center
 //! moves c, a radius drag stops at the floor, one hand drags one handle, the second hand
 //! cannot take the dragged handle but can drag another, the instance cannot be grabbed
 //! during a drag and its handles are hidden while it is grabbed, and a deselect or a trim
@@ -368,7 +368,7 @@ fn i24_xr_a_grab_drag_moves_a_face_by_the_point_on_the_ray() {
         t.app.world().get::<Grabbed>(e).is_none(),
         "the handle, not the instance"
     );
-    // t₀ = 5: the hand moved 0.5 along x gives p = (1.5, 0, 0).
+    // t_h = 5: the hand moved 0.5 along x gives p = (1.5, 0, 0).
     send(&mut t, &[down(Hand::Left, Vec3::new(1.5, 0.0, 5.0))]);
     assert!(close(trim(&t, e).box_max.x, 1.5));
     // Off the axis too: only δ's x counts.
