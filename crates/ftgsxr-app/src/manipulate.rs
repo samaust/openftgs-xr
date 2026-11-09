@@ -346,6 +346,9 @@ struct HandStates {
     /// The trim last sent for each dragged instance, so an unchanged shape is not sent
     /// again while the `SetTrim` is on its way.
     trim_sent: HashMap<Entity, Trim>,
+    /// The instances one of whose drags started or ended this frame, whose drags
+    /// `run_intents` re-anchors before it moves them (Q-379).
+    to_reanchor: Vec<Entity>,
 }
 
 /// The `SetTrim` intents a frame's drags send (E18), written by `send_trim_drags`:
@@ -366,7 +369,45 @@ impl HandStates {
     }
 
     fn end_trim_drag(&mut self, hand: Hand) {
-        self.trim_drags.retain(|d| d.hand != hand);
+        self.retain_trim_drags(|d| d.hand != hand);
+    }
+
+    /// Marks `e`, one of whose drags started or ended, for the re-anchor of its drags.
+    fn mark_reanchor(to_reanchor: &mut Vec<Entity>, e: Entity) {
+        if !to_reanchor.contains(&e) {
+            to_reanchor.push(e);
+        }
+    }
+
+    /// Keeps the drags `keep` keeps, marking the instance of each drag it ends for the
+    /// re-anchor of its other drags (Q-379).
+    fn retain_trim_drags(&mut self, mut keep: impl FnMut(&TrimDrag) -> bool) {
+        let ended = &mut self.to_reanchor;
+        self.trim_drags.retain(|d| {
+            let k = keep(d);
+            if !k {
+                Self::mark_reanchor(ended, d.entity);
+            }
+            k
+        });
+    }
+
+    /// Q-379: re-anchors the drags of each instance one of whose drags started or ended,
+    /// so that they share one t₀: the trim the drags last sent it, else `trim_of`'s; and
+    /// each its current drag point as p₀, so its δ starts again from zero and the trim
+    /// does not change. t_h, the anchor and the start ray stay as each drag began.
+    // Q-379
+    fn reanchor_trim_drags(&mut self, trim_of: impl Fn(Entity) -> Option<Trim>) {
+        for e in std::mem::take(&mut self.to_reanchor) {
+            let Some(t0) = self.trim_sent.get(&e).copied().or_else(|| trim_of(e)) else {
+                continue;
+            };
+            for d in self.trim_drags.iter_mut().filter(|d| d.entity == e) {
+                d.start = t0;
+                d.p0 += d.delta;
+                d.delta = Vec3::ZERO;
+            }
+        }
     }
 
     fn trim_dragged(&self, e: Entity) -> bool {
@@ -841,6 +882,9 @@ fn begin_trim_drag(
         floor,
         delta: Vec3::ZERO,
     });
+    // Its t₀ is the trim the instance's drags last gave, with the others re-anchored.
+    // Q-379
+    HandStates::mark_reanchor(&mut hs.to_reanchor, e);
     true
 }
 
@@ -1278,11 +1322,14 @@ fn run_intents(
     // E18's ends: deselected or gone, the trim turned off, reset or switched between box
     // and sphere, the instance grabbed, and the mouse's out of the gizmo's trim mode.
     let mode = gizmo.mode;
-    hs.trim_drags.retain(|d| {
+    hs.retain_trim_drags(|d| {
         sel == Some(d.entity)
             && trim_of(&trim_now, &trims, d.entity).is_some_and(|t| t.mode == d.start.mode)
             && (d.hand != Hand::Mouse || mode == GizmoMode::Trim)
     });
+    // Q-379: a drag that started or ended re-anchors its instance's other drags, before
+    // `trim_sent` lets go of an instance no longer dragged.
+    hs.reanchor_trim_drags(|e| trim_of(&trim_now, &trims, e));
     // E18's drags: each drag point from its hand's last ray under the current pose, then
     // each dragged instance's trim, sent as `InstanceAction::SetTrim` when it changes;
     // `send_trim_drags` writes it after this system, and the next frame applies it.

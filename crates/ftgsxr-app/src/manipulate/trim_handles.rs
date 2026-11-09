@@ -50,9 +50,10 @@ pub(super) fn handle_hit(
     best
 }
 
-/// A drag under way (E18): the instance, the handle, the trim at the drag's start, the
-/// model-space drag point p₀ and what the drag point needs: the handle's model point at
-/// the start, the start ray (the desktop center's plane) and t_h on the ray (XR).
+/// A drag under way (E18): the instance, the handle, its t₀ and its model-space drag
+/// point p₀, both taken at the drag's start or its instance's last re-anchor (Q-379), and
+/// what the drag point needs, kept as the drag began: the handle's model point at the
+/// start, the start ray (the desktop center's plane) and t_h on the ray (XR).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct TrimDrag {
     pub(super) entity: bevy::ecs::entity::Entity,
@@ -67,7 +68,7 @@ pub(super) struct TrimDrag {
     pub(super) by_select: bool,
     /// E18's ρ: §1.7's radius floor, 10⁻³ of the untrimmed B_m's longest side.
     pub(super) floor: f32,
-    /// The last displacement, kept while a ray gives no drag point.
+    /// The last displacement from p₀, kept while a ray gives no drag point.
     pub(super) delta: Vec3,
 }
 
@@ -108,10 +109,10 @@ pub(super) fn drag_point(
     }
 }
 
-/// The trim a frame's drags of one instance give (E18, Q-379): one drag gives its start
-/// trim dragged, `start.drag_handle(handle, δ, ρ)`; with two, the first one's result,
-/// then the second's own value applied to it: a face's limit through `set_box_limit`,
-/// the radius or the center.
+/// The trim a frame's drags of one instance give (E18, Q-379): one drag gives its t₀
+/// dragged, `start.drag_handle(handle, δ, ρ)`; with two, which share one t₀ since the
+/// last re-anchor, the first one's result, then the second's own value applied to it: a
+/// face's limit through `set_box_limit`, the radius or the center.
 // Q-379
 pub(super) fn dragged_trim(drags: &[&TrimDrag]) -> Option<Trim> {
     let (first, rest) = drags.split_first()?;
