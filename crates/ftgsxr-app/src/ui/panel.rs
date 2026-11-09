@@ -296,7 +296,7 @@ pub(super) fn panel_layout(
         });
     dock::toast_line(world, ui);
     egui::CentralPanel::default().show(ui, |ui| {
-        // Q-377: the dock's overflow rule; a ray drags the horizontal bar.
+        // Q-378: the dock's overflow rule; a ray drags the horizontal bar.
         dock::tab_scroll_area().show(ui, |ui| {
             if asking {
                 dock::confirm_body(world, ui, out);
@@ -1762,7 +1762,7 @@ mod tests {
         shapes
     }
 
-    /// §1.8 User interface, Q-377 (#649, `cpu`): on every main panel texture (#542's,
+    /// §1.8 User interface, Q-378 (#649, `cpu`): on every main panel texture (#542's,
     /// `ui_scale` 1.5 among them, where the panel is 390 points wide), with the Library tab
     /// and a section wider and taller than the panel, the tab body's vertical scroll bar
     /// lies inside the texture and a ray drag of it scrolls the rows, and a horizontal

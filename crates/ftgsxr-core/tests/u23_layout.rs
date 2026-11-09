@@ -550,13 +550,17 @@ fn u23_reduce_to_budget_top_scores_deterministic() {
     }
 }
 
-/// Q-369 (#617): the largest field's bytes per primitive, the SH array's on every Quest tier
-/// (half precision; caps 3, 2 and 1: 96, 54 and 24 bytes), giving #617's largest N under a
-/// 128 MiB binding; at degree 0 another field is the largest (the float32 rotation, 16
-/// bytes, or the float32 position, 12, when the rest are half), and a cap above L keeps L.
+/// Q-377 (#642): the largest N whose every field's buffer fits, under a 128 MiB storage
+/// binding (eight SH ranges of 128 MiB, 1 GiB) and a 4 GiB largest buffer, from §1.12's
+/// per-field bytes: on the half-precision tiers the float32 position (12 bytes a row) caps
+/// N at ⌊134 217 728 ÷ 12⌋ = 11 184 810 at every L′ (at L′ = 3 the 96-byte half SH ties it:
+/// 2³⁰ ÷ 96 is the same); in float32 the rotation (16 bytes) caps it at 8 388 608 up to
+/// L′ = 2, and at L′ = 3 the 192-byte SH at 2³⁰ ÷ 192 = 5 592 405; a 256 MiB largest buffer
+/// caps L′ = 2 half (54 bytes of SH) at ⌊268 435 456 ÷ 54⌋ = 4 971 026.
 #[test]
-fn max_field_bytes_per_primitive_gives_the_quest_caps() {
-    use ftgsxr_core::layout::max_field_bytes_per_primitive;
+fn binding_row_cap_gives_the_quest_caps() {
+    use ftgsxr_core::layout::{SH_BINDINGS, binding_row_cap};
+    assert_eq!(SH_BINDINGS, 8);
     let half = HalfFields {
         velocity: true,
         scale: true,
@@ -564,25 +568,38 @@ fn max_field_bytes_per_primitive_gives_the_quest_caps() {
         opacity: true,
         sh: true,
     };
-    let limit: u64 = 134_217_728;
-    for (cap, bytes, n) in [(3, 96, 1_398_101), (2, 54, 2_485_513), (1, 24, 5_592_405)] {
-        let opts = GpuLayoutOptions {
-            half,
-            sh_cap: Some(cap),
-        };
-        let per = max_field_bytes_per_primitive(3, &opts);
-        assert_eq!(per, bytes, "cap {cap}");
-        assert_eq!(limit / per, n, "cap {cap}");
-    }
-    let float = GpuLayoutOptions::default();
-    assert_eq!(max_field_bytes_per_primitive(0, &float), 16);
-    assert_eq!(max_field_bytes_per_primitive(3, &float), 192);
-    // Half SH at degree 0 (6 bytes) is below the float32 position (12 bytes).
-    let opts = GpuLayoutOptions { half, sh_cap: None };
-    assert_eq!(max_field_bytes_per_primitive(0, &opts), 12);
-    let opts = GpuLayoutOptions {
+    let binding: u64 = 134_217_728;
+    let max_buffer: u64 = 4 << 30;
+    let capped = |half, cap| GpuLayoutOptions {
         half,
-        sh_cap: Some(3),
+        sh_cap: Some(cap),
     };
-    assert_eq!(max_field_bytes_per_primitive(1, &opts), 24);
+    for cap in 0..=3 {
+        assert_eq!(
+            binding_row_cap(3, &capped(half, cap), binding, max_buffer),
+            11_184_810,
+            "half, L′ = {cap}"
+        );
+    }
+    let float = HalfFields::default();
+    for cap in 0..=2 {
+        assert_eq!(
+            binding_row_cap(3, &capped(float, cap), binding, max_buffer),
+            8_388_608,
+            "float32, L′ = {cap}"
+        );
+    }
+    assert_eq!(
+        binding_row_cap(3, &capped(float, 3), binding, max_buffer),
+        5_592_405
+    );
+    // A cap above L keeps L: degree 1 under a cap of 3 is L′ = 1.
+    assert_eq!(
+        binding_row_cap(1, &capped(float, 3), binding, max_buffer),
+        8_388_608
+    );
+    assert_eq!(
+        binding_row_cap(3, &capped(half, 2), binding, 256 << 20),
+        4_971_026
+    );
 }

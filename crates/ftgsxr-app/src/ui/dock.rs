@@ -348,8 +348,8 @@ fn show_dock_panel<R>(
 /// The scroll area of a tab body, the dock's and the main panel's: both ways, so a row
 /// wider than the surface is reached by the horizontal bar, and as wide as the surface,
 /// so the vertical bar stays at its right edge, where a vertical-only area would put it
-/// at its content's, past the clip (Q-376, Q-377).
-// Q-376, Q-377
+/// at its content's, past the clip (Q-376, Q-378).
+// Q-376, Q-378
 pub(super) fn tab_scroll_area() -> egui::ScrollArea {
     egui::ScrollArea::both().auto_shrink([false, true])
 }
@@ -496,6 +496,23 @@ pub(crate) fn source_from_input(text: &str) -> Option<SourceSpec> {
     None
 }
 
+/// The new source field's hint (§1.5 Sources, Q-160).
+const SOURCE_HINT: &str = "https://… index or /path/to/folder";
+
+/// The kind filters' labels, in `UiState.filter_kinds` order (`kind_index`).
+const KINDS: [&str; 4] = ["ftgs-if", "checkpoint", "PLY", "folders"];
+
+/// The width a button labelled `text` takes in a row of `ui`, with the spacing after it.
+fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    galley.size().x + 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x
+}
+
 fn kind_index(k: EntryKind) -> Option<usize> {
     match k {
         EntryKind::Exchange => Some(0),
@@ -524,9 +541,11 @@ fn library_tab(
         .map(|(s, _)| format!("{s:?}"))
         .collect();
     let entries = library.entries.clone();
+    // #627: every row wraps, or sizes its field, to the tab's width, down to §1.7's
+    // narrowest dock: a control past the edge can't be used.
     for (i, s) in sources.iter().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(s);
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::Label::new(s).wrap());
             if button(ui, "Refresh", out, hv) {
                 out.push(Out::Library(LibraryCommand::Refresh(i)));
             }
@@ -537,15 +556,26 @@ fn library_tab(
         });
     }
     // §1.5 Sources, §1.7 Panels: an HTTP index URL or a local folder (Q-160).
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let mut state = world.resource_mut::<UiState>();
+        // The field fills what "Add source" leaves of the row, or the whole row with the
+        // button on the next where that would leave the field too narrow.
+        let add = "Add source";
+        let add_width = button_width(ui, add);
+        let row = ui.available_width();
+        let field = if row - add_width >= row / 2.0 {
+            row - add_width
+        } else {
+            row
+        };
         ui.add(
             egui::TextEdit::singleline(&mut state.new_source)
-                .hint_text("https://… index or /path/to/folder"),
+                .hint_text(SOURCE_HINT)
+                .desired_width(field),
         );
         let spec = source_from_input(&state.new_source);
         if ui
-            .add_enabled(spec.is_some(), egui::Button::new("Add source"))
+            .add_enabled(spec.is_some(), egui::Button::new(add))
             .clicked()
             && let Some(spec) = spec
         {
@@ -554,7 +584,7 @@ fn library_tab(
             out.push(Out::Library(LibraryCommand::AddSource(spec)));
         }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if button(ui, "Open files…", out, hv) {
             out.push(Out::Library(LibraryCommand::Pick(PickKind::Files)));
         }
@@ -565,13 +595,11 @@ fn library_tab(
     let mut state = world.resource_mut::<UiState>();
     ui.horizontal(|ui| {
         ui.label("Name");
-        ui.text_edit_singleline(&mut state.filter_name);
+        let rest = ui.available_width();
+        ui.add(egui::TextEdit::singleline(&mut state.filter_name).desired_width(rest));
     });
-    ui.horizontal(|ui| {
-        for (i, k) in ["ftgs-if", "checkpoint", "PLY", "folders"]
-            .iter()
-            .enumerate()
-        {
+    ui.horizontal_wrapped(|ui| {
+        for (i, k) in KINDS.iter().enumerate() {
             ui.checkbox(&mut state.filter_kinds[i], *k);
         }
     });
@@ -588,8 +616,8 @@ fn library_tab(
         {
             continue;
         }
-        ui.horizontal(|ui| {
-            ui.label(&e.entry.name);
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::Label::new(&e.entry.name).wrap());
             match &e.state {
                 EntryState::Listed => {
                     if button(ui, "Load", out, hv) {
@@ -1464,31 +1492,34 @@ mod tests {
         assert_eq!(dock.saved, 600.0);
     }
 
-    // §1.7 Panels, Q-252, Q-376 (#628): the Library tab's rows, wider than the dock at
-    // 160 points and at the default 320, neither widen the dock nor change its saved
-    // width over frames with no input.
+    // §1.7 Panels, Q-252, Q-376 (#628, #627): the Library tab, drawn in the dock's
+    // scroll area at 160 points and at the default 320, keeps its rows inside the dock
+    // (#627: they wrap to the dock's width, which the two-way scroll area leaves them)
+    // and leaves the dock's saved width unchanged over frames with no input. Content
+    // wider than the dock is `..._with_content_of_any_width`'s case.
     #[test]
     fn show_dock_panel_keeps_the_saved_width_with_the_library_tab() {
         for saved in [160.0, 320.0] {
-            let mut world = World::new();
-            world.init_resource::<crate::ui::UiState>();
-            world.init_resource::<crate::library::Library>();
-            // The case holds only while some row of the tab is wider than the dock.
-            let right = library_texts(&mut world, saved)
-                .iter()
-                .map(|(_, r)| r.max.x)
-                .fold(0.0, f32::max);
-            assert!(right > saved, "a row wider than {saved}: {right}");
+            let mut world = library_with_source(crate::library::EntryState::Missing);
             let mut dock = Dock {
                 ctx: font_context(),
                 saved,
             };
             for _ in 0..5 {
+                let (mut edge, mut right) = (0.0, 0.0);
                 let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
                     let (mut out, mut hv) = (Vec::new(), None);
-                    tab_scroll_area().show(ui, |ui| library_tab(&mut world, ui, &mut out, &mut hv));
+                    edge = ui.max_rect().max.x;
+                    tab_scroll_area().show(ui, |ui| {
+                        library_tab(&mut world, ui, &mut out, &mut hv);
+                        right = ui.min_rect().max.x;
+                    });
                 });
                 assert_eq!((drawn, dock.saved), (saved, saved));
+                assert!(
+                    right <= edge + 0.5,
+                    "the tab's right {right}, the dock's {edge}"
+                );
             }
         }
     }
@@ -1498,13 +1529,27 @@ mod tests {
     // unchanged; the dock's width does not depend on its tabs' layout.
     #[test]
     fn show_dock_panel_keeps_the_saved_width_with_content_of_any_width() {
-        for content in [900.0, 50.0] {
-            let mut dock = Dock::new(320.0);
-            for _ in 0..5 {
-                let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
-                    ui.allocate_space(egui::vec2(content, 1.0));
-                });
-                assert_eq!((drawn, dock.saved), (320.0, 320.0), "content {content}");
+        // Drawn straight in the dock, and in the dock's two-way scroll area as the tabs
+        // are (Q-376: a row wider than the dock is reached by the horizontal bar).
+        for scrolled in [false, true] {
+            for content in [900.0, 50.0] {
+                let mut dock = Dock::new(320.0);
+                for _ in 0..5 {
+                    let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
+                        if scrolled {
+                            tab_scroll_area().show(ui, |ui| {
+                                ui.allocate_space(egui::vec2(content, 1.0));
+                            });
+                        } else {
+                            ui.allocate_space(egui::vec2(content, 1.0));
+                        }
+                    });
+                    assert_eq!(
+                        (drawn, dock.saved),
+                        (320.0, 320.0),
+                        "content {content}, scrolled {scrolled}"
+                    );
+                }
             }
         }
     }
@@ -2118,6 +2163,18 @@ mod tests {
         width: f32,
         events: Vec<egui::Event>,
     ) -> (Vec<(String, egui::Rect)>, Vec<Out>) {
+        let (texts, _, out) = library_frame_shapes(ctx, world, width, events);
+        (texts, out)
+    }
+
+    /// `library_frame`, with every painted shape's visual bounds as well (the frames of
+    /// text fields and checkboxes, which draw no text of their own).
+    fn library_frame_shapes(
+        ctx: &egui::Context,
+        world: &mut World,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) -> (Vec<(String, egui::Rect)>, Vec<egui::Rect>, Vec<Out>) {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -2134,19 +2191,30 @@ mod tests {
             });
         });
         full.textures_delta.clear();
-        let mut texts = Vec::new();
-        fn walk(s: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+        let (mut texts, mut rects) = (Vec::new(), Vec::new());
+        fn walk(
+            s: &egui::Shape,
+            texts: &mut Vec<(String, egui::Rect)>,
+            rects: &mut Vec<egui::Rect>,
+        ) {
             match s {
                 egui::Shape::Text(t) => texts.push((
                     t.galley.text().to_string(),
                     t.galley.rect.translate(t.pos.to_vec2()),
                 )),
-                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts, rects)),
                 _ => {}
             }
+            // A shape that paints nothing (an empty mesh or text) has no finite bounds.
+            let r = s.visual_bounding_rect();
+            if !matches!(s, egui::Shape::Vec(_)) && r.is_finite() {
+                rects.push(r);
+            }
         }
-        full.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
-        (texts, out)
+        full.shapes
+            .iter()
+            .for_each(|c| walk(&c.shape, &mut texts, &mut rects));
+        (texts, rects, out)
     }
 
     /// The texts drawn by two frames of the Library tab `width` points wide (the second
@@ -2204,8 +2272,8 @@ mod tests {
                 "{label} is drawn: {texts:?}"
             );
         }
-        // The entry's own row; the source controls above it are not #620's. Half a
-        // point of slack for the layout's rounding of positions.
+        // The entry's own row (#627's tests check the whole tab). Half a point of slack
+        // for the layout's rounding of positions.
         for (t, r) in texts
             .iter()
             .filter(|(t, _)| [LONG, "kitchen", "Retry"].contains(&&**t))
@@ -2246,5 +2314,172 @@ mod tests {
                 reduce: false
             }]
         );
+    }
+
+    // #627: every control of the Library tab inside the tab's width, from §1.7's
+    // narrowest dock to its default and the main panel's (§1.8).
+
+    /// A world whose library holds two local sources with long paths (the second with
+    /// its Remove button, Q-49) and one entry, `kitchen`, in `state`.
+    fn library_with_source(state: crate::library::EntryState) -> World {
+        let mut world = library_with(state);
+        for root in [
+            "/home/someone/models/openftgs-synth-kitchen-and-courtyard",
+            "/home/someone/more-models/openftgs-synth-studio",
+        ] {
+            let spec = source_from_input(root).expect("an absolute path is a source");
+            let source: std::sync::Arc<dyn ftgsxr_io::ModelSource> =
+                std::sync::Arc::new(ftgsxr_io::LocalDir { root: root.into() });
+            world
+                .resource_mut::<crate::library::Library>()
+                .sources
+                .push((spec, source));
+        }
+        world
+    }
+
+    /// The entry states, each with the texts its row draws.
+    fn entry_states() -> Vec<crate::library::EntryState> {
+        use crate::library::EntryState;
+        vec![
+            EntryState::Listed,
+            EntryState::Fetching(ftgsxr_io::Progress {
+                done: 1,
+                total: Some(4),
+            }),
+            EntryState::Loading,
+            EntryState::Loaded(Entity::PLACEHOLDER),
+            EntryState::Failed(LONG.into()),
+            EntryState::Missing,
+        ]
+    }
+
+    /// Every text and every painted shape of two frames of the Library tab, drawn in a
+    /// column `width` points wide with `ctx`, lies inside the column (half a point of
+    /// slack for the rounding of positions); `labels` are all drawn.
+    fn assert_library_inside(ctx: &egui::Context, world: &mut World, width: f32, labels: &[&str]) {
+        library_frame_shapes(ctx, world, width, Vec::new());
+        let (texts, rects, _) = library_frame_shapes(ctx, world, width, Vec::new());
+        for label in labels {
+            assert!(
+                texts.iter().any(|(t, _)| t == label),
+                "{label} is drawn at {width}: {texts:?}"
+            );
+        }
+        for (t, r) in &texts {
+            assert!(
+                r.min.x >= -0.5 && r.max.x <= width + 0.5,
+                "{t:?} at {r:?} in a column {width} wide"
+            );
+        }
+        for r in &rects {
+            assert!(
+                r.min.x >= -0.5 && r.max.x <= width + 0.5,
+                "a shape at {r:?} in a column {width} wide"
+            );
+        }
+    }
+
+    /// The controls every state draws: the source row, the new source's row, the
+    /// pickers, the filters.
+    const CONTROLS: [&str; 12] = [
+        "Refresh",
+        "Remove",
+        super::SOURCE_HINT,
+        "Add source",
+        "Open files…",
+        "Add folder…",
+        "Name",
+        "ftgs-if",
+        "checkpoint",
+        "PLY",
+        "folders",
+        "Reduce to budget",
+    ];
+
+    #[test]
+    fn library_tab_keeps_every_control_inside_the_narrowest_and_the_default_dock() {
+        for width in [160.0, 320.0] {
+            for state in entry_states() {
+                let mut world = library_with_source(state);
+                assert_library_inside(&font_context(), &mut world, width, &CONTROLS);
+            }
+        }
+    }
+
+    #[test]
+    fn library_tab_keeps_a_missing_entry_s_buttons_inside_the_narrowest_dock() {
+        let mut world = library_with_source(crate::library::EntryState::Missing);
+        let labels = ["kitchen", "missing", "Locate…", "Replace with…"];
+        assert_library_inside(&font_context(), &mut world, 160.0, &labels);
+    }
+
+    #[test]
+    fn library_tab_keeps_every_control_inside_the_main_panel() {
+        // §1.8: the 1024-pixel texture at the panel's zoom, at each end of §1.11's
+        // `ui_scale` range and its default, less the central panel's margins, with the
+        // panel's style (Q-267, Q-293); rounded down to a whole point, where the
+        // separator's half-point stroke lands on the edge.
+        let ctx = font_context();
+        ctx.all_styles_mut(crate::ui::panel::panel_style);
+        let margins = egui::Frame::central_panel(&ctx.global_style())
+            .total_margin()
+            .sum()
+            .x;
+        for ui_scale in [0.8, 1.0, 1.5] {
+            let width = (1024.0 / crate::ui::panel::panel_zoom(ui_scale) - margins).floor();
+            for state in entry_states() {
+                let mut world = library_with_source(state);
+                assert_library_inside(&ctx, &mut world, width, &CONTROLS);
+            }
+        }
+    }
+
+    #[test]
+    fn library_tab_adds_a_typed_source_and_toggles_the_kinds_in_the_narrowest_dock() {
+        let mut world = library_with_source(crate::library::EntryState::Listed);
+        // Click the source field (its hint text), then type into it.
+        let ctx = font_context();
+        library_frame(&ctx, &mut world, 160.0, Vec::new());
+        let (texts, _) = library_frame(&ctx, &mut world, 160.0, Vec::new());
+        let hint = super::SOURCE_HINT;
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == hint)
+            .map(|(_, r)| r.center())
+            .expect("the source field is drawn");
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(at)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("/m/more".into())],
+        ] {
+            library_frame(&ctx, &mut world, 160.0, events);
+        }
+        assert_eq!(world.resource::<crate::ui::UiState>().new_source, "/m/more");
+        let out = library_click(&mut world, 160.0, "Add source");
+        let added: Vec<_> = out
+            .iter()
+            .filter_map(|o| match o {
+                Out::Library(crate::library::LibraryCommand::AddSource(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(added, vec![source_from_input("/m/more").unwrap()]);
+        for (i, kind) in super::KINDS.iter().enumerate() {
+            let before = world.resource::<crate::ui::UiState>().filter_kinds;
+            library_click(&mut world, 160.0, kind);
+            let after = world.resource::<crate::ui::UiState>().filter_kinds;
+            assert_eq!(after[i], !before[i], "{kind} toggles");
+            for j in (0..4).filter(|&j| j != i) {
+                assert_eq!(after[j], before[j], "{kind} leaves the others");
+            }
+        }
     }
 }

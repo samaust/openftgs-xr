@@ -29,7 +29,7 @@ One `FrameBuffers` set per view (per-view mode) holds, sized once per tier and c
 - **statistics**: the 80-byte block of stage 8 (§1.4, revision 13): the splat and center counts, the overflow flag, C and the count of primitives culled for a non-finite projection (E6) in words 0–4, the count of rows trimmed (E17, revision 45) in word 5, two pad words, then the six 64-bit timestamps from byte 32; and four staging buffers it is copied into (Q-81).
 - **draw constants**: one block per instance, written by `encode_prepare` and kept for `encode_draw` (Q-87): E7's constants of the instance's model (D-39), then the centers' colormap, ρ and scales (Q-92, Q-93).
 
-Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 and E7 constants, its temporal index and the 99th percentile of its speeds (Q-93).
+Each `GpuModel` holds its structure-of-arrays buffers, its uniform block of E6 and E7 constants, its temporal index and the 99th percentile of its speeds (Q-93). The cull binds every field's buffer whole except the SH array's, which it binds as up to eight SH ranges of W words each, W·4 bytes being the device's largest storage binding rounded down to its storage offset alignment (at least 64 bytes); the uniform block carries W, and the slots a model doesn't need repeat its last range, so a model whose SH array fits one binding takes the same path (Q-377).
 
 ## Stage by stage
 
