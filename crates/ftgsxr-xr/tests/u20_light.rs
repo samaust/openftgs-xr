@@ -20,10 +20,6 @@ fn est(luma: f32, rgb: [f32; 3]) -> LightEstimate {
     LightEstimate { luma, rgb }
 }
 
-fn luma_of(rgb: [f32; 3]) -> f32 {
-    0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
-}
-
 fn thumb(pixels: &[[f32; 3]], width: u32) -> CameraThumb {
     CameraThumb {
         width,
@@ -114,7 +110,8 @@ fn u20_thumbnail_statistics_global_and_band_mask() {
     for (a, m) in all.rgb.into_iter().zip(mean) {
         close(a, m);
     }
-    close(all.luma, luma_of(mean));
+    // E14 luma by hand: 0.2126·0.5 + 0.7152·0.35 + 0.0722·0.2 = 0.10630 + 0.25032 + 0.01444.
+    close(all.luma, 0.37106);
 
     let depths = [1.0, 5.0, 1.2, f32::NAN, 0.8, 5.0, 1.0, 9.0];
     let mask = band_mask(&depths, 1.0, 0.5).unwrap();
@@ -123,7 +120,8 @@ fn u20_thumbnail_statistics_global_and_band_mask() {
     for (a, m) in local.rgb.into_iter().zip(near) {
         close(a, m);
     }
-    close(local.luma, luma_of(near));
+    // By hand: 0.2126·0.8 + 0.7152·0.6 + 0.0722·0.4 = 0.17008 + 0.42912 + 0.02888.
+    close(local.luma, 0.62808);
 }
 
 #[test]
