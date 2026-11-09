@@ -345,8 +345,8 @@ fn lighting_controls(
                 ui.label("permission denied");
                 ask = ui.button("Ask again").clicked();
             });
-            // Q-395: the denied auto mode back, its reference kept as a mode that
-            // arrives keeps it (Q-385).
+            // Q-395: write the denied auto mode back; keep `lighting_reference`, as
+            // for a mode that arrives (Q-385).
             if ask {
                 e.lighting_mode = denied_auto.unwrap_or("auto-global").into();
             }
