@@ -280,7 +280,9 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// The Environment tab's lighting controls (§1.9 Light estimation and color matching):
 /// the mode, offering the auto modes only where the camera is `Available` and otherwise
 /// showing an auto setting as manual, kept, and the reason whatever the setting (Q-384); picking an auto mode
-/// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion
+/// or "re-capture reference" clears `lighting_reference`, and while it is `None` the tab
+/// says "too dark to capture a reference" or "capturing reference…" by
+/// `Lighting.too_dark` (Q-385); "local needs occlusion
 /// and a selected instance" beside auto local without occlusion's depth or without a
 /// selected instance (Q-388); the manual sliders, the strength
 /// γ, the current gains and "per instance" (Q-383). True when "Ask again" was pressed
@@ -334,6 +336,14 @@ fn lighting_controls(
     if shown.starts_with("auto") {
         if shown == "auto-local" && !(occlusion_on && selected) {
             ui.label("local needs occlusion and a selected instance");
+        }
+        // Q-385: why an auto mode has no reference yet.
+        if e.lighting_reference.is_none() {
+            ui.label(if light.as_ref().is_some_and(|l| l.too_dark) {
+                "too dark to capture a reference"
+            } else {
+                "capturing reference…"
+            });
         }
         if ui.button("re-capture reference").clicked() {
             e.lighting_reference = None;
@@ -960,6 +970,60 @@ mod tests {
                 "{label} with hand removal on: {texts:?}"
             );
         }
+    }
+
+    /// Q-385's two status lines (`cpu`): while an auto mode is shown and
+    /// `lighting_reference` is `None`, "too dark to capture a reference" when
+    /// `Lighting.too_dark` is set and "capturing reference…" otherwise; neither with a
+    /// reference, in manual mode, or with an auto setting shown as manual.
+    #[test]
+    fn the_environment_tab_says_why_the_reference_waits() {
+        const DARK: &str = "too dark to capture a reference";
+        const CAPTURING: &str = "capturing reference…";
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.init_resource::<Messages<AskPermissionAgain>>();
+        let ctx = egui::Context::default();
+        let lines = |world: &mut World| -> (bool, bool) {
+            frame_of(&ctx, world, Vec::new(), environment_section);
+            let texts = frame_of(&ctx, world, Vec::new(), environment_section);
+            let has = |l: &str| texts.iter().any(|(t, _)| t == l);
+            (has(DARK), has(CAPTURING))
+        };
+        let set = |world: &mut World, mode: &str, reference: Option<[f32; 4]>| {
+            let e = &mut world.resource_mut::<SettingsRes>().0.environment;
+            e.lighting_mode = mode.into();
+            e.lighting_reference = reference;
+        };
+        let dark = |world: &mut World, on: bool| {
+            world.insert_resource(Lighting {
+                too_dark: on,
+                ..Lighting::default()
+            });
+        };
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        set(&mut world, "auto-global", None);
+        assert_eq!(lines(&mut world), (false, true), "no Lighting resource");
+        dark(&mut world, false);
+        assert_eq!(lines(&mut world), (false, true), "waiting");
+        set(&mut world, "auto-local", None);
+        dark(&mut world, true);
+        assert_eq!(lines(&mut world), (true, false), "too dark");
+        set(&mut world, "auto-local", Some([0.2; 4]));
+        assert_eq!(lines(&mut world), (false, false), "a reference");
+        set(&mut world, "manual", None);
+        assert_eq!(lines(&mut world), (false, false), "manual");
+        set(&mut world, "auto-global", None);
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Absent,
+            ..XrFeatures::default()
+        });
+        assert_eq!(lines(&mut world), (false, false), "shown as manual");
     }
 
     /// The Environment tab's lighting controls (§1.9 "only manual mode is offered and the
