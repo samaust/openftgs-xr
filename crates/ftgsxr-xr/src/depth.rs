@@ -435,21 +435,7 @@ fn control(
                 images.remove(&h);
             }
         }
-        let mut make = || {
-            let mut image = Image::new_uninit(
-                Extent3d {
-                    width: size.x,
-                    height: size.y,
-                    depth_or_array_layers: 1,
-                },
-                TextureDimension::D2,
-                meta::FORMAT,
-                RenderAssetUsages::default(),
-            );
-            image.texture_descriptor.usage =
-                TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
-            images.add(image)
-        };
+        let mut make = || images.add(view_image(size));
         control.images = Some([make(), make()]);
         control.images_size = Some(size);
         info!(
@@ -499,6 +485,26 @@ fn control(
     if features.occlusion != state {
         features.occlusion = state;
     }
+}
+
+/// A view's `DepthFrame.image` at the swapchain's `size`: `meta::FORMAT` with the
+/// render-attachment and texture-binding usages (Q-360) and the copy-source usage that
+/// auto local's readback copies it with (Q-388).
+// Q-360, Q-388
+pub(crate) fn view_image(size: UVec2) -> Image {
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: size.x,
+            height: size.y,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        meta::FORMAT,
+        RenderAssetUsages::default(),
+    );
+    image.texture_descriptor.usage =
+        TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC;
+    image
 }
 
 /// The render world's frame (Q-338, Q-339, Q-341, Q-349, D-16): the adapter made once
@@ -977,6 +983,20 @@ mod tests {
         let c = depth_camera(view, fov, size, &turned);
         assert!((c.center() - DVec3::new(1.0, 1.5, 2.0)).length() < 1e-6);
         assert!(close(project(&c, Vec3::new(0.0, 1.5, 2.0)), (50.0, 50.0)));
+    }
+
+    /// Q-360, Q-388: the views' images are render targets, sampled, and copied out by
+    /// auto local's readback.
+    #[test]
+    fn view_image_has_the_attachment_binding_and_copy_source_usages() {
+        let u = view_image(UVec2::new(320, 320)).texture_descriptor.usage;
+        for want in [
+            TextureUsages::RENDER_ATTACHMENT,
+            TextureUsages::TEXTURE_BINDING,
+            TextureUsages::COPY_SRC,
+        ] {
+            assert!(u.contains(want), "{u:?} lacks {want:?}");
+        }
     }
 
     /// Q-338: the provider runs only in passthrough mode with the setting on and the
