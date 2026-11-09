@@ -388,8 +388,10 @@ pub(crate) fn handshake(
     // #661: a save in passthrough mode sets `Creating` again (Q-343, Q-350), one in
     // another mode leaves it as it is (Q-361), so a save this frame is a passthrough save
     // when the state changed to `Creating` since the last frame. Read before any write
-    // here, which would mark the state changed. Two saves in one frame are not told apart
-    // (the player issues at most one a frame): the last one counts.
+    // here, which would mark the state changed. It relies on `persist` handling each
+    // `SaveScene` in the frame it is written, before this system: its one writer,
+    // `persist`'s intents, runs ahead of its commands in `Update`. Two saves in one frame
+    // are not told apart (the player issues at most one a frame): the last one counts.
     let passthrough = scene.is_changed() && *scene == SceneAnchor::Creating;
     let hs = &mut *hs;
     let store = &mut *store.0;
@@ -835,6 +837,21 @@ mod tests {
         pose(t.translation.to_array(), t.rotation)
     }
 
+    /// A save in passthrough mode as `persist` makes it (Q-343, Q-350): the command and
+    /// `Creating` written again.
+    fn passthrough_save(app: &mut App, path: &str) {
+        app.world_mut()
+            .write_message(PersistCommand::SaveScene(path.into()));
+        app.insert_resource(SceneAnchor::Creating);
+    }
+
+    /// Frames enough for an unheld creation to persist.
+    fn settle(app: &mut App) {
+        for _ in 0..4 {
+            app.update();
+        }
+    }
+
     /// Q-343: `Creating` creates an anchor at the content group's origin, persists it and
     /// becomes `Ready` with its UUID; the HUD shows it persisted.
     #[test]
@@ -1018,16 +1035,6 @@ mod tests {
         let forgotten = store.forgotten.clone();
         let hold = store.hold.clone();
         let mut app = app(store, pose([0.0, 0.0, -1.0], yaw(0.0)));
-        let passthrough_save = |app: &mut App, path: &str| {
-            app.world_mut()
-                .write_message(PersistCommand::SaveScene(path.into()));
-            app.insert_resource(SceneAnchor::Creating);
-        };
-        let settle = |app: &mut App| {
-            for _ in 0..4 {
-                app.update();
-            }
-        };
         passthrough_save(&mut app, "a");
         settle(&mut app); // "a" names uuid-1
         passthrough_save(&mut app, "b");
@@ -1341,9 +1348,7 @@ mod tests {
             },
             granted.clone(),
         ))));
-        app.world_mut()
-            .write_message(PersistCommand::SaveScene("a".into()));
-        app.insert_resource(SceneAnchor::Creating);
+        passthrough_save(&mut app, "a");
         app.update();
         app.update();
         // The VR-mode save: `persist` leaves `Creating` as it is.
@@ -1351,24 +1356,16 @@ mod tests {
             .write_message(PersistCommand::SaveScene("c".into()));
         app.update();
         granted.store(true, Ordering::SeqCst);
-        for _ in 0..4 {
-            app.update();
-        }
+        settle(&mut app);
         assert_eq!(
             *app.world().resource::<SceneAnchor>(),
             SceneAnchor::Ready("uuid-1".into())
         );
-        let save = |app: &mut App, path: &str| {
-            app.world_mut()
-                .write_message(PersistCommand::SaveScene(path.into()));
-            app.insert_resource(SceneAnchor::Creating);
-            for _ in 0..4 {
-                app.update();
-            }
-        };
-        save(&mut app, "c");
+        passthrough_save(&mut app, "c");
+        settle(&mut app);
         assert!(forgotten.lock().expect("unpoisoned").is_empty());
-        save(&mut app, "a");
+        passthrough_save(&mut app, "a");
+        settle(&mut app);
         assert_eq!(
             *forgotten.lock().expect("unpoisoned"),
             vec![AnchorId("uuid-1".into())]
@@ -1385,33 +1382,23 @@ mod tests {
         let hold = store.hold.clone();
         hold.store(true, Ordering::SeqCst);
         let mut app = app(store, pose([0.0, 0.0, -1.0], yaw(0.0)));
-        app.world_mut()
-            .write_message(PersistCommand::SaveScene("a".into()));
-        app.insert_resource(SceneAnchor::Creating);
+        passthrough_save(&mut app, "a");
         app.update();
         app.update();
         app.world_mut()
             .write_message(PersistCommand::SaveScene("c".into()));
         app.update();
         hold.store(false, Ordering::SeqCst);
-        for _ in 0..4 {
-            app.update();
-        }
+        settle(&mut app);
         assert_eq!(
             *app.world().resource::<SceneAnchor>(),
             SceneAnchor::Ready("uuid-1".into())
         );
-        let save = |app: &mut App, path: &str| {
-            app.world_mut()
-                .write_message(PersistCommand::SaveScene(path.into()));
-            app.insert_resource(SceneAnchor::Creating);
-            for _ in 0..4 {
-                app.update();
-            }
-        };
-        save(&mut app, "c");
+        passthrough_save(&mut app, "c");
+        settle(&mut app);
         assert!(forgotten.lock().expect("unpoisoned").is_empty());
-        save(&mut app, "a");
+        passthrough_save(&mut app, "a");
+        settle(&mut app);
         assert_eq!(
             *forgotten.lock().expect("unpoisoned"),
             vec![AnchorId("uuid-1".into())]
