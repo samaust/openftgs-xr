@@ -12,8 +12,8 @@ use bevy::app::{App, Plugin, PostUpdate};
 use bevy::ecs::message::MessageReader;
 use bevy::log::{info, warn};
 use bevy::prelude::{
-    Commands, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut, Resource, Transform,
-    TransformSystems, With, Without,
+    Commands, DetectChanges, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut, Resource,
+    Transform, TransformSystems, With, Without,
 };
 use bevy_mod_openxr::exts::OxrEnabledExtensions;
 use bevy_mod_openxr::openxr_session_running;
@@ -369,7 +369,7 @@ fn ask(platform: Option<&PlatformRes>) -> Flow {
 /// located, the group placed on it by Q-254 and `Ready`, or `Lost(uuid)`; the UUID a
 /// re-saved scene named before erased once the new one is persisted (Q-344). Writes
 /// `HudData.anchor` (Q-345) and `XrFeatures.anchors` (Q-336).
-// Q-343, Q-344, Q-345, Q-348, Q-350, Q-352, Q-353
+// Q-343, Q-344, Q-345, Q-348, Q-350, Q-352, Q-353, Q-361
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handshake(
     mut store: ResMut<Anchors>,
@@ -385,14 +385,35 @@ pub(crate) fn handshake(
     mut groups: Query<&mut Transform, (With<ContentGroup>, Without<XrTrackingRoot>)>,
     mut commands: Commands,
 ) {
+    // #661: a save in passthrough mode sets `Creating` again (Q-343, Q-350), one in
+    // another mode leaves it as it is (Q-361), so a save this frame is a passthrough save
+    // when the state changed to `Creating` since the last frame. Read before any write
+    // here, which would mark the state changed. It relies on `persist` handling each
+    // `SaveScene` in the frame it is written, before this system: its one writer,
+    // `persist`'s intents, runs ahead of its commands in `Update`. Two saves in one frame
+    // are not told apart (the player issues at most one a frame): the last one counts.
+    let passthrough = scene.is_changed() && *scene == SceneAnchor::Creating;
     let hs = &mut *hs;
     let store = &mut *store.0;
-    // Q-344: the path of this frame's save or load, the file a UUID belongs to.
+    // Q-344, Q-353: the path of this frame's passthrough save or load, the file a UUID
+    // belongs to.
+    let mut saved = None;
     for c in persist.read() {
         match c {
-            PersistCommand::SaveScene(p) => hs.save_path = Some(p.clone()),
+            PersistCommand::SaveScene(p) if passthrough => saved = Some(p.clone()),
             PersistCommand::LoadScene(p) => hs.load_path = Some(p.clone()),
             _ => {}
+        }
+    }
+    if let Some(p) = saved {
+        // Q-350: a pending creation's anchor goes to the newest passthrough save, whose
+        // path it is then remembered for, the UUID that path named before forgotten;
+        // the replaced save's path keeps what it named.
+        if let Job::Creating { path, old, .. } = &mut hs.job {
+            *old = hs.named.get(&p).cloned();
+            *path = Some(p);
+        } else {
+            hs.save_path = Some(p);
         }
     }
     let root = root.iter().next().map_or(Pose::IDENTITY, pose_of);
@@ -816,6 +837,21 @@ mod tests {
         pose(t.translation.to_array(), t.rotation)
     }
 
+    /// A save in passthrough mode as `persist` makes it (Q-343, Q-350): the command and
+    /// `Creating` written again.
+    fn passthrough_save(app: &mut App, path: &str) {
+        app.world_mut()
+            .write_message(PersistCommand::SaveScene(path.into()));
+        app.insert_resource(SceneAnchor::Creating);
+    }
+
+    /// Frames enough for an unheld creation to persist.
+    fn settle(app: &mut App) {
+        for _ in 0..4 {
+            app.update();
+        }
+    }
+
     /// Q-343: `Creating` creates an anchor at the content group's origin, persists it and
     /// becomes `Ready` with its UUID; the HUD shows it persisted.
     #[test]
@@ -987,6 +1023,48 @@ mod tests {
             .expect("located")
             .then(&root());
         assert!(close(world.translation, first.translation, 1e-5));
+    }
+
+    /// Q-350, Q-344, Q-353 (#661): a second passthrough save of "b" while the anchor of
+    /// a save of "a" is pending moves the anchor to "b", whose file `persist` writes it
+    /// into: "b"'s earlier anchor is forgotten once it persists, "a"'s is kept, and a
+    /// later re-save of "a" forgets "a"'s earlier anchor, not the one "b" names.
+    #[test]
+    fn handshake_second_passthrough_save_during_a_creation_takes_its_anchor() {
+        let store = Fake::default();
+        let forgotten = store.forgotten.clone();
+        let hold = store.hold.clone();
+        let mut app = app(store, pose([0.0, 0.0, -1.0], yaw(0.0)));
+        passthrough_save(&mut app, "a");
+        settle(&mut app); // "a" names uuid-1
+        passthrough_save(&mut app, "b");
+        settle(&mut app); // "b" names uuid-2
+        assert_eq!(
+            *app.world().resource::<SceneAnchor>(),
+            SceneAnchor::Ready("uuid-2".into())
+        );
+        hold.store(true, Ordering::SeqCst);
+        passthrough_save(&mut app, "a");
+        app.update();
+        app.update();
+        passthrough_save(&mut app, "b");
+        app.update();
+        hold.store(false, Ordering::SeqCst);
+        settle(&mut app);
+        assert_eq!(
+            *app.world().resource::<SceneAnchor>(),
+            SceneAnchor::Ready("uuid-3".into())
+        );
+        assert_eq!(
+            std::mem::take(&mut *forgotten.lock().expect("unpoisoned")),
+            vec![AnchorId("uuid-2".into())]
+        );
+        passthrough_save(&mut app, "a");
+        settle(&mut app); // uuid-4
+        assert_eq!(
+            *forgotten.lock().expect("unpoisoned"),
+            vec![AnchorId("uuid-1".into())]
+        );
     }
 
     /// Q-343, Q-350: with `NoAnchors` a save's `Creating` becomes `None` at once (no
@@ -1212,5 +1290,118 @@ mod tests {
             group.translation + Vec3::new(0.0, 0.03, 0.0),
             1e-5
         ));
+    }
+
+    /// A platform whose permission requests stay pending until its flag is set, then are
+    /// granted.
+    struct Gated(ftgsxr_io::AppPaths, Arc<AtomicBool>);
+
+    impl ftgsxr_app::Platform for Gated {
+        fn paths(&self) -> &ftgsxr_io::AppPaths {
+            &self.0
+        }
+        fn pick(&self, _: ftgsxr_app::PickKind) -> ftgsxr_app::PickHandle {
+            ftgsxr_app::PickHandle(0)
+        }
+        fn poll_pick(
+            &self,
+            _: ftgsxr_app::PickHandle,
+        ) -> Poll<Result<Vec<ftgsxr_io::ModelRef>, String>> {
+            Poll::Ready(Ok(Vec::new()))
+        }
+        fn request_permission(&self, _: Permission) -> ftgsxr_app::PermissionHandle {
+            ftgsxr_app::PermissionHandle(0)
+        }
+        fn poll_permission(&self, _: ftgsxr_app::PermissionHandle) -> Poll<bool> {
+            if self.1.load(Ordering::SeqCst) {
+                Poll::Ready(true)
+            } else {
+                Poll::Pending
+            }
+        }
+        fn document_provider(&self) -> Option<Arc<dyn ftgsxr_io::DocumentProvider>> {
+            None
+        }
+        fn camera_frames(&self) -> Option<Arc<dyn ftgsxr_app::CameraFrames>> {
+            None
+        }
+    }
+
+    /// Q-361, Q-353 (#661): a VR-mode save of "c" while a passthrough save of "a" waits
+    /// for the permission, before its creation begins, does not take the anchor, which
+    /// `persist` writes into "a": re-saving "a" forgets it, re-saving "c" forgets nothing.
+    #[test]
+    fn handshake_vr_mode_save_before_the_creation_begins_takes_no_anchor() {
+        let store = Fake::default();
+        let forgotten = store.forgotten.clone();
+        let mut app = app(store, pose([0.0, 0.0, -1.0], yaw(0.0)));
+        let granted = Arc::new(AtomicBool::new(false));
+        let dir = PathBuf::from("/nonexistent");
+        app.insert_resource(PlatformRes(Arc::new(Gated(
+            ftgsxr_io::AppPaths {
+                config: dir.clone(),
+                cache: dir.clone(),
+                models: dir.clone(),
+                scenes: dir.clone(),
+                screenshots: dir.clone(),
+                logs: dir,
+            },
+            granted.clone(),
+        ))));
+        passthrough_save(&mut app, "a");
+        app.update();
+        app.update();
+        // The VR-mode save: `persist` leaves `Creating` as it is.
+        app.world_mut()
+            .write_message(PersistCommand::SaveScene("c".into()));
+        app.update();
+        granted.store(true, Ordering::SeqCst);
+        settle(&mut app);
+        assert_eq!(
+            *app.world().resource::<SceneAnchor>(),
+            SceneAnchor::Ready("uuid-1".into())
+        );
+        passthrough_save(&mut app, "c");
+        settle(&mut app);
+        assert!(forgotten.lock().expect("unpoisoned").is_empty());
+        passthrough_save(&mut app, "a");
+        settle(&mut app);
+        assert_eq!(
+            *forgotten.lock().expect("unpoisoned"),
+            vec![AnchorId("uuid-1".into())]
+        );
+    }
+
+    /// Q-361, Q-353 (#661): a VR-mode save of "c" while the anchor of a passthrough save
+    /// of "a" is pending leaves the anchor with "a": re-saving "c" forgets nothing,
+    /// re-saving "a" forgets it.
+    #[test]
+    fn handshake_vr_mode_save_during_a_creation_takes_no_anchor() {
+        let store = Fake::default();
+        let forgotten = store.forgotten.clone();
+        let hold = store.hold.clone();
+        hold.store(true, Ordering::SeqCst);
+        let mut app = app(store, pose([0.0, 0.0, -1.0], yaw(0.0)));
+        passthrough_save(&mut app, "a");
+        app.update();
+        app.update();
+        app.world_mut()
+            .write_message(PersistCommand::SaveScene("c".into()));
+        app.update();
+        hold.store(false, Ordering::SeqCst);
+        settle(&mut app);
+        assert_eq!(
+            *app.world().resource::<SceneAnchor>(),
+            SceneAnchor::Ready("uuid-1".into())
+        );
+        passthrough_save(&mut app, "c");
+        settle(&mut app);
+        assert!(forgotten.lock().expect("unpoisoned").is_empty());
+        passthrough_save(&mut app, "a");
+        settle(&mut app);
+        assert_eq!(
+            *forgotten.lock().expect("unpoisoned"),
+            vec![AnchorId("uuid-1".into())]
+        );
     }
 }
