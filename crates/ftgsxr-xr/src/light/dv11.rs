@@ -9,12 +9,16 @@
 //! granted both camera permissions), waits for the camera to run and its first
 //! thumbnail, counts the thumbnails for [`COUNT`] by their changing timestamps (clause 1:
 //! 30 Hz or more), logs `dv11: cover` as the cue, and for up to [`WATCH`] watches the raw
-//! thumbnails: the first raw luma at or below half the luma at the cue (the smoothed
-//! estimate then) marks the cover's instant, and clause 2 passes when the smoothed
-//! estimate falls to half the luma at the cue or less within [`WITHIN`] of it; no cover
-//! within the window reports clause 2 as not run, not FAIL (Q-390, Q-273). Then
-//! `lighting_mode` goes to `off` and the camera must stop. The detail reports the rate, whether the camera pose
-//! arrived, and the luma ratio reached.
+//! thumbnails of the left passthrough camera, the one the shim opens: the first raw luma
+//! at or below half the luma at the cue (the smoothed estimate then) marks the cover's
+//! instant, and clause 2 passes when the smoothed estimate falls to half the luma at the
+//! cue or less within [`WITHIN`] of it. Clause 2 is reported as not run, not FAIL
+//! (Q-390, Q-273), when no cover comes within the window, when the luma at the cue is
+//! below [`MIN_CUE_LUMA`] (a dark room), or when a miss follows a partial cover: the
+//! raw luma's mean over the [`WITHIN`] after the cover stayed above [`DEEP`] of the luma
+//! at the cue, where even a correct smoother need not halve. Then `lighting_mode` goes
+//! to `off` and the camera must stop. The detail reports the rate, whether the camera
+//! pose arrived, the luma ratio reached, the raw minimum and the time to half.
 
 use std::time::{Duration, Instant};
 
@@ -40,6 +44,16 @@ const MIN_HZ: f64 = 30.0;
 const WATCH: Duration = Duration::from_secs(20);
 /// Clause 2: the smoothed estimate halved within this of the cover.
 const WITHIN: Duration = Duration::from_secs(1);
+/// A cover counts against the smoother only when the raw luma's mean over [`WITHIN`]
+/// after it is at most this fraction of the luma at the cue: with E14's 0.5 s average a
+/// correct smoother then reaches 0.25 + 0.75·e⁻² ≈ 0.35 at 1 s, one twice as slow
+/// 0.25 + 0.75·e⁻¹ ≈ 0.53; above (0.5 − e⁻²)/(1 − e⁻²) ≈ 0.42 none can pass (Q-390).
+// Q-390
+const DEEP: f32 = 0.25;
+/// The least luma at the cue (BT.709 luma, 0–1) clause 2 is judged at: below, a dark
+/// room's noise would decide it (Q-390).
+// Q-390
+const MIN_CUE_LUMA: f32 = 0.05;
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 const FIRST_TIMEOUT: Duration = Duration::from_secs(20);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -55,12 +69,15 @@ pub(crate) fn rate_hz(thumbs: u64, window: Duration) -> f64 {
 pub(crate) enum Cover {
     /// No raw luma at or below half the luma at the cue yet.
     Waiting,
-    /// Covered at the instant; the smoothed estimate not yet halved.
-    Covered(Instant),
-    /// Halved within the window of the cover.
-    Pass,
-    /// Not halved within the window of the cover.
+    /// Covered at the instant; the smoothed estimate not yet halved. Holds the sum and
+    /// the count of the raw luma's ratios to the luma at the cue since the cover.
+    Covered { at: Instant, sum: f32, n: u32 },
+    /// Halved this long after the cover, within the window.
+    Pass(Duration),
+    /// Not halved within the window of a deep cover.
     Fail,
+    /// Not halved within the window, but the cover was partial: its mean raw ratio.
+    Partial(f32),
 }
 
 /// One observation of clause 2: `raw` and `smoothed` luma against `cue_luma` at `now`.
@@ -68,9 +85,30 @@ pub(crate) enum Cover {
 pub(crate) fn watch(cover: Cover, cue_luma: f32, raw: f32, smoothed: f32, now: Instant) -> Cover {
     let half = 0.5 * cue_luma;
     match cover {
-        Cover::Waiting if raw <= half => watch(Cover::Covered(now), cue_luma, raw, smoothed, now),
-        Cover::Covered(at) if smoothed <= half && now - at <= WITHIN => Cover::Pass,
-        Cover::Covered(at) if now - at > WITHIN => Cover::Fail,
+        Cover::Waiting if raw <= half => {
+            let c = Cover::Covered {
+                at: now,
+                sum: 0.0,
+                n: 0,
+            };
+            watch(c, cue_luma, raw, smoothed, now)
+        }
+        Cover::Covered { at, .. } if smoothed <= half && now - at <= WITHIN => {
+            Cover::Pass(now - at)
+        }
+        Cover::Covered { at, sum, n } if now - at > WITHIN => {
+            let mean = if n > 0 { sum / n as f32 } else { f32::INFINITY };
+            if mean <= DEEP {
+                Cover::Fail
+            } else {
+                Cover::Partial(mean)
+            }
+        }
+        Cover::Covered { at, sum, n } => Cover::Covered {
+            at,
+            sum: sum + raw / cue_luma,
+            n: n + 1,
+        },
         c => c,
     }
 }
@@ -100,6 +138,7 @@ pub(crate) struct Dv11 {
     parts: Vec<String>,
     pass: bool,
     min_ratio: f32,
+    min_raw: f32,
 }
 
 /// Adds the test's systems: inert until an entity named [`TRIGGER`] exists.
@@ -124,6 +163,7 @@ fn detect(names: Query<&Name>, mut commands: Commands) {
             parts: Vec::new(),
             pass: true,
             min_ratio: f32::INFINITY,
+            min_raw: f32::INFINITY,
         });
     }
 }
@@ -199,20 +239,31 @@ fn run(
         } => {
             let raw = control.raw.map_or(f32::INFINITY, |e| e.luma);
             let smoothed = control.smoother.current().map_or(f32::INFINITY, |e| e.luma);
+            let lit = cue_luma >= MIN_CUE_LUMA;
             if cue_luma > 0.0 {
                 test.min_ratio = test.min_ratio.min(smoothed / cue_luma);
+                test.min_raw = test.min_raw.min(raw / cue_luma);
             }
-            let cover = if cue_luma > 0.0 {
+            let cover = if lit {
                 watch(cover, cue_luma, raw, smoothed, now)
             } else {
                 cover
             };
             let end = match cover {
-                Cover::Pass => Some("clause 2 PASS".to_owned()),
+                _ if !lit => Some(format!(
+                    "clause 2 not run: luma at the cue below {MIN_CUE_LUMA}"
+                )),
+                Cover::Pass(d) => Some(format!(
+                    "clause 2 PASS: halved {} ms after the cover",
+                    d.as_millis()
+                )),
                 Cover::Fail => {
                     test.pass = false;
                     Some("clause 2 FAIL: not halved within 1 s of the cover".to_owned())
                 }
+                Cover::Partial(mean) => Some(format!(
+                    "clause 2 not run: partial cover (raw mean {mean:.3} of the cue's, above {DEEP})"
+                )),
                 Cover::Waiting if now - at > WATCH => Some(format!(
                     "clause 2 not run: no cover in {} s",
                     WATCH.as_secs()
@@ -224,6 +275,8 @@ fn run(
                     test.parts.push(text);
                     let r = test.min_ratio;
                     test.parts.push(format!("luma ratio reached {r:.3}"));
+                    let m = test.min_raw;
+                    test.parts.push(format!("raw luma ratio minimum {m:.3}"));
                     if let Some(s) = settings.as_deref_mut() {
                         s.0.environment.lighting_mode = "off".into();
                     }
@@ -287,11 +340,67 @@ mod tests {
         let s = |ms| t + Duration::from_millis(ms);
         assert_eq!(watch(Cover::Waiting, 1.0, 0.6, 1.0, t), Cover::Waiting);
         let c = watch(Cover::Waiting, 1.0, 0.5, 0.9, t);
-        assert_eq!(c, Cover::Covered(t));
-        assert_eq!(watch(c, 1.0, 0.1, 0.6, s(500)), c);
-        assert_eq!(watch(c, 1.0, 0.1, 0.5, s(1000)), Cover::Pass);
-        assert_eq!(watch(c, 1.0, 0.1, 0.6, s(1001)), Cover::Fail);
+        assert_eq!(
+            c,
+            Cover::Covered {
+                at: t,
+                sum: 0.5,
+                n: 1
+            }
+        );
+        let c = watch(c, 1.0, 0.1, 0.6, s(500));
+        assert_eq!(
+            c,
+            Cover::Covered {
+                at: t,
+                sum: 0.6,
+                n: 2
+            }
+        );
+        assert_eq!(
+            watch(c, 1.0, 0.1, 0.5, s(1000)),
+            Cover::Pass(Duration::from_secs(1))
+        );
+        // A deep cover (raw mean 0.3 / 3 = 0.1 ≤ 0.25) missed: FAIL.
+        let deep = Cover::Covered {
+            at: t,
+            sum: 0.3,
+            n: 3,
+        };
+        assert_eq!(watch(deep, 1.0, 0.1, 0.6, s(1001)), Cover::Fail);
         // Raw and smoothed halved in one frame: the cover and the pass at once.
-        assert_eq!(watch(Cover::Waiting, 1.0, 0.1, 0.4, t), Cover::Pass);
+        assert_eq!(
+            watch(Cover::Waiting, 1.0, 0.1, 0.4, t),
+            Cover::Pass(Duration::ZERO)
+        );
+    }
+
+    /// Q-390: a miss after a partial cover (the raw mean above 0.25 of the cue's) is
+    /// not run, not FAIL; at 0.25 it is judged.
+    #[test]
+    fn watch_reports_a_partial_cover_not_a_fail() {
+        let t = Instant::now();
+        let late = t + Duration::from_millis(1001);
+        let partial = Cover::Covered {
+            at: t,
+            sum: 0.9,
+            n: 2,
+        };
+        assert_eq!(watch(partial, 1.0, 0.45, 0.6, late), Cover::Partial(0.45));
+        let edge = Cover::Covered {
+            at: t,
+            sum: 0.5,
+            n: 2,
+        };
+        assert_eq!(watch(edge, 1.0, 0.25, 0.6, late), Cover::Fail);
+    }
+
+    /// Q-390: a correct 0.5 s smoother passes a cover to 0.25 of the cue's luma within
+    /// 1 s; one twice as slow fails it.
+    #[test]
+    fn deep_cover_tells_a_correct_smoother_from_a_slow_one() {
+        let at_1s = |tau: f32| DEEP + (1.0 - DEEP) * (-1.0 / tau).exp();
+        assert!(at_1s(0.5) <= 0.5);
+        assert!(at_1s(1.0) > 0.5);
     }
 }
