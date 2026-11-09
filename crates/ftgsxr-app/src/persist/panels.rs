@@ -273,7 +273,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 
 /// The Environment tab's lighting controls (§1.9 Light estimation and color matching):
 /// the mode, offering the auto modes only where the camera is `Available` and otherwise
-/// showing an auto setting as manual, kept, with the reason (Q-384); picking an auto mode
+/// showing an auto setting as manual, kept, and the reason whatever the setting (Q-384); picking an auto mode
 /// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion"
 /// beside auto local without occlusion's depth (Q-388); the manual sliders, the strength
 /// γ, the current gains and "per instance" (Q-383). True when "Ask again" was pressed
@@ -307,7 +307,6 @@ fn lighting_controls(
             }
         }
     });
-    let auto_setting = e.lighting_mode.starts_with("auto");
     match camera {
         FeatureState::Denied => {
             ui.horizontal(|ui| {
@@ -315,7 +314,7 @@ fn lighting_controls(
                 ask = ui.button("Ask again").clicked();
             });
         }
-        FeatureState::Absent if auto_setting => {
+        FeatureState::Absent => {
             ui.label(if headset {
                 "not available on this OS"
             } else {
@@ -957,7 +956,8 @@ mod tests {
 
     /// The Environment tab's lighting controls (§1.9 "only manual mode is offered and the
     /// UI says why", §1.15 E-XR-PERMISSION, Q-384, Q-385, Q-322, `cpu`): off and manual
-    /// with the reason on the desktop and on the headset under `Absent` or `Denied`, an
+    /// with the reason, whatever the setting, on the desktop and on the headset under
+    /// `Absent` or `Denied`, an
     /// auto setting shown as manual and kept; "Ask again" under `Denied` asks for the
     /// camera; the four modes under `Available`, where an auto pick and "re-capture
     /// reference" clear `lighting_reference`.
@@ -1015,6 +1015,29 @@ mod tests {
             }
             assert_eq!(mode(&world), "auto-global", "the setting is kept");
         }
+        // The reason shows whenever only off and manual are offered, whatever the setting.
+        for setting in ["off", "manual"] {
+            for (headset, state, reason) in cases {
+                if headset {
+                    world.insert_resource(Headset);
+                } else {
+                    world.remove_resource::<Headset>();
+                }
+                world.insert_resource(lighting(state));
+                world
+                    .resource_mut::<SettingsRes>()
+                    .0
+                    .environment
+                    .lighting_mode = setting.into();
+                let texts = frame(&mut world);
+                assert!(has(&texts, reason), "{setting}, {state:?}: {texts:?}");
+            }
+        }
+        world
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .lighting_mode = "auto-global".into();
         // Denied: "Ask again" asks for the camera.
         let texts = frame(&mut world);
         for events in click(at(&texts, "Ask again")) {
