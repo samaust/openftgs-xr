@@ -296,7 +296,8 @@ pub(super) fn panel_layout(
         });
     dock::toast_line(world, ui);
     egui::CentralPanel::default().show(ui, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        // Q-380: the dock's overflow rule; a ray drags the horizontal bar.
+        dock::tab_scroll_area().show(ui, |ui| {
             if asking {
                 dock::confirm_body(world, ui, out);
             } else {
@@ -1669,5 +1670,161 @@ mod tests {
         );
         assert_eq!(world.resource::<UiState>().tab, Tab::Playback);
         assert_eq!(clicks(&out), 1);
+    }
+
+    /// A section under the Library tab wider and taller than the main panel at every
+    /// texture: a row 1500 points wide ending in "Far edge", then 60 rows.
+    fn wide_section(_: &mut World, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.add_space(1500.0);
+            ui.label("Far edge");
+        });
+        for i in 0..60 {
+            ui.label(format!("Row {i}"));
+        }
+    }
+
+    /// The scroll bars' handles in one frame's shapes on a `view` of the context's points:
+    /// the vertical one's (a rect under 4 points wide and over 20 high, the shorter of the
+    /// bar's two) and the horizontal one's (the same, turned), below the title bar, whose
+    /// grip is as thin.
+    fn bar_handles(
+        shapes: &[egui::epaint::ClippedShape],
+        view: egui::Rect,
+    ) -> (Option<egui::Rect>, Option<egui::Rect>) {
+        let rects: Vec<egui::Rect> = shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) => Some(r.rect),
+                _ => None,
+            })
+            .filter(|r| r.min.y >= view.min.y + TITLE_FRACTION * view.height())
+            .collect();
+        let thin_handle = |along: fn(egui::Rect) -> f32, across: fn(egui::Rect) -> f32| {
+            rects
+                .iter()
+                .copied()
+                .filter(|r| across(*r) < 4.0 && along(*r) > 20.0)
+                .min_by(|a, b| along(*a).total_cmp(&along(*b)))
+        };
+        (
+            thin_handle(|r| r.height(), |r| r.width()),
+            thin_handle(|r| r.width(), |r| r.height()),
+        )
+    }
+
+    /// Where `label` is drawn in one frame's shapes, in points, when the whole of it is
+    /// inside its clip rect, give or take a point for the galley's rounding (`None` when
+    /// it isn't drawn or is cut by the clip).
+    fn shown_text(shapes: &[egui::epaint::ClippedShape], label: &str) -> Option<egui::Rect> {
+        fn walk(s: &egui::Shape, clip: egui::Rect, label: &str, found: &mut Option<egui::Rect>) {
+            match s {
+                egui::Shape::Text(t) if t.galley.text() == label => {
+                    let r = egui::Rect::from_min_size(t.pos, t.galley.size());
+                    if clip.expand(1.0).contains_rect(r) {
+                        *found = Some(r);
+                    }
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, label, found)),
+                _ => {}
+            }
+        }
+        let mut found = None;
+        shapes
+            .iter()
+            .for_each(|c| walk(&c.shape, c.clip_rect, label, &mut found));
+        found
+    }
+
+    /// A press of the panel pointer at `from` (in points) dragged by `by` in ten steps
+    /// and released, through the touch press as `xr_input` drives it (Q-333), 0.1 s apart
+    /// from `t`; the shapes of the frame after the release.
+    fn drag_on_panel(
+        ctx: &egui::Context,
+        world: &mut World,
+        tex: (f32, f32, f32),
+        (from, by, t): (Vec2, Vec2, f64),
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let mut frames = vec![(from, vec![]), (from, vec![true])];
+        frames.extend((1..=10).map(|i| (from + by * (i as f32 / 10.0), vec![])));
+        frames.push((from + by, vec![false]));
+        frames.push((from + by, vec![]));
+        let mut last = None;
+        let mut shapes = Vec::new();
+        for (i, (at, select)) in frames.into_iter().enumerate() {
+            let events = super::super::touch::touch_events(
+                ctx,
+                pointer_events(last, Some(at), &select, 0.0),
+            );
+            last = Some(at);
+            shapes = texture_shapes_at(ctx, world, tex, events, Some(t + 0.1 * i as f64)).0;
+        }
+        shapes
+    }
+
+    /// §1.8 User interface, Q-380 (#649, `cpu`): on every main panel texture (#542's,
+    /// `ui_scale` 1.5 among them, where the panel is 390 points wide), with the Library tab
+    /// and a section wider and taller than the panel, the tab body's vertical scroll bar
+    /// lies inside the texture and the central panel's frame and a ray drag of it scrolls
+    /// the rows, and a horizontal
+    /// scroll bar lies inside it too, whose drag brings the section's far edge into view.
+    #[test]
+    fn panel_layout_tab_content_wider_than_the_panel_is_reached_by_its_scroll_bars() {
+        for (w, h, scale) in TEXTURES {
+            let tex = (w, h, panel_zoom(scale));
+            let view = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h) / tex.2);
+            let mut world = panel_world(Tab::Library);
+            world.init_resource::<crate::library::Library>();
+            world
+                .resource_mut::<super::super::DockHooks>()
+                .add(Tab::Library, wide_section);
+            let ctx = egui::Context::default();
+            assert!(super::super::load_system_font(&ctx), "a system font");
+            // egui paints a floating bar only while the pointer is over its area.
+            let centre = vec![egui::Event::PointerMoved(view.center())];
+            for t in 0..4 {
+                texture_shapes_at(&ctx, &mut world, tex, centre.clone(), Some(0.1 * t as f64));
+            }
+            let (shapes, _, _) = texture_shapes_at(&ctx, &mut world, tex, centre, Some(0.4));
+            let case = format!("{w} × {h} at ui_scale {scale}");
+            assert!(
+                shown_text(&shapes, "Far edge").is_none(),
+                "{case}: past the edge"
+            );
+            let (Some(v_handle), Some(h_handle)) = bar_handles(&shapes, view) else {
+                panic!("{case}: both scroll bars");
+            };
+            for bar in [v_handle, h_handle] {
+                assert!(view.contains_rect(bar), "{case}: bar {bar:?} in {view:?}");
+            }
+            // The vertical bar at the panel's right edge, inside the central panel's frame
+            // (where a vertical-only area left it in the frame's margin).
+            let body = view - egui::Frame::central_panel(&ctx.global_style()).inner_margin;
+            assert!(
+                v_handle.max.x <= body.max.x + 0.5,
+                "{case}: vertical bar {v_handle:?} inside the frame {body:?}"
+            );
+            let centre_of = |r: egui::Rect| Vec2::new(r.center().x, r.center().y);
+            let by = Vec2::new(view.width(), 0.0);
+            let shapes = drag_on_panel(&ctx, &mut world, tex, (centre_of(h_handle), by, 1.0));
+            let far = shown_text(&shapes, "Far edge");
+            assert!(
+                far.is_some_and(|r| view.contains_rect(r)),
+                "{case}: the far edge in view after the drag: {far:?}"
+            );
+            // The horizontal scroll took the rows out of view; the far edge's row remains.
+            let y = far.map(|r| r.min.y);
+            let shapes = drag_on_panel(
+                &ctx,
+                &mut world,
+                tex,
+                (centre_of(v_handle), Vec2::new(0.0, 60.0), 3.0),
+            );
+            assert_ne!(
+                shown_text(&shapes, "Far edge").map(|r| r.min.y),
+                y,
+                "{case}: the vertical bar's drag scrolls"
+            );
+        }
     }
 }
