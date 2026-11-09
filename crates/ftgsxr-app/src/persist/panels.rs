@@ -18,7 +18,7 @@ use crate::intent::{Feature, Intent};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
 use crate::platform::{AskPermissionAgain, DeniedPermissions, Headset, Permission};
-use crate::ui::{FeatureState, Lighting, UiCue, XrFeatures};
+use crate::ui::{FeatureState, HudData, Lighting, UiCue, XrFeatures};
 
 /// The values `ftgsxr-io` accepts for the string keys (§1.11).
 const TIERS: &[&str] = &[
@@ -191,6 +191,8 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .next()
         .is_some();
     let mut light = world.get_resource::<Lighting>().copied();
+    // Q-394: E14's part of the gains, for the auto modes.
+    let e14 = world.get_resource::<HudData>().and_then(|h| h.light_gains);
     let mut ask_camera = false;
     let mut toggles = Vec::new();
     edit(world, ui, |s, ui| {
@@ -259,7 +261,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             ui.checkbox(&mut e.hand_removal, "hand removal");
         }
         ui.separator();
-        ask_camera = lighting_controls(ui, s, &features, headset, selected, light.as_mut());
+        ask_camera = lighting_controls(ui, s, &features, headset, selected, light.as_mut(), e14);
     });
     if let Some(l) = light
         && world.get_resource::<Lighting>().is_some_and(|w| *w != l)
@@ -283,9 +285,11 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion
 /// and a selected instance" beside auto local without occlusion's depth or without a
 /// selected instance (Q-388); the manual sliders, the strength
-/// γ, the current gains and "per instance" (Q-383). True when "Ask again" was pressed
-/// for a denied camera (Q-322).
-// Q-322, Q-383, Q-384, Q-385, Q-388
+/// γ, the current gains and "per instance" (Q-383): in the auto modes E14's part `e14`
+/// (`HudData.light_gains`), 1 per channel where it is `None`, without the manual offset
+/// the sliders show (Q-394); otherwise `Lighting.transform`'s. True when "Ask again" was
+/// pressed for a denied camera (Q-322).
+// Q-322, Q-383, Q-384, Q-385, Q-388, Q-394
 fn lighting_controls(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -293,6 +297,7 @@ fn lighting_controls(
     headset: bool,
     selected: bool,
     light: Option<&mut Lighting>,
+    e14: Option<bevy::math::Vec3>,
 ) -> bool {
     let camera = features.lighting;
     let occlusion_on = s.environment.occlusion && features.occlusion == FeatureState::Available;
@@ -345,7 +350,11 @@ fn lighting_controls(
     ui.add(egui::Slider::new(&mut m.tint, -1.0..=1.0).text("tint"));
     ui.add(egui::Slider::new(&mut e.lighting_gamma, 0.0..=1.0).text("strength γ"));
     if let Some(l) = light {
-        let g = l.transform.gain;
+        let g = if shown.starts_with("auto") {
+            e14.unwrap_or(bevy::math::Vec3::ONE)
+        } else {
+            l.transform.gain
+        };
         ui.label(format!("gains {:.2} {:.2} {:.2}", g.x, g.y, g.z));
         ui.checkbox(&mut l.per_instance, "per instance");
     }
@@ -1125,5 +1134,50 @@ mod tests {
                 .lighting_reference,
             None
         );
+    }
+
+    /// Q-394 (`cpu`): while an auto mode is shown, the gains line reads
+    /// `HudData.light_gains`, E14's part without the manual offset, and 1 per channel
+    /// where it is `None`; in manual mode it reads `Lighting.transform.gain`.
+    #[test]
+    fn the_environment_tab_shows_e14s_gains_in_the_auto_modes() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.init_resource::<Messages<AskPermissionAgain>>();
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        world.insert_resource(Lighting {
+            transform: ftgsxr_render::ColorTransform {
+                gain: bevy::math::Vec3::splat(3.0),
+            },
+            ..Lighting::default()
+        });
+        world.insert_resource(HudData {
+            light_gains: Some(bevy::math::Vec3::new(1.5, 1.25, 0.25)),
+            ..HudData::default()
+        });
+        let ctx = egui::Context::default();
+        let shows = |world: &mut World, setting: &str, label: &str| {
+            world
+                .resource_mut::<SettingsRes>()
+                .0
+                .environment
+                .lighting_mode = setting.into();
+            frame_of(&ctx, world, Vec::new(), environment_section);
+            let texts = frame_of(&ctx, world, Vec::new(), environment_section);
+            assert!(
+                texts.iter().any(|(t, _)| t == label),
+                "{setting}: {label}: {texts:?}"
+            );
+        };
+        shows(&mut world, "auto-global", "gains 1.50 1.25 0.25");
+        shows(&mut world, "auto-local", "gains 1.50 1.25 0.25");
+        shows(&mut world, "manual", "gains 3.00 3.00 3.00");
+        world.resource_mut::<HudData>().light_gains = None;
+        shows(&mut world, "auto-global", "gains 1.00 1.00 1.00");
     }
 }
