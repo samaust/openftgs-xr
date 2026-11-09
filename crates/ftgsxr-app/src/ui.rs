@@ -419,14 +419,21 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 /// manual mode (`persist`'s settings sync), E14's gains in the auto modes (the XR crate).
 /// `compose_transforms` multiplies it into every instance's own transform, or only the
 /// `Selected` one's while `per_instance` is set; `per_instance` is session state, off at
-/// start and saved nowhere.
-// Q-383
+/// start and saved nowhere. `denied_auto` is the auto mode a camera denial was denied
+/// for, which the Environment tab's "Ask again" writes back (Q-384, Q-394).
+// Q-383, Q-394
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Lighting {
     /// The environment's gains, the identity by default.
     pub transform: ColorTransform,
     /// Whether the environment's factor goes to the selected instance only.
     pub per_instance: bool,
+    /// The auto mode (`"auto-global"` or `"auto-local"`, Q-50's spellings) that the last
+    /// denial of `Permission::Camera` wrote back to `manual`, written by the XR crate's
+    /// `light`; `None` by default, after a grant and without the XR crate. Session state,
+    /// saved nowhere.
+    // Q-394
+    pub denied_auto: Option<&'static str>,
 }
 
 impl Default for Lighting {
@@ -434,6 +441,7 @@ impl Default for Lighting {
         Lighting {
             transform: ColorTransform::IDENTITY,
             per_instance: false,
+            denied_auto: None,
         }
     }
 }
