@@ -5,7 +5,7 @@
 
 use bevy::log::warn;
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
-use ftgsxr_core::{GpuArrays, RenderConventions, TemporalIndex};
+use ftgsxr_core::{GpuArrays, RenderConventions, SH_BINDINGS, TemporalIndex};
 
 use super::device::{Reservation, SplatDevice};
 use super::error::RenderError;
@@ -13,7 +13,7 @@ use super::readback::half_to_f32;
 
 /// The model's uniform block: every E6 and E7 constant of its `render_conventions` (D-39,
 /// §2.6: never a literal in a shader) and the layout facts the shaders read. Little-endian
-/// 32-bit words, 48 bytes, in this order (byte offsets):
+/// 32-bit words, 64 bytes, in this order (byte offsets):
 ///
 /// | offset | field | type |
 /// | --- | --- | --- |
@@ -29,9 +29,11 @@ use super::readback::half_to_f32;
 /// | 36 | the loaded SH degree L′ | u32 |
 /// | 40 | half fields: bit 0 velocity, 1 scale, 2 rotation, 3 opacity, 4 sh | u32 |
 /// | 44 | single timestamp (1) or not (0) | u32 |
+/// | 48 | W, the words of one SH range (Q-377) | u32 |
+/// | 52 | 0 (padding to 16-byte rows) | 3 × u32 |
 ///
 /// `transmittance_stop` is not applied (D-7), and the background is the view's (E7).
-pub(crate) const MODEL_UNIFORM_BYTES: usize = 48;
+pub(crate) const MODEL_UNIFORM_BYTES: usize = 64; // Q-377
 
 /// The model buffers' extra usage in the crate's unit tests, which read them back.
 const TEST_READ: BufferUsages = if cfg!(test) {
@@ -40,14 +42,18 @@ const TEST_READ: BufferUsages = if cfg!(test) {
     BufferUsages::empty()
 };
 
-fn model_uniform(arrays: &GpuArrays, conv: &RenderConventions) -> [u8; MODEL_UNIFORM_BYTES] {
+fn model_uniform(
+    arrays: &GpuArrays,
+    conv: &RenderConventions,
+    sh_range_words: u32,
+) -> [u8; MODEL_UNIFORM_BYTES] {
     let h = arrays.half;
     let flags = u32::from(h.velocity)
         | u32::from(h.scale) << 1
         | u32::from(h.rotation) << 2
         | u32::from(h.opacity) << 3
         | u32::from(h.sh) << 4;
-    let words: [[u8; 4]; 12] = [
+    let words: [[u8; 4]; 16] = [
         conv.alpha_max.to_le_bytes(),
         conv.eps2d.to_le_bytes(),
         conv.near.to_le_bytes(),
@@ -60,6 +66,10 @@ fn model_uniform(arrays: &GpuArrays, conv: &RenderConventions) -> [u8; MODEL_UNI
         u32::from(arrays.sh_degree).to_le_bytes(),
         flags.to_le_bytes(),
         u32::from(arrays.single).to_le_bytes(),
+        sh_range_words.to_le_bytes(),
+        [0; 4],
+        [0; 4],
+        [0; 4],
     ];
     let mut out = [0u8; MODEL_UNIFORM_BYTES];
     out.copy_from_slice(words.as_flattened());
@@ -96,6 +106,8 @@ pub struct GpuModel {
     /// The 99th percentile of the rows' speeds ‖velocity‖ in model units per unit of τ,
     /// the scale of the speed colormap (§1.4 stage 6). // Q-93
     pub(crate) speed_p99: f32,
+    /// The bytes of one SH range, W · 4, on the model's device (Q-377).
+    pub(crate) sh_range_bytes: u64,
     n: u32,
     /// The model's static bytes, reserved on its device until the model is dropped (Q-74).
     reservation: Reservation,
@@ -184,31 +196,84 @@ fn speed_percentile_99(arrays: &GpuArrays) -> f32 {
     s[rank - 1]
 }
 
-/// `RenderError::Budget` when a field's buffer exceeds `dev`'s largest storage binding,
-/// with the field's buffer bytes and the limit, logged with N and the field's name (Q-369):
-/// its bind group could not be made.
-// Q-369
+/// The bytes of one SH range on a device of `limits`, W · 4 (Q-377): the largest storage
+/// binding rounded down to whole multiples of the storage offset alignment, at least 64
+/// bytes, so that every range's offset is aligned.
+// Q-377
+pub(crate) fn sh_range_bytes(limits: &wgpu::Limits) -> u64 {
+    let align = u64::from(limits.min_storage_buffer_offset_alignment).max(64);
+    // At most 4 GiB, so W fits the shader's 32-bit word index.
+    limits.max_storage_buffer_binding_size.min(1 << 32) / align * align
+}
+
+/// The SH ranges `bytes` of SH take at `range` bytes each, at least one (Q-377).
+// Q-377
+pub(crate) fn sh_ranges(bytes: u64, range: u64) -> u64 {
+    bytes.div_ceil(range.max(1)).max(1)
+}
+
+/// W, the words of an SH range of `range` bytes, for the model's uniform (Q-377).
+// Q-377
+fn sh_range_words(range: u64) -> u32 {
+    u32::try_from(range / 4).expect("an SH range of at most 4 GiB")
+}
+
+/// `RenderError::Budget` when `arrays` cannot be bound on `dev` (Q-377, Q-369), logged with
+/// N, the field, its buffer's bytes and the limit hit: (1) the SH buffer exceeds
+/// `SH_BINDINGS` SH ranges, (2) a field's buffer exceeds the device's largest buffer, (3)
+/// another field's buffer exceeds one storage binding; each buffer padded to whole words.
+// Q-369, Q-377
 fn check_bindings(dev: &SplatDevice, arrays: &GpuArrays) -> Result<(), RenderError> {
-    let limit = dev.limits().max_storage_buffer_binding_size;
+    let limits = dev.limits();
+    let refuse = |name: &str, bytes: u64, budget: u64, what: String| {
+        warn!(
+            "model of N = {} refused: its {name} buffer takes {bytes} bytes, over {what} \
+             (E-MEM-BUDGET)",
+            arrays.n
+        );
+        Err(RenderError::Budget {
+            needed: bytes,
+            budget,
+        })
+    };
+    let bytes = |i: usize| buffer_size(field(arrays, i).len()) as u64;
+    let range = sh_range_bytes(limits);
+    let sh_budget = u64::from(SH_BINDINGS) * range;
+    if bytes(SH) > sh_budget {
+        return refuse(
+            FIELD_NAMES[SH],
+            bytes(SH),
+            sh_budget,
+            format!("its {SH_BINDINGS} SH ranges of {range} bytes ({sh_budget} bytes)"),
+        );
+    }
+    let max_buffer = limits.max_buffer_size;
     for (i, name) in FIELD_NAMES.iter().enumerate() {
-        let bytes = buffer_size(field(arrays, i).len()) as u64;
-        if bytes > limit {
-            warn!(
-                "model of N = {} refused: its {name} buffer takes {bytes} bytes, over the \
-                 device's {limit}-byte storage binding (E-MEM-BUDGET)",
-                arrays.n
+        if bytes(i) > max_buffer {
+            return refuse(
+                name,
+                bytes(i),
+                max_buffer,
+                format!("the device's {max_buffer}-byte largest buffer"),
             );
-            return Err(RenderError::Budget {
-                needed: bytes,
-                budget: limit,
-            });
+        }
+    }
+    let binding = limits.max_storage_buffer_binding_size;
+    for (i, name) in FIELD_NAMES.iter().enumerate().take(SH) {
+        if bytes(i) > binding {
+            return refuse(
+                name,
+                bytes(i),
+                binding,
+                format!("the device's {binding}-byte storage binding"),
+            );
         }
     }
     Ok(())
 }
 
 /// `arrays`' static bytes reserved on `dev`'s budget (Q-74), once every field's buffer fits
-/// one storage binding (Q-369); a refusal is logged with N, the bytes needed and the budget
+/// the device's bindings (Q-369, Q-377); a refusal is logged with N, the bytes needed and the budget
 /// left (§1.2 load option 4, D-13), since `RenderError::Budget` carries no N.
 // Q-117
 fn reserve_logged(dev: &SplatDevice, arrays: &GpuArrays) -> Result<Reservation, RenderError> {
@@ -231,8 +296,10 @@ impl GpuModel {
     /// allocated on the GPU (§2.4 rule 4, §1.2 load option 4, D-13), and given back when
     /// the model is dropped (Q-74): a model that does not fit in what the device's live
     /// models leave of the budget is `RenderError::Budget`, its `budget` the bytes left.
-    /// So is a model with a field whose buffer exceeds the device's largest storage
-    /// binding, its `needed` the buffer's bytes and its `budget` the limit (Q-369).
+    /// So is a model whose SH buffer exceeds `SH_BINDINGS` SH ranges, whose buffer exceeds
+    /// the device's largest buffer, or whose other field's buffer exceeds one storage
+    /// binding, its `needed` the buffer's bytes and its `budget` the limit hit (Q-369,
+    /// Q-377).
     ///
     /// # Panics
     ///
@@ -250,14 +317,18 @@ impl GpuModel {
         );
         // Q-74: the model's static bytes against what the device's live models leave.
         let reservation = reserve_logged(dev, arrays)?;
+        let sh_range = sh_range_bytes(dev.limits()); // Q-377
         let uniform = dev.device().create_buffer(&BufferDescriptor {
             label: Some("ftgsxr model uniform"),
             size: MODEL_UNIFORM_BYTES as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST | TEST_READ,
             mapped_at_creation: false,
         });
-        dev.queue()
-            .write_buffer(&uniform, 0, &model_uniform(arrays, conv));
+        dev.queue().write_buffer(
+            &uniform,
+            0,
+            &model_uniform(arrays, conv, sh_range_words(sh_range)),
+        );
         let buffers = ModelBuffers {
             position: f32_buffer(dev, "ftgsxr position", &arrays.position),
             time_center: f32_buffer(dev, "ftgsxr time center", &arrays.time_center),
@@ -277,6 +348,7 @@ impl GpuModel {
             sh_degree: arrays.sh_degree,
             conventions: conv.clone(),
             speed_p99: speed_percentile_99(arrays),
+            sh_range_bytes: sh_range,
             n: arrays.n,
             reservation,
         })
@@ -284,7 +356,7 @@ impl GpuModel {
 
     /// The model's static GPU bytes: §1.12's bytes per primitive times N, as `GpuArrays`
     /// holds them (Q-23); the word padding at the ends of half-precision buffers (at most
-    /// 2 bytes each, Q-22) and the 48-byte uniform block are not counted.
+    /// 2 bytes each, Q-22) and the 64-byte uniform block are not counted.
     pub fn memory_bytes(&self) -> u64 {
         self.reservation.bytes()
     }
@@ -326,8 +398,10 @@ impl FieldBytes<'_> {
 }
 
 const FIELDS: usize = 8;
+/// The SH array's index in `field` order.
+const SH: usize = FIELDS - 1;
 
-/// The fields' names in `field` order, for the binding-limit refusal's log (Q-369).
+/// The fields' names in `field` order, for the binding refusals' log (Q-369, Q-377).
 const FIELD_NAMES: [&str; FIELDS] = [
     "position",
     "time center",
@@ -400,6 +474,7 @@ impl ModelUpload {
         );
         // Q-74: the model's static bytes against what the device's live models leave.
         let reservation = reserve_logged(dev, &arrays)?;
+        let sh_range = sh_range_bytes(dev.limits()); // Q-377
         let buffer = |label: &str, len: usize| {
             dev.device().create_buffer(&BufferDescriptor {
                 label: Some(label),
@@ -414,8 +489,11 @@ impl ModelUpload {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST | TEST_READ,
             mapped_at_creation: false,
         });
-        dev.queue()
-            .write_buffer(&uniform, 0, &model_uniform(&arrays, conv));
+        dev.queue().write_buffer(
+            &uniform,
+            0,
+            &model_uniform(&arrays, conv, sh_range_words(sh_range)),
+        );
         let len = |i| field(&arrays, i).len();
         let buffers = ModelBuffers {
             position: buffer("ftgsxr position", len(0)),
@@ -436,6 +514,7 @@ impl ModelUpload {
             sh_degree: arrays.sh_degree,
             conventions: conv.clone(),
             speed_p99,
+            sh_range_bytes: sh_range,
             n: arrays.n,
             reservation,
         };
@@ -732,8 +811,8 @@ mod tests {
     }
 
     /// A device of its own, as `SplatDevice::headless` makes one, but whose largest storage
-    /// binding is `bytes` (Q-369).
-    fn device_with_binding_limit(bytes: u64) -> SplatDevice {
+    /// binding is `bytes` (Q-369) and, when given, whose largest buffer is `max_buffer`.
+    fn device_with_binding_limit(bytes: u64, max_buffer: Option<u64>) -> SplatDevice {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
         desc.backends = wgpu::Backends::VULKAN;
         desc.flags = wgpu::InstanceFlags::from_build_config().with_env();
@@ -747,6 +826,7 @@ mod tests {
             .expect("an adapter");
         let required_limits = wgpu::Limits {
             max_storage_buffer_binding_size: bytes,
+            max_buffer_size: max_buffer.unwrap_or(adapter.limits().max_buffer_size),
             ..adapter.limits()
         };
         let (device, queue) =
@@ -771,8 +851,9 @@ mod tests {
         }
     }
 
-    /// Binds `buffer` whole as a read-only storage buffer of a compute bind group.
-    fn bind_whole(dev: &SplatDevice, buffer: &wgpu::Buffer) {
+    /// Binds `size` bytes of `buffer` from `offset` (all of it from there when `None`) as
+    /// a read-only storage buffer of a compute bind group.
+    fn bind(dev: &SplatDevice, buffer: &wgpu::Buffer, offset: u64, size: Option<u64>) {
         let layout = dev
             .device()
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -793,73 +874,122 @@ mod tests {
             layout: &layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: buffer.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset,
+                    size: size.and_then(std::num::NonZeroU64::new),
+                }),
             }],
         });
     }
 
-    /// Q-369 (#617): on a device whose largest storage binding is 64 KiB, a model of 400
-    /// degree-3 rows (a 76 800-byte SH buffer) is refused with E-MEM-BUDGET, the buffer's
-    /// bytes and the limit, by the one-call and the chunked upload alike, before anything
-    /// is reserved, and the refusal logs N, the field and both figures; the largest N that
-    /// fits, ⌊65 536 ÷ 192⌋ = 341, uploads and its SH buffer binds without a validation
-    /// message, while a buffer one row longer does not bind.
+    /// `r` is E-MEM-BUDGET with `(needed, budget)`.
+    fn refused(r: Result<(), RenderError>, figures: (u64, u64)) {
+        match r {
+            Err(RenderError::Budget { needed, budget }) => assert_eq!((needed, budget), figures),
+            Err(e) => panic!("expected E-MEM-BUDGET, got {e:?}"),
+            Ok(()) => panic!("a model over the device's bindings uploaded"),
+        }
+    }
+
+    /// `arrays` refused with `figures` by the one-call and the chunked upload alike.
+    fn refused_by_both(dev: &SplatDevice, arrays: GpuArrays, figures: (u64, u64)) {
+        let n = arrays.n;
+        let arrays = std::sync::Arc::new(arrays);
+        let conv = RenderConventions::default();
+        refused(
+            GpuModel::upload(dev, &arrays, persistent_index(n), &conv).map(|_| ()),
+            figures,
+        );
+        refused(
+            ModelUpload::begin(dev, arrays, persistent_index(n), &conv, 0.0).map(|_| ()),
+            figures,
+        );
+    }
+
+    /// Q-377, Q-369 (#617, #642): on a device whose largest storage binding is 64 KiB (an
+    /// SH range of 65 536 bytes at a 64-byte alignment), 1 000 degree-3 rows in float32 (a
+    /// 192 000-byte SH buffer) upload and their three ranges bind without a validation
+    /// message, while one range's bytes past the limit do not bind; 2 731 rows (524 352
+    /// bytes, nine ranges) are refused with E-MEM-BUDGET, the SH buffer's bytes and the
+    /// eight ranges' 524 288, by the one-call and the chunked upload alike, before anything
+    /// is reserved, the refusal logging N, the field and both figures; a non-SH field over
+    /// one binding (6 000 rows: a 72 000-byte position buffer, SH in half at degree 0) is
+    /// refused with its bytes and the binding; and on a device whose largest buffer is
+    /// 256 KiB, 1 500 degree-3 rows (288 000 bytes of SH, within eight ranges) are refused
+    /// with the SH buffer's bytes and the 262 144-byte largest buffer.
     #[test]
     #[ignore = "gpu"]
     fn gpu_upload_refuses_a_field_over_the_binding_limit() {
         let (log, _subscriber) = capture_log();
         let limit = 65_536;
-        let dev = device_with_binding_limit(limit);
+        let dev = device_with_binding_limit(limit, None);
         assert_eq!(dev.limits().max_storage_buffer_binding_size, limit);
+        assert_eq!(sh_range_bytes(dev.limits()), limit);
         let conv = RenderConventions::default();
-        let over = std::sync::Arc::new(degree3_arrays(400));
-        let refused = |r: Result<(), RenderError>| match r {
-            Err(RenderError::Budget { needed, budget }) => {
-                assert_eq!((needed, budget), (76_800, limit));
-            }
-            Err(e) => panic!("expected E-MEM-BUDGET, got {e:?}"),
-            Ok(()) => panic!("a model over the binding limit uploaded"),
-        };
-        refused(GpuModel::upload(&dev, &over, persistent_index(400), &conv).map(|_| ()));
-        refused(
-            ModelUpload::begin(
+
+        let model = GpuModel::upload(&dev, &degree3_arrays(1000), persistent_index(1000), &conv)
+            .expect("three SH ranges upload");
+        assert_eq!(model.buffers.sh.size(), 192_000);
+        assert_eq!(sh_ranges(192_000, model.sh_range_bytes), 3);
+        for k in 0..3 {
+            let offset = k * limit;
+            bind(
                 &dev,
-                std::sync::Arc::clone(&over),
-                persistent_index(400),
-                &conv,
-                0.0,
-            )
-            .map(|_| ()),
+                &model.buffers.sh,
+                offset,
+                Some(limit.min(192_000 - offset)),
+            );
+        }
+        assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
+        // The control: the device does hold the lowered limit.
+        bind(&dev, &model.buffers.sh, 0, Some(limit + 256));
+        assert!(
+            !dev.take_validation_messages().is_empty(),
+            "a range over the limit fails to bind"
         );
+        drop(model);
+
+        refused_by_both(&dev, degree3_arrays(2731), (524_352, 524_288));
         assert_eq!(dev.model_bytes_in_use(), 0, "nothing reserved");
         let text = log.text();
         assert!(
-            text.contains("N = 400")
+            text.contains("N = 2731")
                 && text.contains("sh buffer")
-                && text.contains("76800 bytes")
-                && text.contains("65536-byte"),
+                && text.contains("524352 bytes")
+                && text.contains("524288 bytes"),
+            "{text}"
+        );
+
+        let position = GpuArrays {
+            half: HalfFields {
+                sh: true,
+                ..HalfFields::default()
+            },
+            ..patterned_arrays(6000)
+        };
+        refused_by_both(&dev, position, (72_000, limit));
+        assert_eq!(dev.model_bytes_in_use(), 0, "nothing reserved");
+        let text = log.text();
+        assert!(
+            text.contains("N = 6000")
+                && text.contains("position buffer")
+                && text.contains("72000 bytes")
+                && text.contains("65536-byte storage binding"),
             "{text}"
         );
         assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
 
-        let cap = (limit / 192) as u32;
-        assert_eq!(cap, 341);
-        let model = GpuModel::upload(&dev, &degree3_arrays(cap), persistent_index(cap), &conv)
-            .expect("the largest N that fits uploads");
-        bind_whole(&dev, &model.buffers.sh);
-        assert_eq!(dev.take_validation_messages(), Vec::<String>::new());
-        // The control: the device does hold the lowered limit.
-        let longer = dev.device().create_buffer(&BufferDescriptor {
-            label: None,
-            size: 192 * u64::from(cap + 1),
-            usage: BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        bind_whole(&dev, &longer);
+        let small = device_with_binding_limit(limit, Some(262_144));
+        assert_eq!(small.limits().max_buffer_size, 262_144);
+        refused_by_both(&small, degree3_arrays(1500), (288_000, 262_144));
+        assert_eq!(small.model_bytes_in_use(), 0, "nothing reserved");
         assert!(
-            !dev.take_validation_messages().is_empty(),
-            "a buffer over the limit fails to bind"
+            log.text().contains("262144-byte largest buffer"),
+            "{}",
+            log.text()
         );
+        assert_eq!(small.take_validation_messages(), Vec::<String>::new());
     }
 
     /// Q-117 (#189): an upload over the budget logs N, the bytes needed and the budget,
@@ -960,7 +1090,7 @@ mod tests {
             opacity: vec![],
             sh: vec![],
         };
-        let bytes = model_uniform(&arrays, &conv);
+        let bytes = model_uniform(&arrays, &conv, 4096);
         let word = |i: usize| <[u8; 4]>::try_from(&bytes[4 * i..4 * i + 4]).unwrap();
         let f = |i| f32::from_le_bytes(word(i));
         let u = |i| u32::from_le_bytes(word(i));
@@ -969,5 +1099,7 @@ mod tests {
             [0.5, 0.25, 2.0, 8.0, 0.125, 1.5, 0.75, 3.0]
         );
         assert_eq!([u(8), u(9), u(10), u(11)], [7, 2, 0b10101, 1]);
+        // Q-377: W, then padding.
+        assert_eq!([u(12), u(13), u(14), u(15)], [4096, 0, 0, 0]);
     }
 }

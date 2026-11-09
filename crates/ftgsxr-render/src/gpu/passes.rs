@@ -8,7 +8,7 @@
 use std::sync::atomic::Ordering;
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
-use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, TrimMode, Vec3};
+use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, SH_BINDINGS, TrimMode, Vec3};
 
 use super::device::SplatDevice;
 use super::error::RenderError;
@@ -19,7 +19,7 @@ use super::frame::{
 use super::inputs::{
     ColorTransform, Colormap, ModelDraw, OcclusionInput, RenderMode, SortPose, ViewParams,
 };
-use super::model::MODEL_UNIFORM_BYTES;
+use super::model::{MODEL_UNIFORM_BYTES, sh_ranges};
 use super::sort::{RadixSort, SORT_BLOCK};
 use super::tier::QualityTier;
 
@@ -61,8 +61,20 @@ const INSTANCE_STRIDE: usize = 256;
 const FRAME_BYTES: usize = 240;
 /// One cull view in the frame block (`cull.wgsl`'s `ViewCam`).
 const VIEW_BYTES: usize = 96;
-/// The cull reads eight model buffers and writes four frame buffers (§2.4 GPU data layout).
-const STORAGE_BUFFERS: u32 = 12;
+/// The cull reads seven model buffers and the SH array's `SH_BINDINGS` SH ranges (Q-377),
+/// and writes four frame buffers (§2.4 GPU data layout).
+const STORAGE_BUFFERS: u32 = (SH_RANGE_BINDING - 1) + SH_BINDINGS + 4; // Q-377
+/// The model bind group's first SH-range binding (`cull.wgsl`'s `sh0`), after the uniform
+/// and the seven whole fields.
+// Q-377
+const SH_RANGE_BINDING: u32 = 8;
+/// The size pass's first binding (`cull.wgsl`'s `size_counters`): past the SH ranges, which
+/// share the module's group 0.
+const SIZE_BINDING: u32 = 16;
+// `cull.wgsl` declares the ranges `sh0` … `sh7` at bindings 8–15 and switches over eight of
+// them, and its size bindings start at 16 (Q-377).
+const _: () = assert!(SH_BINDINGS == 8);
+const _: () = assert!(SH_RANGE_BINDING + SH_BINDINGS <= SIZE_BINDING);
 
 const FLAG_TRANSFORM: u32 = 1;
 const FLAG_COUNT_ACTIVE: u32 = 2;
@@ -130,8 +142,8 @@ fn uniform_entry(binding: u32, dynamic: bool) -> wgpu::BindGroupLayoutEntry {
 
 impl SplatPasses {
     /// Compiles the passes for `tier`'s record layout (§1.4) and the given layer and depth
-    /// formats; a shader that fails to compile, or a device with fewer than the twelve
-    /// storage buffers per stage the cull binds, is `RenderError::Shader`.
+    /// formats; a shader that fails to compile, or a device with fewer than the nineteen
+    /// storage buffers per stage the cull binds (Q-377), is `RenderError::Shader`.
     pub fn new(
         dev: &SplatDevice,
         layer_format: wgpu::TextureFormat,
@@ -152,19 +164,15 @@ impl SplatPasses {
             label: Some("ftgsxr cull.wgsl"),
             source: wgpu::ShaderSource::Wgsl(CULL_WGSL.into()),
         });
+        // The uniform, the seven whole fields and the SH array's ranges.
+        // Q-377
+        let model_entries: Vec<wgpu::BindGroupLayoutEntry> =
+            std::iter::once(uniform_entry(0, false))
+                .chain((1..SH_RANGE_BINDING + SH_BINDINGS).map(|b| storage_entry(b, true)))
+                .collect();
         let model_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ftgsxr model"),
-            entries: &[
-                uniform_entry(0, false),
-                storage_entry(1, true),
-                storage_entry(2, true),
-                storage_entry(3, true),
-                storage_entry(4, true),
-                storage_entry(5, true),
-                storage_entry(6, true),
-                storage_entry(7, true),
-                storage_entry(8, true),
-            ],
+            entries: &model_entries,
         });
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ftgsxr frame"),
@@ -183,10 +191,10 @@ impl SplatPasses {
         let size_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ftgsxr size"),
             entries: &[
-                storage_entry(10, false),
-                storage_entry(11, false),
-                storage_entry(12, false),
-                uniform_entry(13, false),
+                storage_entry(SIZE_BINDING, false),
+                storage_entry(SIZE_BINDING + 1, false),
+                storage_entry(SIZE_BINDING + 2, false),
+                uniform_entry(SIZE_BINDING + 3, false),
             ],
         });
         let cull_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -403,30 +411,31 @@ impl SplatPasses {
             label: Some("ftgsxr size"),
             layout: &self.size_layout,
             entries: &[
-                buffer_entry(10, &set.indirect),
-                buffer_entry(11, &set.dispatch),
-                buffer_entry(12, &set.stats),
-                buffer_entry(13, &frame_uniform),
+                buffer_entry(SIZE_BINDING, &set.indirect),
+                buffer_entry(SIZE_BINDING + 1, &set.dispatch),
+                buffer_entry(SIZE_BINDING + 2, &set.stats),
+                buffer_entry(SIZE_BINDING + 3, &frame_uniform),
             ],
         });
         let model_groups: Vec<wgpu::BindGroup> = models
             .iter()
             .map(|draw| {
                 let b = &draw.model.buffers;
+                let mut entries = vec![
+                    buffer_entry(0, &b.uniform),
+                    buffer_entry(1, &b.position),
+                    buffer_entry(2, &b.time_center),
+                    buffer_entry(3, &b.duration),
+                    buffer_entry(4, &b.velocity),
+                    buffer_entry(5, &b.scale),
+                    buffer_entry(6, &b.rotation),
+                    buffer_entry(7, &b.opacity),
+                ];
+                entries.extend(sh_range_entries(&b.sh, draw.model.sh_range_bytes));
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("ftgsxr model"),
                     layout: &self.model_layout,
-                    entries: &[
-                        buffer_entry(0, &b.uniform),
-                        buffer_entry(1, &b.position),
-                        buffer_entry(2, &b.time_center),
-                        buffer_entry(3, &b.duration),
-                        buffer_entry(4, &b.velocity),
-                        buffer_entry(5, &b.scale),
-                        buffer_entry(6, &b.rotation),
-                        buffer_entry(7, &b.opacity),
-                        buffer_entry(8, &b.sh),
-                    ],
+                    entries: &entries,
                 })
             })
             .collect();
@@ -1112,6 +1121,27 @@ fn buffer_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_>
     }
 }
 
+/// The SH array `sh`'s `SH_BINDINGS` bindings (Q-377): range k holds bytes k·`range`
+/// onwards, `range` of them or what is left; the slots past the last range repeat it.
+// Q-377
+fn sh_range_entries(sh: &wgpu::Buffer, range: u64) -> Vec<wgpu::BindGroupEntry<'_>> {
+    let total = sh.size();
+    let used = sh_ranges(total, range);
+    (0..u64::from(SH_BINDINGS))
+        .map(|slot| {
+            let offset = slot.min(used - 1) * range;
+            wgpu::BindGroupEntry {
+                binding: SH_RANGE_BINDING + slot as u32,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: sh,
+                    offset,
+                    size: std::num::NonZeroU64::new(range.min(total - offset)),
+                }),
+            }
+        })
+        .collect()
+}
+
 /// The workgroups that cover `rows` rows: x up to 65,535, y the rest (`cull.wgsl`'s
 /// `row_of` linearizes them).
 fn dispatch_groups(rows: u32) -> (u32, u32) {
@@ -1256,8 +1286,8 @@ fn frame_uniform(views: &[ViewParams], capacity: u32, sort_pose: &SortPose) -> [
     out
 }
 
-// The model's uniform block is `model.rs`'s; `cull.wgsl` reads it as 48 bytes.
-const _: () = assert!(MODEL_UNIFORM_BYTES == 48);
+// The model's uniform block is `model.rs`'s; `cull.wgsl` reads it as 64 bytes (Q-377).
+const _: () = assert!(MODEL_UNIFORM_BYTES == 64);
 
 #[cfg(test)]
 mod tests {
