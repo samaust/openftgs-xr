@@ -933,7 +933,7 @@ fn scene_tab(world: &mut World, ui: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut 
     }
     for (e, l) in lightings {
         if let Ok(mut ec) = world.get_entity_mut(e) {
-            ec.insert(InstanceLighting::bundle(l));
+            ec.insert(InstanceLighting(l));
         }
     }
     if let Some(e) = ask {

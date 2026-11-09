@@ -427,7 +427,11 @@ impl Plugin for PersistPlugin {
             )
             .add_systems(
                 PostUpdate,
-                (apply_pending_instances, apply_pending_clock).chain(),
+                (apply_pending_instances, apply_pending_clock)
+                    .chain()
+                    // Q-383: an instance's `InstanceLighting` reaches its `SplatTransform`
+                    // in the frame it is inserted.
+                    .before(crate::ui::ComposeTransforms),
             )
             .add_systems(Last, save_at_exit);
         let recent = app
@@ -1128,7 +1132,7 @@ fn apply_pending_instances(
         let mut ec = commands.entity(e);
         // Q-206: a null `lighting` leaves the identity.
         if let Some(l) = &p.lighting {
-            ec.try_insert(InstanceLighting::bundle(l.clone()));
+            ec.try_insert(InstanceLighting(l.clone()));
         }
         ec.try_insert(SplatMode(mode_of(&p.mode, display)));
         ec.try_insert(SplatOverlays(overlays_of(&display.overlays)));
