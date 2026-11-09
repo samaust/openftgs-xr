@@ -89,7 +89,8 @@ pub struct SettingsWarnings(pub Vec<String>);
 
 /// The scene anchor's handshake with the XR crate (§1.9 Floor, shadows and anchors,
 /// Q-343): `persist` sets `Creating` at a scene save under the `Headset` marker in
-/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)`, `None` at
+/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)` (before
+/// the next commands, #663), `None` at
 /// any other save (written with a null anchor) unless a save waits, and sets
 /// `Locating(uuid)` at the load of a file with an anchor on the headset; the XR crate
 /// answers `Ready` once located, or `Lost(uuid)`, which `persist` toasts.
@@ -599,6 +600,14 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
         .read(world.resource::<Messages<PersistCommand>>())
         .cloned()
         .collect();
+    // #663: a save waits only while the state is `Creating` (Q-343, Q-350); once the XR
+    // crate has answered `Ready(uuid)` the waiting file is written, anchor first and file
+    // second (§1.9), before this frame's commands can replace its path, clear its anchor
+    // or load another scene over it.
+    // Q-343, Q-350, Q-353
+    if matches!(world.resource::<SceneAnchor>(), SceneAnchor::Ready(_)) {
+        finish_anchor_wait(world);
+    }
     for c in commands {
         match c {
             PersistCommand::SaveSettings => save_now(world),
@@ -694,9 +703,9 @@ fn write_scene_file(world: &mut World, path: &Path) {
     world.insert_resource(RecentScenes(recent_scenes(&scenes)));
 }
 
-/// The waiting save's end (Q-343): written with its anchor at `Ready`; without one, and
-/// toasted, at any other answer or after `ANCHOR_WAIT` (the state then `None`,
-/// Q-350).
+/// The waiting save's end (Q-343): written with its anchor at `Ready`, before the
+/// frame's commands (`run_commands`, #663); without one, and toasted, at any other answer
+/// or after `ANCHOR_WAIT` (the state then `None`, Q-350).
 // Q-343, Q-350
 fn finish_anchor_wait(world: &mut World) {
     let Some((path, since)) = world.resource::<AnchorWait>().0.clone() else {

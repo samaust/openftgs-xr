@@ -227,3 +227,81 @@ fn loading_an_anchored_scene_without_the_marker_leaves_the_anchor_alone() {
     t.frames(2);
     assert_eq!(anchor(&t), SceneAnchor::None);
 }
+
+/// The XR crate's `Ready(uuid)` (written in a frame's `PostUpdate`) and `command` in the
+/// next frame (#663).
+fn ready_then(t: &mut TestApp, uuid: &str, command: PersistCommand) {
+    *t.app.world_mut().resource_mut::<SceneAnchor>() = SceneAnchor::Ready(uuid.into());
+    t.app.world_mut().write_message(command);
+    t.frames(2);
+}
+
+/// Q-343, Q-350, Q-353 (#663): once `Ready(uuid)` has come the wait is over, so a
+/// passthrough save of "b" in the frame after it doesn't replace the waiting path: "a"
+/// is written with the UUID first, and "b" starts a wait of its own.
+// Q-343, Q-350, Q-353
+#[test]
+fn a_passthrough_save_in_the_frame_after_ready_waits_on_its_own() {
+    let mut t = app("anchor_ready_then_save", true, "passthrough");
+    save(&mut t, "a");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    ready_then(&mut t, "0123-abcd", PersistCommand::SaveScene("b".into()));
+    assert_eq!(read(&file(&t, "a")).anchor.as_deref(), Some("0123-abcd"));
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    assert!(!file(&t, "b").exists(), "\"b\" waits for its own anchor");
+    assert!(texts(&t).is_empty(), "{:?}", texts(&t));
+}
+
+/// Q-343, Q-361 (#663): a VR-mode save of "b" in the frame after `Ready(uuid)` writes
+/// "b" with a null anchor, and "a", whose wait `Ready` ended, still gets the UUID.
+// Q-343, Q-361
+#[test]
+fn a_vr_mode_save_in_the_frame_after_ready_leaves_the_uuid_to_the_waiting_file() {
+    let mut t = app("anchor_ready_then_vr", true, "passthrough");
+    save(&mut t, "a");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .mode = "vr".into();
+    ready_then(&mut t, "0123-abcd", PersistCommand::SaveScene("b".into()));
+    assert_eq!(read(&file(&t, "a")).anchor.as_deref(), Some("0123-abcd"));
+    assert_eq!(read(&file(&t, "b")).anchor, None);
+    assert!(texts(&t).is_empty(), "{:?}", texts(&t));
+}
+
+/// Q-343 (#663): a load in the frame after `Ready(uuid)` comes after the waiting file is
+/// written: "a" names the UUID and holds its own scene (here its background), not the
+/// loaded one's.
+// Q-343
+#[test]
+fn a_load_in_the_frame_after_ready_comes_after_the_waiting_file() {
+    const LOADED: [f32; 3] = [0.25, 0.5, 0.75];
+    let mut t = app("anchor_ready_then_load", true, "passthrough");
+    let before = scene_from_world(t.app.world()).environment.background;
+    assert_ne!(before, LOADED);
+    let other = file(&t, "other");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    let mut scene = scene_from_world(t.app.world());
+    scene.environment.background = LOADED;
+    scene.anchor = None;
+    write_scene(&other, &scene).unwrap();
+    save(&mut t, "a");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    ready_then(
+        &mut t,
+        "0123-abcd",
+        PersistCommand::LoadScene("other".into()),
+    );
+    // The load applied: the world holds the loaded scene now.
+    assert_eq!(
+        scene_from_world(t.app.world()).environment.background,
+        LOADED
+    );
+    let a = read(&file(&t, "a"));
+    assert_eq!(a.anchor.as_deref(), Some("0123-abcd"));
+    assert_eq!(a.environment.background, before);
+    assert!(texts(&t).is_empty(), "{:?}", texts(&t));
+}
