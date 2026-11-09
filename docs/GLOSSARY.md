@@ -584,6 +584,10 @@ _Avoid_: fit bounds
 A model instance's region in model space, off, a box or a sphere, outside which its primitives are not drawn; a primitive is kept while its moved center lies inside. E17, D-56
 _Avoid_: crop, clip (reserved for the near and far culls), cull region, mask
 
+**Trim handle**:
+A point on the selected instance's trim that a mouse drag or a hand's ray drags to change the trim in the viewport: a box's face, or a sphere's center or one of its six radius points. E18, D-57
+_Avoid_: gizmo (the desktop's handle set as a whole), trim gizmo, crop handle, grip
+
 **Trimmed box**:
 The model box and the content box of an instance whose trim is on, taken over only the primitives the trim keeps, over the times it keeps them; the trim's own box when it keeps none. E17, §1.5, D-56
 _Avoid_: trimmed bounds (the code's name, not prose), cropped box
@@ -677,7 +681,7 @@ One saved desktop camera, its pose, field of view and mode, kept in the scene fi
 _Avoid_: viewpoint, saved view, camera preset
 
 **Gizmo**:
-The translate arrows, rotation rings and uniform-scale cube drawn on the selected instance on the desktop, which the mouse drags to change its pose. §1.7
+The translate arrows, rotation rings and uniform-scale cube drawn on the selected instance on the desktop, which the mouse drags to change its pose, or, in its trim mode, the instance's trim handles. §1.7, E18
 _Avoid_: handles (unqualified), manipulator, Bevy gizmos (the engine's line-drawing API)
 
 **Grab point**:
