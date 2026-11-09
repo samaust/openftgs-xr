@@ -417,23 +417,24 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 /// The environment's lighting transform (§1.9 Light estimation and color matching):
 /// the identity in off mode, E14's manual form of `[environment] lighting_manual` in
 /// manual mode (`persist`'s settings sync), E14's gains in the auto modes (the XR crate).
-/// `compose_transforms` multiplies it into every instance's own transform, or only the
-/// `Selected` one's while `per_instance` is set; `per_instance` is session state, off at
-/// start and saved nowhere.
+/// `compose_transforms` multiplies it into every instance's own transform while
+/// `per_instance` is `None`, or only into the target's while it is `Some(e)`, whatever is
+/// selected later; `per_instance` is session state, `None` at start and saved nowhere.
 // Q-383
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Lighting {
     /// The environment's gains, the identity by default.
     pub transform: ColorTransform,
-    /// Whether the environment's factor goes to the selected instance only.
-    pub per_instance: bool,
+    /// The one instance the environment's factor goes to ("per instance", the instance
+    /// selected when it was turned on), `None` for every instance.
+    pub per_instance: Option<Entity>,
 }
 
 impl Default for Lighting {
     fn default() -> Lighting {
         Lighting {
             transform: ColorTransform::IDENTITY,
-            per_instance: false,
+            per_instance: None,
         }
     }
 }
@@ -442,25 +443,31 @@ impl Default for Lighting {
 type ComposeItem = (
     Entity,
     Option<&'static InstanceLighting>,
-    Has<Selected>,
     Option<&'static mut SplatTransform>,
 );
 
 /// `SplatTransform`'s one writer: each instance's own E14 manual transform (the identity
 /// without `InstanceLighting`) times the environment's per channel, the environment's
-/// factor going to every instance, or only to the `Selected` one while "per instance" is
-/// set (to none when nothing is selected). Writes only what changed.
+/// factor going to every instance while `per_instance` is `None`, or only to its target
+/// while it is `Some(e)`, whatever is selected. A target no longer loaded (removed)
+/// returns `per_instance` to `None`. Writes only what changed.
 // Q-383
 fn compose_transforms(
-    lighting: Res<Lighting>,
+    mut lighting: ResMut<Lighting>,
     mut instances: Query<ComposeItem, With<LoadedModel>>,
     mut commands: Commands,
 ) {
-    for (e, own, selected, current) in &mut instances {
+    if lighting
+        .per_instance
+        .is_some_and(|t| !instances.contains(t))
+    {
+        lighting.per_instance = None;
+    }
+    for (e, own, current) in &mut instances {
         let own = own.map_or(ColorTransform::IDENTITY, |l| {
             ColorTransform::from_manual(&l.0)
         });
-        let gain = if !lighting.per_instance || selected {
+        let gain = if lighting.per_instance.is_none_or(|t| t == e) {
             own.gain * lighting.transform.gain
         } else {
             own.gain
@@ -1257,8 +1264,9 @@ mod tests {
     }
 
     /// Q-383 (`cpu`): every instance's `SplatTransform` is the per-channel product of its
-    /// own E14 manual transform and the environment's; with "per instance" only the
-    /// `Selected` one takes the environment's factor, none when nothing is selected.
+    /// own E14 manual transform and the environment's while `per_instance` is `None`;
+    /// while it is `Some(a)`, only `a` takes the environment's factor, whatever is selected
+    /// later (another instance, or nothing); removing `a` returns `per_instance` to `None`.
     #[test]
     fn compose_transforms_multiplies_the_instance_and_the_environment() {
         let mut app = App::new();
@@ -1269,26 +1277,33 @@ mod tests {
             exposure_ev: 1.0,
             ..ManualLighting::default()
         };
-        let lit = app.world_mut().spawn((probe(), InstanceLighting(ev1))).id();
-        let other = app.world_mut().spawn(probe()).id();
+        let a = app.world_mut().spawn((probe(), InstanceLighting(ev1))).id();
+        let b = app.world_mut().spawn(probe()).id();
         app.world_mut().resource_mut::<Lighting>().transform = ColorTransform {
             gain: Vec3::new(2.0, 1.0, 1.0),
         };
         let gain = |app: &App, e: Entity| app.world().get::<SplatTransform>(e).unwrap().0.gain;
+        // `None`: every instance takes the product.
         app.update();
-        assert_eq!(gain(&app, lit), Vec3::new(4.0, 2.0, 2.0));
-        assert_eq!(gain(&app, other), Vec3::new(2.0, 1.0, 1.0));
-        // Per instance, the other one selected: the lit one keeps its own factor only.
-        app.world_mut().resource_mut::<Lighting>().per_instance = true;
-        app.world_mut().entity_mut(other).insert(Selected);
+        assert_eq!(gain(&app, a), Vec3::new(4.0, 2.0, 2.0));
+        assert_eq!(gain(&app, b), Vec3::new(2.0, 1.0, 1.0));
+        // Pinned to A, then B selected: A keeps the product, B its own transform.
+        app.world_mut().resource_mut::<Lighting>().per_instance = Some(a);
+        app.world_mut().entity_mut(b).insert(Selected);
         app.update();
-        assert_eq!(gain(&app, lit), Vec3::new(2.0, 2.0, 2.0));
-        assert_eq!(gain(&app, other), Vec3::new(2.0, 1.0, 1.0));
-        // Nothing selected: no instance takes the environment's factor.
-        app.world_mut().entity_mut(other).remove::<Selected>();
+        assert_eq!(gain(&app, a), Vec3::new(4.0, 2.0, 2.0));
+        assert_eq!(gain(&app, b), Vec3::ONE);
+        // Nothing selected: still A only.
+        app.world_mut().entity_mut(b).remove::<Selected>();
         app.update();
-        assert_eq!(gain(&app, lit), Vec3::new(2.0, 2.0, 2.0));
-        assert_eq!(gain(&app, other), Vec3::ONE);
+        assert_eq!(gain(&app, a), Vec3::new(4.0, 2.0, 2.0));
+        assert_eq!(gain(&app, b), Vec3::ONE);
+        // A removed: `per_instance` returns to `None`, and B takes the product again.
+        app.world_mut().despawn(a);
+        app.update();
+        assert_eq!(app.world().resource::<Lighting>().per_instance, None);
+        app.update();
+        assert_eq!(gain(&app, b), Vec3::new(2.0, 1.0, 1.0));
     }
 
     // Q-256: the question names the missing model and the picked file's path.
