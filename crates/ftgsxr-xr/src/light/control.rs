@@ -229,7 +229,7 @@ impl Control {
     }
 
     /// One frame (Q-384, Q-385, Q-389, Q-392).
-    // Q-161, Q-261, Q-322, Q-348, Q-355, Q-384, Q-385, Q-389, Q-392
+    // Q-161, Q-261, Q-322, Q-348, Q-355, Q-384, Q-385, Q-389, Q-392, Q-394
     pub(crate) fn step(&mut self, platform: Option<&dyn Platform>, i: &Inputs) -> Outputs {
         let mut out = Outputs::default();
         if self.camera.is_none() {
@@ -514,6 +514,7 @@ fn control(
     {
         lighting.transform = t;
     }
+    // Q-394: the kept auto mode, for the Environment tab's "Ask again".
     if lighting.denied_auto != out.denied_auto {
         lighting.denied_auto = out.denied_auto;
     }
