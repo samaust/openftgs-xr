@@ -10,8 +10,12 @@
 //! moves c, a radius drag stops at the floor, one hand drags one handle, the second hand
 //! cannot take the dragged handle but can drag another, the instance cannot be grabbed
 //! during a drag and its handles are hidden while it is grabbed, and a deselect or a trim
-//! change ends the drag. Which handle and whether a drag runs are read from
-//! `TrimHandles` (Q-379) and compared exactly; the trim's values within 10⁻⁶.
+//! change ends the drag. Added (Q-379, #655): with two hands' drags of one instance,
+//! either release keeps the other hand's face, center or radius as it left them, the trim
+//! does not jump in the frame a drag starts or ends, and one drag of a face past its
+//! opposite and back still returns the opposite to its start value. Which handle and
+//! whether a drag runs are read from `TrimHandles` (Q-379) and compared exactly; the
+//! trim's values within 10⁻⁶.
 
 use crate::support;
 
@@ -533,4 +537,213 @@ fn i24_xr_a_deselect_or_a_trim_change_ends_the_drag() {
     assert!(dragged(&t, e).is_empty(), "a trim change ends it");
     send(&mut t, &[down(Hand::Left, Vec3::new(2.0, 0.0, 5.0))]);
     assert_eq!(trim(&t, e), sphere);
+}
+
+const PLUS_Y: TrimHandle = TrimHandle::Face { axis: 1, max: true };
+
+/// Q-379: the left hand drags the +x face and the right hand then the +y face, both
+/// moving; t_h = 5 for both.
+fn two_faces(name: &str) -> (TestApp, Entity) {
+    let (mut t, e) = setup(name, unit_box());
+    send(
+        &mut t,
+        &[down(Hand::Left, Vec3::new(1.0, 0.0, 5.0)), grab(Hand::Left)],
+    );
+    send(&mut t, &[down(Hand::Left, Vec3::new(1.25, 0.0, 5.0))]);
+    send(
+        &mut t,
+        &[
+            down(Hand::Right, Vec3::new(0.0, 1.0, 5.0)),
+            grab(Hand::Right),
+        ],
+    );
+    assert_eq!(
+        dragged(&t, e),
+        [(Hand::Left, PLUS_X), (Hand::Right, PLUS_Y)]
+    );
+    send(
+        &mut t,
+        &[
+            down(Hand::Left, Vec3::new(1.5, 0.0, 5.0)),
+            down(Hand::Right, Vec3::new(0.0, 1.5, 5.0)),
+        ],
+    );
+    let tr = trim(&t, e);
+    assert!(
+        close(tr.box_max.x, 1.5) && close(tr.box_max.y, 1.5),
+        "{tr:?}"
+    );
+    (t, e)
+}
+
+#[test]
+fn i24_q379_the_right_hand_releases_and_its_face_keeps_its_limit() {
+    let (mut t, e) = two_faces("i24_q379_right_releases");
+    send(&mut t, &[Intent::GrabEnd { hand: Hand::Right }]);
+    assert_eq!(dragged(&t, e), [(Hand::Left, PLUS_X)]);
+    send(&mut t, &[down(Hand::Left, Vec3::new(1.75, 0.0, 5.0))]);
+    let tr = trim(&t, e);
+    assert!(
+        close(tr.box_max.y, 1.5),
+        "+y keeps the right hand's value: {tr:?}"
+    );
+    assert!(
+        close(tr.box_max.x, 1.75),
+        "+x follows the left hand: {tr:?}"
+    );
+}
+
+#[test]
+fn i24_q379_the_left_hand_releases_first_and_its_face_keeps_its_limit() {
+    let (mut t, e) = two_faces("i24_q379_left_releases");
+    send(&mut t, &[down(Hand::Left, Vec3::new(1.625, 0.0, 5.0))]);
+    send(&mut t, &[Intent::GrabEnd { hand: Hand::Left }]);
+    assert_eq!(dragged(&t, e), [(Hand::Right, PLUS_Y)]);
+    send(&mut t, &[down(Hand::Right, Vec3::new(0.0, 1.75, 5.0))]);
+    let tr = trim(&t, e);
+    assert!(
+        close(tr.box_max.x, 1.625),
+        "+x keeps the left hand's value: {tr:?}"
+    );
+    assert!(
+        close(tr.box_max.y, 1.75),
+        "+y follows the right hand: {tr:?}"
+    );
+}
+
+/// Q-379: the right hand drags the sphere's +x radius handle and the left hand its center;
+/// the radius moved to 2.5 and the center to (0.5, 0, −0.25).
+fn center_and_radius(name: &str) -> (TestApp, Entity) {
+    let (mut t, e) = setup(name, wide_sphere());
+    let plus_x = TrimHandle::Radius {
+        axis: 0,
+        positive: true,
+    };
+    send(
+        &mut t,
+        &[
+            down(Hand::Right, Vec3::new(2.0, 0.0, 5.0)),
+            grab(Hand::Right),
+        ],
+    );
+    send(
+        &mut t,
+        &[diagonal(Hand::Left, Vec3::ZERO), press(Hand::Left)],
+    );
+    assert_eq!(
+        dragged(&t, e),
+        [(Hand::Right, plus_x), (Hand::Left, TrimHandle::Center)]
+    );
+    send(
+        &mut t,
+        &[
+            down(Hand::Right, Vec3::new(2.5, 0.0, 5.0)),
+            diagonal(Hand::Left, Vec3::new(0.5, 0.0, -0.25)),
+        ],
+    );
+    let tr = trim(&t, e);
+    assert!(close(tr.radius, 2.5), "{tr:?}");
+    assert!(
+        close(tr.center.x, 0.5) && close(tr.center.z, -0.25),
+        "{tr:?}"
+    );
+    (t, e)
+}
+
+#[test]
+fn i24_q379_either_release_keeps_the_other_hands_center_or_radius() {
+    // The radius's hand releases: the center moves on, the radius stays.
+    let (mut t, e) = center_and_radius("i24_q379_sphere_radius_releases");
+    send(&mut t, &[Intent::GrabEnd { hand: Hand::Right }]);
+    send(&mut t, &[diagonal(Hand::Left, Vec3::new(1.0, 0.0, -0.5))]);
+    let tr = trim(&t, e);
+    assert!(close(tr.radius, 2.5), "the radius stays: {tr:?}");
+    assert!(
+        close(tr.center.x, 1.0) && close(tr.center.y, 0.0) && close(tr.center.z, -0.5),
+        "{tr:?}"
+    );
+    // The center's hand releases: the radius moves on, the center stays.
+    let (mut t, e) = center_and_radius("i24_q379_sphere_center_releases");
+    send(&mut t, &[release(Hand::Left)]);
+    send(&mut t, &[down(Hand::Right, Vec3::new(3.0, 0.0, 5.0))]);
+    let tr = trim(&t, e);
+    assert!(close(tr.radius, 3.0), "{tr:?}");
+    assert!(
+        close(tr.center.x, 0.5) && close(tr.center.y, 0.0) && close(tr.center.z, -0.25),
+        "the center stays: {tr:?}"
+    );
+}
+
+fn close_trim(a: Trim, b: Trim) -> bool {
+    a.mode == b.mode
+        && (a.box_min - b.box_min).abs().max_element() <= TOL
+        && (a.box_max - b.box_max).abs().max_element() <= TOL
+        && (a.center - b.center).abs().max_element() <= TOL
+        && close(a.radius, b.radius)
+}
+
+#[test]
+fn i24_q379_no_jump_when_a_drag_starts_or_ends() {
+    let (mut t, e) = setup("i24_q379_no_jump", unit_box());
+    send(
+        &mut t,
+        &[down(Hand::Left, Vec3::new(1.0, 0.0, 5.0)), grab(Hand::Left)],
+    );
+    send(&mut t, &[down(Hand::Left, Vec3::new(1.25, 0.0, 5.0))]);
+    // A start, the rays unmoved.
+    let before = trim(&t, e);
+    point(
+        &mut t,
+        &[
+            down(Hand::Right, Vec3::new(0.0, 1.0, 5.0)),
+            grab(Hand::Right),
+        ],
+    );
+    t.frames(1);
+    assert_eq!(
+        dragged(&t, e),
+        [(Hand::Left, PLUS_X), (Hand::Right, PLUS_Y)]
+    );
+    assert!(close_trim(trim(&t, e), before), "{:?}", trim(&t, e));
+    // Both move on, so that neither drag's start holds the other's last value.
+    send(
+        &mut t,
+        &[
+            down(Hand::Left, Vec3::new(1.5, 0.0, 5.0)),
+            down(Hand::Right, Vec3::new(0.0, 1.5, 5.0)),
+        ],
+    );
+    // An end of each, the rays unmoved.
+    for hand in [Hand::Right, Hand::Left] {
+        let before = trim(&t, e);
+        send(&mut t, &[Intent::GrabEnd { hand }]);
+        assert!(!dragged(&t, e).iter().any(|(h, _)| *h == hand));
+        assert!(close_trim(trim(&t, e), before), "{:?}", trim(&t, e));
+    }
+    let tr = trim(&t, e);
+    assert!(
+        close(tr.box_max.x, 1.5) && close(tr.box_max.y, 1.5),
+        "{tr:?}"
+    );
+}
+
+#[test]
+fn i24_q379_one_drag_past_the_opposite_and_back_restores_it() {
+    let (mut t, e) = setup("i24_q379_one_drag_back", unit_box());
+    send(
+        &mut t,
+        &[down(Hand::Left, Vec3::new(1.0, 0.0, 5.0)), grab(Hand::Left)],
+    );
+    send(&mut t, &[down(Hand::Left, Vec3::new(-1.5, 0.0, 5.0))]);
+    let tr = trim(&t, e);
+    assert!(
+        close(tr.box_max.x, -1.5) && close(tr.box_min.x, -1.5),
+        "{tr:?}"
+    );
+    send(&mut t, &[down(Hand::Left, Vec3::new(1.25, 0.0, 5.0))]);
+    let tr = trim(&t, e);
+    assert!(
+        close(tr.box_max.x, 1.25) && close(tr.box_min.x, -1.0),
+        "{tr:?}"
+    );
 }
