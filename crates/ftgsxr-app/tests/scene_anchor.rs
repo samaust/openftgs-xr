@@ -142,6 +142,32 @@ fn a_vr_mode_save_during_a_wait_keeps_the_wait() {
     assert!(texts(&t).is_empty(), "{:?}", texts(&t));
 }
 
+/// Q-350: a second passthrough save while one waits replaces the waiting path and
+/// restarts the 2 s wait; the state stays `Creating`, so the XR crate keeps the creation
+/// it started at the first save and its `Ready(uuid)` goes to the second file. The
+/// first file is never written. Times at the test's 60 Hz frames.
+// Q-350
+#[test]
+fn a_second_passthrough_save_during_a_wait_replaces_the_waiting_path() {
+    let mut t = app("anchor_replace", true, "passthrough");
+    save(&mut t, "a");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    // 1.5 s after the first save, the second.
+    t.frames(88);
+    save(&mut t, "b");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    // 2.2 s after the first save, 0.7 s after the second: still waiting.
+    t.frames(40);
+    let (a, b) = (file(&t, "a"), file(&t, "b"));
+    assert!(!b.exists(), "the wait restarted at the second save");
+    assert_eq!(anchor(&t), SceneAnchor::Creating);
+    assert!(texts(&t).is_empty(), "{:?}", texts(&t));
+    set_anchor(&mut t, SceneAnchor::Ready("0123-abcd".into()));
+    assert_eq!(read(&b).anchor.as_deref(), Some("0123-abcd"));
+    assert!(!a.exists(), "the replaced path is never written");
+    assert!(texts(&t).is_empty(), "{:?}", texts(&t));
+}
+
 // Q-350
 #[test]
 fn a_failed_creation_writes_a_null_anchor_and_toasts() {
