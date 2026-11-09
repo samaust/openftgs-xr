@@ -44,7 +44,7 @@ pub(crate) fn uuid_text(u: &sys::Uuid) -> String {
 // Q-351
 pub(crate) fn parse_uuid(text: &str) -> Option<sys::Uuid> {
     let hex: Vec<u8> = text.bytes().filter(|&b| b != b'-').collect();
-    if hex.len() != 32 {
+    if hex.len() != 32 || !hex.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
     let mut data = [0u8; 16];
@@ -789,5 +789,14 @@ mod tests {
         assert_eq!(parse_uuid(&t).map(|p| p.data), Some(u.data));
         assert!(parse_uuid("not a uuid").is_none());
         assert!(parse_uuid("request:3").is_none());
+    }
+
+    /// Q-351: exactly 32 hexadecimal digits, so a UUID with one digit replaced by
+    /// a sign, which `u8::from_str_radix` would take with its neighbour, parses to nothing.
+    #[test]
+    fn parse_uuid_rejects_a_sign_in_place_of_a_digit() {
+        assert!(parse_uuid("12345678-9abc-def0-0123-456789abcdef").is_some());
+        assert!(parse_uuid("12345678-9abc-def0-0123-+56789abcdef").is_none());
+        assert!(parse_uuid("+2345678-9abc-def0-0123-456789abcdef").is_none());
     }
 }
