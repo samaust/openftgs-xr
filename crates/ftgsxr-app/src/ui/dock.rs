@@ -477,6 +477,20 @@ pub(crate) fn source_from_input(text: &str) -> Option<SourceSpec> {
     None
 }
 
+/// The kind filters' labels, in `UiState.filter_kinds` order (`kind_index`).
+const KINDS: [&str; 4] = ["ftgs-if", "checkpoint", "PLY", "folders"];
+
+/// The width a button labelled `text` takes in a row of `ui`, with the spacing after it.
+fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    galley.size().x + 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x
+}
+
 fn kind_index(k: EntryKind) -> Option<usize> {
     match k {
         EntryKind::Exchange => Some(0),
@@ -525,17 +539,7 @@ fn library_tab(
         // The field fills what "Add source" leaves of the row, or the whole row with the
         // button on the next where that would leave the field too narrow.
         let add = "Add source";
-        let add_width = egui::WidgetText::from(add)
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                egui::TextStyle::Button,
-            )
-            .size()
-            .x
-            + 2.0 * ui.spacing().button_padding.x
-            + ui.spacing().item_spacing.x;
+        let add_width = button_width(ui, add);
         let row = ui.available_width();
         let field = if row - add_width >= row / 2.0 {
             row - add_width
@@ -573,10 +577,7 @@ fn library_tab(
         ui.add(egui::TextEdit::singleline(&mut state.filter_name).desired_width(rest));
     });
     ui.horizontal_wrapped(|ui| {
-        for (i, k) in ["ftgs-if", "checkpoint", "PLY", "folders"]
-            .iter()
-            .enumerate()
-        {
+        for (i, k) in KINDS.iter().enumerate() {
             ui.checkbox(&mut state.filter_kinds[i], *k);
         }
     });
@@ -2223,18 +2224,22 @@ mod tests {
     // #627: every control of the Library tab inside the tab's width, from §1.7's
     // narrowest dock to its default and the main panel's (§1.8).
 
-    /// A world whose library holds one local source with a long path and one entry,
-    /// `kitchen`, in `state`.
+    /// A world whose library holds two local sources with long paths (the second with
+    /// its Remove button, Q-49) and one entry, `kitchen`, in `state`.
     fn library_with_source(state: crate::library::EntryState) -> World {
         let mut world = library_with(state);
-        let root = "/home/someone/models/openftgs-synth-kitchen-and-courtyard";
-        let spec = source_from_input(root).expect("an absolute path is a source");
-        let source: std::sync::Arc<dyn ftgsxr_io::ModelSource> =
-            std::sync::Arc::new(ftgsxr_io::LocalDir { root: root.into() });
-        world
-            .resource_mut::<crate::library::Library>()
-            .sources
-            .push((spec, source));
+        for root in [
+            "/home/someone/models/openftgs-synth-kitchen-and-courtyard",
+            "/home/someone/more-models/openftgs-synth-studio",
+        ] {
+            let spec = source_from_input(root).expect("an absolute path is a source");
+            let source: std::sync::Arc<dyn ftgsxr_io::ModelSource> =
+                std::sync::Arc::new(ftgsxr_io::LocalDir { root: root.into() });
+            world
+                .resource_mut::<crate::library::Library>()
+                .sources
+                .push((spec, source));
+        }
         world
     }
 
@@ -2248,6 +2253,7 @@ mod tests {
                 total: Some(4),
             }),
             EntryState::Loading,
+            EntryState::Loaded(Entity::PLACEHOLDER),
             EntryState::Failed(LONG.into()),
             EntryState::Missing,
         ]
@@ -2281,8 +2287,9 @@ mod tests {
 
     /// The controls every state draws: the source row, the new source's row, the
     /// pickers, the filters.
-    const CONTROLS: [&str; 11] = [
+    const CONTROLS: [&str; 12] = [
         "Refresh",
+        "Remove",
         "https://… index or /path/to/folder",
         "Add source",
         "Open files…",
@@ -2314,26 +2321,53 @@ mod tests {
 
     #[test]
     fn library_tab_keeps_every_control_inside_the_main_panel() {
-        // §1.8: the 1024-pixel texture at the panel's zoom, less the central panel's
-        // margins, with the panel's style (Q-267, Q-293); rounded down to a whole point,
-        // where the separator's half-point stroke lands on the edge.
+        // §1.8: the 1024-pixel texture at the panel's zoom, at each end of §1.11's
+        // `ui_scale` range and its default, less the central panel's margins, with the
+        // panel's style (Q-267, Q-293); rounded down to a whole point, where the
+        // separator's half-point stroke lands on the edge.
         let ctx = font_context();
         ctx.all_styles_mut(crate::ui::panel::panel_style);
         let margins = egui::Frame::central_panel(&ctx.global_style())
             .total_margin()
             .sum()
             .x;
-        let width = (1024.0 / crate::ui::panel::PANEL_ZOOM - margins).floor();
-        for state in entry_states() {
-            let mut world = library_with_source(state);
-            assert_library_inside(&ctx, &mut world, width, &CONTROLS);
+        for ui_scale in [0.8, 1.0, 1.5] {
+            let width = (1024.0 / crate::ui::panel::panel_zoom(ui_scale) - margins).floor();
+            for state in entry_states() {
+                let mut world = library_with_source(state);
+                assert_library_inside(&ctx, &mut world, width, &CONTROLS);
+            }
         }
     }
 
     #[test]
     fn library_tab_adds_a_typed_source_and_toggles_the_kinds_in_the_narrowest_dock() {
         let mut world = library_with_source(crate::library::EntryState::Listed);
-        world.resource_mut::<crate::ui::UiState>().new_source = "/m/more".into();
+        // Click the source field (its hint text), then type into it.
+        let ctx = font_context();
+        library_frame(&ctx, &mut world, 160.0, Vec::new());
+        let (texts, _) = library_frame(&ctx, &mut world, 160.0, Vec::new());
+        let hint = "https://… index or /path/to/folder";
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == hint)
+            .map(|(_, r)| r.center())
+            .expect("the source field is drawn");
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(at)],
+            vec![press(true)],
+            vec![press(false)],
+            vec![egui::Event::Text("/m/more".into())],
+        ] {
+            library_frame(&ctx, &mut world, 160.0, events);
+        }
+        assert_eq!(world.resource::<crate::ui::UiState>().new_source, "/m/more");
         let out = library_click(&mut world, 160.0, "Add source");
         let added: Vec<_> = out
             .iter()
@@ -2343,10 +2377,7 @@ mod tests {
             })
             .collect();
         assert_eq!(added, vec![source_from_input("/m/more").unwrap()]);
-        for (i, kind) in ["ftgs-if", "checkpoint", "PLY", "folders"]
-            .iter()
-            .enumerate()
-        {
+        for (i, kind) in super::KINDS.iter().enumerate() {
             let before = world.resource::<crate::ui::UiState>().filter_kinds;
             library_click(&mut world, 160.0, kind);
             let after = world.resource::<crate::ui::UiState>().filter_kinds;
