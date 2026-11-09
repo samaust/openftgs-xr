@@ -314,9 +314,12 @@ fn dock_range(window: f32) -> std::ops::RangeInclusive<f32> {
 /// Draws the dock's panel at its saved `width` clamped to the window's range, and
 /// returns the width the user dragged it to, if any (Q-252). egui's remembered size is
 /// dropped first, so a window narrowed and widened again draws the saved width once
-/// more; the drawn width differs from the clamped one (by half a point or more, beyond
-/// egui's 1/32-point rounding) only while the handle is dragged.
-// Q-252
+/// more. The contents are drawn in a child the size of the panel's inner rect, clipped
+/// to it, and the panel takes exactly that rect, so contents wider or narrower than the
+/// dock never change its width (Q-376); the drawn width then differs from the clamped
+/// one (by half a point or more, beyond egui's 1/32-point rounding) only while the
+/// handle is dragged, since a drag sets the panel's rect before its contents are drawn.
+// Q-252, Q-376
 fn show_dock_panel<R>(
     ui: &mut egui::Ui,
     width: f32,
@@ -328,11 +331,27 @@ fn show_dock_panel<R>(
     let range = dock_range(window);
     let shown = width.clamp(*range.start(), *range.end());
     let drawn = dock_panel(width, window)
-        .show(ui, add_contents)
+        .show(ui, |ui| {
+            let rect = ui.available_rect_before_wrap();
+            let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            inner.shrink_clip_rect(rect);
+            let r = add_contents(&mut inner);
+            ui.advance_cursor_after_rect(rect);
+            r
+        })
         .response
         .rect
         .width();
     (drawn, ((drawn - shown).abs() >= 0.5).then_some(drawn))
+}
+
+/// The scroll area of the dock's tab body: both ways, so a row wider than the dock is
+/// reached by the horizontal bar, and as wide as the dock, so the vertical bar stays at
+/// the dock's right edge, where a vertical-only area would put it at its content's,
+/// past the clip (Q-376).
+// Q-376
+fn dock_scroll_area() -> egui::ScrollArea {
+    egui::ScrollArea::both().auto_shrink([false, true])
 }
 
 /// The dock and its tabs; its width is kept in `UiState`, changed only by a drag of its
@@ -359,7 +378,7 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
             }
         });
         ui.separator();
-        egui::ScrollArea::vertical().show(ui, |ui| tab_body(world, ui, tab, out, hv, false));
+        dock_scroll_area().show(ui, |ui| tab_body(world, ui, tab, out, hv, false));
     });
     if let Some(w) = dragged {
         world.resource_mut::<UiState>().dock_width = w;
@@ -1286,8 +1305,9 @@ fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
 mod tests {
     use super::{
         Colormap, Entity, InstanceAction, Intent, LoadedModel, Out, RenderMode, SplatMode,
-        Transform, Visibility, World, display_tab, egui, library_tab, load_choices, playback_tab,
-        replay_lines, replay_loaded_degree, scene_tab, show_dock_panel, source_from_input,
+        Transform, Visibility, World, display_tab, dock_scroll_area, egui, library_tab,
+        load_choices, playback_tab, replay_lines, replay_loaded_degree, scene_tab, show_dock_panel,
+        source_from_input,
     };
     use crate::SplatEvent;
     use crate::manipulate::Selected;
@@ -1325,6 +1345,19 @@ mod tests {
 
         /// One frame in a window `window` points wide, with `events`; the drawn width.
         fn frame(&mut self, window: f32, events: Vec<egui::Event>) -> f32 {
+            self.frame_with(window, events, |ui| {
+                // Content that fills the panel's width, as the dock's tabs do.
+                ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
+            })
+        }
+
+        /// One frame as `frame`, with `contents` drawn in the dock; the drawn width.
+        fn frame_with(
+            &mut self,
+            window: f32,
+            events: Vec<egui::Event>,
+            mut contents: impl FnMut(&mut egui::Ui),
+        ) -> f32 {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1335,10 +1368,7 @@ mod tests {
             };
             let (mut drawn, mut dragged) = (0.0, None);
             let mut out = self.ctx.run_ui(input, |ui| {
-                (drawn, dragged) = show_dock_panel(ui, self.saved, |ui| {
-                    // Content that fills the panel's width, as the dock's tabs do.
-                    ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
-                });
+                (drawn, dragged) = show_dock_panel(ui, self.saved, &mut contents);
             });
             out.textures_delta.clear();
             if let Some(w) = dragged {
@@ -1432,6 +1462,52 @@ mod tests {
         }
         dock.frame(1000.0, vec![button(900.0, false)]);
         assert_eq!(dock.saved, 600.0);
+    }
+
+    // §1.7 Panels, Q-252, Q-376 (#628): the Library tab's rows, wider than the dock at
+    // 160 points and at the default 320, neither widen the dock nor change its saved
+    // width over frames with no input.
+    #[test]
+    fn show_dock_panel_keeps_the_saved_width_with_the_library_tab() {
+        for saved in [160.0, 320.0] {
+            let mut world = World::new();
+            world.init_resource::<crate::ui::UiState>();
+            world.init_resource::<crate::library::Library>();
+            // The case holds only while some row of the tab is wider than the dock.
+            let right = library_texts(&mut world, saved)
+                .iter()
+                .map(|(_, r)| r.max.x)
+                .fold(0.0, f32::max);
+            assert!(right > saved, "a row wider than {saved}: {right}");
+            let mut dock = Dock {
+                ctx: font_context(),
+                saved,
+            };
+            for _ in 0..5 {
+                let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
+                    let (mut out, mut hv) = (Vec::new(), None);
+                    dock_scroll_area()
+                        .show(ui, |ui| library_tab(&mut world, ui, &mut out, &mut hv));
+                });
+                assert_eq!((drawn, dock.saved), (saved, saved));
+            }
+        }
+    }
+
+    // §1.7 Panels, Q-252, Q-376 (#628): content of any width, wider than the window's
+    // 60 % bound or narrower than the dock, is drawn at the saved width and leaves it
+    // unchanged; the dock's width does not depend on its tabs' layout.
+    #[test]
+    fn show_dock_panel_keeps_the_saved_width_with_content_of_any_width() {
+        for content in [900.0, 50.0] {
+            let mut dock = Dock::new(320.0);
+            for _ in 0..5 {
+                let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
+                    ui.allocate_space(egui::vec2(content, 1.0));
+                });
+                assert_eq!((drawn, dock.saved), (320.0, 320.0), "content {content}");
+            }
+        }
     }
 
     fn sh_line(lines: &[String]) -> Option<&String> {
