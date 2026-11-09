@@ -1076,7 +1076,13 @@ mod tests {
         let forgotten = store.forgotten.clone();
         let mut app = app(store, pose([0.0, 0.0, -1.0], yaw(0.0)));
         passthrough_save(&mut app, "a");
-        settle(&mut app);
+        // The frame "a"'s anchor persists in; "b" is saved in the next.
+        for _ in 0..4 {
+            app.update();
+            if *app.world().resource::<SceneAnchor>() != SceneAnchor::Creating {
+                break;
+            }
+        }
         assert_eq!(
             *app.world().resource::<SceneAnchor>(),
             SceneAnchor::Ready("uuid-1".into())

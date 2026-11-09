@@ -89,11 +89,11 @@ pub struct SettingsWarnings(pub Vec<String>);
 
 /// The scene anchor's handshake with the XR crate (§1.9 Floor, shadows and anchors,
 /// Q-343): `persist` sets `Creating` at a scene save under the `Headset` marker in
-/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)` (before
-/// the next commands, #663), `None` at
-/// any other save (written with a null anchor) unless a save waits, and sets
-/// `Locating(uuid)` at the load of a file with an anchor on the headset; the XR crate
-/// answers `Ready` once located, or `Lost(uuid)`, which `persist` toasts.
+/// passthrough mode and writes the file once the XR crate answers `Ready(uuid)`, before
+/// the next commands (#663); `None` at any other save (written with a null anchor) unless
+/// a save waits; and `Locating(uuid)` at the load of a file with an anchor on the
+/// headset. The XR crate answers `Ready` once located, or `Lost(uuid)`, which `persist`
+/// toasts.
 /// `scene_from_world` writes `anchor` from `Ready`. While a save waits, any other answer
 /// than `Ready` is a failure (Q-350).
 // Q-343, Q-350

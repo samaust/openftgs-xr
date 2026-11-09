@@ -7,7 +7,8 @@
 //! or 2 s without an answer writes a null anchor and toasts; a load of a file with an
 //! anchor asks for `Locating(uuid)`; `Lost` toasts "anchor not found; using the saved
 //! pose"; without the marker, or in VR mode, a save writes at once with a null anchor
-//! and clears the state, so no earlier save's anchor is written.
+//! and clears the state, so no earlier save's anchor is written. Once `Ready` has come,
+//! the waiting file is written before the next frame's commands (#663).
 
 use crate::support;
 
@@ -56,6 +57,16 @@ fn save(t: &mut TestApp, name: &str) {
 
 fn anchor(t: &TestApp) -> SceneAnchor {
     t.app.world().resource::<SceneAnchor>().clone()
+}
+
+/// `[environment] mode` set to `mode`.
+fn set_mode(t: &mut TestApp, mode: &str) {
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .mode = mode.into();
 }
 
 fn set_anchor(t: &mut TestApp, a: SceneAnchor) {
@@ -260,15 +271,11 @@ fn a_vr_mode_save_in_the_frame_after_ready_leaves_the_uuid_to_the_waiting_file()
     let mut t = app("anchor_ready_then_vr", true, "passthrough");
     save(&mut t, "a");
     assert_eq!(anchor(&t), SceneAnchor::Creating);
-    t.app
-        .world_mut()
-        .resource_mut::<SettingsRes>()
-        .0
-        .environment
-        .mode = "vr".into();
+    set_mode(&mut t, "vr");
     ready_then(&mut t, "0123-abcd", PersistCommand::SaveScene("b".into()));
     assert_eq!(read(&file(&t, "a")).anchor.as_deref(), Some("0123-abcd"));
     assert_eq!(read(&file(&t, "b")).anchor, None);
+    assert_eq!(anchor(&t), SceneAnchor::None);
     assert!(texts(&t).is_empty(), "{:?}", texts(&t));
 }
 
