@@ -110,6 +110,39 @@ struct Instance {
     trim: Trim,
 }
 
+/// The warm-up threads by passes key (Q-325), each holding the device until it ends.
+/// Dropping them joins every thread still running (Q-381): with the render world, or at a
+/// new device or tier (Q-239), so no thread outlives the state that started it and
+/// releases the device on its own, during the process's exit (#650).
+#[derive(Default)]
+struct Warming(HashMap<(TextureFormat, bool), JoinHandle<Result<SplatPasses, RenderError>>>);
+
+impl Warming {
+    fn insert(
+        &mut self,
+        key: (TextureFormat, bool),
+        handle: JoinHandle<Result<SplatPasses, RenderError>>,
+    ) {
+        self.0.insert(key, handle);
+    }
+
+    /// The passes `key`'s thread compiled, waiting for it if it is not done; none when no
+    /// thread compiles `key` or its thread panicked.
+    fn take(&mut self, key: &(TextureFormat, bool)) -> Option<Result<SplatPasses, RenderError>> {
+        self.0.remove(key).and_then(|h| h.join().ok())
+    }
+}
+
+// Q-381
+impl Drop for Warming {
+    fn drop(&mut self) {
+        for (_, handle) in self.0.drain() {
+            // The passes go with the thread; a panic in it was its own.
+            let _ = handle.join();
+        }
+    }
+}
+
 /// What the frame's extraction found: the device, the visible instances whose models are
 /// on the GPU (in entity order), and the splat cameras by render entity.
 #[derive(Resource, Default)]
@@ -160,7 +193,7 @@ struct Views {
     passes: HashMap<(TextureFormat, bool), Arc<SplatPasses>>,
     /// The `LinearOver` passes compiling ahead on their own threads, by the same key
     /// (Q-325).
-    warming: HashMap<(TextureFormat, bool), JoinHandle<Result<SplatPasses, RenderError>>>,
+    warming: Warming,
     /// Whether this device's and tier's warm-up has started (Q-325).
     warm_started: bool,
     /// The depth copy's pipeline (Q-164), made on first use.
@@ -405,12 +438,14 @@ fn compile(
 /// compiles on the Quest 3 then run while the session starts, not in the first frame a
 /// splat camera draws, nor in the frame the governor first switches the sort mode.
 /// `prepare_view` takes a key's result, waiting for it if it is not ready, so the first
-/// frame still draws; a thread that cannot start leaves its key to compile there.
-// Q-325
+/// frame still draws; a thread that cannot start leaves its key to compile there. A
+/// thread not taken by then is joined when `Views` drops or resets (Q-381).
+// Q-325, Q-381
 fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
     for sort in [SortMode::PerView, SortMode::SharedCenter] {
         let dev = Arc::clone(dev);
         let tier = tier.clone();
+        // `warm_up_teardown`'s test finds the threads by this name.
         let spawned = thread::Builder::new()
             .name("ftgsxr splat passes".into())
             .spawn(move || compile(&dev, LAYER_FORMAT, &tier, sort));
@@ -520,7 +555,7 @@ fn prepare_view(
         None => {
             // Q-325: the warm-up's passes when it compiled this key.
             // A warm-up thread that panicked leaves the key to compile here.
-            let warmed = views.warming.remove(&key).and_then(|h| h.join().ok());
+            let warmed = views.warming.take(&key);
             let made = warmed.unwrap_or_else(|| compile(dev, layer_format, tier, camera.sort));
             let p = made.map_err(|e| {
                 error!("splat passes: {}: {}", e.code(), e.user_text());

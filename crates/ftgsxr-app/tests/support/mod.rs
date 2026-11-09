@@ -339,7 +339,9 @@ impl TestApp {
 /// pipeline, say) lets the harness exit the process with that worker inside the Vulkan
 /// driver, and the driver's exit-time destructors crash (SIGSEGV after the tests passed).
 /// Dropping a `gpu_` app first lets its compiles finish. Not while panicking: a failed test
-/// must report, not abort on a second panic.
+/// must report, not abort on a second panic. The adapter's warm-up threads (Q-325), which
+/// compile outside `PipelineCache`, are joined by the adapter itself when the app drops
+/// (Q-381, #650).
 impl Drop for TestApp {
     fn drop(&mut self) {
         if !std::thread::panicking() {
