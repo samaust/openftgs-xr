@@ -19,4 +19,4 @@ pub use error::CoreError;
 pub use model::{Aabb, Model, ModelInfo, ModelKind};
 pub use pose::Pose;
 pub use time::TimeSpan;
-pub use trim::{Trim, TrimMode};
+pub use trim::{Trim, TrimHandle, TrimMode};

@@ -19,14 +19,16 @@ use bevy::camera::{Camera, RenderTarget};
 use bevy::color::Color;
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::prelude::*;
-use bevy::gizmos::config::GizmoConfigStore;
+use bevy::gizmos::AppGizmoBuilder;
+use bevy::gizmos::config::{GizmoConfig, GizmoConfigGroup, GizmoConfigStore};
 use bevy::gizmos::gizmos::Gizmos;
 use bevy::math::{Quat, Vec3};
+use bevy::reflect::Reflect;
 use bevy::time::Time;
 use bevy::transform::components::{GlobalTransform, Transform};
 use ftgsxr_core::{
-    Aabb, Grab, ModelKind, Pose, Preset, ScaleLimits, SceneManifest, Trim, TrimMode, TwoHandGrab,
-    fit_pose, ray_hit, read_scene_manifest, snap_to_floor,
+    Aabb, Grab, ModelKind, Pose, Preset, ScaleLimits, SceneManifest, Trim, TrimHandle, TrimMode,
+    TwoHandGrab, fit_pose, ray_hit, read_scene_manifest, snap_to_floor,
 };
 use ftgsxr_io::{ModelRef, PoseStore, SavedPose};
 use ftgsxr_render::{SplatAsset, SplatBounds, SplatMode, SplatModel, SplatTrim};
@@ -35,6 +37,9 @@ use crate::intent::{GizmoMode, Hand, InstanceAction, Intent};
 use crate::library::{LibraryCommand, LoadedModel};
 use crate::platform::Headset;
 use crate::playback::StepTarget;
+
+mod trim_handles;
+use trim_handles::TrimDrag;
 
 /// What the grabs and rays obey (§1.5, §1.8, E10, E11).
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -101,6 +106,18 @@ pub struct Hovered {
     pub distance: f32,
 }
 
+/// E18's trim handles of an instance that a hand touches: the handle each hand's ray
+/// hovers, and the handle each hand drags; absent when none. `audio` and the XR haptics
+/// read its edges (§1.8, §1.10).
+// Q-379
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct TrimHandles {
+    /// The handles hovered, one per hand at most, in hand order.
+    pub hovered: Vec<(Hand, TrimHandle)>,
+    /// The handles dragged, one per hand at most, in the order the drags began.
+    pub dragged: Vec<(Hand, TrimHandle)>,
+}
+
 /// The pose store in the world (§1.5 Poses); `persist` loads and writes the file.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct Poses(pub PoseStore);
@@ -139,20 +156,44 @@ impl Plugin for ManipulatePlugin {
             .add_message::<LibraryCommand>()
             .init_resource::<HandStates>()
             .init_resource::<GizmoState>()
+            .init_resource::<TrimSends>()
             .init_resource::<HighContrast>()
             .add_observer(on_loaded)
             .add_message::<SetPoseExtras>()
             .add_systems(
                 Update,
-                (set_pose_extras, run_intents, step_target_follows_selection).chain(),
+                (
+                    set_pose_extras,
+                    run_intents,
+                    send_trim_drags,
+                    step_target_follows_selection,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
                 draw.after(run_intents)
                     .run_if(resource_exists::<GizmoConfigStore>),
             );
+        // E18's handles are drawn on top of the splats, in a gizmo group of their own;
+        // only where the engine draws gizmos (Q-379).
+        if app.world().contains_resource::<GizmoConfigStore>() {
+            app.insert_gizmo_config(
+                TrimHandleGizmos,
+                GizmoConfig {
+                    depth_bias: -1.0,
+                    ..Default::default()
+                },
+            )
+            .add_systems(Update, draw_trim_handles.after(run_intents));
+        }
     }
 }
+
+/// The gizmo group of E18's handles: no depth test (a depth bias of −1), so a handle
+/// inside or behind the content stays visible.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct TrimHandleGizmos;
 
 /// playback's `StepTarget` follows the selection (Q-175): the selected instance, else
 /// none (playback's fallback).
@@ -300,6 +341,37 @@ fn begin_two(hs: &mut HandStates, (a, b): (Hand, Hand), model: Pose) -> Option<T
 struct HandStates {
     hands: HashMap<Hand, HandState>,
     grabs: HashMap<Entity, (Grabbed, Option<(Hand, Hand)>)>,
+    /// E18's drags under way, one per hand at most, in the order they began.
+    trim_drags: Vec<TrimDrag>,
+    /// The trim last sent for each dragged instance, so an unchanged shape is not sent
+    /// again while the `SetTrim` is on its way.
+    trim_sent: HashMap<Entity, Trim>,
+}
+
+/// The `SetTrim` intents a frame's drags send (E18), written by `send_trim_drags`:
+/// `run_intents` reads the intents, so it cannot write them too.
+#[derive(Resource, Default)]
+struct TrimSends(Vec<Intent>);
+
+/// Writes the frame's `SetTrim` intents of E18's drags.
+fn send_trim_drags(mut sends: ResMut<TrimSends>, mut intents: MessageWriter<Intent>) {
+    for i in sends.0.drain(..) {
+        intents.write(i);
+    }
+}
+
+impl HandStates {
+    fn trim_drag(&self, hand: Hand) -> Option<&TrimDrag> {
+        self.trim_drags.iter().find(|d| d.hand == hand)
+    }
+
+    fn end_trim_drag(&mut self, hand: Hand) {
+        self.trim_drags.retain(|d| d.hand != hand);
+    }
+
+    fn trim_dragged(&self, e: Entity) -> bool {
+        self.trim_drags.iter().any(|d| d.entity == e)
+    }
 }
 
 /// The desktop gizmo: its handle set (translate until `Intent::Gizmo` chooses) and the
@@ -670,6 +742,108 @@ fn gizmo_size(center: Vec3, eye: Vec3) -> f32 {
     (0.2 * center.distance(eye)).max(0.05)
 }
 
+/// An instance's trim as it stands within the frame: one set this frame, else its
+/// `SplatTrim`.
+fn trim_of(now: &HashMap<Entity, Trim>, trims: &Query<&SplatTrim>, e: Entity) -> Option<Trim> {
+    now.get(&e)
+        .copied()
+        .or_else(|| trims.get(e).ok().map(|t| t.0))
+}
+
+/// The instance whose trim handles a hand may touch (E18, §1.7): the selected one, while
+/// its trim is on and it is not grabbed, the mouse only in the gizmo's trim mode; with its
+/// trim and stage pose.
+#[allow(clippy::too_many_arguments)]
+fn trim_target(
+    sel: Option<Entity>,
+    hand: Hand,
+    mode: GizmoMode,
+    now: &HashMap<Entity, Trim>,
+    trims: &Query<&SplatTrim>,
+    hs: &HandStates,
+    q: &Instances,
+    groups: &GroupTransforms,
+) -> Option<(Entity, Trim, Pose)> {
+    let e = sel?;
+    if hand == Hand::Mouse && mode != GizmoMode::Trim {
+        return None;
+    }
+    let trim = trim_of(now, trims, e)?;
+    if trim.mode == TrimMode::Off || hs.grabs.contains_key(&e) {
+        return None;
+    }
+    Some((e, trim, stage_pose(q, groups, e)?))
+}
+
+/// E18's ρ for an instance: §1.7's radius floor, 10⁻³ of its untrimmed B_m's longest side.
+fn trim_floor(assets: &Assets<SplatAsset>, models: &Query<&SplatModel>, e: Entity) -> f32 {
+    models
+        .get(e)
+        .ok()
+        .and_then(|m| assets.get(&m.0))
+        .map_or(0.0, |a| 1e-3 * a.bounds.longest_side())
+}
+
+/// Starts a drag of the trim handle the hand's ray hits (E18), when `target` has one
+/// under it; true when the action is the handles' (a drag started, or a handle another
+/// hand drags, which it cannot take), so it neither picks nor grabs.
+fn begin_trim_drag(
+    hs: &mut HandStates,
+    hand: Hand,
+    by_select: bool,
+    target: Option<(Entity, Trim, Pose)>,
+    eye: Option<Vec3>,
+    max_m: f32,
+    floor: f32,
+) -> bool {
+    let Some((e, trim, pose)) = target else {
+        return false;
+    };
+    let Some(ray) = hs.hands.get(&hand).and_then(|h| h.ray) else {
+        return false;
+    };
+    // L's eye: the head, else the ray's origin. Q-379
+    let Some(size) = trim_handles::handle_size(&trim, &pose, eye.unwrap_or(ray.0)) else {
+        return false;
+    };
+    let Some((handle, t0)) = trim_handles::handle_hit(&trim, &pose, size, ray, max_m) else {
+        return false;
+    };
+    // A handle another hand drags is the handles' action: no pick, no grab. Q-379
+    if hs
+        .trim_drags
+        .iter()
+        .any(|d| d.entity == e && d.handle == handle)
+    {
+        return true;
+    }
+    let Some(anchor) = trim
+        .handles()
+        .into_iter()
+        .find_map(|(h, p)| (h == handle).then_some(p))
+    else {
+        return true;
+    };
+    // A mouse ray along the handle's line or plane gives no drag point: no drag.
+    let Some(p) = trim_handles::drag_point(hand, handle, anchor, ray, t0, &pose, ray) else {
+        return true;
+    };
+    hs.trim_drags.push(TrimDrag {
+        entity: e,
+        hand,
+        handle,
+        start: trim,
+        p0: pose.inverse().transform_point(p),
+        anchor,
+        start_ray: ray,
+        t0,
+        by_select,
+        floor,
+        delta: Vec3::ZERO,
+    });
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_intents(
     mut intents: MessageReader<Intent>,
@@ -688,9 +862,14 @@ fn run_intents(
     mut gizmo: ResMut<GizmoState>,
     time: Res<Time>,
     mut library: MessageWriter<LibraryCommand>,
+    touched: Query<(Entity, &TrimHandles)>,
+    mut sends: ResMut<TrimSends>,
     mut commands: Commands,
 ) {
     let s = *settings;
+    let eye = head_pose(&cameras).map(|p| p.translation);
+    // The trims set within the frame, which the deferred inserts don't show `trims` yet.
+    let mut trim_now: HashMap<Entity, Trim> = HashMap::new();
     // The selection as it stands within the frame.
     let mut sel: Option<Entity> = selected.iter().next();
     let mut sel_changed = false;
@@ -704,6 +883,7 @@ fn run_intents(
     if gizmo.drag.as_ref().is_some_and(|d| !q.contains(d.entity)) {
         gizmo.drag = None;
     }
+    hs.trim_drags.retain(|d| q.contains(d.entity));
     let pick = |q: &Instances, ray: Option<(Vec3, Vec3)>| {
         let (o, d) = ray?;
         pick_instance(o, d, &boxes(q, &groups), s.ray_max_m)
@@ -731,6 +911,14 @@ fn run_intents(
                     if hand == Hand::Mouse {
                         gizmo.drag = None;
                     }
+                    // E18: releasing the action that started a drag ends it.
+                    if hs.trim_drag(hand).is_some_and(|d| d.by_select) {
+                        hs.end_trim_drag(hand);
+                    }
+                    continue;
+                }
+                // E18: a hand drags one handle; another action on it does nothing.
+                if hs.trim_drag(hand).is_some() {
                     continue;
                 }
                 let ray = hs.hands.get(&hand).and_then(|h| h.ray);
@@ -754,6 +942,13 @@ fn run_intents(
                         continue;
                     }
                 }
+                // E18: the trim handles come before the instances.
+                let target =
+                    trim_target(sel, hand, gizmo.mode, &trim_now, &trims, &hs, &q, &groups);
+                let floor = target.map_or(0.0, |(e, ..)| trim_floor(&assets, &models, e));
+                if begin_trim_drag(&mut hs, hand, true, target, eye, s.ray_max_m, floor) {
+                    continue;
+                }
                 sel = pick(&q, ray).map(|(e, _)| e);
                 sel_changed = true;
             }
@@ -766,9 +961,23 @@ fn run_intents(
                     }
                     h.ray
                 };
+                // E18: a hand drags one handle; another action on it does nothing.
+                if hs.trim_drag(hand).is_some() {
+                    continue;
+                }
+                let target =
+                    trim_target(sel, hand, gizmo.mode, &trim_now, &trims, &hs, &q, &groups);
+                let floor = target.map_or(0.0, |(e, ..)| trim_floor(&assets, &models, e));
+                if begin_trim_drag(&mut hs, hand, false, target, eye, s.ray_max_m, floor) {
+                    continue;
+                }
                 let (Some((e, dist)), Some((origin, dir))) = (pick(&q, ray), ray) else {
                     continue;
                 };
+                // E18: an instance whose handle is dragged cannot be grabbed.
+                if hs.trim_dragged(e) {
+                    continue;
+                }
                 let Some(model) = stage_pose(&q, &groups, e) else {
                     continue;
                 };
@@ -838,6 +1047,10 @@ fn run_intents(
                 set_stage_pose(&mut q, &groups, e, new);
             }
             Intent::GrabEnd { hand } => {
+                if hs.trim_drag(hand).is_some_and(|d| !d.by_select) {
+                    hs.end_trim_drag(hand);
+                    continue;
+                }
                 let Some((e, _)) = hs.hands.get_mut(&hand).and_then(|h| h.held.take()) else {
                     continue;
                 };
@@ -887,6 +1100,19 @@ fn run_intents(
                 rebase(&mut hs, e, p);
             }
             Intent::Gizmo(mode) => {
+                // §1.7: C only while the selected instance's trim is on.
+                if mode == GizmoMode::Trim
+                    && !sel
+                        .and_then(|e| trim_of(&trim_now, &trims, e))
+                        .is_some_and(|t| t.mode != TrimMode::Off)
+                {
+                    continue;
+                }
+                // E18: a gizmo mode change ends the mouse's drag; the same mode again is
+                // no change.
+                if mode != gizmo.mode {
+                    hs.end_trim_drag(Hand::Mouse);
+                }
                 gizmo.mode = mode;
                 gizmo.drag = None;
             }
@@ -978,6 +1204,7 @@ fn run_intents(
                     // instance holds can always be saved (Q-372).
                     if q.contains(instance) && trim.is_valid() {
                         commands.entity(instance).insert(SplatTrim(trim));
+                        trim_now.insert(instance, trim);
                     }
                 }
                 InstanceAction::ResetTrim => {
@@ -986,9 +1213,9 @@ fn run_intents(
                         && let Some(asset) =
                             models.get(instance).ok().and_then(|sm| assets.get(&sm.0))
                     {
-                        commands
-                            .entity(instance)
-                            .insert(SplatTrim(Trim::initial(&asset.bounds)));
+                        let trim = Trim::initial(&asset.bounds);
+                        commands.entity(instance).insert(SplatTrim(trim));
+                        trim_now.insert(instance, trim);
                     }
                 }
                 InstanceAction::Fit | InstanceAction::SnapToFloor => {
@@ -1036,16 +1263,100 @@ fn run_intents(
             commands.entity(e).insert(Selected);
         }
     }
+    // §1.7: the gizmo's trim mode returns to translate when the selected instance's trim
+    // is off (Q-379).
+    // Q-379
+    let sel_trim_on = |now: &HashMap<Entity, Trim>, e: Entity| {
+        trim_of(now, &trims, e).is_some_and(|t| t.mode != TrimMode::Off)
+    };
+    if gizmo.mode == GizmoMode::Trim
+        && let Some(e) = sel
+        && !sel_trim_on(&trim_now, e)
+    {
+        gizmo.mode = GizmoMode::Translate;
+    }
+    // E18's ends: deselected or gone, the trim turned off, reset or switched between box
+    // and sphere, the instance grabbed, and the mouse's out of the gizmo's trim mode.
+    let mode = gizmo.mode;
+    hs.trim_drags.retain(|d| {
+        sel == Some(d.entity)
+            && trim_of(&trim_now, &trims, d.entity).is_some_and(|t| t.mode == d.start.mode)
+            && (d.hand != Hand::Mouse || mode == GizmoMode::Trim)
+    });
+    // E18's drags: each drag point from its hand's last ray under the current pose, then
+    // each dragged instance's trim, sent as `InstanceAction::SetTrim` when it changes;
+    // `send_trim_drags` writes it after this system, and the next frame applies it.
+    let rays: HashMap<Hand, (Vec3, Vec3)> = hs
+        .hands
+        .iter()
+        .filter_map(|(h, st)| Some((*h, st.ray?)))
+        .collect();
+    for d in &mut hs.trim_drags {
+        let (Some(pose), Some(&ray)) = (stage_pose(&q, &groups, d.entity), rays.get(&d.hand))
+        else {
+            continue;
+        };
+        if let Some(p) =
+            trim_handles::drag_point(d.hand, d.handle, d.anchor, d.start_ray, d.t0, &pose, ray)
+        {
+            d.delta = pose.inverse().transform_point(p) - d.p0;
+        }
+    }
+    let mut dragged: Vec<Entity> = hs.trim_drags.iter().map(|d| d.entity).collect();
+    dragged.sort_unstable();
+    dragged.dedup();
+    hs.trim_sent.retain(|e, _| dragged.contains(e));
+    for e in dragged {
+        let drags: Vec<&TrimDrag> = hs.trim_drags.iter().filter(|d| d.entity == e).collect();
+        let Some(t) = trim_handles::dragged_trim(&drags) else {
+            continue;
+        };
+        let sent = hs
+            .trim_sent
+            .get(&e)
+            .copied()
+            .or(trim_of(&trim_now, &trims, e));
+        if t.is_valid() && sent != Some(t) {
+            sends.0.push(Intent::Instance {
+                instance: e,
+                action: InstanceAction::SetTrim(t),
+            });
+            hs.trim_sent.insert(e, t);
+        }
+    }
     // Hovered: recomputed each frame from that frame's `Pointer` intents, each hand's
     // last ray of the frame over the instances as they now stand, a hand without one
     // hovering nothing (Q-263, rewording Q-182); an instance two rays hit carries the
     // nearer (Q-182).
     let all = boxes(&q, &groups);
     let mut hovered: HashMap<Entity, Hovered> = HashMap::new();
+    let mut touches: HashMap<Entity, TrimHandles> = HashMap::new();
+    for d in &hs.trim_drags {
+        touches
+            .entry(d.entity)
+            .or_default()
+            .dragged
+            .push((d.hand, d.handle));
+    }
+    pointed.sort_by_key(|h| *h as u8);
     for &hand in &pointed {
         let Some((o, d)) = hs.hands.get(&hand).and_then(|h| h.ray) else {
             continue;
         };
+        // A dragging hand hovers nothing; a hand over a trim handle hovers the handle,
+        // not the instance (E18). `pointed` is in hand order, so `hovered` is. Q-379
+        if hs.trim_drag(hand).is_some() {
+            continue;
+        }
+        if let Some((e, trim, pose)) =
+            trim_target(sel, hand, gizmo.mode, &trim_now, &trims, &hs, &q, &groups)
+            && let Some(size) = trim_handles::handle_size(&trim, &pose, eye.unwrap_or(o))
+            && let Some((handle, _)) =
+                trim_handles::handle_hit(&trim, &pose, size, (o, d), s.ray_max_m)
+        {
+            touches.entry(e).or_default().hovered.push((hand, handle));
+            continue;
+        }
         if let Some((e, distance)) = pick_instance(o, d, &all, s.ray_max_m)
             && hovered.get(&e).is_none_or(|v| distance < v.distance)
         {
@@ -1074,6 +1385,18 @@ fn run_intents(
                 c.remove::<Grabbed>();
             }
             (None, None) => {}
+        }
+    }
+    for (e, old) in &touched {
+        if !touches.contains_key(&e) {
+            commands.entity(e).remove::<TrimHandles>();
+        } else if touches.get(&e) == Some(old) {
+            touches.remove(&e);
+        }
+    }
+    for (e, new) in touches {
+        if let Ok(mut c) = commands.get_entity(e) {
+            c.insert(new);
         }
     }
 }
@@ -1149,6 +1472,8 @@ fn handle_hit(mode: GizmoMode, c: Vec3, size: f32, ray: (Vec3, Vec3)) -> Option<
                 take(t, Handle::Cube);
             }
         }
+        // E18's handles are `trim_handles`'.
+        GizmoMode::Trim => {}
     }
     best.map(|(_, h)| h)
 }
@@ -1275,6 +1600,54 @@ fn trim_lines(gizmos: &mut Gizmos, trim: &Trim, pose: &Pose) {
     }
 }
 
+type TrimHandleItem = (
+    &'static Transform,
+    &'static SplatTrim,
+    Option<&'static TrimHandles>,
+    Has<Grabbed>,
+    Option<&'static ChildOf>,
+);
+
+/// E18's handles of the selected instance while its trim is on and it is not grabbed:
+/// spheres of radius 0.1 L in the trim's color, the hovered or dragged ones in the hover
+/// color; on the desktop only in the gizmo's trim mode, in XR whatever the mode.
+// Q-379
+fn draw_trim_handles(
+    mut gizmos: Gizmos<TrimHandleGizmos>,
+    q: Query<TrimHandleItem, (With<LoadedModel>, With<Selected>)>,
+    groups: GroupTransforms,
+    cameras: HeadCameras,
+    gizmo: Res<GizmoState>,
+    headset: Option<Res<Headset>>,
+    contrast: Res<HighContrast>,
+) {
+    if headset.is_none() && gizmo.mode != GizmoMode::Trim {
+        return;
+    }
+    let (hover, _) = highlight_colors(contrast.0);
+    let eye = head_pose(&cameras).unwrap_or(Pose::IDENTITY).translation;
+    for (t, trim, touched, grabbed, parent) in &q {
+        let pose = staged(t, parent, &groups);
+        let Some(size) = trim_handles::handle_size(&trim.0, &pose, eye) else {
+            continue;
+        };
+        if grabbed {
+            continue;
+        }
+        let lit = |h: TrimHandle| {
+            touched.is_some_and(|x| x.hovered.iter().chain(&x.dragged).any(|(_, k)| *k == h))
+        };
+        for (h, p) in trim.0.handles() {
+            let color = if lit(h) { hover } else { TRIM_COLOR };
+            gizmos.sphere(
+                pose.transform_point(p),
+                trim_handles::HANDLE_RADIUS * size,
+                color,
+            );
+        }
+    }
+}
+
 const AXIS_COLORS: [Color; 3] = [
     Color::srgb(0.9, 0.2, 0.2),
     Color::srgb(0.2, 0.9, 0.2),
@@ -1334,7 +1707,7 @@ fn draw(
                         gizmos.line(at(k), at(k + 1), color);
                     }
                 }
-                GizmoMode::Scale => {}
+                GizmoMode::Scale | GizmoMode::Trim => {}
             }
         }
         if mode == GizmoMode::Scale {

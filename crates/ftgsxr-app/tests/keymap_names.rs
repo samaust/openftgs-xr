@@ -27,6 +27,7 @@ const D1: &[(&str, &str)] = &[
     ("gizmo_translate", "KeyG"),
     ("gizmo_rotate", "KeyR"),
     ("gizmo_scale", "KeyT"),
+    ("gizmo_trim", "KeyC"), // Q-378
     ("nudge_left", "ArrowLeft"),
     ("nudge_right", "ArrowRight"),
     ("nudge_forward", "ArrowUp"),

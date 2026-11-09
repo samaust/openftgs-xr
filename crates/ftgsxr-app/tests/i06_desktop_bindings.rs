@@ -69,6 +69,7 @@ fn i06_every_key_row_produces_its_intent() {
         (&[], KeyCode::KeyG, Intent::Gizmo(GizmoMode::Translate)),
         (&[], KeyCode::KeyR, Intent::Gizmo(GizmoMode::Rotate)),
         (&[], KeyCode::KeyT, Intent::Gizmo(GizmoMode::Scale)),
+        (&[], KeyCode::KeyC, Intent::Gizmo(GizmoMode::Trim)),
         (&[CTRL], KeyCode::KeyF, inst(InstanceAction::Fit)),
         (&[CTRL], KeyCode::KeyP, inst(InstanceAction::SavePose)),
         (&[CTRL], KeyCode::Backspace, inst(InstanceAction::ResetPose)),
