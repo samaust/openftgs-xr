@@ -3,8 +3,8 @@
 //! I-13 (§1.15), this ticket's clauses: an invalid file listed by the library gives
 //! `EntryState::Failed` with its E-FILE code (`cpu`); a model over the budget fails with
 //! Q-117's text, and `Load { reduce: true }` then loads it reduced (`gpu`; Q-158); so is a
-//! model whose SH array exceeds the device's largest storage binding, reduced to fit it
-//! and then drawn (`gpu`; Q-369).
+//! model whose SH array exceeds its eight SH ranges of the device's largest storage
+//! binding, reduced to fit them and then drawn (`gpu`; Q-369, Q-377).
 
 use crate::support;
 
@@ -133,10 +133,11 @@ fn gpu_i13_over_the_binding_limit_then_reduced() {
     use bevy::render::render_resource::{TextureFormat, TextureUsages};
     use ftgsxr_app::SplatCamera;
     use ftgsxr_render::{Capacity, OutputSpace, SortMode, SplatStats};
-    // Q-369 (#617): a 1 MiB binding against 10 000 degree-3 rows in float32 (`desktop`): the
-    // SH array takes 192 bytes a row, 1 920 000 in all, while the budget holds them all.
+    // Q-369, Q-377 (#617, #642): a 1 MiB binding against 50 000 degree-3 rows in float32
+    // (`desktop`): the SH array takes 192 bytes a row, 9 600 000 in all, over its eight SH
+    // ranges' 8 388 608 bytes, while the budget holds them all.
     let limit: u64 = 1 << 20;
-    let n: u64 = 10_000;
+    let n: u64 = 50_000;
     let mut tier = QualityTier::by_name("desktop").unwrap();
     // The frame buffers bind under the same limit: 48-byte records for 8 192 rows.
     tier.capacity = Capacity::Fixed(8192);
@@ -199,9 +200,9 @@ fn gpu_i13_over_the_binding_limit_then_reduced() {
     let Some(EntryState::Failed(text)) = state(&t, 0) else {
         unreachable!()
     };
-    // The SH buffer's 1 920 000 bytes against the 1 048 576-byte binding, in MB.
+    // The SH buffer's 9 600 000 bytes against the eight ranges' 8 388 608, in MB.
     assert!(
-        text.starts_with("E-MEM-BUDGET: Needs 2 MB, budget 1 MB"),
+        text.starts_with("E-MEM-BUDGET: Needs 10 MB, budget 8 MB"),
         "{text}"
     );
     assert!(text.ends_with(&format!("(N = {n})")), "{text}");
@@ -219,8 +220,9 @@ fn gpu_i13_over_the_binding_limit_then_reduced() {
     let mut q = t.app.world_mut().query::<&LoadedModel>();
     let m = q.single(t.app.world()).unwrap();
     assert!(m.reduced);
-    // ⌊1 048 576 ÷ 192⌋ = 5 461 rows: the binding, not the budget, sets the count.
-    assert_eq!(m.info.n, limit / 192);
+    // ⌊8 · 1 048 576 ÷ 192⌋ = 43 690 rows, below the float32 rotation's ⌊1 048 576 ÷ 16⌋ =
+    // 65 536: the SH ranges, not the budget, set the count.
+    assert_eq!(m.info.n, 43_690);
     let drawn = |app: &mut bevy::app::App| {
         app.world()
             .resource::<SplatStats>()

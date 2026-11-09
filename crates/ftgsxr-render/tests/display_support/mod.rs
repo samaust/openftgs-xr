@@ -12,7 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ftgsxr_core::{Camera, Model, ModelKind, RenderConventions, TimeSpan, UVec2};
 use ftgsxr_render::{
-    FrameBuffers, ModelDraw, OcclusionInput, QualityTier, SplatDevice, SplatPasses, ViewParams,
+    FrameBuffers, FrameContents, ModelDraw, OcclusionInput, QualityTier, SplatDevice, SplatPasses,
+    ViewParams,
 };
 
 /// E4's C₀.
@@ -189,6 +190,30 @@ pub fn render_occluded(
     run: &Run,
     occlusion: Option<&Occlusion>,
 ) -> Frame {
+    render_frame(dev, draws, camera, run, occlusion, None).0
+}
+
+/// `render` with the frame buffers' capacity `capacity`, and what they hold after the
+/// frame (Q-69): its records, counts and flags.
+pub fn render_with_records(
+    dev: &SplatDevice,
+    draws: &[ModelDraw],
+    camera: &Camera,
+    run: &Run,
+    capacity: u32,
+) -> (Frame, FrameContents) {
+    render_frame(dev, draws, camera, run, None, Some(capacity))
+}
+
+/// `render_occluded`, at `capacity` when given, with the frame buffers' contents.
+fn render_frame(
+    dev: &SplatDevice,
+    draws: &[ModelDraw],
+    camera: &Camera,
+    run: &Run,
+    occlusion: Option<&Occlusion>,
+    capacity: Option<u32>,
+) -> (Frame, FrameContents) {
     let tier = QualityTier {
         occlusion: occlusion.is_some(), // Q-347
         ..QualityTier::conformance()
@@ -196,7 +221,8 @@ pub fn render_occluded(
     let passes = SplatPasses::new(dev, LAYER, run.depth.then_some(DEPTH), &tier)
         .expect("the passes compile");
     // Room for every row's splat and center (Q-78: the centers share the C slots).
-    let capacity: u32 = 2 * draws.iter().map(|d| d.model.n()).sum::<u32>();
+    let capacity: u32 =
+        capacity.unwrap_or_else(|| 2 * draws.iter().map(|d| d.model.n()).sum::<u32>());
     let frame = FrameBuffers::new(dev, &tier, capacity);
     let size = UVec2::new(camera.width, camera.height);
     let view = ViewParams {
@@ -366,11 +392,15 @@ pub fn render_occluded(
     });
     let messages = dev.take_validation_messages();
     assert!(messages.is_empty(), "validation messages: {messages:?}");
-    Frame {
-        layer,
-        target,
-        depth,
-    }
+    let contents = frame.read_back(dev);
+    (
+        Frame {
+            layer,
+            target,
+            depth,
+        },
+        contents,
+    )
 }
 
 /// The camera's center and forward axis (the frame block's sort pose; per-view mode reads

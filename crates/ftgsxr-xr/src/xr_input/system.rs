@@ -249,7 +249,7 @@ fn holding(grabbed: &Query<&Grabbed>) -> Vec<Hand> {
 /// takes their ray or presses, so the release that ends the drag reaches `manipulate`
 /// (E18), and their stick does nothing (E18: "another action on that hand during a drag
 /// does nothing").
-// Q-378
+// Q-379
 fn dragging(handles: &Query<&TrimHandles>) -> Vec<Hand> {
     handles
         .iter()
@@ -495,9 +495,9 @@ fn colors(high_contrast: bool) -> (Color, Color) {
 /// took the ray (Q-263, Q-317), otherwise the hand's own E10 hit on the instances'
 /// boxes as they stand after this frame's grabs, whichever hand holds the instance's
 /// `Hovered` (Q-182); a trim handle the hand hovers or drags comes first, the ray
-/// ending at the handle point's projection on it (E18, Q-378); else 10 m, a dot only at
+/// ending at the handle point's projection on it (E18, Q-379); else 10 m, a dot only at
 /// a hit (§1.8 Rays, Q-304, #552).
-// Q-304, Q-378
+// Q-304, Q-379
 fn ray_ends(
     mut frame: ResMut<Frame>,
     instances: Query<(Entity, &Transform, &SplatBounds, Option<&ChildOf>), With<LoadedModel>>,
@@ -658,7 +658,7 @@ pub(crate) fn select_pulses(
             }
         }
     }
-    // E18: a handle drag gives the hover and grab pulses (§1.8). Q-378
+    // E18: a handle drag gives the hover and grab pulses (§1.8). Q-379
     for t in &now.handles_hovered {
         if !prev.handles_hovered.contains(t) {
             add(t.1, HOVER);
@@ -840,7 +840,7 @@ mod tests {
         Entity::from_raw_u32(n).unwrap()
     }
 
-    /// Q-378 (E18, §1.8): a trim handle's hover gives the hover pulse on its hand, a
+    /// Q-379 (E18, §1.8): a trim handle's hover gives the hover pulse on its hand, a
     /// drag's start and end the grab pulse.
     #[test]
     fn select_pulses_trim_handles_hover_and_drag() {

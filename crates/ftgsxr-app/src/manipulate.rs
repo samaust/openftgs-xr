@@ -109,7 +109,7 @@ pub struct Hovered {
 /// E18's trim handles of an instance that a hand touches: the handle each hand's ray
 /// hovers, and the handle each hand drags; absent when none. `audio` and the XR haptics
 /// read its edges (§1.8, §1.10).
-// Q-378
+// Q-379
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct TrimHandles {
     /// The handles hovered, one per hand at most, in hand order.
@@ -176,7 +176,7 @@ impl Plugin for ManipulatePlugin {
                     .run_if(resource_exists::<GizmoConfigStore>),
             );
         // E18's handles are drawn on top of the splats, in a gizmo group of their own;
-        // only where the engine draws gizmos (Q-378).
+        // only where the engine draws gizmos (Q-379).
         if app.world().contains_resource::<GizmoConfigStore>() {
             app.insert_gizmo_config(
                 TrimHandleGizmos,
@@ -802,14 +802,14 @@ fn begin_trim_drag(
     let Some(ray) = hs.hands.get(&hand).and_then(|h| h.ray) else {
         return false;
     };
-    // L's eye: the head, else the ray's origin. Q-378
+    // L's eye: the head, else the ray's origin. Q-379
     let Some(size) = trim_handles::handle_size(&trim, &pose, eye.unwrap_or(ray.0)) else {
         return false;
     };
     let Some((handle, t0)) = trim_handles::handle_hit(&trim, &pose, size, ray, max_m) else {
         return false;
     };
-    // A handle another hand drags is the handles' action: no pick, no grab. Q-378
+    // A handle another hand drags is the handles' action: no pick, no grab. Q-379
     if hs
         .trim_drags
         .iter()
@@ -1264,8 +1264,8 @@ fn run_intents(
         }
     }
     // §1.7: the gizmo's trim mode returns to translate when the selected instance's trim
-    // is off (Q-378).
-    // Q-378
+    // is off (Q-379).
+    // Q-379
     let sel_trim_on = |now: &HashMap<Entity, Trim>, e: Entity| {
         trim_of(now, &trims, e).is_some_and(|t| t.mode != TrimMode::Off)
     };
@@ -1344,7 +1344,7 @@ fn run_intents(
             continue;
         };
         // A dragging hand hovers nothing; a hand over a trim handle hovers the handle,
-        // not the instance (E18). `pointed` is in hand order, so `hovered` is. Q-378
+        // not the instance (E18). `pointed` is in hand order, so `hovered` is. Q-379
         if hs.trim_drag(hand).is_some() {
             continue;
         }
@@ -1611,7 +1611,7 @@ type TrimHandleItem = (
 /// E18's handles of the selected instance while its trim is on and it is not grabbed:
 /// spheres of radius 0.1 L in the trim's color, the hovered or dragged ones in the hover
 /// color; on the desktop only in the gizmo's trim mode, in XR whatever the mode.
-// Q-378
+// Q-379
 fn draw_trim_handles(
     mut gizmos: Gizmos<TrimHandleGizmos>,
     q: Query<TrimHandleItem, (With<LoadedModel>, With<Selected>)>,

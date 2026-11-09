@@ -38,7 +38,7 @@ pub(super) fn handle_hit(
     let mut best: Option<(TrimHandle, f32)> = None;
     for (h, p) in trim.handles() {
         let p = pose.transform_point(p);
-        // t, which a drag keeps as t₀: the handle point's projection on the ray. Q-378
+        // t, which a drag keeps as t₀: the handle point's projection on the ray. Q-379
         let t = (p - o).dot(d);
         if !(0.0..=max_m).contains(&t) || (o + t * d).distance(p) > reach {
             continue;
@@ -108,11 +108,11 @@ pub(super) fn drag_point(
     }
 }
 
-/// The trim a frame's drags of one instance give (E18, Q-378): one drag gives its start
+/// The trim a frame's drags of one instance give (E18, Q-379): one drag gives its start
 /// trim dragged, `start.drag_handle(handle, δ, ρ)`; with two, the first one's result,
 /// then the second's own value applied to it: a face's limit through `set_box_limit`,
 /// the radius or the center.
-// Q-378
+// Q-379
 pub(super) fn dragged_trim(drags: &[&TrimDrag]) -> Option<Trim> {
     let (first, rest) = drags.split_first()?;
     let mut t = first

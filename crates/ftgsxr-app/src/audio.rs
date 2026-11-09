@@ -684,7 +684,7 @@ fn grab_sounds(
 /// E18's handle sounds (§1.8, §1.10) from `TrimHandles`' edges: the hover sound when a
 /// hand comes to hover a handle it did not hover, the grab sounds when a hand starts or
 /// ends a drag; each at most once a frame.
-// Q-378
+// Q-379
 fn trim_handle_sounds(
     touched: Query<(Entity, &TrimHandles)>,
     mut last: Local<HashMap<Entity, TrimHandles>>,
@@ -1489,7 +1489,7 @@ mod tests {
         assert!(played(&mut app).is_empty());
     }
 
-    /// Q-378 (E18, §1.10): a hand hovering a trim handle sounds the hover once, a drag's
+    /// Q-379 (E18, §1.10): a hand hovering a trim handle sounds the hover once, a drag's
     /// start and end the grab sounds; no change, no sound.
     #[test]
     fn trim_handle_sounds_follow_the_handles_edges() {
