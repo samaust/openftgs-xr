@@ -947,6 +947,48 @@ mod tests {
         );
     }
 
+    /// Q-350: a second passthrough save while a creation is pending (`Creating` written
+    /// again) does not restart it: the one anchor, created at the group's origin at the
+    /// first save, becomes `Ready`, though the group moved in between.
+    #[test]
+    fn handshake_second_save_during_a_creation_keeps_the_first_creation() {
+        let first = pose([0.4, 0.0, -1.2], yaw(25.0));
+        let store = Fake::default();
+        let hold = store.hold.clone();
+        hold.store(true, Ordering::SeqCst);
+        let mut app = app(store, first);
+        app.update();
+        app.world_mut()
+            .write_message(PersistCommand::SaveScene("a".into()));
+        app.insert_resource(SceneAnchor::Creating);
+        app.update();
+        app.update();
+        // The group moves; the second save.
+        *app.world_mut()
+            .query_filtered::<&mut Transform, With<ContentGroup>>()
+            .single_mut(app.world_mut())
+            .expect("one group") = Transform::from_xyz(3.0, 0.0, 1.0);
+        app.world_mut()
+            .write_message(PersistCommand::SaveScene("b".into()));
+        app.insert_resource(SceneAnchor::Creating);
+        app.update();
+        hold.store(false, Ordering::SeqCst);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<SceneAnchor>(),
+            SceneAnchor::Ready("uuid-1".into())
+        );
+        let anchors = &app.world().resource::<Anchors>().0;
+        assert!(anchors.locate(&AnchorId("uuid-2".into())).is_none());
+        let world = anchors
+            .locate(&AnchorId("uuid-1".into()))
+            .expect("located")
+            .then(&root());
+        assert!(close(world.translation, first.translation, 1e-5));
+    }
+
     /// Q-343, Q-350: with `NoAnchors` a save's `Creating` becomes `None` at once (no
     /// wait), a load's `Locating` becomes `Lost`, and the feature is absent.
     #[test]
