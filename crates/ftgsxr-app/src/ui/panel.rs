@@ -1700,7 +1700,7 @@ mod tests {
             })
             .filter(|r| r.min.y >= view.min.y + TITLE_FRACTION * view.height())
             .collect();
-        let thin = |along: fn(egui::Rect) -> f32, across: fn(egui::Rect) -> f32| {
+        let thin_handle = |along: fn(egui::Rect) -> f32, across: fn(egui::Rect) -> f32| {
             rects
                 .iter()
                 .copied()
@@ -1708,8 +1708,8 @@ mod tests {
                 .min_by(|a, b| along(*a).total_cmp(&along(*b)))
         };
         (
-            thin(|r| r.height(), |r| r.width()),
-            thin(|r| r.width(), |r| r.height()),
+            thin_handle(|r| r.height(), |r| r.width()),
+            thin_handle(|r| r.width(), |r| r.height()),
         )
     }
 
@@ -1765,7 +1765,8 @@ mod tests {
     /// §1.8 User interface, Q-378 (#649, `cpu`): on every main panel texture (#542's,
     /// `ui_scale` 1.5 among them, where the panel is 390 points wide), with the Library tab
     /// and a section wider and taller than the panel, the tab body's vertical scroll bar
-    /// lies inside the texture and a ray drag of it scrolls the rows, and a horizontal
+    /// lies inside the texture and the central panel's frame and a ray drag of it scrolls
+    /// the rows, and a horizontal
     /// scroll bar lies inside it too, whose drag brings the section's far edge into view.
     #[test]
     fn panel_layout_tab_content_wider_than_the_panel_is_reached_by_its_scroll_bars() {
@@ -1790,15 +1791,22 @@ mod tests {
                 shown_text(&shapes, "Far edge").is_none(),
                 "{case}: past the edge"
             );
-            let (Some(v), Some(hb)) = bar_handles(&shapes, view) else {
+            let (Some(v_handle), Some(h_handle)) = bar_handles(&shapes, view) else {
                 panic!("{case}: both scroll bars");
             };
-            for bar in [v, hb] {
+            for bar in [v_handle, h_handle] {
                 assert!(view.contains_rect(bar), "{case}: bar {bar:?} in {view:?}");
             }
-            let at = |r: egui::Rect| Vec2::new(r.center().x, r.center().y);
+            // The vertical bar at the panel's right edge, inside the central panel's frame
+            // (where a vertical-only area left it in the frame's margin).
+            let body = view - egui::Frame::central_panel(&ctx.global_style()).inner_margin;
+            assert!(
+                v_handle.max.x <= body.max.x + 0.5,
+                "{case}: vertical bar {v_handle:?} inside the frame {body:?}"
+            );
+            let centre_of = |r: egui::Rect| Vec2::new(r.center().x, r.center().y);
             let by = Vec2::new(view.width(), 0.0);
-            let shapes = drag_on_panel(&ctx, &mut world, tex, (at(hb), by, 1.0));
+            let shapes = drag_on_panel(&ctx, &mut world, tex, (centre_of(h_handle), by, 1.0));
             let far = shown_text(&shapes, "Far edge");
             assert!(
                 far.is_some_and(|r| view.contains_rect(r)),
@@ -1806,7 +1814,12 @@ mod tests {
             );
             // The horizontal scroll took the rows out of view; the far edge's row remains.
             let y = far.map(|r| r.min.y);
-            let shapes = drag_on_panel(&ctx, &mut world, tex, (at(v), Vec2::new(0.0, 60.0), 3.0));
+            let shapes = drag_on_panel(
+                &ctx,
+                &mut world,
+                tex,
+                (centre_of(v_handle), Vec2::new(0.0, 60.0), 3.0),
+            );
             assert_ne!(
                 shown_text(&shapes, "Far edge").map(|r| r.min.y),
                 y,
