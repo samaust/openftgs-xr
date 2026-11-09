@@ -257,8 +257,9 @@ pub struct HudData {
     pub anchor: Option<HudAnchor>,
     /// The light estimate's gains (§1.13 HUD) while an auto lighting mode runs the
     /// camera; `None` otherwise. The value is g·w per channel, as `ColorTransform.gain`
-    /// holds it, not E14's g and w apart. The XR crate's to write.
-    // Q-389
+    /// holds it, not E14's g and w apart, and without the manual offset (Q-394). The XR
+    /// crate's to write.
+    // Q-389, Q-394
     pub light_gains: Option<Vec3>,
 }
 
@@ -416,7 +417,9 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 
 /// The environment's lighting transform (§1.9 Light estimation and color matching):
 /// the identity in off mode, E14's manual form of `[environment] lighting_manual` in
-/// manual mode (`persist`'s settings sync), E14's gains in the auto modes (the XR crate).
+/// manual mode (`persist`'s settings sync), and in the auto modes that manual form times
+/// E14's gains, or the manual form alone where the gains are not in force (the XR crate;
+/// E14, revision 52).
 /// `compose_transforms` multiplies it into every instance's own transform, or only the
 /// `Selected` one's while `per_instance` is set; `per_instance` is session state, off at
 /// start and saved nowhere.

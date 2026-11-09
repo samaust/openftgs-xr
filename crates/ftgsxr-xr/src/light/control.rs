@@ -17,8 +17,10 @@
 //!   environment mode is passthrough; the smoother restarts at each start; no new
 //!   thumbnail for 2 s while started counts as a stop. Each new thumbnail is pushed into
 //!   the smoother; while `lighting_reference` is `None` the next smoothed estimate is
-//!   written into it; the gains go into `Lighting.transform` in the auto modes (the
-//!   identity in VR mode) and `HudData.light_gains` while the camera runs (Q-389).
+//!   written into it. In the auto modes `Lighting.transform` is the manual form of
+//!   `lighting_manual` times E14's gains (E14, revision 52), the manual form alone where
+//!   the gains are not in force (VR mode, no estimate yet); `HudData.light_gains` holds
+//!   E14's part alone while the camera runs (Q-389, Q-394).
 
 use std::sync::Arc;
 use std::task::Poll;
@@ -41,7 +43,10 @@ use ftgsxr_render::ColorTransform;
 use ftgsxr_render::SplatBounds;
 
 use super::band::{DepthReadback, DepthSnapshot, thumb_depths};
-use super::{LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains, light_gains};
+use super::{
+    LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains, light_gains,
+    manual_gains,
+};
 use crate::error::{XrError, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode};
 use crate::tracking::XrHands;
@@ -99,9 +104,10 @@ pub(crate) struct Band<'a> {
 pub(crate) struct Outputs {
     /// `XrFeatures.lighting`.
     pub(crate) feature: FeatureState,
-    /// `Lighting.transform`, in an effective auto mode only (Q-383).
+    /// `Lighting.transform`, in an effective auto mode only: the manual form times E14's
+    /// gains (Q-383).
     pub(crate) transform: Option<ColorTransform>,
-    /// `HudData.light_gains` (Q-389).
+    /// `HudData.light_gains`: E14's part alone (Q-389, Q-394).
     pub(crate) light_gains: Option<Vec3>,
     /// `lighting_mode` written back (Q-355, Q-392).
     pub(crate) write_mode: Option<&'static str>,
@@ -350,10 +356,12 @@ impl Control {
             reference = Some(r);
             out.write_reference = Some(r);
         }
+        // E14's gains where they are in force, `None` where they are not.
+        let mut e14 = None;
         if auto {
-            let t = match (i.env_mode, self.smoother.current()) {
-                (EnvironmentMode::Vr, _) | (_, None) => ColorTransform::IDENTITY,
-                (_, Some(e)) => match reference {
+            e14 = match (i.env_mode, self.smoother.current()) {
+                (EnvironmentMode::Vr, _) | (_, None) => None,
+                (_, Some(e)) => Some(match reference {
                     Some([luma, r, g, b]) => light_gains(
                         &e,
                         &LightEstimate {
@@ -363,13 +371,19 @@ impl Control {
                         i.env.lighting_gamma,
                     ),
                     None => grey_world_gains(&e),
-                },
+                }),
             };
-            out.transform = Some(t);
+            // E14 (revision 52, #689): the manual form times E14's gains per channel,
+            // the product unclamped, or the manual form alone where the gains are not
+            // in force; read each frame, so a slider change applies at the next.
+            // Q-383, Q-385
+            let manual = manual_gains(&i.env.lighting_manual);
+            out.transform = Some(ColorTransform {
+                gain: manual.gain * e14.map_or(Vec3::ONE, |t| t.gain),
+            });
         }
-        out.light_gains = self
-            .started
-            .and_then(|_| out.transform.map(|t| t.gain).or(Some(Vec3::ONE)));
+        // Q-389, Q-394: E14's part alone, without the manual offset.
+        out.light_gains = self.started.map(|_| e14.map_or(Vec3::ONE, |t| t.gain));
         self.last_auto = auto_setting(&setting);
         out.feature = self.feature();
         out
@@ -868,6 +882,75 @@ mod tests {
         e.lighting_mode = "manual".into();
         let out = frame(&mut c, &p, &mut e, at(0.6));
         assert!(out.transform.is_none(), "manual's transform is persist's");
+        assert_eq!(out.light_gains, None);
+    }
+
+    /// U-20's clause (E14, revision 52) through the control, since nothing public
+    /// composes: manual EV 1 with auto g = √2 (a doubled luma at γ = 0.5) gives
+    /// `Lighting.transform` g = 2√2, while `HudData.light_gains` stays E14's √2 (Q-394).
+    #[test]
+    fn step_manual_offset_composes_with_the_auto_gains() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        e.lighting_gamma = 0.5;
+        e.lighting_manual.exposure_ev = 1.0;
+        let mut c = session();
+        frame(&mut c, &p, &mut e, at(0.0));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 10.0));
+        frame(&mut c, &p, &mut e, at(0.1));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.4, 0.4, 0.4], 1000.0));
+        let out = frame(&mut c, &p, &mut e, at(0.2));
+        let g = out.transform.unwrap().gain;
+        let want = 2.0 * 2f32.sqrt();
+        assert!((g - Vec3::splat(want)).abs().max_element() < 1e-5, "{g}");
+        let hud = out.light_gains.unwrap();
+        assert!(
+            (hud - Vec3::splat(2f32.sqrt())).abs().max_element() < 1e-5,
+            "{hud}"
+        );
+    }
+
+    /// E14 (revision 52): EV −1 halves E14's gains; with E14's gains at their clamp of
+    /// 4, EV 1 gives 8 (the product is not clamped); where the gains are not in force
+    /// (the camera started without an estimate, VR mode) the transform is the manual
+    /// form alone; a slider change applies at the next frame.
+    #[test]
+    fn step_manual_offset_alone_or_unclamped() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        e.lighting_gamma = 1.0;
+        e.lighting_manual.exposure_ev = 1.0;
+        let close = |g: Vec3, want: f32| {
+            assert!(
+                (g - Vec3::splat(want)).abs().max_element() < 1e-5,
+                "{g} vs {want}"
+            );
+        };
+        let mut c = session();
+        // Started, no thumbnail yet: the manual form alone (2), E14's part 1.
+        let out = frame(&mut c, &p, &mut e, at(0.0));
+        close(out.transform.unwrap().gain, 2.0);
+        close(out.light_gains.unwrap(), 1.0);
+        // The reference at Ȳ = 0.01, then Ȳ = 1 at γ = 1: E14's g clamped at 4.
+        *cam.thumb.lock().unwrap() = Some(thumb([0.01, 0.01, 0.01], 10.0));
+        frame(&mut c, &p, &mut e, at(0.1));
+        *cam.thumb.lock().unwrap() = Some(thumb([1.0, 1.0, 1.0], 1000.0));
+        let out = frame(&mut c, &p, &mut e, at(0.2));
+        close(out.transform.unwrap().gain, 8.0);
+        close(out.light_gains.unwrap(), 4.0);
+        // EV −1 at the next frame: 0.5 × 4.
+        e.lighting_manual.exposure_ev = -1.0;
+        let out = frame(&mut c, &p, &mut e, at(0.3));
+        close(out.transform.unwrap().gain, 2.0);
+        // VR mode: the manual form alone.
+        let out = frame_with(&mut c, &p, &mut e, at(0.4), EnvironmentMode::Vr, false);
+        close(out.transform.unwrap().gain, 0.5);
         assert_eq!(out.light_gains, None);
     }
 
