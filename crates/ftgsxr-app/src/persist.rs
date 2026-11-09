@@ -25,7 +25,9 @@ use ftgsxr_io::{
     PoseStore, SceneFile, SceneModel, Settings, SourceSpec, Url, load_settings, read_scene,
     save_settings, write_scene,
 };
-use ftgsxr_render::{Colormap, Overlays, RenderMode, SplatMode, SplatOverlays, SplatTrim};
+use ftgsxr_render::{
+    ColorTransform, Colormap, Overlays, RenderMode, SplatMode, SplatOverlays, SplatTrim,
+};
 
 use crate::audio::AudioState;
 use crate::intent::{Feature, InstanceAction, Intent, OverlayToggle, PlaybackCommand, UiCommand};
@@ -40,8 +42,8 @@ use crate::platform::{AskPermissionAgain, DeniedPermissions, Headset, PlatformRe
 use crate::playback::{LoopSetting, Playback, RangeSetting};
 use crate::rig::{CameraController, DesktopCamera, DesktopView, Locomotion, PlayerRig};
 use crate::ui::{
-    DockHooks, InstanceLighting, RecentScenes, SceneLoadConfirmed, Tab, ToastRequest, UiState,
-    UiSurface, recent_scenes,
+    DockHooks, FeatureState, InstanceLighting, Lighting, RecentScenes, SceneLoadConfirmed, Tab,
+    ToastRequest, UiState, UiSurface, XrFeatures, recent_scenes,
 };
 
 mod panels;
@@ -398,6 +400,7 @@ impl Plugin for PersistPlugin {
                     high_contrast_follows_settings,
                     keep_upright_sync,
                     fit_to_sync,
+                    lighting_follows_settings,
                     save_settings_debounced,
                     save_poses,
                 )
@@ -542,13 +545,19 @@ fn fit_to_sync(
 /// UI's, which confirms and sends `PersistCommand::LoadScene`. The overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
 /// is a `[display.overlays]` setting, flipped here and mapped onto every instance by
 /// `sync_settings` (Q-207). `Toggle(Feature::Occlusion)` flips `[environment] occlusion`
-/// (Q-336); `Toggle(Feature::Passthrough)` is the XR crate's (Q-335).
-// Q-336
+/// (Q-336); `Toggle(Feature::Lighting)` turns `lighting_mode` off and back (Q-391);
+/// `Toggle(Feature::Passthrough)` is the XR crate's (Q-335).
+// Q-336, Q-391
 fn run_intents(
     mut reader: MessageReader<Intent>,
     mut out: MessageWriter<PersistCommand>,
     mut settings: ResMut<SettingsRes>,
+    mut last_lighting: Local<Option<String>>,
 ) {
+    // Q-391: the mode last set in this session, by any writer, for the toggle's way back.
+    if settings.0.environment.lighting_mode != "off" {
+        *last_lighting = Some(settings.0.environment.lighting_mode.clone());
+    }
     for intent in reader.read() {
         match intent {
             Intent::Ui(UiCommand::SaveScene) => {
@@ -567,6 +576,16 @@ fn run_intents(
             Intent::Toggle(Feature::Occlusion) => {
                 let e = &mut settings.0.environment;
                 e.occlusion = !e.occlusion;
+            }
+            // Q-391: off when it is not, else the mode last set (manual when none).
+            Intent::Toggle(Feature::Lighting) => {
+                let e = &mut settings.0.environment;
+                if e.lighting_mode != "off" {
+                    *last_lighting = Some(e.lighting_mode.clone());
+                    e.lighting_mode = "off".into();
+                } else {
+                    e.lighting_mode = last_lighting.clone().unwrap_or_else(|| "manual".into());
+                }
             }
             _ => {}
         }
@@ -1211,6 +1230,40 @@ fn desktop_view(s: &Settings, headset: bool) -> DesktopView {
 // Q-335
 fn passthrough_mode(s: &Settings, headset: bool) -> bool {
     headset && s.environment.mode == "passthrough"
+}
+
+/// The effective lighting mode (§1.9, Q-384): `[environment] lighting_mode`, except that
+/// an auto mode counts as `manual` while the camera's feature is not `Available` (the
+/// desktop, `play --xr`, an older OS, a denied permission); the setting is kept.
+// Q-384
+pub(crate) fn effective_lighting_mode(s: &Settings, camera: FeatureState) -> &str {
+    match s.environment.lighting_mode.as_str() {
+        "auto-global" | "auto-local" if camera != FeatureState::Available => "manual",
+        m => m,
+    }
+}
+
+/// The environment's transform from the settings (Q-383, Q-384): the identity in off
+/// mode, E14's manual form of `lighting_manual` in manual mode (or a gated auto mode);
+/// the auto modes' is the XR crate's. Writes only a change.
+// Q-383, Q-384
+fn lighting_follows_settings(
+    settings: Res<SettingsRes>,
+    features: Option<Res<XrFeatures>>,
+    lighting: Option<ResMut<Lighting>>,
+) {
+    let Some(mut lighting) = lighting else {
+        return;
+    };
+    let camera = features.map_or(FeatureState::Absent, |f| f.lighting);
+    let wanted = match effective_lighting_mode(&settings.0, camera) {
+        "off" => ColorTransform::IDENTITY,
+        "manual" => ColorTransform::from_manual(&settings.0.environment.lighting_manual),
+        _ => return,
+    };
+    if lighting.transform != wanted {
+        lighting.transform = wanted;
+    }
 }
 
 /// D-17: stick locomotion off in passthrough mode (Q-195), as gated (Q-335).
