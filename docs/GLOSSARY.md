@@ -484,6 +484,10 @@ _Avoid_: splat (reserved for a primitive's projected quad), instance (the model 
 The number of records a view's frame buffers hold, shared by every model instance; rows beyond it are dropped and the overflow flag raised. §1.4, §1.12, D-34
 _Avoid_: budget (the memory budget), max splats, limit
 
+**SH range**:
+One of a fixed number of consecutive pieces of a model's GPU SH array, each bound to the GPU on its own, so the array can exceed the device's largest storage binding; every other field is bound whole. §1.12 Memory, D-13, #642
+_Avoid_: binding chunk, SH split, SH band (a coefficient band of the SH basis), shard
+
 ### Data
 
 **Scene manifest**:
