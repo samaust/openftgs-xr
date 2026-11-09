@@ -11,29 +11,12 @@
 
 use crate::dv_support;
 
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use dv_support::{ACTIVITY, PACKAGE, adb, adb_path, apk, device, install, log, stop, verdict};
+use dv_support::{ACTIVITY, adb, apk, device, install, log, stop, verdict};
 
 /// The anchors permission of §2.5's manifest.
 const PERMISSION: &str = "com.oculus.permission.USE_ANCHOR_API";
-
-/// `pm grant`, whose failure (a permission the system grants at install) is only printed.
-fn grant() {
-    let out = Command::new(adb_path())
-        .args(["shell", "pm", "grant", PACKAGE, PERMISSION])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => println!(
-            "dv9: pm grant {PERMISSION}: {}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        ),
-        Err(e) => println!("dv9: pm grant {PERMISSION}: {e}"),
-    }
-}
 
 /// Launches `dv9`, restarting the app, with `anchor` in the extra `ftgsxr-anchor`.
 fn launch(anchor: Option<&str>) -> Instant {
@@ -65,7 +48,7 @@ fn dv_dv9_an_anchor_persists_across_a_restart_within_5_cm() {
     let apk = apk();
     device();
     install(&apk);
-    grant();
+    dv_support::pm("dv9", "grant", &[PERMISSION]);
 
     let start = launch(None);
     let first = verdict("dv9", start, Duration::from_secs(120));

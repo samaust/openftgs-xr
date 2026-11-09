@@ -13,29 +13,12 @@
 
 use crate::dv_support;
 
-use std::process::Command;
 use std::time::Duration;
 
-use dv_support::{PACKAGE, adb_path, apk, device, install, launch, log, stop, verdict};
+use dv_support::{apk, device, install, launch, log, stop, verdict};
 
 /// The hand-tracking permission of §2.5's manifest.
 const PERMISSION: &str = "com.oculus.permission.HAND_TRACKING";
-
-/// `pm grant`, whose failure (a permission the system grants at install) is only printed.
-fn grant() {
-    let out = Command::new(adb_path())
-        .args(["shell", "pm", "grant", PACKAGE, PERMISSION])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => println!(
-            "dv8: pm grant {PERMISSION}: {}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        ),
-        Err(e) => println!("dv8: pm grant {PERMISSION}: {e}"),
-    }
-}
 
 #[test]
 #[ignore = "dv"]
@@ -43,7 +26,7 @@ fn dv_dv8_joints_and_aim_state_arrive_a_pinch_selects_a_grab_pulses() {
     let apk = apk();
     device();
     install(&apk);
-    grant();
+    dv_support::pm("dv8", "grant", &[PERMISSION]);
     let start = launch("dv8");
     let result = verdict("dv8", start, Duration::from_secs(150));
     let lines = log();

@@ -5,11 +5,12 @@
 
 use bevy::log::{info, warn};
 use bevy::math::{DMat3, DVec3};
-use bevy::prelude::{Commands, Entity, On, Res, ResMut, Resource};
+use bevy::prelude::{Commands, Entity, On, Query, Res, ResMut, Resource, With};
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
-use ftgsxr_app::{Camera, CameraThumb, SettingsRes};
+use ftgsxr_app::{Camera, CameraThumb, FeatureState, Selected, SettingsRes, XrFeatures};
 use ftgsxr_render::SplatOcclusion;
 
+use super::LightingMode;
 use crate::passthrough::{Environment, EnvironmentMode};
 
 /// A readback still pending after this many frames is dropped (PRD #664's spike check
@@ -78,8 +79,9 @@ pub(crate) fn r32_floats(data: &[u8], width: u32, height: u32) -> Option<Vec<f32
     Some(out)
 }
 
-/// Each thumbnail pixel's environment depth in metres along the depth camera's z axis
-/// (E13's decode), `NaN` where the pixel has none: the ray through the pixel's centre and
+/// Each thumbnail pixel's environment depth as E14's distance in metres from the eye
+/// (E13's decode along the depth camera's z axis, times the texel's ray length
+/// |K_d⁻¹(u, v, 1)|), `NaN` where the pixel has none: the ray through the pixel's centre and
 /// `thumb.camera`'s intrinsics, rotated into the depth camera with the two centres taken
 /// as coincident, projected into the depth image, the nearest texel decoded; a texel
 /// invalid to the decode, a ray behind the depth camera or a projection outside the image
@@ -90,16 +92,21 @@ pub(crate) fn thumb_depths(thumb: &CameraThumb, depth: &DepthSnapshot) -> Vec<f3
     let (tw, th) = (thumb.width as usize, thumb.height as usize);
     let c = &depth.camera;
     let (dw, dh) = (f64::from(c.width), f64::from(c.height));
+    let k_inv = c.k.inverse();
+    // Q-388 (owner, 2026-11-09): E14's distance, the axis depth Z times the texel's ray
+    // length |K_d⁻¹(u, v, 1)|, so it compares with d_m as a straight line from the eye.
     let texel = |x: f64, y: f64| -> f32 {
         if !(0.0..dw).contains(&x) || !(0.0..dh).contains(&y) {
             return f32::NAN;
         }
-        let i = y as usize * c.width as usize + x as usize;
+        let (tx, ty) = (x.floor(), y.floor());
+        let i = ty as usize * c.width as usize + tx as usize;
+        let ray = (k_inv * DVec3::new(tx + 0.5, ty + 0.5, 1.0)).length();
         depth
             .stored
             .get(i)
             .and_then(|&d| stored_depth_metres(d, depth.near, depth.far))
-            .unwrap_or(f32::NAN)
+            .map_or(f32::NAN, |z| (f64::from(z) * ray) as f32)
     };
     // The thumbnail's pixel ray to the depth camera's: R_d R_tᵀ K_t⁻¹ (centres coincident).
     let to_depth = thumb.camera.as_ref().map(|t| {
@@ -128,8 +135,22 @@ pub(crate) fn thumb_depths(thumb: &CameraThumb, depth: &DepthSnapshot) -> Vec<f3
     out
 }
 
+/// Whether a readback is spawned for the left view's capture `age_frames` old: the
+/// effective `mode` auto local, an instance selected (the band needs d_m), passthrough
+/// mode and a new capture (Q-388).
+// Q-388
+fn readback_wanted(
+    mode: &LightingMode,
+    selected: bool,
+    passthrough: bool,
+    age_frames: u32,
+) -> bool {
+    matches!(mode, LightingMode::AutoLocal) && selected && passthrough && age_frames == 0
+}
+
 /// The frame's request (main world, `Update`, before the control): while auto local is
-/// set in passthrough mode and the provider runs, a one-shot `Readback::texture` of the
+/// in force (`XrFeatures.lighting` as of the last frame's control), an instance selected,
+/// in passthrough mode and the provider runs, a one-shot `Readback::texture` of the
 /// left view's `DepthFrame.image` is spawned when a new capture arrived (`age_frames`
 /// 0) and none is in flight. Its `Readback` is removed the frame after (one extract
 /// copies it once, encoded by Bevy's render system after the drive's median pass was
@@ -141,6 +162,8 @@ pub(crate) fn request(
     occlusion: Option<Res<SplatOcclusion>>,
     settings: Option<Res<SettingsRes>>,
     env: Option<Res<Environment>>,
+    features: Option<Res<XrFeatures>>,
+    selected: Query<(), With<Selected>>,
     mut commands: Commands,
 ) {
     let left = occlusion.as_deref().and_then(|o| o.frames.first());
@@ -159,12 +182,13 @@ pub(crate) fn request(
         }
         return;
     }
-    let local = settings.is_some_and(|s| s.0.environment.lighting_mode == "auto-local");
+    let camera = features.map_or(FeatureState::Absent, |f| f.lighting);
+    let mode = settings.map_or(LightingMode::Off, |s| {
+        LightingMode::from_settings(&s.0.environment, camera)
+    });
     let passthrough = env.is_some_and(|e| e.mode == EnvironmentMode::Passthrough);
     if let Some(f) = left
-        && local
-        && passthrough
-        && f.age_frames == 0
+        && readback_wanted(&mode, !selected.is_empty(), passthrough, f.age_frames)
     {
         let entity = commands
             .spawn(Readback::texture(f.image.clone()))
@@ -218,10 +242,30 @@ fn complete(
 #[cfg(test)]
 mod tests {
     use bevy::math::{Quat, Vec3};
-    use ftgsxr_app::Fov;
+    use ftgsxr_app::{FeatureState, Fov};
 
     use super::super::band_mask;
     use super::*;
+
+    /// Q-388: the readback is wanted only in the effective auto local mode (an auto local
+    /// setting without the camera is manual), with an instance selected, in passthrough
+    /// mode, for a new capture.
+    #[test]
+    fn readback_wanted_needs_effective_auto_local_a_selection_and_a_new_capture() {
+        let mut env = ftgsxr_io::Settings::default().environment;
+        env.lighting_mode = "auto-local".into();
+        let local = LightingMode::from_settings(&env, FeatureState::Available);
+        assert!(readback_wanted(&local, true, true, 0));
+        assert!(!readback_wanted(&local, false, true, 0), "no selection");
+        assert!(!readback_wanted(&local, true, false, 0), "VR mode");
+        assert!(!readback_wanted(&local, true, true, 1), "no new capture");
+        let gated = LightingMode::from_settings(&env, FeatureState::Absent);
+        assert!(
+            !readback_wanted(&gated, true, true, 0),
+            "auto local gated to manual"
+        );
+        assert!(!readback_wanted(&LightingMode::AutoGlobal, true, true, 0));
+    }
 
     /// Q-340's hand-worked values, the ones `passes.rs`'s
     /// `gpu_depth_metres_decodes_hand_worked_values` pins the shader on: with n = 0.25
@@ -293,12 +337,16 @@ mod tests {
         }
     }
 
-    /// E14 local, Q-388: a 320 × 320 depth image (near 0.1 m, the infinite far plane)
-    /// seen by the thumbnail's own pose and field of view, a wall at 2 m (d = 1 − 0.1/2 =
-    /// 0.95) over its left half and nothing (d = 1) over its right half. d_m = 2 m gives
-    /// the thumbnail's left half (32 of 64 columns, every row), d_m = 4 m fewer than 1 %,
-    /// so the frame; the same without the thumbnail's camera (normalized coordinates);
-    /// a thumbnail camera turned away from the depth camera sees no depth at all.
+    /// E14 local, Q-388 (owner 2026-11-09, "distance on both"): a 320 × 320 depth image
+    /// (near 0.1 m, the infinite far plane) seen by the thumbnail's own pose and field of
+    /// view, a flat wall 2 m along the axis (d = 1 − 0.1/2 = 0.95) over its left half and
+    /// nothing (d = 1) over its right half. Each pixel's environment depth is the
+    /// straight-line distance 2·√(1 + x² + y²) for its ray (x, y, 1): about 2 m beside the
+    /// axis (pixel (31, 24): x = −1/64, y = 1/48, 2.0007 m) and 2·√2.92776 = 3.4221 m at
+    /// the corner (0, 0) (x = −63/64, y = −47/48); none on the right. d_m = 2 m keeps the
+    /// pixels near the axis, not the corner; d_m = 4 m fewer than 1 %, so the frame. The
+    /// same without the thumbnail's camera (normalized coordinates); a thumbnail camera
+    /// turned away from the depth camera sees no depth at all.
     #[test]
     fn thumb_depths_maps_a_wall_over_half_the_thumbnail() {
         let at = Vec3::new(0.3, 1.6, -0.2);
@@ -316,7 +364,23 @@ mod tests {
             let label = format!("camera {}", camera.is_some());
             let z = thumb_depths(&thumb(camera), &depth);
             assert_eq!(z.len(), 64 * 48, "{label}");
-            assert_eq!(band_mask(&z, 2.0, 0.5), Some(half.clone()), "{label}");
+            // The nearest texel's ray, not the pixel's: within a texel's 1/160 in tan.
+            assert!(
+                (z[24 * 64 + 31] - 2.0007).abs() < 0.01,
+                "{label}: {}",
+                z[24 * 64 + 31]
+            );
+            assert!((z[0] - 3.4221).abs() < 0.03, "{label}: {}", z[0]);
+            for (i, &d) in z.iter().enumerate() {
+                if half[i] {
+                    assert!(d >= 1.999, "{label}: pixel {i} at {d}");
+                } else {
+                    assert!(d.is_nan(), "{label}: pixel {i} at {d}");
+                }
+            }
+            let band = band_mask(&z, 2.0, 0.5).expect("the band near the axis");
+            assert!(band[24 * 64 + 31] && !band[0], "{label}");
+            assert!(band.iter().zip(&half).all(|(b, h)| !b || *h), "{label}");
             assert_eq!(band_mask(&z, 4.0, 0.5), None, "{label}");
         }
         let away = Camera::from_stage_pose(at, turn * Quat::from_rotation_y(3.0), FOV, 64, 48);

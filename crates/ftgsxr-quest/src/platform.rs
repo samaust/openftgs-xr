@@ -88,6 +88,7 @@ impl QuestPlatform {
 
     /// The head's stage pose this frame (`XrHands.head`), under which `latest` places the
     /// next thumbnail's lens (Q-387).
+    // Q-387
     pub(crate) fn set_head(&self, position: Vec3, rotation: Quat) {
         *lock(&self.inner.head) = (position, rotation);
     }
@@ -203,8 +204,7 @@ impl Platform for QuestPlatform {
 // Q-386, Q-392
 impl CameraFrames for QuestPlatform {
     fn start(&self) -> Result<(), String> {
-        let code = shim::start_camera()
-            .map_err(|e| format!("the passthrough camera could not be opened: {e}"))?;
+        let code = shim::start_camera().map_err(camera::not_opened)?;
         camera::start_result(code)
     }
 

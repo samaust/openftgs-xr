@@ -56,6 +56,11 @@ impl LightingMode {
             _ => LightingMode::Off,
         }
     }
+
+    /// Auto global or auto local.
+    pub(crate) fn is_auto(&self) -> bool {
+        matches!(self, LightingMode::AutoGlobal | LightingMode::AutoLocal)
+    }
 }
 
 /// E14's estimate: the mean luma Ȳ and the mean RGB (r̄, ḡ, b̄) over Ω.

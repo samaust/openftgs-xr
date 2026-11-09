@@ -12,7 +12,7 @@ use crate::dv_support;
 
 use std::time::{Duration, Instant};
 
-use dv_support::{adb, apk, device, install, launch, log, stop, verdict};
+use dv_support::{adb, apk, device, install, launch, log, stop, verdict, wait_for};
 
 /// How long the headset is left asleep.
 const ASLEEP: Duration = Duration::from_secs(10);
@@ -49,17 +49,6 @@ fn wake_and_settle() {
         std::thread::sleep(Duration::from_millis(200));
     }
     std::thread::sleep(SETTLE);
-}
-
-fn wait_for(line: &str, timeout: Duration) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if log().iter().any(|l| l.contains(line)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    false
 }
 
 #[test]

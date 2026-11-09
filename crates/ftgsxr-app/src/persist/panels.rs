@@ -32,7 +32,24 @@ const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 const RENDER_MODES: &[&str] = &["splats", "centers", "both", "hidden"];
 const COLORMAPS: &[&str] = &["dc", "time", "speed", "opacity"];
 const ENVIRONMENT_MODES: &[&str] = &["vr", "passthrough"];
-const LIGHTING_MODES: &[&str] = &["off", "manual", "auto-global", "auto-local"];
+/// The lighting modes as the selector names them (§1.9), with their setting.
+const LIGHTING_CHOICES: [(&str, &str); 4] = [
+    ("off", "off"),
+    ("manual", "manual"),
+    ("auto-global", "auto global"),
+    ("auto-local", "auto local"),
+];
+
+/// The settings table's spellings of the lighting modes, `LIGHTING_CHOICES`' settings.
+const LIGHTING_MODES: [&str; 4] = {
+    let mut m = [""; 4];
+    let mut i = 0;
+    while i < 4 {
+        m[i] = LIGHTING_CHOICES[i].0;
+        i += 1;
+    }
+    m
+};
 const FOVEATION: &[&str] = &["off", "low", "medium", "high", "dynamic"];
 const SPEEDS: [f64; 12] = [
     -4.0, -2.0, -1.0, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0,
@@ -167,6 +184,12 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .map(|t| t.tier.name.clone());
     // §1.9 Light estimation: the reason only manual mode is offered (Q-384).
     let headset = world.contains_resource::<Headset>();
+    // Q-388: auto local's band needs a selected instance.
+    let selected = world
+        .query_filtered::<(), With<Selected>>()
+        .iter(world)
+        .next()
+        .is_some();
     let mut light = world.get_resource::<Lighting>().copied();
     let mut ask_camera = false;
     let mut toggles = Vec::new();
@@ -236,7 +259,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             ui.checkbox(&mut e.hand_removal, "hand removal");
         }
         ui.separator();
-        ask_camera = lighting_controls(ui, s, &features, headset, light.as_mut());
+        ask_camera = lighting_controls(ui, s, &features, headset, selected, light.as_mut());
     });
     if let Some(l) = light
         && world.get_resource::<Lighting>().is_some_and(|w| *w != l)
@@ -254,19 +277,12 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
     }
 }
 
-/// The lighting modes as the selector names them (§1.9), with their setting.
-const LIGHTING_CHOICES: [(&str, &str); 4] = [
-    ("off", "off"),
-    ("manual", "manual"),
-    ("auto-global", "auto global"),
-    ("auto-local", "auto local"),
-];
-
 /// The Environment tab's lighting controls (§1.9 Light estimation and color matching):
 /// the mode, offering the auto modes only where the camera is `Available` and otherwise
-/// showing an auto setting as manual, kept, with the reason (Q-384); picking an auto mode
-/// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion"
-/// beside auto local without occlusion's depth (Q-388); the manual sliders, the strength
+/// showing an auto setting as manual, kept, and the reason whatever the setting (Q-384); picking an auto mode
+/// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion
+/// and a selected instance" beside auto local without occlusion's depth or without a
+/// selected instance (Q-388); the manual sliders, the strength
 /// γ, the current gains and "per instance" (Q-383). True when "Ask again" was pressed
 /// for a denied camera (Q-322).
 // Q-322, Q-383, Q-384, Q-385, Q-388
@@ -275,6 +291,7 @@ fn lighting_controls(
     s: &mut Settings,
     features: &XrFeatures,
     headset: bool,
+    selected: bool,
     light: Option<&mut Lighting>,
 ) -> bool {
     let camera = features.lighting;
@@ -288,7 +305,7 @@ fn lighting_controls(
     };
     let mut ask = false;
     ui.horizontal(|ui| {
-        ui.label("lighting");
+        ui.label("lighting mode");
         for (mode, label) in &LIGHTING_CHOICES[..offered] {
             if ui.selectable_label(shown == *mode, *label).clicked() && shown != *mode {
                 e.lighting_mode = (*mode).into();
@@ -298,7 +315,6 @@ fn lighting_controls(
             }
         }
     });
-    let auto_setting = e.lighting_mode.starts_with("auto");
     match camera {
         FeatureState::Denied => {
             ui.horizontal(|ui| {
@@ -306,7 +322,7 @@ fn lighting_controls(
                 ask = ui.button("Ask again").clicked();
             });
         }
-        FeatureState::Absent if auto_setting => {
+        FeatureState::Absent => {
             ui.label(if headset {
                 "not available on this OS"
             } else {
@@ -316,8 +332,8 @@ fn lighting_controls(
         _ => {}
     }
     if shown.starts_with("auto") {
-        if shown == "auto-local" && !occlusion_on {
-            ui.label("local needs occlusion");
+        if shown == "auto-local" && !(occlusion_on && selected) {
+            ui.label("local needs occlusion and a selected instance");
         }
         if ui.button("re-capture reference").clicked() {
             e.lighting_reference = None;
@@ -507,7 +523,7 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
                 0.02,
                 0.001,
             );
-            choice(ui, "lighting_mode", &mut e.lighting_mode, LIGHTING_MODES);
+            choice(ui, "lighting_mode", &mut e.lighting_mode, &LIGHTING_MODES);
             let m = &mut e.lighting_manual;
             num(
                 ui,
@@ -948,7 +964,8 @@ mod tests {
 
     /// The Environment tab's lighting controls (§1.9 "only manual mode is offered and the
     /// UI says why", §1.15 E-XR-PERMISSION, Q-384, Q-385, Q-322, `cpu`): off and manual
-    /// with the reason on the desktop and on the headset under `Absent` or `Denied`, an
+    /// with the reason, whatever the setting, on the desktop and on the headset under
+    /// `Absent` or `Denied`, an
     /// auto setting shown as manual and kept; "Ask again" under `Denied` asks for the
     /// camera; the four modes under `Available`, where an auto pick and "re-capture
     /// reference" clear `lighting_reference`.
@@ -1006,6 +1023,29 @@ mod tests {
             }
             assert_eq!(mode(&world), "auto-global", "the setting is kept");
         }
+        // The reason shows whenever only off and manual are offered, whatever the setting.
+        for setting in ["off", "manual"] {
+            for (headset, state, reason) in cases {
+                if headset {
+                    world.insert_resource(Headset);
+                } else {
+                    world.remove_resource::<Headset>();
+                }
+                world.insert_resource(lighting(state));
+                world
+                    .resource_mut::<SettingsRes>()
+                    .0
+                    .environment
+                    .lighting_mode = setting.into();
+                let texts = frame(&mut world);
+                assert!(has(&texts, reason), "{setting}, {state:?}: {texts:?}");
+            }
+        }
+        world
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .lighting_mode = "auto-global".into();
         // Denied: "Ask again" asks for the camera.
         let texts = frame(&mut world);
         for events in click(at(&texts, "Ask again")) {
@@ -1044,9 +1084,31 @@ mod tests {
             env.lighting_reference, None,
             "an auto pick clears the reference"
         );
-        // Q-388: auto local without occlusion's depth says so.
+        // Q-388: auto local without occlusion's depth, or without a selected instance,
+        // says so.
         let texts = frame(&mut world);
-        assert!(has(&texts, "local needs occlusion"), "{texts:?}");
+        assert!(
+            has(&texts, "local needs occlusion and a selected instance"),
+            "occlusion off: {texts:?}"
+        );
+        world.resource_mut::<SettingsRes>().0.environment.occlusion = true;
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Available,
+            occlusion: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        let texts = frame(&mut world);
+        assert!(
+            has(&texts, "local needs occlusion and a selected instance"),
+            "nothing selected: {texts:?}"
+        );
+        let selected = world.spawn(Selected).id();
+        let texts = frame(&mut world);
+        assert!(
+            !has(&texts, "local needs occlusion and a selected instance"),
+            "occlusion on, an instance selected: {texts:?}"
+        );
+        world.despawn(selected);
         world
             .resource_mut::<SettingsRes>()
             .0

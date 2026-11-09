@@ -12,10 +12,9 @@
 
 use crate::dv_support;
 
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use dv_support::{PACKAGE, adb_path, apk, device, install, launch, log, stop, verdict};
+use dv_support::{apk, device, install, launch, log, stop, verdict, wait_for};
 
 /// The camera permissions of §2.5's manifest, which light estimation needs (§1.9).
 const PERMISSIONS: [&str; 2] = [
@@ -23,42 +22,13 @@ const PERMISSIONS: [&str; 2] = [
     "horizonos.permission.HEADSET_CAMERA",
 ];
 
-/// `pm grant` (or `revoke`) of each camera permission; a failure is only printed.
-fn pm(verb: &str) {
-    for p in PERMISSIONS {
-        let out = Command::new(adb_path())
-            .args(["shell", "pm", verb, PACKAGE, p])
-            .output();
-        match out {
-            Ok(o) if o.status.success() => {}
-            Ok(o) => println!(
-                "dv11: pm {verb} {p}: {}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
-            ),
-            Err(e) => println!("dv11: pm {verb} {p}: {e}"),
-        }
-    }
-}
-
-fn wait_for(line: &str, timeout: Duration) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if log().iter().any(|l| l.contains(line)) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    false
-}
-
 #[test]
 #[ignore = "dv"]
 fn dv_dv11_thumbnails_at_30_hz_and_the_cover_halves_the_luma() {
     let apk = apk();
     device();
     install(&apk);
-    pm("grant");
+    dv_support::pm("dv11", "grant", &PERMISSIONS);
     let start = launch("dv11");
     if wait_for("dv11: cover", Duration::from_secs(90)) {
         println!("dv11: COVER THE HEADSET'S CAMERAS NOW (20 s)");
@@ -66,7 +36,7 @@ fn dv_dv11_thumbnails_at_30_hz_and_the_cover_halves_the_luma() {
     let result = verdict("dv11", start, Duration::from_secs(150));
     let lines = log();
     stop();
-    pm("revoke");
+    dv_support::pm("dv11", "revoke", &PERMISSIONS);
     for l in lines
         .iter()
         .filter(|l| l.contains("passthrough camera data space"))

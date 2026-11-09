@@ -192,7 +192,8 @@ fn an_auto_lighting_mode_counts_as_manual_unless_the_camera_is_available() {
 }
 
 /// `Toggle(Feature::Lighting)` (Q-391): a mode other than off becomes off, and off
-/// becomes the mode last set in this session, `manual` when none was.
+/// becomes the mode last set in this session, `manual` when none was; restoring an auto
+/// mode clears `lighting_reference` (Q-391, owner 2026-11-09).
 #[test]
 fn toggle_lighting_turns_off_and_back_to_the_last_mode() {
     use ftgsxr_app::{Feature, Intent};
@@ -225,6 +226,43 @@ fn toggle_lighting_turns_off_and_back_to_the_last_mode() {
     t.frames(2);
     toggle(&mut t);
     assert_eq!(mode(&t), "off");
+    // An auto mode restored counts as enabling it (§1.9): the reference is cleared, so
+    // the next smoothed estimate is captured; manual keeps it.
+    let reference = |t: &mut TestApp, r: Option<[f32; 4]>| {
+        t.app
+            .world_mut()
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .lighting_reference = r;
+    };
+    let held = Some([0.5, 0.4, 0.3, 0.42]);
+    reference(&mut t, held);
     toggle(&mut t);
     assert_eq!(mode(&t), "auto-local", "the mode last set");
+    let env = |t: &TestApp| {
+        t.app
+            .world()
+            .resource::<SettingsRes>()
+            .0
+            .environment
+            .clone()
+    };
+    assert_eq!(env(&t).lighting_reference, None, "restoring auto clears it");
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .lighting_mode = "manual".into();
+    t.frames(2);
+    toggle(&mut t);
+    reference(&mut t, held);
+    toggle(&mut t);
+    assert_eq!(mode(&t), "manual");
+    assert_eq!(
+        env(&t).lighting_reference,
+        held,
+        "restoring manual keeps it"
+    );
 }
