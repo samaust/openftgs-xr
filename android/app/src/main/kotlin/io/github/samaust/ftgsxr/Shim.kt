@@ -453,8 +453,9 @@ object Shim {
 
     /**
      * The 64 × 48 thumbnail: the mean of each 20 × 20 Y block and its 10 × 10 Cb and Cr
-     * blocks, through BT.709's full-range matrix to RGB in [0, 1]; then the timestamp as
-     * whole seconds and fraction, and the lens's 17 raw floats when known (Q-386).
+     * blocks, through BT.601's full-range matrix (JFIF, E14) to RGB in [0, 1]; then the
+     * timestamp as whole seconds and fraction, and the lens's 17 raw floats when known
+     * (Q-386).
      */
     private fun reduce(image: Image): FloatArray {
         val planes = image.planes
@@ -513,12 +514,12 @@ object Shim {
                 val y = ySums[bx] / (BLOCK * BLOCK * 255f)
                 val cb = uSums[bx] / (half * half * 255f) - 0.5f
                 val cr = vSums[bx] / (half * half * 255f) - 0.5f
-                // BT.709, full range: R = Y + 1.5748 Cr, G = Y − 0.18732 Cb − 0.46812 Cr,
-                // B = Y + 1.8556 Cb.
+                // BT.601 (JFIF), full range, from E14's K_R = 0.299, K_B = 0.114:
+                // R = Y + 1.402 Cr, G = Y − 0.344136 Cb − 0.714136 Cr, B = Y + 1.772 Cb.
                 val i = (by * THUMB_WIDTH + bx) * 3
-                out[i] = (y + 1.5748f * cr).coerceIn(0f, 1f)
-                out[i + 1] = (y - 0.18732f * cb - 0.46812f * cr).coerceIn(0f, 1f)
-                out[i + 2] = (y + 1.8556f * cb).coerceIn(0f, 1f)
+                out[i] = (y + 1.402f * cr).coerceIn(0f, 1f)
+                out[i + 1] = (y - 0.344136f * cb - 0.714136f * cr).coerceIn(0f, 1f)
+                out[i + 2] = (y + 1.772f * cb).coerceIn(0f, 1f)
             }
         }
         val ns = image.timestamp

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! U-20 (§3.1, E14, D-38) through `ftgsxr_xr`'s `light` items, and the smoother's time
-//! constant (PRD #664 candidate 1, Q-382), on the host (`cpu`).
+//! constant (PRD #664 candidate 1, Q-382), on the host (`cpu`). U-20's clause "manual EV 1
+//! with auto g = √2 → g = 2√2" (E14, revision 52) is checked in `light::control`'s
+//! `step_manual_offset_composes_with_the_auto_gains`: the product is formed only inside
+//! the light control, and no public item composes the two gains (#696).
 
 use ftgsxr_app::{CameraThumb, FeatureState};
 use ftgsxr_io::{EnvironmentSettings, ManualLighting};
@@ -110,8 +113,8 @@ fn u20_thumbnail_statistics_global_and_band_mask() {
     for (a, m) in all.rgb.into_iter().zip(mean) {
         close(a, m);
     }
-    // E14 luma by hand: 0.2126·0.5 + 0.7152·0.35 + 0.0722·0.2 = 0.10630 + 0.25032 + 0.01444.
-    close(all.luma, 0.37106);
+    // E14 luma by hand: 0.299·0.5 + 0.587·0.35 + 0.114·0.2 = 0.1495 + 0.20545 + 0.0228.
+    close(all.luma, 0.37775);
 
     let depths = [1.0, 5.0, 1.2, f32::NAN, 0.8, 5.0, 1.0, 9.0];
     let mask = band_mask(&depths, 1.0, 0.5).unwrap();
@@ -120,8 +123,8 @@ fn u20_thumbnail_statistics_global_and_band_mask() {
     for (a, m) in local.rgb.into_iter().zip(near) {
         close(a, m);
     }
-    // By hand: 0.2126·0.8 + 0.7152·0.6 + 0.0722·0.4 = 0.17008 + 0.42912 + 0.02888.
-    close(local.luma, 0.62808);
+    // By hand: 0.299·0.8 + 0.587·0.6 + 0.114·0.4 = 0.2392 + 0.3522 + 0.0456.
+    close(local.luma, 0.6370);
 }
 
 #[test]

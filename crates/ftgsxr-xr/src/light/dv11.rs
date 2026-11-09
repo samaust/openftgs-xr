@@ -50,7 +50,7 @@ const WITHIN: Duration = Duration::from_secs(1);
 /// 0.25 + 0.75·e⁻¹ ≈ 0.53; above (0.5 − e⁻²)/(1 − e⁻²) ≈ 0.42 none can pass (Q-390).
 // Q-390
 const DEEP: f32 = 0.25;
-/// The least luma at the cue (BT.709 luma, 0–1) clause 2 is judged at: below, a dark
+/// The least luma at the cue (E14's luma, 0–1) clause 2 is judged at: below, a dark
 /// room's noise would decide it (Q-390).
 // Q-390
 const MIN_CUE_LUMA: f32 = 0.05;
