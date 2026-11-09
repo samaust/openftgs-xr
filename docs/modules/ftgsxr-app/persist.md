@@ -1,6 +1,6 @@
 # Settings, scenes and poses in `ftgsxr-app`
 
-How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's poses: `SettingsPath`, `SettingsRes`, `PersistCommand`, `scene_from_world` and `apply_scene`. The spec items are §1.5 Poses and Scene files, §1.11, D-11, D-23 and §2.1 `ftgsxr_app::persist`; this doc explains them and never overrides them. Built in M-4 (#277's minimal load, #285); the environment mode's gate, the Environment tab's XR controls and the scene anchor's handshake in M-6 (#567). The M-6 spec items are §1.9, §1.4 Backgrounds, §1.8 Locomotion, §1.11 `[environment]` and Scene files' `anchor`, and §1.15 E-XR-PERMISSION.
+How `ftgsxr_app::persist` meets §1.11's settings and scene files and §1.5's poses: `SettingsPath`, `SettingsRes`, `PersistCommand`, `scene_from_world` and `apply_scene`. The spec items are §1.5 Poses and Scene files, §1.11, D-11, D-23 and §2.1 `ftgsxr_app::persist`; this doc explains them and never overrides them. Built in M-4 (#277's minimal load, #285); the environment mode's gate, the Environment tab's XR controls and the scene anchor's handshake in M-6 (#567); the effective lighting mode, the off and manual writer, `Toggle(Feature::Lighting)` and the Environment tab's lighting controls in M-7 (#665). The M-6 spec items are §1.9, §1.4 Backgrounds, §1.8 Locomotion, §1.11 `[environment]` and Scene files' `anchor`, and §1.15 E-XR-PERMISSION.
 
 ## Settings
 
@@ -21,6 +21,14 @@ The dock's layout is saved too (§1.7 Panels, spec revision 24, #428): at startu
 `Toggle(Feature::Occlusion)` flips `[environment] occlusion`, as the other toggles flip theirs; `Toggle(Feature::Passthrough)` is the XR crate's (Q-335, Q-336).
 
 The Environment tab draws the VR-mode controls, background and grid, everywhere, and the XR controls only for the features `XrFeatures` reports (Q-336, §1.9 "On the desktop the Environment tab shows the VR-mode controls only"): with passthrough, the mode switch, which writes `Toggle(Feature::Passthrough)`, the three style sliders and the contact-shadows switch, and, when `XrFeatures.hands` is not `Absent` either and hand removal is off, the tracked hands' gauntlet controls (§1.9, Q-366), offered with or without the depth provider: the gauntlet margin's slider over 0–2 cm (`hand_gauntlet_margin_m`) and "draw gauntlets" (`hand_gauntlets`); with occlusion, its switch, soft or hard, δ's slider over §1.9's range and hand removal, with the note "off in the <tier> tier" while the running tier's `occlusion` flag turns it off (Q-338). Under a `Denied` feature the line says the permission was denied and "Ask again" writes its toggle again (§1.15 E-XR-PERMISSION); for occlusion, whose denial turns the setting off, that toggle turns it on and asks once more (Q-355). The other controls edit the settings directly.
+
+## The lighting mode and its controls
+
+The effective lighting mode is `[environment] lighting_mode`, except that an auto mode counts as `manual` while `XrFeatures.lighting` is not `Available` (the desktop, `play --xr`, an older OS, a denied permission), without rewriting the setting (Q-384, the environment mode's gate pattern above). From it `persist`'s settings sync writes `Lighting.transform`: the identity in off mode, E14's manual form of `lighting_manual` in manual mode or under a gated auto mode, only on a change; in an effective auto mode the transform is the XR crate's (Q-383, `ftgsxr-xr/light.md`).
+
+`Toggle(Feature::Lighting)` turns `lighting_mode` off when it is not, else back to the mode last set in this session by any writer, `manual` when none, an auto mode restored clearing `lighting_reference` so the next smoothed estimate is captured (§1.9's enabling); no binding produces it yet (Q-391).
+
+The Environment tab's lighting section offers the four modes only while `XrFeatures.lighting` is `Available`; otherwise off and manual, an auto setting shown as manual, with the reason: no passthrough camera on the desktop, not available on this OS, or permission denied with "Ask again", which sends `AskPermissionAgain(Permission::Camera)` (Q-384, Q-322). Picking an auto mode and "re-capture reference" write `lighting_reference = None`, so the XR crate captures the lighting reference E_ref from the next smoothed estimate and writes it back into the settings, and so into the scene at a save; a scene or a start that arrives with an auto mode keeps the file's reference (Q-385, D-38). Auto local shows "local needs occlusion" while occlusion is off (Q-388). Beside them: the manual sliders, γ's slider, the current gains (`Lighting.transform`'s gain) and "per instance", which sets `Lighting.per_instance` (Q-383).
 
 ## Poses
 
@@ -46,4 +54,4 @@ A crate-private `PersistFailure { code, text }` carries the settings' and the po
 
 ## Q-n rows relied on
 
-Q-163, Q-166, Q-170, Q-173, Q-185, Q-195, Q-228, Q-335, Q-336, Q-343, Q-350, Q-355, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-225, Q-245, Q-252, Q-253, Q-255, Q-258, Q-330; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.
+Q-383, Q-384, Q-385, Q-388, Q-391, Q-163, Q-166, Q-170, Q-173, Q-185, Q-195, Q-228, Q-335, Q-336, Q-343, Q-350, Q-355, Q-188, Q-200, Q-201, Q-202, Q-203, Q-204, Q-205, Q-206, Q-207, Q-218, Q-225, Q-245, Q-252, Q-253, Q-255, Q-258, Q-330; with Q-3, Q-49, Q-50, Q-51 and Q-54 from M-1.

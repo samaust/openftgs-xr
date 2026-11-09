@@ -137,3 +137,132 @@ fn toggle_occlusion_flips_the_setting() {
     t.frames(2);
     assert_eq!(occlusion(&t), before);
 }
+
+/// The effective lighting mode (§1.9 "only manual mode is offered", Q-384, `cpu`): an
+/// auto setting counts as manual while `XrFeatures.lighting` is `Absent` or `Denied`, so
+/// the environment's transform is E14's manual form of `lighting_manual`, and as itself
+/// under `Available`, where the transform is the XR crate's and persist leaves it; the
+/// setting is never rewritten.
+#[test]
+fn an_auto_lighting_mode_counts_as_manual_unless_the_camera_is_available() {
+    use ftgsxr_app::{FeatureState, Lighting, XrFeatures};
+    use ftgsxr_render::ColorTransform;
+    let estimated = Vec3::new(3.0, 0.5, 1.5);
+    // EV 1, neutral: g = 2, w = (1, 1, 1).
+    let manual = Vec3::splat(2.0);
+    for (state, want) in [
+        (FeatureState::Absent, manual),
+        (FeatureState::Denied, manual),
+        (FeatureState::Available, estimated),
+    ] {
+        let mut t = app("lighting_gate", true);
+        t.app.insert_resource(XrFeatures {
+            lighting: state,
+            ..XrFeatures::default()
+        });
+        {
+            let mut s = t.app.world_mut().resource_mut::<SettingsRes>();
+            s.0.environment.lighting_mode = "auto-global".into();
+            s.0.environment.lighting_manual.exposure_ev = 1.0;
+        }
+        t.app.world_mut().resource_mut::<Lighting>().transform = ColorTransform { gain: estimated };
+        t.frames(2);
+        let gain = t.app.world().resource::<Lighting>().transform.gain;
+        assert!(
+            (gain - want).abs().max_element() < 1e-6,
+            "{state:?}: {gain}"
+        );
+        let mode = &t
+            .app
+            .world()
+            .resource::<SettingsRes>()
+            .0
+            .environment
+            .lighting_mode;
+        assert_eq!(mode, "auto-global", "{state:?}: the setting is kept");
+    }
+    // Off: the identity, whatever the camera.
+    let mut t = app("lighting_off", false);
+    t.app.world_mut().resource_mut::<Lighting>().transform = ColorTransform { gain: estimated };
+    t.frames(2);
+    assert_eq!(
+        t.app.world().resource::<Lighting>().transform.gain,
+        Vec3::ONE
+    );
+}
+
+/// `Toggle(Feature::Lighting)` (Q-391): a mode other than off becomes off, and off
+/// becomes the mode last set in this session, `manual` when none was; restoring an auto
+/// mode clears `lighting_reference` (Q-391, owner 2026-11-09).
+#[test]
+fn toggle_lighting_turns_off_and_back_to_the_last_mode() {
+    use ftgsxr_app::{Feature, Intent};
+    let mut t = app("toggle_lighting", true);
+    t.frames(1);
+    let mode = |t: &TestApp| {
+        t.app
+            .world()
+            .resource::<SettingsRes>()
+            .0
+            .environment
+            .lighting_mode
+            .clone()
+    };
+    let toggle = |t: &mut TestApp| {
+        t.app
+            .world_mut()
+            .write_message(Intent::Toggle(Feature::Lighting));
+        t.frames(2);
+    };
+    assert_eq!(mode(&t), "off");
+    toggle(&mut t);
+    assert_eq!(mode(&t), "manual", "none set yet: manual");
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .lighting_mode = "auto-local".into();
+    t.frames(2);
+    toggle(&mut t);
+    assert_eq!(mode(&t), "off");
+    // An auto mode restored counts as enabling it (§1.9): the reference is cleared, so
+    // the next smoothed estimate is captured; manual keeps it.
+    let reference = |t: &mut TestApp, r: Option<[f32; 4]>| {
+        t.app
+            .world_mut()
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .lighting_reference = r;
+    };
+    let held = Some([0.5, 0.4, 0.3, 0.42]);
+    reference(&mut t, held);
+    toggle(&mut t);
+    assert_eq!(mode(&t), "auto-local", "the mode last set");
+    let env = |t: &TestApp| {
+        t.app
+            .world()
+            .resource::<SettingsRes>()
+            .0
+            .environment
+            .clone()
+    };
+    assert_eq!(env(&t).lighting_reference, None, "restoring auto clears it");
+    t.app
+        .world_mut()
+        .resource_mut::<SettingsRes>()
+        .0
+        .environment
+        .lighting_mode = "manual".into();
+    t.frames(2);
+    toggle(&mut t);
+    reference(&mut t, held);
+    toggle(&mut t);
+    assert_eq!(mode(&t), "manual");
+    assert_eq!(
+        env(&t).lighting_reference,
+        held,
+        "restoring manual keeps it"
+    );
+}

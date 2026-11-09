@@ -1,0 +1,46 @@
+# Light estimation in `ftgsxr-xr`
+
+How `ftgsxr_xr::light` makes the content's colors follow the room: the lighting mode read from the settings, the camera thumbnails' statistics, the smoother, the lighting reference E_ref, the gains, auto local's depth band, and Dv-11's device side (M-7, #668, #669). The spec items are §1.9 Light estimation and color matching, E14, D-15, D-38, §1.11 `[environment]` `lighting_*`, §1.13 HUD, §1.15 E-XR-PERMISSION and E-XR-UNSUPPORTED, §2.1 `LightingMode`, `LightEstimate`, `light_gains`, `manual_gains`, `grey_world_gains`, `CameraFrames`, `CameraThumb` and `Permission::Camera`, and §3.4 Dv-11; this doc explains them and never overrides them. The app's side (`Lighting`, the composer, the off and manual writer, the Environment tab's controls) is in `ftgsxr-app/ui.md` and `persist.md`; the shim's camera and `QuestPlatform`'s frames in `ftgsxr-quest/android.md`.
+
+## Two halves
+
+- **The pure part** (`light.rs`, public through Q-382): `LightingMode::from_settings`, `LightEstimate::from_thumb` (E14's mean RGB over Ω and the luma of that mean), `band_mask` (d_m ± Δ and the 1 % fallback), `LightSmoother` (E14's exponential moving average over consecutive thumbnails' timestamps), and the three gains functions. A ratio whose denominator is zero or whose quotient is not finite is read as 1, so a black reference never divides (Q-382). U-20 tests it at the public interface.
+- **The control** (`light/control.rs`, main world, `Update`, after `tracking`; added by `plugin` with `XrPlugin.passthrough`): a plain `Control::step` over one frame's `Inputs` and `Outputs`, so its private `cpu` tests drive the permission flow, the start errors, the run condition, the reference and the stale restart without a world. `light/band.rs` is auto local's depth (below); `light/dv11.rs` is Dv-11.
+
+## The effective mode and the permission
+
+The effective lighting mode is the setting's, except that an auto mode counts as manual while `XrFeatures.lighting` is not `Available`, without rewriting the setting, so the desktop and `play --xr` never estimate (Q-384). `persist` applies the same gate for the off and manual writer (`ftgsxr-app/persist.md`).
+
+`light` writes `XrFeatures.lighting` each frame: `Absent` without a session, without the platform's `CameraFrames`, or once `start` reported no passthrough camera; `Denied` after a denial; `Available` otherwise (Q-384). `Permission::Camera` is asked through the platform port the first time an auto mode is wanted where the camera would then run, the session running in passthrough mode (Q-348's pattern: asked when first used). A denial writes `lighting_mode` back to `manual`, toasts E-XR-PERMISSION with Y "light estimation" (Q-261) and lists the permission in `DeniedPermissions`; an auto mode selected again or `AskPermissionAgain(Permission::Camera)` asks once more (Q-322, Q-355). The flow is kept across sessions; the absent camera and its one toast per session are reset with each session (Q-161).
+
+`CameraFrames::start`'s `Err` tells the cases apart by its text (Q-392): one beginning with `E-XR-UNSUPPORTED` makes the feature `Absent` for the session, logged as a warning, with the write-back to `manual` and a toast when an auto mode was asked; any other `Err` is a failed start, a warning, the feature left `Available` and the start retried 2 s later at the earliest.
+
+## The camera's life
+
+The camera runs while four conditions hold: the effective lighting mode is auto, the permission is granted, the session runs, and the effective environment mode is passthrough, as the depth provider's (Q-385, Q-338). It stops when one ends and starts again when all hold. While started, no new thumbnail for 2 s counts as a stop, which covers the shim closing the camera after an error or at `onPause` (Q-386); the next frame whose conditions hold starts it again. The smoother restarts at each start. In VR mode an auto mode's `Lighting.transform` is the identity and the controls stay.
+
+## The estimate, the reference and the gains
+
+Each new thumbnail, polled once per frame through `CameraFrames::latest`, gives a `LightEstimate` over the frame, or over the depth band in auto local, which is pushed into the smoother; Δt is the difference of consecutive thumbnails' timestamps, the shim's clock, so no conversion to XrTime is needed (Q-385).
+
+The lighting reference E_ref is `lighting_reference`. One rule captures it: while an auto mode is in force and the reference is `None`, the next smoothed estimate (the first thumbnail's, when the camera is starting) is written into the setting, and so into the scene at a save. The Environment tab writes `None` when the user picks an auto mode and on "re-capture reference", so enabling captures as §1.9 says; a start or a scene load that arrives with the mode already auto keeps the file's reference (D-38). While no reference exists, `grey_world_gains` applies, which lasts no frame in practice (Q-385; §1.9's four modes expose no grey-world choice, which PRD #664 reported to the owner).
+
+Each frame the gains are recomputed from the smoothed estimate, the reference and `lighting_gamma`, and written into `Lighting.transform` in an effective auto mode and into `HudData.light_gains` while the camera runs, `None` otherwise (Q-383, Q-389).
+
+## Auto local's depth band
+
+d_m is the distance from the head (the views' midpoint) to the selected instance's posed B_m centre (E10, Q-388). The depth is the left view's `DepthFrame.image`, the converted and median-filtered image of `depth.md`, read back without waiting (§2.4 rule 1):
+
+- **The readback.** While auto local is in force (the effective mode, the camera `Available` as of the last frame), an instance is selected, passthrough mode is on and the provider runs, `band::request` spawns a one-shot `Readback::texture` of that image when a new capture arrived (`age_frames` 0) and none is in flight, and removes its `Readback` the frame after, so one extract copies it once. Bevy's render system encodes the copy after the drive's median pass, which was submitted in `PrepareResources`, so the band never reads a half-written image; this needs the copy-source usage `depth` gives the views' images (Q-388). The `ReadbackComplete` observer keeps the floats, unpadded from the copy's 256-byte rows, as the snapshot with the camera and planes of the left view's frame then current; a capture newer than the one asked for is read whole, since the copy follows its median pass. A readback is expected within two frames and dropped after ten, the band then staying on the older snapshot or the frame. On the Quest 3 the readback arrived within two frames, as Q-388 expects; the first completion is logged.
+- **The mapping.** Each thumbnail pixel's ray through `CameraThumb.camera`'s intrinsics is rotated into the depth camera with the two centres taken as coincident, projected into the depth image, and the nearest texel decoded to metres along the depth camera's axis by E13's rule, `occlusion.wgsl`'s decode mirrored in Rust (Q-340), with a `cpu` test on the shader's hand-worked values; that axis depth is scaled by the texel's ray length |K_d⁻¹(u, v, 1)|, so the band compares straight-line distances from the eye on both sides, as E14's "distance" reads (Q-388, the owner's answer). A texel invalid to the decode, a ray behind the depth camera or a projection outside the image is not in the band. Without the thumbnail's camera the mapping is by normalized image coordinates.
+- **The band.** `band_mask` applies d_m ± Δ and the 1 % fallback (Q-382). While the depth provider is not running or no instance is selected, auto local computes E14 over the frame; the Environment tab notes "local needs occlusion and a selected instance" while occlusion is off or nothing is selected (Q-388).
+
+## Dv-11 on the device
+
+Dv-11's clauses live here, since they read the control's thumbnails and its raw and smoothed estimates; they stay inert until the quest runner spawns `ftgsxr-test: dv11` and print the verdict line themselves (Q-308, Q-122). As Q-390 reads the row: the host driver grants both camera permissions; the device sets passthrough mode and auto global, waits for the camera and its first thumbnail, counts the thumbnails for 3 s by their changing timestamps (clause 1), then logs `dv11: cover`, the driver's cue to the person; for up to 20 s the first raw luma at or below half the luma at the cue (the smoothed estimate then) marks the cover's instant, and clause 2 passes when the smoothed estimate halves within 1 s of it. No cover in the window reports clause 2 as not run, not FAIL (Q-273). It then sets lighting off and requires the camera to stop. The detail reports the rate, whether the camera pose arrived and the luma ratio reached; the driver also prints the shim's logged data space (Q-386) and revokes the permissions.
+
+On the Quest 3 the thumbnails arrived at 56.6 Hz, and the shim logged the frames' data space as full range, which bears out Q-386's full-range conversion.
+
+## Q-n rows relied on
+
+Q-382, Q-383, Q-384, Q-385, Q-386, Q-387, Q-388, Q-389, Q-390, Q-392; with Q-122, Q-161, Q-250, Q-261, Q-273, Q-308, Q-322, Q-335, Q-338, Q-340, Q-341, Q-348, Q-355, Q-360 and Q-363.

@@ -7,6 +7,7 @@ mod dv_support;
 mod xr_support;
 
 mod dv10_storage;
+mod dv11_light;
 mod dv12_display;
 mod dv13_sleep_wake;
 mod dv1_install_launch;
@@ -22,6 +23,7 @@ mod i15_xr_session;
 mod i16_xr_input;
 mod i17_reference_spaces;
 mod r18_contact_shadow;
+mod u20_light;
 mod u32_hands_to_intents;
 mod u34_xr_error_catalog;
 mod u37_panel_placement;

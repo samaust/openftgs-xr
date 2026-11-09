@@ -5,7 +5,8 @@
 //! (the library and `tracking` poll once per frame on the main thread); a picked file is a
 //! `ModelRef::Document` and a picked tree a `ModelRef::Document` the library adds as a
 //! `documents` source; `listTree`'s rows become entries (`tree`, Q-297);
-//! `openDocument`'s descriptor becomes a `File`. The camera's frames are M-7's.
+//! `openDocument`'s descriptor becomes a `File`; the camera's frames are the shim's
+//! thumbnails (`camera`, Q-386), their camera built under the head's stage pose (Q-387).
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -15,12 +16,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::Poll;
 
 use bevy::log::{info, warn};
+use bevy::math::{Quat, Vec3};
 use ftgsxr_app::{
-    AppPaths, CameraFrames, DocumentProvider, Entry, IoError, ModelRef, Permission,
+    AppPaths, CameraFrames, CameraThumb, DocumentProvider, Entry, IoError, ModelRef, Permission,
     PermissionHandle, PickHandle, PickKind, Platform,
 };
 
-use crate::{shim, tree};
+use crate::{camera, shim, tree};
 
 /// The Quest's platform (§2.1): the paths and the shim's requests in flight. Cloning
 /// shares them, so the platform is its own document provider.
@@ -35,6 +37,10 @@ struct Inner {
     picks: Mutex<HashMap<u32, PickState>>,
     /// Each permission handle's shim requests: one per Android permission.
     permissions: Mutex<HashMap<u32, Vec<i32>>>,
+    /// The head's stage pose, written each frame from `XrHands.head` (Q-387).
+    head: Mutex<(Vec3, Quat)>,
+    /// The newest thumbnail, kept until a newer one arrives.
+    thumb: Mutex<Option<CameraThumb>>,
 }
 
 enum PickState {
@@ -74,8 +80,17 @@ impl QuestPlatform {
                 next: AtomicU32::new(1),
                 picks: Mutex::new(HashMap::new()),
                 permissions: Mutex::new(HashMap::new()),
+                head: Mutex::new((Vec3::ZERO, Quat::IDENTITY)),
+                thumb: Mutex::new(None),
             }),
         }
+    }
+
+    /// The head's stage pose this frame (`XrHands.head`), under which `latest` places the
+    /// next thumbnail's lens (Q-387).
+    // Q-387
+    pub(crate) fn set_head(&self, position: Vec3, rotation: Quat) {
+        *lock(&self.inner.head) = (position, rotation);
     }
 
     /// The next request id, kept positive for Java's `int`.
@@ -182,8 +197,39 @@ impl Platform for QuestPlatform {
     }
 
     fn camera_frames(&self) -> Option<Arc<dyn CameraFrames>> {
-        // M-7: the shim's camera methods.
-        None
+        Some(Arc::new(self.clone()))
+    }
+}
+
+// Q-386, Q-392
+impl CameraFrames for QuestPlatform {
+    fn start(&self) -> Result<(), String> {
+        let code = shim::start_camera().map_err(camera::not_opened)?;
+        camera::start_result(code)
+    }
+
+    fn latest(&self) -> Option<CameraThumb> {
+        let mut thumb = lock(&self.inner.thumb);
+        match shim::poll_camera_thumb() {
+            Ok(None) => {}
+            Ok(Some(array)) => match camera::parse(&array) {
+                Ok(parsed) => {
+                    let (position, rotation) = *lock(&self.inner.head);
+                    *thumb = Some(camera::thumb(parsed, position, rotation));
+                }
+                Err(e) => warn!("{e}"),
+            },
+            Err(e) => warn!("polling the camera's thumbnail: {e}"),
+        }
+        thumb.clone()
+    }
+
+    fn stop(&self) {
+        if let Err(e) = shim::stop_camera() {
+            warn!("stopping the camera: {e}");
+        }
+        // A restart's thumbnails are new frames: the last one is not kept across it.
+        lock(&self.inner.thumb).take();
     }
 }
 

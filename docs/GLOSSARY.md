@@ -760,6 +760,22 @@ _Avoid_: anchor (unqualified, where the grab point could be meant), world lock, 
 The one spatial anchor a scene file keeps, created at the content group's origin when the scene is saved in passthrough mode. §1.9, §1.11, D-26
 _Avoid_: scene origin, root anchor
 
+**Lighting mode**:
+Which of the four ways the content's colors follow the room is in force: off, manual, auto global or auto local; the Environment tab's choice, kept in the settings and the scene. §1.9, E14
+_Avoid_: color mode, light mode, matching mode, lighting (unqualified)
+
+**Lighting reference E_ref**:
+The smoothed light estimate captured when an auto mode is enabled or re-captured by the user, against which E14's gains are taken. E14, §1.9, D-38
+_Avoid_: baseline, calibration, white point
+
+**Camera thumbnail**:
+The 64 × 48 RGB reduction of one passthrough camera frame the shim hands the player, with its timestamp and, when known, the camera's pose and field of view. §1.9, §2.5, D-15
+_Avoid_: camera frame (the full image), preview, snapshot
+
+**Depth band**:
+The thumbnail pixels whose environment depth lies within Δ of the selected instance's distance from the eye, the region auto local estimates over. E14
+_Avoid_: depth slice, depth mask (the implementation's array), region of interest
+
 ### Files
 
 **File format**:

@@ -183,3 +183,41 @@ pub(crate) fn poll_permission(request_id: i32) -> Result<i32, String> {
             .i()
     })
 }
+
+/// `Shim.startCamera()`: 0 opening, 1 no passthrough camera, 2 a camera permission
+/// missing, 3 the open failed (Q-386).
+// Q-386
+pub(crate) fn start_camera() -> Result<i32, String> {
+    with_shim(|env, class| {
+        env.call_static_method(class, "startCamera", "()I", &[])?
+            .i()
+    })
+}
+
+/// `Shim.pollCameraThumb()`: the newest thumbnail's array once, `None` until the next.
+// Q-386
+pub(crate) fn poll_camera_thumb() -> Result<Option<Vec<f32>>, String> {
+    with_shim(|env, class| {
+        let array = env
+            .call_static_method(class, "pollCameraThumb", "()[F", &[])?
+            .l()?;
+        if array.is_null() {
+            return Ok(None);
+        }
+        let raw = array.into_raw();
+        let n = env.get_array_length(raw)?;
+        let mut out = vec![0.0f32; n.max(0) as usize];
+        env.get_float_array_region(raw, 0, &mut out)?;
+        env.delete_local_ref(array)?;
+        Ok(Some(out))
+    })
+}
+
+/// `Shim.stopCamera()`.
+// Q-386
+pub(crate) fn stop_camera() -> Result<(), String> {
+    with_shim(|env, class| {
+        env.call_static_method(class, "stopCamera", "()V", &[])?;
+        Ok(())
+    })
+}

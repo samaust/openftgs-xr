@@ -274,3 +274,34 @@ impl Validation {
         );
     }
 }
+
+/// `pm VERB` (`grant` or `revoke`) of each of `permissions` for the app; a failure (a
+/// permission the system grants at install, say) is only printed, after `test`'s name.
+pub fn pm(test: &str, verb: &str, permissions: &[&str]) {
+    for p in permissions {
+        let out = Command::new(adb_path())
+            .args(["shell", "pm", verb, PACKAGE, p])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => println!(
+                "{test}: pm {verb} {p}: {}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(e) => println!("{test}: pm {verb} {p}: {e}"),
+        }
+    }
+}
+
+/// Whether a logcat line containing `line` appears within `timeout`, polled every 200 ms.
+pub fn wait_for(line: &str, timeout: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if log().iter().any(|l| l.contains(line)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}

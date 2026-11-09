@@ -59,10 +59,11 @@ pub use rig::{
     ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
 };
 // §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`; Q-274:
-// `HudHandSource`; Q-336: `XrFeatures`, `FeatureState`; Q-345: `HudAnchor`.
+// `HudHandSource`; Q-336: `XrFeatures`, `FeatureState`; Q-345: `HudAnchor`; Q-383:
+// `Lighting`.
 pub use ui::{
-    FeatureState, HudAnchor, HudData, HudHandSource, HudInstance, PanelPointer, Toast, ToastLevel,
-    UiSurface, WorldPanel, WristMenu, XrFeatures, panel_hit,
+    FeatureState, HudAnchor, HudData, HudHandSource, HudInstance, Lighting, PanelPointer, Toast,
+    ToastLevel, UiSurface, WorldPanel, WristMenu, XrFeatures, panel_hit,
 };
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;
@@ -88,6 +89,9 @@ pub use ftgsxr_io::{DocumentProvider, ModelRef, Url};
 // with, and the source Dv-10's runner adds (§2.1's `ftgsxr-quest` depends on the app
 // alone), as Q-168.
 pub use ftgsxr_io::{Entry, EntryKind, SourceSpec, classify_name};
+// Q-393: what `ftgsxr_quest::QuestPlatform`'s `CameraFrames` builds a thumbnail's camera
+// with (Q-387), as Q-296.
+pub use ftgsxr_core::{Camera, Fov};
 // Q-89: the tier `cmd_render` (and M-4's `AppPlugin`) takes, for callers that depend on
 // the app alone (§2.1's `ftgsxr-desktop`).
 pub use ftgsxr_render::QualityTier;

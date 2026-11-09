@@ -255,6 +255,10 @@ pub struct HudData {
     /// The XR crate's to write.
     // Q-345
     pub anchor: Option<HudAnchor>,
+    /// The light estimate's gains (§1.13 HUD) while an auto lighting mode runs the
+    /// camera; `None` otherwise. The XR crate's to write.
+    // Q-389
+    pub light_gains: Option<Vec3>,
 }
 
 /// The scene anchor's state on the HUD (§1.13 HUD, Q-345).
@@ -305,6 +309,11 @@ pub struct XrFeatures {
     /// hands' gauntlets need (§1.9, Q-366).
     // Q-366
     pub hands: FeatureState,
+    /// Light estimation's passthrough camera (§1.9): `Absent` without the XR crate, a
+    /// session, the platform's `CameraFrames` or a passthrough camera; `Denied` after a
+    /// denial. The Environment tab offers the auto lighting modes only while `Available`.
+    // Q-384
+    pub lighting: FeatureState,
 }
 
 /// Which device a side's HUD line shows (Q-274): the XR crate's `HandSource`, which the
@@ -404,13 +413,73 @@ pub(crate) struct SceneLoadConfirmed(pub(crate) PathBuf);
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 
-impl InstanceLighting {
-    /// The component with the `SplatTransform` its values give.
-    pub(crate) fn bundle(m: ManualLighting) -> (InstanceLighting, SplatTransform) {
-        let transform = ColorTransform::from_manual(&m);
-        (InstanceLighting(m), SplatTransform(transform))
+/// The environment's lighting transform (§1.9 Light estimation and color matching):
+/// the identity in off mode, E14's manual form of `[environment] lighting_manual` in
+/// manual mode (`persist`'s settings sync), E14's gains in the auto modes (the XR crate).
+/// `compose_transforms` multiplies it into every instance's own transform, or only the
+/// `Selected` one's while `per_instance` is set; `per_instance` is session state, off at
+/// start and saved nowhere.
+// Q-383
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct Lighting {
+    /// The environment's gains, the identity by default.
+    pub transform: ColorTransform,
+    /// Whether the environment's factor goes to the selected instance only.
+    pub per_instance: bool,
+}
+
+impl Default for Lighting {
+    fn default() -> Lighting {
+        Lighting {
+            transform: ColorTransform::IDENTITY,
+            per_instance: false,
+        }
     }
 }
+
+/// An instance as `compose_transforms` reads it.
+type ComposeItem = (
+    Entity,
+    Option<&'static InstanceLighting>,
+    Has<Selected>,
+    Option<&'static mut SplatTransform>,
+);
+
+/// `SplatTransform`'s one writer: each instance's own E14 manual transform (the identity
+/// without `InstanceLighting`) times the environment's per channel, the environment's
+/// factor going to every instance, or only to the `Selected` one while "per instance" is
+/// set (to none when nothing is selected). Writes only what changed.
+// Q-383
+fn compose_transforms(
+    lighting: Res<Lighting>,
+    mut instances: Query<ComposeItem, With<LoadedModel>>,
+    mut commands: Commands,
+) {
+    for (e, own, selected, current) in &mut instances {
+        let own = own.map_or(ColorTransform::IDENTITY, |l| {
+            ColorTransform::from_manual(&l.0)
+        });
+        let gain = if !lighting.per_instance || selected {
+            own.gain * lighting.transform.gain
+        } else {
+            own.gain
+        };
+        let next = SplatTransform(ColorTransform { gain });
+        match current {
+            Some(mut c) => {
+                c.set_if_neq(next);
+            }
+            None => {
+                commands.entity(e).try_insert(next);
+            }
+        }
+    }
+}
+
+/// The set of `compose_transforms`, for the modules that insert `InstanceLighting` in
+/// `PostUpdate` to order themselves before it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ComposeTransforms;
 
 /// The most recent eight scene files, newest first (§1.5 Scene files, Q-200): the scene
 /// load dialog's list. `persist` refreshes it at startup and after each save and load; it
@@ -726,6 +795,8 @@ impl Plugin for UiPlugin {
             .init_resource::<HudData>()
             // Q-336
             .init_resource::<XrFeatures>()
+            // Q-383
+            .init_resource::<Lighting>()
             .init_resource::<DockHooks>()
             .init_resource::<ToastLimiter>()
             .init_resource::<SeenFailures>()
@@ -736,6 +807,7 @@ impl Plugin for UiPlugin {
                 (ui_commands, replace_picks, library_toasts, clock_toasts).in_set(UiSet),
             )
             .add_systems(PostUpdate, (raise_toasts, fill_hud).chain())
+            .add_systems(PostUpdate, compose_transforms.in_set(ComposeTransforms))
             .add_observer(splat_toasts)
             .add_observer(triggered_toasts);
         // `persist`'s scene query needs the component known before any instance has one.
@@ -1164,6 +1236,59 @@ pub(crate) fn load_system_font(ctx: &egui::Context) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A marked instance for the composer: `LoadedModel` from the P1 probe.
+    fn probe() -> LoadedModel {
+        let path = ftgsxr_testkit::fixtures_dir().join("probes/P1.safetensors");
+        let bytes = std::fs::read(&path).unwrap();
+        let n = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+        let info = ftgsxr_core::read_info(&bytes[8..8 + n], bytes.len() as u64).unwrap();
+        LoadedModel {
+            source: ModelRef::File(path),
+            identity: "0".repeat(64),
+            time: ftgsxr_core::ModelTime::from_span(&info.time),
+            info,
+            name: "P1".into(),
+            reduced: false,
+            audio: None,
+            frame_step_s: 1.0 / 30.0,
+        }
+    }
+
+    /// Q-383 (`cpu`): every instance's `SplatTransform` is the per-channel product of its
+    /// own E14 manual transform and the environment's; with "per instance" only the
+    /// `Selected` one takes the environment's factor, none when nothing is selected.
+    #[test]
+    fn compose_transforms_multiplies_the_instance_and_the_environment() {
+        let mut app = App::new();
+        app.init_resource::<Lighting>()
+            .add_systems(PostUpdate, compose_transforms);
+        // EV 1, neutral white balance: g = 2^1 = 2, w = (1, 1, 1).
+        let ev1 = ManualLighting {
+            exposure_ev: 1.0,
+            ..ManualLighting::default()
+        };
+        let lit = app.world_mut().spawn((probe(), InstanceLighting(ev1))).id();
+        let other = app.world_mut().spawn(probe()).id();
+        app.world_mut().resource_mut::<Lighting>().transform = ColorTransform {
+            gain: Vec3::new(2.0, 1.0, 1.0),
+        };
+        let gain = |app: &App, e: Entity| app.world().get::<SplatTransform>(e).unwrap().0.gain;
+        app.update();
+        assert_eq!(gain(&app, lit), Vec3::new(4.0, 2.0, 2.0));
+        assert_eq!(gain(&app, other), Vec3::new(2.0, 1.0, 1.0));
+        // Per instance, the other one selected: the lit one keeps its own factor only.
+        app.world_mut().resource_mut::<Lighting>().per_instance = true;
+        app.world_mut().entity_mut(other).insert(Selected);
+        app.update();
+        assert_eq!(gain(&app, lit), Vec3::new(2.0, 2.0, 2.0));
+        assert_eq!(gain(&app, other), Vec3::new(2.0, 1.0, 1.0));
+        // Nothing selected: no instance takes the environment's factor.
+        app.world_mut().entity_mut(other).remove::<Selected>();
+        app.update();
+        assert_eq!(gain(&app, lit), Vec3::new(2.0, 2.0, 2.0));
+        assert_eq!(gain(&app, other), Vec3::ONE);
+    }
 
     // Q-256: the question names the missing model and the picked file's path.
     #[test]
