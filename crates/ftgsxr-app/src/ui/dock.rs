@@ -496,6 +496,9 @@ pub(crate) fn source_from_input(text: &str) -> Option<SourceSpec> {
     None
 }
 
+/// The new source field's hint (§1.5 Sources, Q-160).
+const SOURCE_HINT: &str = "https://… index or /path/to/folder";
+
 /// The kind filters' labels, in `UiState.filter_kinds` order (`kind_index`).
 const KINDS: [&str; 4] = ["ftgs-if", "checkpoint", "PLY", "folders"];
 
@@ -567,7 +570,7 @@ fn library_tab(
         };
         ui.add(
             egui::TextEdit::singleline(&mut state.new_source)
-                .hint_text("https://… index or /path/to/folder")
+                .hint_text(SOURCE_HINT)
                 .desired_width(field),
         );
         let spec = source_from_input(&state.new_source);
@@ -1526,13 +1529,27 @@ mod tests {
     // unchanged; the dock's width does not depend on its tabs' layout.
     #[test]
     fn show_dock_panel_keeps_the_saved_width_with_content_of_any_width() {
-        for content in [900.0, 50.0] {
-            let mut dock = Dock::new(320.0);
-            for _ in 0..5 {
-                let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
-                    ui.allocate_space(egui::vec2(content, 1.0));
-                });
-                assert_eq!((drawn, dock.saved), (320.0, 320.0), "content {content}");
+        // Drawn straight in the dock, and in the dock's two-way scroll area as the tabs
+        // are (Q-376: a row wider than the dock is reached by the horizontal bar).
+        for scrolled in [false, true] {
+            for content in [900.0, 50.0] {
+                let mut dock = Dock::new(320.0);
+                for _ in 0..5 {
+                    let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
+                        if scrolled {
+                            dock_scroll_area().show(ui, |ui| {
+                                ui.allocate_space(egui::vec2(content, 1.0));
+                            });
+                        } else {
+                            ui.allocate_space(egui::vec2(content, 1.0));
+                        }
+                    });
+                    assert_eq!(
+                        (drawn, dock.saved),
+                        (320.0, 320.0),
+                        "content {content}, scrolled {scrolled}"
+                    );
+                }
             }
         }
     }
@@ -2368,7 +2385,7 @@ mod tests {
     const CONTROLS: [&str; 12] = [
         "Refresh",
         "Remove",
-        "https://… index or /path/to/folder",
+        super::SOURCE_HINT,
         "Add source",
         "Open files…",
         "Add folder…",
@@ -2425,7 +2442,7 @@ mod tests {
         let ctx = font_context();
         library_frame(&ctx, &mut world, 160.0, Vec::new());
         let (texts, _) = library_frame(&ctx, &mut world, 160.0, Vec::new());
-        let hint = "https://… index or /path/to/folder";
+        let hint = super::SOURCE_HINT;
         let at = texts
             .iter()
             .find(|(t, _)| t == hint)
