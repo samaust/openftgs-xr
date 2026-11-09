@@ -9,11 +9,11 @@
 //! granted both camera permissions), waits for the camera to run and its first
 //! thumbnail, counts the thumbnails for [`COUNT`] by their changing timestamps (clause 1:
 //! 30 Hz or more), logs `dv11: cover` as the cue, and for up to [`WATCH`] watches the raw
-//! thumbnails: the first raw luma at or below half the baseline (the smoothed estimate at
-//! the cue) marks the cover's instant, and clause 2 passes when the smoothed estimate
-//! falls to half the baseline or less within [`WITHIN`] of it; no cover within the window
-//! reports clause 2 as not run, not FAIL (Q-390, Q-273). Then `lighting_mode` goes to
-//! `off` and the camera must stop. The detail reports the rate, whether the camera pose
+//! thumbnails: the first raw luma at or below half the luma at the cue (the smoothed
+//! estimate then) marks the cover's instant, and clause 2 passes when the smoothed
+//! estimate falls to half the luma at the cue or less within [`WITHIN`] of it; no cover
+//! within the window reports clause 2 as not run, not FAIL (Q-390, Q-273). Then
+//! `lighting_mode` goes to `off` and the camera must stop. The detail reports the rate, whether the camera pose
 //! arrived, and the luma ratio reached.
 
 use std::time::{Duration, Instant};
@@ -45,6 +45,7 @@ const FIRST_TIMEOUT: Duration = Duration::from_secs(20);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Clause 1's verdict from the thumbnails counted over `window` (Q-390).
+// Q-390
 pub(crate) fn rate_hz(thumbs: u64, window: Duration) -> f64 {
     thumbs as f64 / window.as_secs_f64()
 }
@@ -52,7 +53,7 @@ pub(crate) fn rate_hz(thumbs: u64, window: Duration) -> f64 {
 /// Clause 2's state (Q-390).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Cover {
-    /// No raw luma at or below half the baseline yet.
+    /// No raw luma at or below half the luma at the cue yet.
     Waiting,
     /// Covered at the instant; the smoothed estimate not yet halved.
     Covered(Instant),
@@ -62,11 +63,12 @@ pub(crate) enum Cover {
     Fail,
 }
 
-/// One observation of clause 2: `raw` and `smoothed` luma against `baseline` at `now`.
-pub(crate) fn watch(cover: Cover, baseline: f32, raw: f32, smoothed: f32, now: Instant) -> Cover {
-    let half = 0.5 * baseline;
+/// One observation of clause 2: `raw` and `smoothed` luma against `cue_luma` at `now`.
+// Q-390
+pub(crate) fn watch(cover: Cover, cue_luma: f32, raw: f32, smoothed: f32, now: Instant) -> Cover {
+    let half = 0.5 * cue_luma;
     match cover {
-        Cover::Waiting if raw <= half => watch(Cover::Covered(now), baseline, raw, smoothed, now),
+        Cover::Waiting if raw <= half => watch(Cover::Covered(now), cue_luma, raw, smoothed, now),
         Cover::Covered(at) if smoothed <= half && now - at <= WITHIN => Cover::Pass,
         Cover::Covered(at) if now - at > WITHIN => Cover::Fail,
         c => c,
@@ -83,7 +85,7 @@ enum Phase {
     },
     Watching {
         at: Instant,
-        baseline: f32,
+        cue_luma: f32,
         cover: Cover,
     },
     Stopping,
@@ -127,6 +129,7 @@ fn detect(names: Query<&Name>, mut commands: Commands) {
 }
 
 #[cfg_attr(test, allow(dead_code))]
+// Q-390
 fn run(
     mut test: ResMut<Dv11>,
     state: Option<Res<XrState>>,
@@ -179,28 +182,28 @@ fn run(
                 test.pass &= ok;
                 test.parts
                     .push(format!("camera pose arrived: {}", control.pose_seen));
-                let baseline = control.smoother.current().map_or(0.0, |e| e.luma);
-                test.parts.push(format!("baseline luma {baseline:.4}"));
+                let cue_luma = control.smoother.current().map_or(0.0, |e| e.luma);
+                test.parts.push(format!("luma at the cue {cue_luma:.4}"));
                 info!("dv11: cover");
                 test.enter(Phase::Watching {
                     at: now,
-                    baseline,
+                    cue_luma,
                     cover: Cover::Waiting,
                 });
             }
         }
         Phase::Watching {
             at,
-            baseline,
+            cue_luma,
             cover,
         } => {
             let raw = control.raw.map_or(f32::INFINITY, |e| e.luma);
             let smoothed = control.smoother.current().map_or(f32::INFINITY, |e| e.luma);
-            if baseline > 0.0 {
-                test.min_ratio = test.min_ratio.min(smoothed / baseline);
+            if cue_luma > 0.0 {
+                test.min_ratio = test.min_ratio.min(smoothed / cue_luma);
             }
-            let cover = if baseline > 0.0 {
-                watch(cover, baseline, raw, smoothed, now)
+            let cover = if cue_luma > 0.0 {
+                watch(cover, cue_luma, raw, smoothed, now)
             } else {
                 cover
             };
@@ -229,7 +232,7 @@ fn run(
                 None => {
                     test.phase = Phase::Watching {
                         at,
-                        baseline,
+                        cue_luma,
                         cover,
                     }
                 }
@@ -276,8 +279,8 @@ mod tests {
         assert!(rate_hz(89, Duration::from_secs(3)) < MIN_HZ);
     }
 
-    /// Q-390: the first raw luma at or below half the baseline marks the cover; clause 2
-    /// passes when the smoothed estimate is halved within 1 s of it, fails after.
+    /// Q-390: the first raw luma at or below half the luma at the cue marks the cover;
+    /// clause 2 passes when the smoothed estimate is halved within 1 s of it, fails after.
     #[test]
     fn watch_marks_the_cover_and_times_the_smoothed_drop() {
         let t = Instant::now();

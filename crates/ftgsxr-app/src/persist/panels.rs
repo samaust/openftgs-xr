@@ -288,7 +288,7 @@ fn lighting_controls(
     };
     let mut ask = false;
     ui.horizontal(|ui| {
-        ui.label("lighting");
+        ui.label("lighting mode");
         for (mode, label) in &LIGHTING_CHOICES[..offered] {
             if ui.selectable_label(shown == *mode, *label).clicked() && shown != *mode {
                 e.lighting_mode = (*mode).into();
