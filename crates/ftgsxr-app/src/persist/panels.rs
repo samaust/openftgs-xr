@@ -8,6 +8,7 @@
 //! `audio`'s section and the tier and governor are `governor`'s.
 
 use bevy::ecs::prelude::*;
+use bevy::math::Vec3;
 use bevy_egui::egui;
 use ftgsxr_core::LoopMode;
 use ftgsxr_io::Settings;
@@ -18,7 +19,7 @@ use crate::intent::{Feature, Intent};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
 use crate::platform::{AskPermissionAgain, DeniedPermissions, Headset, Permission};
-use crate::ui::{FeatureState, Lighting, UiCue, XrFeatures};
+use crate::ui::{FeatureState, HudData, Lighting, UiCue, XrFeatures};
 
 /// The values `ftgsxr-io` accepts for the string keys (§1.11).
 const TIERS: &[&str] = &[
@@ -191,6 +192,8 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .iter(world)
         .next();
     let mut light = world.get_resource::<Lighting>().copied();
+    // Q-394: E14's part of the gains, for the auto modes.
+    let e14_gains = world.get_resource::<HudData>().and_then(|h| h.light_gains);
     let mut ask_camera = false;
     let mut toggles = Vec::new();
     edit(world, ui, |s, ui| {
@@ -259,7 +262,15 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             ui.checkbox(&mut e.hand_removal, "hand removal");
         }
         ui.separator();
-        ask_camera = lighting_controls(ui, s, &features, headset, selected, light.as_mut());
+        ask_camera = lighting_controls(
+            ui,
+            s,
+            &features,
+            headset,
+            selected,
+            light.as_mut(),
+            e14_gains,
+        );
     });
     if let Some(l) = light
         && world.get_resource::<Lighting>().is_some_and(|w| *w != l)
@@ -280,15 +291,19 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// The Environment tab's lighting controls (§1.9 Light estimation and color matching):
 /// the mode, offering the auto modes only where the camera is `Available` and otherwise
 /// showing an auto setting as manual, kept, and the reason whatever the setting (Q-384); picking an auto mode
-/// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion
+/// or "re-capture reference" clears `lighting_reference`, and while it is `None` the tab
+/// says "too dark to capture a reference" or "capturing reference…" by
+/// `Lighting.too_dark` (Q-385); "local needs occlusion
 /// and a selected instance" beside auto local without occlusion's depth or without a
 /// selected instance (Q-388); the manual sliders, the strength
 /// γ, the current gains and "per instance" (Q-383: turning it on pins the instance then
 /// selected, it can't be turned on while nothing is selected and turning it off sets
 /// `None`; a pinned target stands for the selection in the note, as the XR crate's
-/// band takes it for the depth band's instance). True when "Ask again" was pressed for
-/// a denied camera (Q-322).
-// Q-322, Q-383, Q-384, Q-385, Q-388
+/// band takes it for the depth band's instance). The gains are, in the auto modes,
+/// E14's part `e14_gains` (`HudData.light_gains`), 1 per channel where it is `None`,
+/// without the manual offset the sliders show (Q-394); otherwise `Lighting.transform`'s.
+/// True when "Ask again" was pressed for a denied camera (Q-322).
+// Q-322, Q-383, Q-384, Q-385, Q-388, Q-394
 fn lighting_controls(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -296,11 +311,13 @@ fn lighting_controls(
     headset: bool,
     selected: Option<Entity>,
     light: Option<&mut Lighting>,
+    e14_gains: Option<Vec3>,
 ) -> bool {
     let camera = features.lighting;
     let occlusion_on = s.environment.occlusion && features.occlusion == FeatureState::Available;
     let e = &mut s.environment;
     let shown = super::effective_lighting_mode_of(&e.lighting_mode, camera).to_owned();
+    let auto = shown.starts_with("auto");
     let offered = if camera == FeatureState::Available {
         4
     } else {
@@ -334,11 +351,19 @@ fn lighting_controls(
         }
         _ => {}
     }
-    if shown.starts_with("auto") {
+    if auto {
         // Q-383: while a target is pinned, the band is measured around it.
         let target = selected.is_some() || light.as_ref().is_some_and(|l| l.per_instance.is_some());
         if shown == "auto-local" && !(occlusion_on && target) {
             ui.label("local needs occlusion and a selected instance");
+        }
+        // Q-385: why an auto mode has no reference yet.
+        if e.lighting_reference.is_none() {
+            ui.label(if light.as_ref().is_some_and(|l| l.too_dark) {
+                "too dark to capture a reference"
+            } else {
+                "capturing reference…"
+            });
         }
         if ui.button("re-capture reference").clicked() {
             e.lighting_reference = None;
@@ -350,7 +375,11 @@ fn lighting_controls(
     ui.add(egui::Slider::new(&mut m.tint, -1.0..=1.0).text("tint"));
     ui.add(egui::Slider::new(&mut e.lighting_gamma, 0.0..=1.0).text("strength γ"));
     if let Some(l) = light {
-        let g = l.transform.gain;
+        let g = if auto {
+            e14_gains.unwrap_or(Vec3::ONE)
+        } else {
+            l.transform.gain
+        };
         ui.label(format!("gains {:.2} {:.2} {:.2}", g.x, g.y, g.z));
         let mut on = l.per_instance.is_some();
         let enabled = on || selected.is_some();
@@ -1015,6 +1044,60 @@ mod tests {
         assert_eq!(target(&world), None);
     }
 
+    /// Q-385's two status lines (`cpu`): while an auto mode is shown and
+    /// `lighting_reference` is `None`, "too dark to capture a reference" when
+    /// `Lighting.too_dark` is set and "capturing reference…" otherwise; neither with a
+    /// reference, in manual mode, or with an auto setting shown as manual.
+    #[test]
+    fn the_environment_tab_says_why_the_reference_waits() {
+        const DARK: &str = "too dark to capture a reference";
+        const CAPTURING: &str = "capturing reference…";
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.init_resource::<Messages<AskPermissionAgain>>();
+        let ctx = egui::Context::default();
+        let lines = |world: &mut World| -> (bool, bool) {
+            frame_of(&ctx, world, Vec::new(), environment_section);
+            let texts = frame_of(&ctx, world, Vec::new(), environment_section);
+            let has = |l: &str| texts.iter().any(|(t, _)| t == l);
+            (has(DARK), has(CAPTURING))
+        };
+        let set = |world: &mut World, mode: &str, reference: Option<[f32; 4]>| {
+            let e = &mut world.resource_mut::<SettingsRes>().0.environment;
+            e.lighting_mode = mode.into();
+            e.lighting_reference = reference;
+        };
+        let dark = |world: &mut World, on: bool| {
+            world.insert_resource(Lighting {
+                too_dark: on,
+                ..Lighting::default()
+            });
+        };
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        set(&mut world, "auto-global", None);
+        assert_eq!(lines(&mut world), (false, true), "no Lighting resource");
+        dark(&mut world, false);
+        assert_eq!(lines(&mut world), (false, true), "waiting");
+        set(&mut world, "auto-local", None);
+        dark(&mut world, true);
+        assert_eq!(lines(&mut world), (true, false), "too dark");
+        set(&mut world, "auto-local", Some([0.2; 4]));
+        assert_eq!(lines(&mut world), (false, false), "a reference");
+        set(&mut world, "manual", None);
+        assert_eq!(lines(&mut world), (false, false), "manual");
+        set(&mut world, "auto-global", None);
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Absent,
+            ..XrFeatures::default()
+        });
+        assert_eq!(lines(&mut world), (false, false), "shown as manual");
+    }
+
     /// The Environment tab's lighting controls (§1.9 "only manual mode is offered and the
     /// UI says why", §1.15 E-XR-PERMISSION, Q-384, Q-385, Q-322, `cpu`): off and manual
     /// with the reason, whatever the setting, on the desktop and on the headset under
@@ -1187,5 +1270,52 @@ mod tests {
                 .lighting_reference,
             None
         );
+    }
+
+    /// Q-394 (`cpu`): while an auto mode is shown, the gains line reads
+    /// `HudData.light_gains`, E14's part without the manual offset, and 1 per channel
+    /// where it is `None`; in manual mode it reads `Lighting.transform.gain`.
+    #[test]
+    fn the_environment_tab_shows_e14s_gains_in_the_auto_modes() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.init_resource::<Messages<AskPermissionAgain>>();
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        world.insert_resource(Lighting {
+            transform: ftgsxr_render::ColorTransform {
+                gain: Vec3::splat(3.0),
+            },
+            ..Lighting::default()
+        });
+        world.insert_resource(HudData {
+            light_gains: Some(Vec3::new(1.5, 1.25, 0.25)),
+            ..HudData::default()
+        });
+        let ctx = egui::Context::default();
+        let shows = |world: &mut World, setting: &str, label: &str| {
+            world
+                .resource_mut::<SettingsRes>()
+                .0
+                .environment
+                .lighting_mode = setting.into();
+            // A second frame, as the module's other tests do: egui lays a changed
+            // panel out once before its texts are where they stay.
+            frame_of(&ctx, world, Vec::new(), environment_section);
+            let texts = frame_of(&ctx, world, Vec::new(), environment_section);
+            assert!(
+                texts.iter().any(|(t, _)| t == label),
+                "{setting}: {label}: {texts:?}"
+            );
+        };
+        shows(&mut world, "auto-global", "gains 1.50 1.25 0.25");
+        shows(&mut world, "auto-local", "gains 1.50 1.25 0.25");
+        shows(&mut world, "manual", "gains 3.00 3.00 3.00");
+        world.resource_mut::<HudData>().light_gains = None;
+        shows(&mut world, "auto-global", "gains 1.00 1.00 1.00");
     }
 }

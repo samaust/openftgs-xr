@@ -257,8 +257,9 @@ pub struct HudData {
     pub anchor: Option<HudAnchor>,
     /// The light estimate's gains (§1.13 HUD) while an auto lighting mode runs the
     /// camera; `None` otherwise. The value is g·w per channel, as `ColorTransform.gain`
-    /// holds it, not E14's g and w apart. The XR crate's to write.
-    // Q-389
+    /// holds it, not E14's g and w apart, and without the manual offset (Q-394). The XR
+    /// crate's to write.
+    // Q-389, Q-394
     pub light_gains: Option<Vec3>,
 }
 
@@ -416,11 +417,15 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 
 /// The environment's lighting transform (§1.9 Light estimation and color matching):
 /// the identity in off mode, E14's manual form of `[environment] lighting_manual` in
-/// manual mode (`persist`'s settings sync), E14's gains in the auto modes (the XR crate).
+/// manual mode (`persist`'s settings sync), and in the auto modes that manual form times
+/// E14's gains, or the manual form alone where the gains are not in force (the XR crate;
+/// E14, revision 52).
 /// `compose_transforms` multiplies it into every instance's own transform while
 /// `per_instance` is `None`, or only into the target's while it is `Some(e)`, whatever is
 /// selected later; `per_instance` is session state, `None` at start and saved nowhere.
-// Q-383
+/// `too_dark` is the XR crate's, for the Environment tab: an auto mode waits for a
+/// reference the room is too dark to give (Q-385).
+// Q-383, Q-385
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Lighting {
     /// The environment's gains, the identity by default.
@@ -428,6 +433,9 @@ pub struct Lighting {
     /// The one instance the environment's factor goes to ("per instance", the instance
     /// selected when it was turned on), `None` for every instance.
     pub per_instance: Option<Entity>,
+    /// An auto mode is in force, `lighting_reference` is `None`, the warm-up is over and
+    /// the smoothed estimate is below the reference's floor (Q-385).
+    pub too_dark: bool,
 }
 
 impl Default for Lighting {
@@ -435,6 +443,7 @@ impl Default for Lighting {
         Lighting {
             transform: ColorTransform::IDENTITY,
             per_instance: None,
+            too_dark: false,
         }
     }
 }
