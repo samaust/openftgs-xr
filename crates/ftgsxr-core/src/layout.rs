@@ -204,7 +204,7 @@ pub fn binding_row_cap(
         .iter()
         .enumerate()
         .map(|(i, &per_row)| {
-            let bound = if i == fields.len() - 1 {
+            let bound = if i == SH_FIELD {
                 sh_ranges
             } else {
                 binding_limit
@@ -215,6 +215,9 @@ pub fn binding_row_cap(
         .min()
         .unwrap_or(0)
 }
+
+/// The SH array's index in `field_bytes_per_primitive`'s order.
+const SH_FIELD: usize = 7;
 
 /// §1.12's bytes per primitive of each `GpuArrays` field under `opts`, in `GpuArrays`
 /// order (position, time center, duration, velocity, scale, rotation, opacity, SH), the

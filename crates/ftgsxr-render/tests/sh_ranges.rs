@@ -6,8 +6,9 @@
 //! bit-identical to the same model's on a device with the adapter's limits: the same
 //! values read through other bindings (`gpu`).
 
-use ftgsxr_core::pack_for_gpu;
-use ftgsxr_render::{RecordView, RenderMode, SplatDevice};
+use ftgsxr_core::{GpuLayoutOptions, HalfFields, Model, TemporalIndex, pack_for_gpu};
+use ftgsxr_render::{GpuModel, QualityTier, RecordView, RenderMode, SplatDevice};
+use ftgsxr_testkit::layer_messages;
 
 use crate::display_support::{self, Run, probe_camera};
 
@@ -59,10 +60,18 @@ fn record_bits(r: &RecordView) -> [u32; 12] {
     ]
 }
 
-/// One frame of `model` at τ = 0.95 seen by the probe camera at SH degree 3: its sorted
-/// record bits, its visible count and its layer's bits.
-fn frame(dev: &SplatDevice, model: &ftgsxr_core::Model) -> (Vec<[u32; 12]>, u32, Vec<[u32; 4]>) {
-    let gpu = display_support::upload(dev, model);
+/// One frame of `model`, packed under `layout`, at τ = 0.95 seen by the probe camera at SH
+/// degree 3 with `capacity` records: its sorted record bits, its visible count and its
+/// layer's bits.
+fn frame(
+    dev: &SplatDevice,
+    model: &Model,
+    layout: &GpuLayoutOptions,
+    capacity: u32,
+) -> (Vec<[u32; 12]>, u32, Vec<[u32; 4]>) {
+    let (index, order) = TemporalIndex::build(model);
+    let arrays = pack_for_gpu(model, &order, layout);
+    let gpu = GpuModel::upload(dev, &arrays, index, &model.conventions).expect("fits");
     let mut draw = display_support::draw(
         &gpu,
         0.95,
@@ -76,42 +85,43 @@ fn frame(dev: &SplatDevice, model: &ftgsxr_core::Model) -> (Vec<[u32; 12]>, u32,
         resolve: None,
         depth: false,
     };
-    // C = N: under the lowered binding, the records' buffer fits one binding too.
     let (frame, contents) =
-        display_support::render_with_records(dev, &[draw], &probe_camera(), &run, gpu.n());
+        display_support::render_with_records(dev, &[draw], &probe_camera(), &run, capacity);
+    assert!(!contents.overflow, "every visible row has a slot");
     let mut records: Vec<[u32; 12]> = contents.records.iter().map(record_bits).collect();
     records.sort_unstable();
     let layer = frame.layer.iter().map(|t| t.map(f32::to_bits)).collect();
     (records, contents.visible_splats, layer)
 }
 
-/// Q-377 (#642): under a 64 KiB storage binding, 1 000 degree-3 rows in float32 (a
-/// 192 000-byte SH buffer: three ranges of 65 536 bytes, the last 60 928) give the same
-/// record bits and layer bits as on the adapter's limits, where one binding holds the
-/// array, with no validation message on either device.
-#[test]
-#[ignore = "gpu"]
-fn gpu_sh_ranges_give_the_same_records_and_layer() {
-    let limit: u64 = 65_536;
-    let n = 1000;
+/// A random degree-3 model of `n` rows, every row persistent and opaque enough to reach
+/// α_skip, so rows in every SH range are drawn.
+fn persistent_model(n: usize) -> Model {
     let mut model = ftgsxr_testkit::random_model(642, n, 3);
-    // Every row persistent and opaque enough to reach α_skip, so rows in every range are
-    // drawn.
     for (d, o) in model.duration.iter_mut().zip(model.opacity.iter_mut()) {
         *d = 8.0;
         *o = o.max(0.5);
     }
+    model
+}
+
+/// `model` under `layout` gives the same record bits and layer bits on a device whose
+/// largest storage binding is `limit` as on the adapter's limits, where one binding holds
+/// its `sh_bytes`-byte SH array in `ranges` ranges, with no validation message on either
+/// device and at least `min_visible` rows drawn.
+fn assert_same_frames(
+    model: &Model,
+    layout: &GpuLayoutOptions,
+    capacity: u32,
+    limit: u64,
+    (sh_bytes, ranges): (u64, u64),
+    min_visible: u32,
+) {
     model.validate().expect("a valid model");
-    let order: Vec<u32> = ftgsxr_core::TemporalIndex::build(&model).1;
-    let sh_bytes = pack_for_gpu(
-        &model,
-        &order,
-        &ftgsxr_render::QualityTier::conformance().layout,
-    )
-    .sh
-    .len() as u64;
-    assert_eq!(sh_bytes, 192_000);
-    assert_eq!(sh_bytes.div_ceil(limit), 3, "three SH ranges");
+    let order = TemporalIndex::build(model).1;
+    let packed = pack_for_gpu(model, &order, layout).sh.len() as u64;
+    assert_eq!(packed, sh_bytes);
+    assert_eq!(sh_bytes.div_ceil(limit), ranges);
 
     let full = device(None);
     assert!(
@@ -121,12 +131,12 @@ fn gpu_sh_ranges_give_the_same_records_and_layer() {
     let low = device(Some(limit));
     assert_eq!(low.device().limits().max_storage_buffer_binding_size, limit);
 
-    let (records, visible, layer) = frame(&full, &model);
+    let (records, visible, layer) = frame(&full, model, layout, capacity);
     assert_eq!(full.take_validation_messages(), Vec::<String>::new());
-    let (low_records, low_visible, low_layer) = frame(&low, &model);
+    let (low_records, low_visible, low_layer) = frame(&low, model, layout, capacity);
     assert_eq!(low.take_validation_messages(), Vec::<String>::new());
 
-    assert!(visible > 500, "most rows drawn: {visible}");
+    assert!(visible >= min_visible, "rows drawn: {visible}");
     assert_eq!(low_visible, visible);
     assert!(low_records == records, "the records' bits differ");
     assert!(
@@ -134,4 +144,43 @@ fn gpu_sh_ranges_give_the_same_records_and_layer() {
         "the layer is covered somewhere"
     );
     assert!(low_layer == layer, "the layers' bits differ");
+}
+
+/// Q-377 (#642): under a 64 KiB storage binding, 1 000 degree-3 rows in float32 (a
+/// 192 000-byte SH buffer: three ranges of 65 536 bytes, the last 60 928, rows straddling
+/// two) give the same record bits and layer bits as on the adapter's limits, where one
+/// binding holds the array, with no validation message on either device.
+#[test]
+#[ignore = "gpu"]
+fn gpu_sh_ranges_give_the_same_records_and_layer() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let model = persistent_model(1000);
+    let layout = QualityTier::conformance().layout;
+    // C = N: under the lowered binding, the records' buffer (48 bytes a slot) fits too.
+    assert_same_frames(&model, &layout, 1000, 65_536, (192_000, 3), 500);
+}
+
+/// Q-377 (#642): the same in half-precision SH, two values a word: 1 800 degree-3 rows
+/// (96 bytes of SH a row, 172 800 bytes: three ranges, rows straddling two) under a 64 KiB
+/// binding, two rows in three moved behind the camera so the 1 200 records fit one
+/// binding.
+#[test]
+#[ignore = "gpu"]
+fn gpu_sh_ranges_in_half_precision_give_the_same_records_and_layer() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let mut model = persistent_model(1800);
+    for (i, p) in model.position.iter_mut().enumerate() {
+        if i % 3 != 0 {
+            // The probe camera sits at y = −4 looking along +y.
+            *p = [0.0, -10.0, 0.0];
+        }
+    }
+    let layout = GpuLayoutOptions {
+        half: HalfFields {
+            sh: true,
+            ..HalfFields::default()
+        },
+        ..QualityTier::conformance().layout
+    };
+    assert_same_frames(&model, &layout, 1200, 65_536, (172_800, 3), 300);
 }

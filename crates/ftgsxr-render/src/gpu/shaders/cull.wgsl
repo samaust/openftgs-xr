@@ -207,7 +207,8 @@ fn opacity_at(m: u32) -> f32 {
     return unpack_value(opacity[field_index(m, half)], m, half);
 }
 
-// Word w of the SH array: word w mod W of range w ÷ W (Q-377).
+// Word w of the SH array: word w mod W of range w ÷ W.
+// Q-377
 fn sh_word(w: u32) -> u32 {
     let i = w % model.sh_range_words;
     switch w / model.sh_range_words {

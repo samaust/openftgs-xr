@@ -207,13 +207,15 @@ pub(crate) fn sh_range_bytes(limits: &wgpu::Limits) -> u64 {
 }
 
 /// The SH ranges `bytes` of SH take at `range` bytes each, at least one (Q-377).
+// Q-377
 pub(crate) fn sh_ranges(bytes: u64, range: u64) -> u64 {
     bytes.div_ceil(range.max(1)).max(1)
 }
 
-/// W, the words of one SH range on `dev`, for the model's uniform (Q-377).
-fn sh_range_words(dev: &SplatDevice) -> u32 {
-    u32::try_from(sh_range_bytes(dev.limits()) / 4).expect("an SH range of at most 4 GiB")
+/// W, the words of an SH range of `range` bytes, for the model's uniform (Q-377).
+// Q-377
+fn sh_range_words(range: u64) -> u32 {
+    u32::try_from(range / 4).expect("an SH range of at most 4 GiB")
 }
 
 /// `RenderError::Budget` when `arrays` cannot be bound on `dev` (Q-377, Q-369), logged with
@@ -315,6 +317,7 @@ impl GpuModel {
         );
         // Q-74: the model's static bytes against what the device's live models leave.
         let reservation = reserve_logged(dev, arrays)?;
+        let sh_range = sh_range_bytes(dev.limits()); // Q-377
         let uniform = dev.device().create_buffer(&BufferDescriptor {
             label: Some("ftgsxr model uniform"),
             size: MODEL_UNIFORM_BYTES as u64,
@@ -324,7 +327,7 @@ impl GpuModel {
         dev.queue().write_buffer(
             &uniform,
             0,
-            &model_uniform(arrays, conv, sh_range_words(dev)),
+            &model_uniform(arrays, conv, sh_range_words(sh_range)),
         );
         let buffers = ModelBuffers {
             position: f32_buffer(dev, "ftgsxr position", &arrays.position),
@@ -345,7 +348,7 @@ impl GpuModel {
             sh_degree: arrays.sh_degree,
             conventions: conv.clone(),
             speed_p99: speed_percentile_99(arrays),
-            sh_range_bytes: sh_range_bytes(dev.limits()),
+            sh_range_bytes: sh_range,
             n: arrays.n,
             reservation,
         })
@@ -471,6 +474,7 @@ impl ModelUpload {
         );
         // Q-74: the model's static bytes against what the device's live models leave.
         let reservation = reserve_logged(dev, &arrays)?;
+        let sh_range = sh_range_bytes(dev.limits()); // Q-377
         let buffer = |label: &str, len: usize| {
             dev.device().create_buffer(&BufferDescriptor {
                 label: Some(label),
@@ -488,7 +492,7 @@ impl ModelUpload {
         dev.queue().write_buffer(
             &uniform,
             0,
-            &model_uniform(&arrays, conv, sh_range_words(dev)),
+            &model_uniform(&arrays, conv, sh_range_words(sh_range)),
         );
         let len = |i| field(&arrays, i).len();
         let buffers = ModelBuffers {
@@ -510,7 +514,7 @@ impl ModelUpload {
             sh_degree: arrays.sh_degree,
             conventions: conv.clone(),
             speed_p99,
-            sh_range_bytes: sh_range_bytes(dev.limits()),
+            sh_range_bytes: sh_range,
             n: arrays.n,
             reservation,
         };
