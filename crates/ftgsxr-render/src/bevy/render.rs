@@ -445,6 +445,7 @@ fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
     for sort in [SortMode::PerView, SortMode::SharedCenter] {
         let dev = Arc::clone(dev);
         let tier = tier.clone();
+        // `warm_up_teardown`'s test finds the threads by this name.
         let spawned = thread::Builder::new()
             .name("ftgsxr splat passes".into())
             .spawn(move || compile(&dev, LAYER_FORMAT, &tier, sort));

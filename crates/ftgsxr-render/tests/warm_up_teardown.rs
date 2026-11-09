@@ -77,9 +77,13 @@ fn gpu_an_app_dropped_while_its_warm_up_compiles_leaves_no_warm_up_thread() {
     }
     assert!(running > 0, "the warm-up started (Q-325)");
     drop(app);
-    assert_eq!(
-        warm_up_threads(),
-        0,
-        "a warm-up thread outlived the app (Q-380)"
-    );
+    // A joined thread can stay listed in `/proc/self/task` for a moment after its join
+    // returns: allow it 10 ms, far less than a warm-up compile.
+    let joined = Instant::now();
+    let mut left = warm_up_threads();
+    while left > 0 && joined.elapsed() < Duration::from_millis(10) {
+        std::thread::sleep(Duration::from_millis(1));
+        left = warm_up_threads();
+    }
+    assert_eq!(left, 0, "a warm-up thread outlived the app (Q-380)");
 }
