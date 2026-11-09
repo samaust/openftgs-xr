@@ -346,11 +346,12 @@ fn show_dock_panel<R>(
 }
 
 /// The scroll area of the dock's tab body: both ways, so a row wider than the dock is
-/// reached by the horizontal bar and the vertical bar stays at the dock's right edge,
-/// where a vertical-only area would put it at its content's, past the clip (Q-376).
+/// reached by the horizontal bar, and as wide as the dock, so the vertical bar stays at
+/// the dock's right edge, where a vertical-only area would put it at its content's,
+/// past the clip (Q-376).
 // Q-376
 fn dock_scroll_area() -> egui::ScrollArea {
-    egui::ScrollArea::both()
+    egui::ScrollArea::both().auto_shrink([false, true])
 }
 
 /// The dock and its tabs; its width is kept in `UiState`, changed only by a drag of its
@@ -1355,7 +1356,7 @@ mod tests {
             &mut self,
             window: f32,
             events: Vec<egui::Event>,
-            contents: impl FnOnce(&mut egui::Ui),
+            mut contents: impl FnMut(&mut egui::Ui),
         ) -> f32 {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -1365,10 +1366,9 @@ mod tests {
                 events,
                 ..Default::default()
             };
-            let (mut drawn, mut dragged, mut contents) = (0.0, None, Some(contents));
+            let (mut drawn, mut dragged) = (0.0, None);
             let mut out = self.ctx.run_ui(input, |ui| {
-                let contents = contents.take().expect("one pass");
-                (drawn, dragged) = show_dock_panel(ui, self.saved, contents);
+                (drawn, dragged) = show_dock_panel(ui, self.saved, &mut contents);
             });
             out.textures_delta.clear();
             if let Some(w) = dragged {
@@ -1468,11 +1468,17 @@ mod tests {
     // 160 points and at the default 320, neither widen the dock nor change its saved
     // width over frames with no input.
     #[test]
-    fn the_library_tab_keeps_the_saved_dock_width() {
+    fn show_dock_panel_keeps_the_saved_width_with_the_library_tab() {
         for saved in [160.0, 320.0] {
             let mut world = World::new();
             world.init_resource::<crate::ui::UiState>();
             world.init_resource::<crate::library::Library>();
+            // The case holds only while some row of the tab is wider than the dock.
+            let right = library_texts(&mut world, saved)
+                .iter()
+                .map(|(_, r)| r.max.x)
+                .fold(0.0, f32::max);
+            assert!(right > saved, "a row wider than {saved}: {right}");
             let mut dock = Dock {
                 ctx: font_context(),
                 saved,
@@ -1492,7 +1498,7 @@ mod tests {
     // 60 % bound or narrower than the dock, is drawn at the saved width and leaves it
     // unchanged; the dock's width does not depend on its tabs' layout.
     #[test]
-    fn tab_content_of_any_width_keeps_the_saved_dock_width() {
+    fn show_dock_panel_keeps_the_saved_width_with_content_of_any_width() {
         for content in [900.0, 50.0] {
             let mut dock = Dock::new(320.0);
             for _ in 0..5 {
