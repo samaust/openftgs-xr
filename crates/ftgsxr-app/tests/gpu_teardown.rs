@@ -4,6 +4,10 @@
 //! task pools a `gpu_` app still has render pipelines compiling on the async compute pool a
 //! frame after it starts; a test returning then let the process exit with a worker inside
 //! the Vulkan driver (SIGSEGV after the tests passed). `TestApp`'s drop lets them finish.
+//! The adapter's warm-up threads (Q-325) compile beside them, outside `PipelineCache`: one
+//! still running after the app was dropped held the last reference to the device and
+//! destroyed the Vulkan instance during the process's exit (#650); the adapter joins them
+//! when the app drops (Q-378).
 //! A process's exit right after such a frame is the crash's check: the crate's tests share
 //! one test binary (#413), so the test also runs again in a child process of it, alone, which
 //! exits once the test returns.
