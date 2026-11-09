@@ -79,8 +79,9 @@ pub(crate) fn r32_floats(data: &[u8], width: u32, height: u32) -> Option<Vec<f32
     Some(out)
 }
 
-/// Each thumbnail pixel's environment depth in metres along the depth camera's z axis
-/// (E13's decode), `NaN` where the pixel has none: the ray through the pixel's centre and
+/// Each thumbnail pixel's environment depth as E14's distance in metres from the eye
+/// (E13's decode along the depth camera's z axis, times the texel's ray length
+/// |K_d⁻¹(u, v, 1)|), `NaN` where the pixel has none: the ray through the pixel's centre and
 /// `thumb.camera`'s intrinsics, rotated into the depth camera with the two centres taken
 /// as coincident, projected into the depth image, the nearest texel decoded; a texel
 /// invalid to the decode, a ray behind the depth camera or a projection outside the image
@@ -91,16 +92,21 @@ pub(crate) fn thumb_depths(thumb: &CameraThumb, depth: &DepthSnapshot) -> Vec<f3
     let (tw, th) = (thumb.width as usize, thumb.height as usize);
     let c = &depth.camera;
     let (dw, dh) = (f64::from(c.width), f64::from(c.height));
+    let k_inv = c.k.inverse();
+    // Q-388 (owner, 2026-11-09): E14's distance, the axis depth Z times the texel's ray
+    // length |K_d⁻¹(u, v, 1)|, so it compares with d_m as a straight line from the eye.
     let texel = |x: f64, y: f64| -> f32 {
         if !(0.0..dw).contains(&x) || !(0.0..dh).contains(&y) {
             return f32::NAN;
         }
-        let i = y as usize * c.width as usize + x as usize;
+        let (tx, ty) = (x.floor(), y.floor());
+        let i = ty as usize * c.width as usize + tx as usize;
+        let ray = (k_inv * DVec3::new(tx + 0.5, ty + 0.5, 1.0)).length();
         depth
             .stored
             .get(i)
             .and_then(|&d| stored_depth_metres(d, depth.near, depth.far))
-            .unwrap_or(f32::NAN)
+            .map_or(f32::NAN, |z| (f64::from(z) * ray) as f32)
     };
     // The thumbnail's pixel ray to the depth camera's: R_d R_tᵀ K_t⁻¹ (centres coincident).
     let to_depth = thumb.camera.as_ref().map(|t| {
@@ -331,12 +337,16 @@ mod tests {
         }
     }
 
-    /// E14 local, Q-388: a 320 × 320 depth image (near 0.1 m, the infinite far plane)
-    /// seen by the thumbnail's own pose and field of view, a wall at 2 m (d = 1 − 0.1/2 =
-    /// 0.95) over its left half and nothing (d = 1) over its right half. d_m = 2 m gives
-    /// the thumbnail's left half (32 of 64 columns, every row), d_m = 4 m fewer than 1 %,
-    /// so the frame; the same without the thumbnail's camera (normalized coordinates);
-    /// a thumbnail camera turned away from the depth camera sees no depth at all.
+    /// E14 local, Q-388 (owner 2026-11-09, "distance on both"): a 320 × 320 depth image
+    /// (near 0.1 m, the infinite far plane) seen by the thumbnail's own pose and field of
+    /// view, a flat wall 2 m along the axis (d = 1 − 0.1/2 = 0.95) over its left half and
+    /// nothing (d = 1) over its right half. Each pixel's environment depth is the
+    /// straight-line distance 2·√(1 + x² + y²) for its ray (x, y, 1): about 2 m beside the
+    /// axis (pixel (31, 24): x = −1/64, y = 1/48, 2.0007 m) and 2·√2.92776 = 3.4221 m at
+    /// the corner (0, 0) (x = −63/64, y = −47/48); none on the right. d_m = 2 m keeps the
+    /// pixels near the axis, not the corner; d_m = 4 m fewer than 1 %, so the frame. The
+    /// same without the thumbnail's camera (normalized coordinates); a thumbnail camera
+    /// turned away from the depth camera sees no depth at all.
     #[test]
     fn thumb_depths_maps_a_wall_over_half_the_thumbnail() {
         let at = Vec3::new(0.3, 1.6, -0.2);
@@ -354,7 +364,23 @@ mod tests {
             let label = format!("camera {}", camera.is_some());
             let z = thumb_depths(&thumb(camera), &depth);
             assert_eq!(z.len(), 64 * 48, "{label}");
-            assert_eq!(band_mask(&z, 2.0, 0.5), Some(half.clone()), "{label}");
+            // The nearest texel's ray, not the pixel's: within a texel's 1/160 in tan.
+            assert!(
+                (z[24 * 64 + 31] - 2.0007).abs() < 0.01,
+                "{label}: {}",
+                z[24 * 64 + 31]
+            );
+            assert!((z[0] - 3.4221).abs() < 0.03, "{label}: {}", z[0]);
+            for (i, &d) in z.iter().enumerate() {
+                if half[i] {
+                    assert!(d >= 1.999, "{label}: pixel {i} at {d}");
+                } else {
+                    assert!(d.is_nan(), "{label}: pixel {i} at {d}");
+                }
+            }
+            let band = band_mask(&z, 2.0, 0.5).expect("the band near the axis");
+            assert!(band[24 * 64 + 31] && !band[0], "{label}");
+            assert!(band.iter().zip(&half).all(|(b, h)| !b || *h), "{label}");
             assert_eq!(band_mask(&z, 4.0, 0.5), None, "{label}");
         }
         let away = Camera::from_stage_pose(at, turn * Quat::from_rotation_y(3.0), FOV, 64, 48);
