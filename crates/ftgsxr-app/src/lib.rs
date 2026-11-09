@@ -50,7 +50,10 @@ pub use audio::{
     StubSink, UiSound,
 };
 // §2.1 `ftgsxr_app::manipulate`.
-pub use manipulate::{Grabbed, Hovered, ManipulateSettings, Poses, Selected, pick_instance};
+// Q-377: `TrimHandles`.
+pub use manipulate::{
+    Grabbed, Hovered, ManipulateSettings, Poses, Selected, TrimHandles, pick_instance,
+};
 // §2.1 `ftgsxr_app::rig`.
 pub use rig::{
     ContentGroup, Locomotion, PlayerRig, SnapTurnState, apply_locomotion, stick_response,
