@@ -302,8 +302,11 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// band takes it for the depth band's instance). The gains are, in the auto modes,
 /// E14's part `e14_gains` (`HudData.light_gains`), 1 per channel where it is `None`,
 /// without the manual offset the sliders show (Q-394); otherwise `Lighting.transform`'s.
-/// True when "Ask again" was pressed for a denied camera (Q-322).
-// Q-322, Q-383, Q-384, Q-385, Q-388, Q-394
+/// True when "Ask again" was pressed for a denied camera (Q-322), which also writes
+/// back the auto mode the denial wrote to `manual`, `Lighting.denied_auto` (auto
+/// global when none was kept), so the XR crate asks once and a grant runs that mode
+/// (Q-384, Q-395).
+// Q-322, Q-383, Q-384, Q-385, Q-388, Q-394, Q-395
 fn lighting_controls(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -323,6 +326,7 @@ fn lighting_controls(
     } else {
         2
     };
+    let denied_auto = light.as_ref().and_then(|l| l.denied_auto);
     let mut ask = false;
     ui.horizontal(|ui| {
         ui.label("lighting mode");
@@ -341,6 +345,11 @@ fn lighting_controls(
                 ui.label("permission denied");
                 ask = ui.button("Ask again").clicked();
             });
+            // Q-395: write the denied auto mode back; keep `lighting_reference`, as
+            // for a mode that arrives (Q-385).
+            if ask {
+                e.lighting_mode = denied_auto.unwrap_or("auto-global").into();
+            }
         }
         FeatureState::Absent => {
             ui.label(if headset {
@@ -1271,6 +1280,57 @@ mod tests {
                 .lighting_reference,
             None
         );
+    }
+
+    /// Q-384, Q-395 (#691, `cpu`): under a denied camera with the setting written back to
+    /// `manual`, "Ask again" writes `Lighting.denied_auto` back into `lighting_mode`
+    /// (auto global when none was kept, or without `Lighting`), keeps
+    /// `lighting_reference`, and asks for the camera once.
+    #[test]
+    fn the_environment_tabs_ask_again_writes_the_denied_auto_mode_back() {
+        let ctx = egui::Context::default();
+        let reference = Some([0.5, 0.4, 0.3, 0.42]);
+        for (kept, expected) in [
+            (Some(Some("auto-local")), "auto-local"),
+            (Some(Some("auto-global")), "auto-global"),
+            (Some(None), "auto-global"),
+            (None, "auto-global"),
+        ] {
+            let mut world = World::new();
+            world.insert_resource(SettingsRes::default());
+            world.init_resource::<Messages<Intent>>();
+            world.init_resource::<Messages<UiCue>>();
+            world.init_resource::<Messages<AskPermissionAgain>>();
+            world.insert_resource(Headset);
+            world.insert_resource(XrFeatures {
+                lighting: FeatureState::Denied,
+                ..XrFeatures::default()
+            });
+            if let Some(denied_auto) = kept {
+                world.insert_resource(Lighting {
+                    denied_auto,
+                    ..Lighting::default()
+                });
+            }
+            {
+                let e = &mut world.resource_mut::<SettingsRes>().0.environment;
+                e.lighting_mode = "manual".into();
+                e.lighting_reference = reference;
+            }
+            frame_of(&ctx, &mut world, Vec::new(), environment_section);
+            let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
+            for events in click(at(&texts, "Ask again")) {
+                frame_of(&ctx, &mut world, events, environment_section);
+            }
+            let env = world.resource::<SettingsRes>().0.environment.clone();
+            assert_eq!(env.lighting_mode, expected, "{kept:?}");
+            assert_eq!(env.lighting_reference, reference, "{kept:?}");
+            let asked: Vec<AskPermissionAgain> = world
+                .resource_mut::<Messages<AskPermissionAgain>>()
+                .drain()
+                .collect();
+            assert_eq!(asked, [AskPermissionAgain(Permission::Camera)], "{kept:?}");
+        }
     }
 
     /// Q-394 (`cpu`): while an auto mode is shown, the gains line reads
