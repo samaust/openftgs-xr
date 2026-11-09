@@ -69,24 +69,41 @@ pub(crate) fn parse(array: &[f32]) -> Result<Parsed, String> {
 /// not above zero, or an empty array or stream.
 // Q-386
 fn lens(raw: &[f32]) -> Option<Lens> {
+    let raw: [f32; RAW_LENS] = raw.try_into().ok()?;
     if raw.iter().any(|v| !v.is_finite()) {
         return None;
     }
-    let position = Vec3::new(raw[0], raw[1], raw[2]);
+    let [
+        tx,
+        ty,
+        tz,
+        qx,
+        qy,
+        qz,
+        qw,
+        fx,
+        fy,
+        cx,
+        cy,
+        left,
+        top,
+        right,
+        bottom,
+        stream_w,
+        stream_h,
+    ] = raw.map(f64::from);
+    let position = Vec3::new(tx as f32, ty as f32, tz as f32);
     // `LENS_POSE_ROTATION` rotates Android's sensor axes (x right, y up, z back on the
     // Quest 3: OpenXR's, as observed on the owner's Quest 3 with `adb shell dumpsys
     // media.camera`, 2026-11-09, #667) into the camera's (x along the long side, y down the
     // short side, z along the optical axis): the camera's orientation is its inverse, and
     // OpenXR's camera (looking along −z with y up) that turned by π about x, the quaternion
     // (1, 0, 0, 0).
-    let q = Quat::from_xyzw(raw[3], raw[4], raw[5], raw[6]);
+    let q = Quat::from_xyzw(qx as f32, qy as f32, qz as f32, qw as f32);
     if q.length_squared() < 1e-12 {
         return None;
     }
     let rotation = (q.conjugate() * Quat::from_xyzw(1.0, 0.0, 0.0, 0.0)).normalize();
-    let [fx, fy, cx, cy] = [raw[7], raw[8], raw[9], raw[10]].map(f64::from);
-    let [left, top, right, bottom] = [raw[11], raw[12], raw[13], raw[14]].map(f64::from);
-    let [stream_w, stream_h] = [raw[15], raw[16]].map(f64::from);
     let (w, h) = (right - left, bottom - top);
     if fx <= 0.0 || fy <= 0.0 || w <= 0.0 || h <= 0.0 || stream_w <= 0.0 || stream_h <= 0.0 {
         return None;
@@ -192,8 +209,8 @@ mod tests {
         assert_eq!(p.lens, None);
     }
 
-    /// The 17 raw floats of Q-386: translation, `LENS_POSE_ROTATION` (x, y, z, w), fx, fy,
-    /// cx, cy, the pre-correction array (left, top, right, bottom), the stream's size.
+    /// The 17 raw floats in `RAW_LENS`'s layout, with the translation (0.1, −0.2, −0.3) and
+    /// the stream 1280 × 960.
     fn raw(rotation: [f32; 4], k: [f32; 4], array: [f32; 4]) -> Vec<f32> {
         let mut r = vec![0.1, -0.2, -0.3];
         r.extend_from_slice(&rotation);
@@ -270,7 +287,7 @@ mod tests {
     /// half-sizes: ±atan(1) = ±π/4 across and ±atan(0.75) up and down, each pair of equal
     /// magnitude, left and down negative.
     #[test]
-    fn fov_symmetric() {
+    fn lens_fov_symmetric() {
         let lens = lens_of(&raw(IDENTITY, CENTRED, ARRAY_4_3)).expect("a lens");
         let (h, v) = (std::f32::consts::FRAC_PI_4, 0.75f32.atan());
         near_fov(lens.fov, [-h, h, v, -v]);
@@ -284,7 +301,7 @@ mod tests {
     /// Q-386: an off-centre principal point (cx = 320 of 1280, f = 640): left −atan(0.5),
     /// right atan(1.5); up and down unchanged, ±atan(0.75).
     #[test]
-    fn fov_off_centre() {
+    fn lens_fov_off_centre() {
         let lens =
             lens_of(&raw(IDENTITY, [640.0, 640.0, 320.0, 480.0], ARRAY_4_3)).expect("a lens");
         let v = 0.75f32.atan();
@@ -296,7 +313,7 @@ mod tests {
     /// ±atan(640/800) and ±atan(480/800). The array's left and top do not move the
     /// intrinsics, which are in the array's own pixels.
     #[test]
-    fn fov_wide_array_crops_the_long_side() {
+    fn lens_fov_wide_array_crops_the_long_side() {
         let k = [800.0, 800.0, 800.0, 480.0];
         let (h, v) = (0.8f32.atan(), 0.6f32.atan());
         for array in [[0.0, 0.0, 1600.0, 960.0], [8.0, 4.0, 1608.0, 964.0]] {
@@ -309,7 +326,7 @@ mod tests {
     /// y = 440, so cy = 800 becomes 360; f = 480 gives ±atan(1) across and ±atan(0.75) up
     /// and down.
     #[test]
-    fn fov_tall_array_crops_the_height() {
+    fn lens_fov_tall_array_crops_the_height() {
         let k = [480.0, 480.0, 480.0, 800.0];
         let lens = lens_of(&raw(IDENTITY, k, [0.0, 0.0, 960.0, 1600.0])).expect("a lens");
         let (h, v) = (1.0f32.atan(), 0.75f32.atan());
@@ -319,7 +336,7 @@ mod tests {
     /// Q-386: characteristics that give no camera (a focal length not above zero, an empty
     /// array or stream, a value not finite) give a thumbnail without a lens.
     #[test]
-    fn unusable_raw_lens_gives_no_lens() {
+    fn lens_unusable_characteristics_give_none() {
         let cases = [
             raw(IDENTITY, [0.0, 640.0, 640.0, 480.0], ARRAY_4_3),
             raw(IDENTITY, [640.0, -1.0, 640.0, 480.0], ARRAY_4_3),
