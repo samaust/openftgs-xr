@@ -11,6 +11,7 @@ mod anchors;
 mod depth;
 mod display;
 mod error;
+mod light;
 mod panel;
 mod passthrough;
 mod plugin;
@@ -29,6 +30,13 @@ pub use display::DisplaySettings;
 pub use ftgsxr_render::Foveation;
 // §2.1; Q-119: `code` and `user_text`.
 pub use error::XrError;
+// §2.1 `LightingMode`, `LightEstimate`, `light_gains`, `manual_gains`, `grey_world_gains`
+// (E14, D-38, #666); Q-382: `LightEstimate::from_thumb`, `band_mask`, `LightSmoother`,
+// `LightingMode::from_settings`.
+pub use light::{
+    LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains, light_gains,
+    manual_gains,
+};
 // §2.1 `MainPanel`, `PanelFollow` (#462); Q-265, Q-305: the placement functions.
 pub use panel::{MainPanel, PanelFollow, summon_pose, wrist_menu_pose, wrist_menu_visible};
 // §2.1 (M-3: the declarations I-15 reads).

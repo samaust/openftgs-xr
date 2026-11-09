@@ -22,6 +22,7 @@ mod i15_xr_session;
 mod i16_xr_input;
 mod i17_reference_spaces;
 mod r18_contact_shadow;
+mod u20_light;
 mod u32_hands_to_intents;
 mod u34_xr_error_catalog;
 mod u37_panel_placement;
