@@ -66,10 +66,7 @@ pub(crate) fn wanted(
     running: bool,
     env: EnvironmentMode,
 ) -> bool {
-    matches!(mode, LightingMode::AutoGlobal | LightingMode::AutoLocal)
-        && granted
-        && running
-        && env == EnvironmentMode::Passthrough
+    mode.is_auto() && granted && running && env == EnvironmentMode::Passthrough
 }
 
 /// What one frame of the control reads.
@@ -207,7 +204,12 @@ impl Control {
             self.camera = Some(platform.and_then(|p| p.camera_frames()));
         }
         let mut setting = i.env.lighting_mode.clone();
-        let auto_setting = |s: &str| s.starts_with("auto");
+        // The setting's own mode, as if the camera were available (Q-50's spellings).
+        let auto_setting = |s: &str| {
+            let mut e = i.env.clone();
+            e.lighting_mode = s.to_owned();
+            LightingMode::from_settings(&e, FeatureState::Available).is_auto()
+        };
 
         // Q-355: while denied, an auto mode selected again or "ask again" asks once more.
         let reselected = auto_setting(&setting) && !self.last_auto;
@@ -319,7 +321,7 @@ impl Control {
             }
         }
 
-        let auto = matches!(mode, LightingMode::AutoGlobal | LightingMode::AutoLocal);
+        let auto = mode.is_auto();
         let mut reference = i.env.lighting_reference;
         if auto
             && reference.is_none()

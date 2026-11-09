@@ -5,11 +5,12 @@
 
 use bevy::log::{info, warn};
 use bevy::math::{DMat3, DVec3};
-use bevy::prelude::{Commands, Entity, On, Res, ResMut, Resource};
+use bevy::prelude::{Commands, Entity, On, Query, Res, ResMut, Resource, With};
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
-use ftgsxr_app::{Camera, CameraThumb, SettingsRes};
+use ftgsxr_app::{Camera, CameraThumb, FeatureState, Selected, SettingsRes, XrFeatures};
 use ftgsxr_render::SplatOcclusion;
 
+use super::LightingMode;
 use crate::passthrough::{Environment, EnvironmentMode};
 
 /// A readback still pending after this many frames is dropped (PRD #664's spike check
@@ -128,8 +129,22 @@ pub(crate) fn thumb_depths(thumb: &CameraThumb, depth: &DepthSnapshot) -> Vec<f3
     out
 }
 
+/// Whether a readback is spawned for the left view's capture `age_frames` old: the
+/// effective `mode` auto local, an instance selected (the band needs d_m), passthrough
+/// mode and a new capture (Q-388).
+// Q-388
+fn readback_wanted(
+    mode: &LightingMode,
+    selected: bool,
+    passthrough: bool,
+    age_frames: u32,
+) -> bool {
+    matches!(mode, LightingMode::AutoLocal) && selected && passthrough && age_frames == 0
+}
+
 /// The frame's request (main world, `Update`, before the control): while auto local is
-/// set in passthrough mode and the provider runs, a one-shot `Readback::texture` of the
+/// in force (`XrFeatures.lighting` as of the last frame's control), an instance selected,
+/// in passthrough mode and the provider runs, a one-shot `Readback::texture` of the
 /// left view's `DepthFrame.image` is spawned when a new capture arrived (`age_frames`
 /// 0) and none is in flight. Its `Readback` is removed the frame after (one extract
 /// copies it once, encoded by Bevy's render system after the drive's median pass was
@@ -141,6 +156,8 @@ pub(crate) fn request(
     occlusion: Option<Res<SplatOcclusion>>,
     settings: Option<Res<SettingsRes>>,
     env: Option<Res<Environment>>,
+    features: Option<Res<XrFeatures>>,
+    selected: Query<(), With<Selected>>,
     mut commands: Commands,
 ) {
     let left = occlusion.as_deref().and_then(|o| o.frames.first());
@@ -159,12 +176,13 @@ pub(crate) fn request(
         }
         return;
     }
-    let local = settings.is_some_and(|s| s.0.environment.lighting_mode == "auto-local");
+    let camera = features.map_or(FeatureState::Absent, |f| f.lighting);
+    let mode = settings.map_or(LightingMode::Off, |s| {
+        LightingMode::from_settings(&s.0.environment, camera)
+    });
     let passthrough = env.is_some_and(|e| e.mode == EnvironmentMode::Passthrough);
     if let Some(f) = left
-        && local
-        && passthrough
-        && f.age_frames == 0
+        && readback_wanted(&mode, !selected.is_empty(), passthrough, f.age_frames)
     {
         let entity = commands
             .spawn(Readback::texture(f.image.clone()))
@@ -218,10 +236,30 @@ fn complete(
 #[cfg(test)]
 mod tests {
     use bevy::math::{Quat, Vec3};
-    use ftgsxr_app::Fov;
+    use ftgsxr_app::{FeatureState, Fov};
 
     use super::super::band_mask;
     use super::*;
+
+    /// Q-388: the readback is wanted only in the effective auto local mode (an auto local
+    /// setting without the camera is manual), with an instance selected, in passthrough
+    /// mode, for a new capture.
+    #[test]
+    fn readback_wanted_needs_effective_auto_local_a_selection_and_a_new_capture() {
+        let mut env = ftgsxr_io::Settings::default().environment;
+        env.lighting_mode = "auto-local".into();
+        let local = LightingMode::from_settings(&env, FeatureState::Available);
+        assert!(readback_wanted(&local, true, true, 0));
+        assert!(!readback_wanted(&local, false, true, 0), "no selection");
+        assert!(!readback_wanted(&local, true, false, 0), "VR mode");
+        assert!(!readback_wanted(&local, true, true, 1), "no new capture");
+        let gated = LightingMode::from_settings(&env, FeatureState::Absent);
+        assert!(
+            !readback_wanted(&gated, true, true, 0),
+            "auto local gated to manual"
+        );
+        assert!(!readback_wanted(&LightingMode::AutoGlobal, true, true, 0));
+    }
 
     /// Q-340's hand-worked values, the ones `passes.rs`'s
     /// `gpu_depth_metres_decodes_hand_worked_values` pins the shader on: with n = 0.25

@@ -32,7 +32,24 @@ const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 const RENDER_MODES: &[&str] = &["splats", "centers", "both", "hidden"];
 const COLORMAPS: &[&str] = &["dc", "time", "speed", "opacity"];
 const ENVIRONMENT_MODES: &[&str] = &["vr", "passthrough"];
-const LIGHTING_MODES: &[&str] = &["off", "manual", "auto-global", "auto-local"];
+/// The lighting modes as the selector names them (§1.9), with their setting.
+const LIGHTING_CHOICES: [(&str, &str); 4] = [
+    ("off", "off"),
+    ("manual", "manual"),
+    ("auto-global", "auto global"),
+    ("auto-local", "auto local"),
+];
+
+/// The settings table's spellings of the lighting modes, `LIGHTING_CHOICES`' settings.
+const LIGHTING_MODES: [&str; 4] = {
+    let mut m = [""; 4];
+    let mut i = 0;
+    while i < 4 {
+        m[i] = LIGHTING_CHOICES[i].0;
+        i += 1;
+    }
+    m
+};
 const FOVEATION: &[&str] = &["off", "low", "medium", "high", "dynamic"];
 const SPEEDS: [f64; 12] = [
     -4.0, -2.0, -1.0, -0.5, -0.25, -0.1, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0,
@@ -253,14 +270,6 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         world.write_message(UiCue::Click);
     }
 }
-
-/// The lighting modes as the selector names them (§1.9), with their setting.
-const LIGHTING_CHOICES: [(&str, &str); 4] = [
-    ("off", "off"),
-    ("manual", "manual"),
-    ("auto-global", "auto global"),
-    ("auto-local", "auto local"),
-];
 
 /// The Environment tab's lighting controls (§1.9 Light estimation and color matching):
 /// the mode, offering the auto modes only where the camera is `Available` and otherwise
@@ -507,7 +516,7 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
                 0.02,
                 0.001,
             );
-            choice(ui, "lighting_mode", &mut e.lighting_mode, LIGHTING_MODES);
+            choice(ui, "lighting_mode", &mut e.lighting_mode, &LIGHTING_MODES);
             let m = &mut e.lighting_manual;
             num(
                 ui,
