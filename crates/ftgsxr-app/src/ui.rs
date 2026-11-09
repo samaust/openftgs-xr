@@ -422,14 +422,18 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 /// E14, revision 52).
 /// `compose_transforms` multiplies it into every instance's own transform, or only the
 /// `Selected` one's while `per_instance` is set; `per_instance` is session state, off at
-/// start and saved nowhere.
-// Q-383
+/// start and saved nowhere. `too_dark` is the XR crate's, for the Environment tab: an
+/// auto mode waits for a reference the room is too dark to give (Q-385).
+// Q-383, Q-385
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Lighting {
     /// The environment's gains, the identity by default.
     pub transform: ColorTransform,
     /// Whether the environment's factor goes to the selected instance only.
     pub per_instance: bool,
+    /// An auto mode is in force, `lighting_reference` is `None`, the warm-up is over and
+    /// the smoothed estimate is below the reference's floor (Q-385).
+    pub too_dark: bool,
 }
 
 impl Default for Lighting {
@@ -437,6 +441,7 @@ impl Default for Lighting {
         Lighting {
             transform: ColorTransform::IDENTITY,
             per_instance: false,
+            too_dark: false,
         }
     }
 }
