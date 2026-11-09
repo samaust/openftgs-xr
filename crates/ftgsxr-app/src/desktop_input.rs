@@ -50,6 +50,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("gizmo_translate", "KeyG"),
     ("gizmo_rotate", "KeyR"),
     ("gizmo_scale", "KeyT"),
+    ("gizmo_trim", "KeyC"), // Q-376
     ("nudge_left", "ArrowLeft"),
     ("nudge_right", "ArrowRight"),
     ("nudge_forward", "ArrowUp"),
@@ -385,13 +386,14 @@ fn keyboard(
     }
 
     let cam = |c| Intent::Camera(c);
-    let simple: [(&str, Intent); 22] = [
+    let simple: [(&str, Intent); 23] = [
         ("toggle_fly_orbit", cam(CameraCommand::ToggleOrbit)),
         ("frame_selected", cam(CameraCommand::Frame)),
         ("reset_view", cam(CameraCommand::ResetView)),
         ("gizmo_translate", Intent::Gizmo(GizmoMode::Translate)),
         ("gizmo_rotate", Intent::Gizmo(GizmoMode::Rotate)),
         ("gizmo_scale", Intent::Gizmo(GizmoMode::Scale)),
+        ("gizmo_trim", Intent::Gizmo(GizmoMode::Trim)),
         ("open_files", Intent::Ui(UiCommand::OpenFiles)),
         ("save_scene", Intent::Ui(UiCommand::SaveScene)),
         ("load_scene", Intent::Ui(UiCommand::LoadScene)),
