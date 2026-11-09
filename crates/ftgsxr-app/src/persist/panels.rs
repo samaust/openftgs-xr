@@ -8,6 +8,7 @@
 //! `audio`'s section and the tier and governor are `governor`'s.
 
 use bevy::ecs::prelude::*;
+use bevy::math::Vec3;
 use bevy_egui::egui;
 use ftgsxr_core::LoopMode;
 use ftgsxr_io::Settings;
@@ -192,7 +193,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .is_some();
     let mut light = world.get_resource::<Lighting>().copied();
     // Q-394: E14's part of the gains, for the auto modes.
-    let e14 = world.get_resource::<HudData>().and_then(|h| h.light_gains);
+    let e14_gains = world.get_resource::<HudData>().and_then(|h| h.light_gains);
     let mut ask_camera = false;
     let mut toggles = Vec::new();
     edit(world, ui, |s, ui| {
@@ -261,7 +262,15 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             ui.checkbox(&mut e.hand_removal, "hand removal");
         }
         ui.separator();
-        ask_camera = lighting_controls(ui, s, &features, headset, selected, light.as_mut(), e14);
+        ask_camera = lighting_controls(
+            ui,
+            s,
+            &features,
+            headset,
+            selected,
+            light.as_mut(),
+            e14_gains,
+        );
     });
     if let Some(l) = light
         && world.get_resource::<Lighting>().is_some_and(|w| *w != l)
@@ -285,7 +294,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion
 /// and a selected instance" beside auto local without occlusion's depth or without a
 /// selected instance (Q-388); the manual sliders, the strength
-/// γ, the current gains and "per instance" (Q-383): in the auto modes E14's part `e14`
+/// γ, the current gains and "per instance" (Q-383): in the auto modes E14's part `e14_gains`
 /// (`HudData.light_gains`), 1 per channel where it is `None`, without the manual offset
 /// the sliders show (Q-394); otherwise `Lighting.transform`'s. True when "Ask again" was
 /// pressed for a denied camera (Q-322).
@@ -297,12 +306,13 @@ fn lighting_controls(
     headset: bool,
     selected: bool,
     light: Option<&mut Lighting>,
-    e14: Option<bevy::math::Vec3>,
+    e14_gains: Option<Vec3>,
 ) -> bool {
     let camera = features.lighting;
     let occlusion_on = s.environment.occlusion && features.occlusion == FeatureState::Available;
     let e = &mut s.environment;
     let shown = super::effective_lighting_mode_of(&e.lighting_mode, camera).to_owned();
+    let auto = shown.starts_with("auto");
     let offered = if camera == FeatureState::Available {
         4
     } else {
@@ -336,7 +346,7 @@ fn lighting_controls(
         }
         _ => {}
     }
-    if shown.starts_with("auto") {
+    if auto {
         if shown == "auto-local" && !(occlusion_on && selected) {
             ui.label("local needs occlusion and a selected instance");
         }
@@ -350,8 +360,8 @@ fn lighting_controls(
     ui.add(egui::Slider::new(&mut m.tint, -1.0..=1.0).text("tint"));
     ui.add(egui::Slider::new(&mut e.lighting_gamma, 0.0..=1.0).text("strength γ"));
     if let Some(l) = light {
-        let g = if shown.starts_with("auto") {
-            e14.unwrap_or(bevy::math::Vec3::ONE)
+        let g = if auto {
+            e14_gains.unwrap_or(Vec3::ONE)
         } else {
             l.transform.gain
         };
@@ -1152,12 +1162,12 @@ mod tests {
         });
         world.insert_resource(Lighting {
             transform: ftgsxr_render::ColorTransform {
-                gain: bevy::math::Vec3::splat(3.0),
+                gain: Vec3::splat(3.0),
             },
             ..Lighting::default()
         });
         world.insert_resource(HudData {
-            light_gains: Some(bevy::math::Vec3::new(1.5, 1.25, 0.25)),
+            light_gains: Some(Vec3::new(1.5, 1.25, 0.25)),
             ..HudData::default()
         });
         let ctx = egui::Context::default();
@@ -1167,6 +1177,8 @@ mod tests {
                 .0
                 .environment
                 .lighting_mode = setting.into();
+            // A second frame, as the module's other tests do: egui lays a changed
+            // panel out once before its texts are where they stay.
             frame_of(&ctx, world, Vec::new(), environment_section);
             let texts = frame_of(&ctx, world, Vec::new(), environment_section);
             assert!(

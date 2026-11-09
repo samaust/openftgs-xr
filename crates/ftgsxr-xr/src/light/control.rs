@@ -105,7 +105,7 @@ pub(crate) struct Outputs {
     /// `XrFeatures.lighting`.
     pub(crate) feature: FeatureState,
     /// `Lighting.transform`, in an effective auto mode only: the manual form times E14's
-    /// gains (Q-383).
+    /// gains, or the manual form alone where the gains are not in force (Q-383).
     pub(crate) transform: Option<ColorTransform>,
     /// `HudData.light_gains`: E14's part alone (Q-389, Q-394).
     pub(crate) light_gains: Option<Vec3>,
@@ -357,9 +357,8 @@ impl Control {
             out.write_reference = Some(r);
         }
         // E14's gains where they are in force, `None` where they are not.
-        let mut e14 = None;
-        if auto {
-            e14 = match (i.env_mode, self.smoother.current()) {
+        let e14 = if auto {
+            match (i.env_mode, self.smoother.current()) {
                 (EnvironmentMode::Vr, _) | (_, None) => None,
                 (_, Some(e)) => Some(match reference {
                     Some([luma, r, g, b]) => light_gains(
@@ -372,7 +371,11 @@ impl Control {
                     ),
                     None => grey_world_gains(&e),
                 }),
-            };
+            }
+        } else {
+            None
+        };
+        if auto {
             // E14 (revision 52, #689): the manual form times E14's gains per channel,
             // the product unclamped, or the manual form alone where the gains are not
             // in force; read each frame, so a slider change applies at the next.
@@ -885,8 +888,8 @@ mod tests {
         assert_eq!(out.light_gains, None);
     }
 
-    /// U-20's clause (E14, revision 52) through the control, since nothing public
-    /// composes: manual EV 1 with auto g = √2 (a doubled luma at γ = 0.5) gives
+    /// U-20's clause (E14, revision 52) at U-20's tolerance 10⁻⁶, through the control,
+    /// where the product is formed (nothing public composes it): manual EV 1 with auto g = √2 (a doubled luma at γ = 0.5) gives
     /// `Lighting.transform` g = 2√2, while `HudData.light_gains` stays E14's √2 (Q-394).
     #[test]
     fn step_manual_offset_composes_with_the_auto_gains() {
@@ -905,10 +908,10 @@ mod tests {
         let out = frame(&mut c, &p, &mut e, at(0.2));
         let g = out.transform.unwrap().gain;
         let want = 2.0 * 2f32.sqrt();
-        assert!((g - Vec3::splat(want)).abs().max_element() < 1e-5, "{g}");
+        assert!((g - Vec3::splat(want)).abs().max_element() <= 1e-6, "{g}");
         let hud = out.light_gains.unwrap();
         assert!(
-            (hud - Vec3::splat(2f32.sqrt())).abs().max_element() < 1e-5,
+            (hud - Vec3::splat(2f32.sqrt())).abs().max_element() <= 1e-6,
             "{hud}"
         );
     }
