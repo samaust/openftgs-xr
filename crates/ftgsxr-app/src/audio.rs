@@ -27,7 +27,7 @@ use ftgsxr_render::{SplatBounds, SplatCamera};
 
 use crate::intent::{Feature, Hand, Intent, VolumeChannel};
 use crate::library::LoadedModel;
-use crate::manipulate::Grabbed;
+use crate::manipulate::{Grabbed, TrimHandles};
 use crate::platform::{Headset, PlatformRes};
 use crate::playback::{Playback, Scrubbing};
 use crate::ui::{DockHooks, Tab, ToastRequest, UiCue};
@@ -467,6 +467,7 @@ impl Plugin for AudioPlugin {
                     ui_bridge,
                     run_intents,
                     grab_sounds,
+                    trim_handle_sounds,
                     play_ui_sounds,
                     attach,
                     decode,
@@ -676,6 +677,39 @@ fn grab_sounds(
     }
     if left {
         sounds.write(PlayUiSound(UiSound::GrabEnd));
+    }
+    *last = now;
+}
+
+/// E18's handle sounds (§1.8, §1.10) from `TrimHandles`' edges: the hover sound when a
+/// hand comes to hover a handle it did not hover, the grab sounds when a hand starts or
+/// ends a drag; each at most once a frame.
+// Q-379
+fn trim_handle_sounds(
+    touched: Query<(Entity, &TrimHandles)>,
+    mut last: Local<HashMap<Entity, TrimHandles>>,
+    mut sounds: MessageWriter<PlayUiSound>,
+) {
+    let now: HashMap<Entity, TrimHandles> = touched.iter().map(|(e, t)| (e, t.clone())).collect();
+    let empty = TrimHandles::default();
+    let (mut hover, mut begin, mut end) = (false, false, false);
+    for (e, t) in &now {
+        let before = last.get(e).unwrap_or(&empty);
+        hover |= t.hovered.iter().any(|h| !before.hovered.contains(h));
+        begin |= t.dragged.iter().any(|h| !before.dragged.contains(h));
+    }
+    for (e, t) in last.iter() {
+        let after = now.get(e).unwrap_or(&empty);
+        end |= t.dragged.iter().any(|h| !after.dragged.contains(h));
+    }
+    for (on, sound) in [
+        (hover, UiSound::Hover),
+        (begin, UiSound::GrabBegin),
+        (end, UiSound::GrabEnd),
+    ] {
+        if on {
+            sounds.write(PlayUiSound(sound));
+        }
     }
     *last = now;
 }
@@ -1453,6 +1487,41 @@ mod tests {
         assert_eq!(played(&mut app), [UiSound::SnapTurn]);
         app.world_mut().write_message(Intent::SnapTurn { steps: 0 });
         assert!(played(&mut app).is_empty());
+    }
+
+    /// Q-379 (E18, §1.10): a hand hovering a trim handle sounds the hover once, a drag's
+    /// start and end the grab sounds; no change, no sound.
+    #[test]
+    fn trim_handle_sounds_follow_the_handles_edges() {
+        use ftgsxr_core::TrimHandle;
+        let out = Arc::new(StubAudioOutput::new());
+        let mut app = app(out.clone());
+        app.update();
+        out.take_played();
+        let played = |app: &mut App| {
+            app.update();
+            out.take_played()
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect::<Vec<_>>()
+        };
+        let face = TrimHandle::Face { axis: 0, max: true };
+        let e = app
+            .world_mut()
+            .spawn(TrimHandles {
+                hovered: vec![(Hand::Left, face)],
+                dragged: vec![],
+            })
+            .id();
+        assert_eq!(played(&mut app), [UiSound::Hover]);
+        assert!(played(&mut app).is_empty(), "no change, no sound");
+        app.world_mut().entity_mut(e).insert(TrimHandles {
+            hovered: vec![],
+            dragged: vec![(Hand::Left, face)],
+        });
+        assert_eq!(played(&mut app), [UiSound::GrabBegin]);
+        app.world_mut().entity_mut(e).remove::<TrimHandles>();
+        assert_eq!(played(&mut app), [UiSound::GrabEnd]);
     }
 
     /// A headless app with the audio plugin alone on `output`.

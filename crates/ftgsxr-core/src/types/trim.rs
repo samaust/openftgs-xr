@@ -19,6 +19,28 @@ pub enum TrimMode {
     Sphere,
 }
 
+/// One of E18's trim handles: a box's face (`axis` 0 = x, 1 = y, 2 = z; the b_max face
+/// when `max`), a sphere's center, or one of its six radius handles at c ± r·e_axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimHandle {
+    /// The box's face on `axis`, b_max's when `max`, else b_min's.
+    Face {
+        /// 0 = x, 1 = y, 2 = z.
+        axis: usize,
+        /// Whether it is the b_max face.
+        max: bool,
+    },
+    /// The sphere's center c.
+    Center,
+    /// The sphere's radius handle at c + r·e_axis when `positive`, else c − r·e_axis.
+    Radius {
+        /// 0 = x, 1 = y, 2 = z.
+        axis: usize,
+        /// Whether it lies on the + side.
+        positive: bool,
+    },
+}
+
 /// E17's trim, in model space. `Default` is off with zero shapes, replaced by `initial`
 /// when the trim is turned on. Both shapes keep their values while the mode changes.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -94,6 +116,68 @@ impl Trim {
                 self.box_max[axis] = value;
             }
         }
+    }
+
+    /// E18's handles of the shape the mode keeps, at their model-space points: a box's
+    /// six face centers, or a sphere's center and its six radius handles; none when off.
+    pub fn handles(&self) -> Vec<(TrimHandle, Vec3)> {
+        match self.mode {
+            TrimMode::Off => Vec::new(),
+            TrimMode::Box => {
+                let mid = 0.5 * (self.box_min + self.box_max);
+                let mut v = Vec::with_capacity(6);
+                for axis in 0..3 {
+                    for max in [false, true] {
+                        let mut p = mid;
+                        p[axis] = if max {
+                            self.box_max[axis]
+                        } else {
+                            self.box_min[axis]
+                        };
+                        v.push((TrimHandle::Face { axis, max }, p));
+                    }
+                }
+                v
+            }
+            TrimMode::Sphere => {
+                let mut v = Vec::with_capacity(7);
+                v.push((TrimHandle::Center, self.center));
+                for axis in 0..3 {
+                    for positive in [false, true] {
+                        let mut p = self.center;
+                        p[axis] += if positive { self.radius } else { -self.radius };
+                        v.push((TrimHandle::Radius { axis, positive }, p));
+                    }
+                }
+                v
+            }
+        }
+    }
+
+    /// E18's drag of `handle` by the drag point's model-space displacement `delta` since
+    /// the drag began, applied to `self`, the trim at the drag's start: a face's limit
+    /// moves by δ_axis through `set_box_limit` (carrying the opposite limit when crossed);
+    /// a radius handle sets r = max(r₀ ± δ_axis, `floor`), the sign its side's; the center
+    /// moves by δ. A handle that does not match the mode leaves the trim unchanged.
+    pub fn drag_handle(&self, handle: TrimHandle, delta: Vec3, floor: f32) -> Trim {
+        let mut t = *self;
+        match (self.mode, handle) {
+            (TrimMode::Box, TrimHandle::Face { axis, max }) => {
+                let start = if max {
+                    self.box_max[axis]
+                } else {
+                    self.box_min[axis]
+                };
+                t.set_box_limit(axis, max, start + delta[axis]);
+            }
+            (TrimMode::Sphere, TrimHandle::Radius { axis, positive }) => {
+                let d = if positive { delta[axis] } else { -delta[axis] };
+                t.radius = (self.radius + d).max(floor);
+            }
+            (TrimMode::Sphere, TrimHandle::Center) => t.center = self.center + delta,
+            _ => {}
+        }
+        t
     }
 
     /// Whether both shapes are well formed, whatever the mode: every value finite,
