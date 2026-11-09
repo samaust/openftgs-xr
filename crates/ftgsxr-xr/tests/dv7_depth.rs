@@ -15,31 +15,12 @@
 
 use crate::dv_support;
 
-use std::process::Command;
 use std::time::Duration;
 
-use dv_support::{
-    DebugLayers, PACKAGE, Validation, adb_path, apk, device, install, launch, log, stop, verdict,
-};
+use dv_support::{DebugLayers, Validation, apk, device, install, launch, log, stop, verdict};
 
 /// The scene permission of §2.5's manifest, which the Depth API needs (Appendix E.1).
 const PERMISSION: &str = "com.oculus.permission.USE_SCENE";
-
-/// `pm grant`, whose failure (a permission the system grants at install) is only printed.
-fn grant() {
-    let out = Command::new(adb_path())
-        .args(["shell", "pm", "grant", PACKAGE, PERMISSION])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => println!(
-            "dv7: pm grant {PERMISSION}: {}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        ),
-        Err(e) => println!("dv7: pm grant {PERMISSION}: {e}"),
-    }
-}
 
 #[test]
 #[ignore = "dv"]
@@ -47,7 +28,7 @@ fn dv_dv7_depth_frames_every_frame_and_a_clean_stop() {
     let apk = apk();
     device();
     install(&apk);
-    grant();
+    dv_support::pm("dv7", "grant", &[PERMISSION]);
     // Q-123: the bundled validation layer, whose messages are spike checks 1 and 2's.
     let layers = DebugLayers::enable();
     let start = launch("dv7");
