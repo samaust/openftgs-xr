@@ -6,8 +6,9 @@
 //! permissions with `pm grant` (so no dialog waits for a person), installs, launches
 //! `dv11`, prints the cue for the person when the device logs `dv11: cover`, reads the
 //! verdict, requires clause 1 and reports clause 2's state: a clause 2 "not run" (no
-//! cover within the device's 20 s) leaves Dv-11 unverified until the owner runs it, not
-//! failed (Q-390, Q-273). It prints the shim's logged YUV data space and range (Q-386).
+//! cover within the device's 20 s, a dark room, or a partial cover) leaves Dv-11
+//! unverified until the owner runs it, not failed (Q-390, Q-273). The cover is of the
+//! left passthrough camera, the one the shim opens. It prints the shim's logged YUV data space and range (Q-386).
 //! Prerequisites: `dv_support`'s.
 
 use crate::dv_support;
@@ -31,7 +32,9 @@ fn dv_dv11_thumbnails_at_30_hz_and_the_cover_halves_the_luma() {
     dv_support::pm("dv11", "grant", &PERMISSIONS);
     let start = launch("dv11");
     if wait_for("dv11: cover", Duration::from_secs(90)) {
-        println!("dv11: COVER THE HEADSET'S CAMERAS NOW (20 s)");
+        println!(
+            "dv11: COVER THE HEADSET'S LEFT FRONT CAMERA NOW, FULLY, WITH A HAND (20 s, room lit)"
+        );
     }
     let result = verdict("dv11", start, Duration::from_secs(150));
     let lines = log();
