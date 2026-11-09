@@ -5,7 +5,9 @@
 //!
 //! - The feature and the permission (Q-384): `XrFeatures.lighting` is `Absent` without a
 //!   session, without the platform's `CameraFrames`, or once `start` reported no
-//!   passthrough camera (Q-392); `Denied` after a denial; `Available` otherwise.
+//!   passthrough camera (Q-392); `Denied` after a denial, or after `start` reported a
+//!   missing camera permission (Q-392); `Available` otherwise; any other failed start is
+//!   retried 2 s later at the earliest (Q-392).
 //!   `Permission::Camera` is asked the first time an auto mode is wanted where the
 //!   camera would then run, the session running in passthrough mode (Q-348's pattern); a denial writes `lighting_mode = manual`, toasts E-XR-PERMISSION with Y
 //!   "light estimation" (Q-261) and lists the permission (Q-322); an auto mode selected
@@ -196,6 +198,20 @@ impl Control {
         }
     }
 
+    /// A denial of `Permission::Camera` (Q-384, Q-261, Q-322, Q-355, Q-392): `Denied`,
+    /// listed, toasted, and an auto setting written back to `manual`.
+    fn deny(&mut self, out: &mut Outputs, setting: &mut String, auto: bool) {
+        self.flow = Flow::Denied;
+        out.listed = Some(true);
+        if auto {
+            *setting = "manual".into();
+            out.write_mode = Some("manual");
+        }
+        let text = denied_text(Permission::Camera, FEATURE);
+        warn!("{text}");
+        out.toasts.push(text);
+    }
+
     /// One frame (Q-384, Q-385, Q-389, Q-392).
     // Q-161, Q-261, Q-322, Q-348, Q-355, Q-384, Q-385, Q-389, Q-392
     pub(crate) fn step(&mut self, platform: Option<&dyn Platform>, i: &Inputs) -> Outputs {
@@ -234,15 +250,8 @@ impl Control {
                 Poll::Pending => {}
                 Poll::Ready(true) => self.flow = Flow::Granted,
                 Poll::Ready(false) => {
-                    self.flow = Flow::Denied;
-                    out.listed = Some(true);
-                    if auto_setting(&setting) {
-                        setting = "manual".into();
-                        out.write_mode = Some("manual");
-                    }
-                    let text = denied_text(Permission::Camera, FEATURE);
-                    warn!("{text}");
-                    out.toasts.push(text);
+                    let auto = auto_setting(&setting);
+                    self.deny(&mut out, &mut setting, auto);
                 }
             }
         }
@@ -288,6 +297,13 @@ impl Control {
                     }
                     setting = "manual".into();
                     out.write_mode = Some("manual");
+                    mode = self.mode_of(i.env, &setting);
+                }
+                // Q-392: a permission the shim finds missing after a grant (one of the
+                // two Android permissions, or one revoked) is a denial, not retried.
+                Err(e) if e.starts_with(XrError::Permission(Permission::Camera).code()) => {
+                    warn!("light: {e}");
+                    self.deny(&mut out, &mut setting, true);
                     mode = self.mode_of(i.env, &setting);
                 }
                 Err(e) => {
@@ -758,6 +774,46 @@ mod tests {
         let out = frame(&mut c, &p, &mut e, now + Duration::from_secs(5));
         assert_eq!(out.feature, FeatureState::Absent);
         assert_eq!(*cam.starts.lock().unwrap(), 2, "absent for the session");
+    }
+
+    /// Q-392, Q-384: a start whose error begins with E-XR-PERMISSION is a denial: `Denied`,
+    /// `manual` written back, listed and toasted with Y "light estimation", not retried;
+    /// "ask again", granted, starts the camera again.
+    #[test]
+    fn step_start_permission_error_is_a_denial() {
+        let now = Instant::now();
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        cam.results.lock().unwrap().push(Err(
+            "E-XR-PERMISSION: the camera permissions are not granted".into(),
+        ));
+        let mut e = env("auto-global");
+        let mut c = session();
+        let out = frame(&mut c, &p, &mut e, now);
+        assert_eq!(*cam.starts.lock().unwrap(), 1);
+        assert_eq!(out.feature, FeatureState::Denied);
+        assert_eq!(c.flow, Flow::Denied);
+        assert_eq!(e.lighting_mode, "manual");
+        assert_eq!(out.listed, Some(true));
+        assert_eq!(
+            out.toasts,
+            ["E-XR-PERMISSION: Permission Camera denied; feature light estimation unavailable"]
+        );
+        let out = frame(&mut c, &p, &mut e, now + Duration::from_secs(5));
+        assert_eq!(*cam.starts.lock().unwrap(), 1, "not retried");
+        assert!(out.toasts.is_empty());
+        e.lighting_mode = "auto-global".into();
+        let out = frame_with(
+            &mut c,
+            &p,
+            &mut e,
+            now + Duration::from_secs(6),
+            EnvironmentMode::Passthrough,
+            true,
+        );
+        assert_eq!(out.listed, Some(false));
+        assert_eq!(out.feature, FeatureState::Available);
+        assert_eq!(*cam.starts.lock().unwrap(), 2);
     }
 
     /// Q-385, Q-389: the first smoothed estimate captured into `lighting_reference` when
