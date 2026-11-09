@@ -13,6 +13,8 @@ mod android;
 mod device_test;
 #[cfg(any(test, target_os = "android"))]
 mod dv2_rate;
+#[cfg(any(test, target_os = "android"))]
+mod exit;
 #[cfg(target_os = "android")]
 mod jni_calls;
 #[cfg(target_os = "android")]

@@ -12,22 +12,19 @@ use bevy::android::ANDROID_APP;
 use bevy::prelude::*;
 use bevy::window::ExitCondition;
 use bevy::winit::{UpdateMode, WinitSettings};
-use bevy_mod_xr::session::{XrSessionCreatedMessage, XrState};
-use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
+use bevy_mod_xr::session::XrState;
 use ftgsxr_app::{
     AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SettingsRes, SortMode, SplatLoad, Toast,
     ToastLevel, load_settings,
 };
 use ftgsxr_xr::{XrPlugin, add_xr};
 
+use crate::exit::{EXIT_ENVIRONMENT, exit_code, exit_without_session};
 use crate::platform::QuestPlatform;
 use crate::{device_test, jni_calls};
 
 /// The logcat tag (§1.13).
 const TAG: &str = "ftgsxr";
-
-/// The exit code of E-XR-RUNTIME on the Quest (§1.15).
-const EXIT_ENVIRONMENT: i32 = 2;
 
 /// Logs to logcat at `level` (§1.13): tracing's events reach android_logger through
 /// tracing's `log` records, as no tracing subscriber is installed.
@@ -76,19 +73,6 @@ pub(crate) fn splat_load(bytes: Vec<u8>) -> SplatLoad {
         bytes: ModelBytes::Owned(bytes),
         kind_hint: None,
         reduce_to: None,
-    }
-}
-
-/// E-XR-RUNTIME when the session cannot be created (§1.15): the Quest exits 2. The XR
-/// crate logs it and inserts the primary reference space only once a session exists, so
-/// a session-created message without that space is the failure (or a session left
-/// without its reference space, which is E-XR-RUNTIME too).
-fn exit_without_session(
-    mut created: MessageReader<XrSessionCreatedMessage>,
-    space: Option<Res<XrPrimaryReferenceSpace>>,
-) {
-    if created.read().count() > 0 && space.is_none() {
-        std::process::exit(EXIT_ENVIRONMENT);
     }
 }
 
@@ -157,8 +141,9 @@ fn main() {
         })
         .add_plugins(add_xr(group, xr));
     if app.world().get_resource::<XrState>() == Some(&XrState::Unavailable) {
-        // E-XR-RUNTIME, which `XrPlugin` logged: the Quest exits 2 (§1.15).
-        std::process::exit(EXIT_ENVIRONMENT);
+        // E-XR-RUNTIME, which `XrPlugin` logged: the Quest exits 2 (§1.15). Before the
+        // app's first frame, so no warm-up runs yet (Q-325).
+        std::process::exit(i32::from(EXIT_ENVIRONMENT));
     }
     // Q-266: before `AppPlugin`, so panel mode, spatial audio and D-11's auto-fit apply.
     app.insert_resource(Headset);
@@ -177,5 +162,11 @@ fn main() {
         info!("device test {name}");
         device_test::add(&mut app, &name);
     }
-    app.run();
+    // #660: the runner drops the app, and with it the render world (Q-381's join), before
+    // `run` returns; an error exit (E-XR-RUNTIME's 2, §1.15) then ends the process with
+    // its code, and a success returns as before.
+    let code = exit_code(&app.run());
+    if code != 0 {
+        std::process::exit(code);
+    }
 }
