@@ -705,10 +705,8 @@ impl MetaDepth {
             // swapchain, which outlives this texture (`Drop` waits for the GPU and drops
             // the textures before destroying it); it was written by the runtime before
             // this acquire returned. Its usages are sampled and depth-attachment (Dv-7's
-            // validation layer, spike check 1), not the transfer-source usage the helper's
-            // contract names: the texture is only sampled here (the conversion pass,
-            // Q-360), never copied, so no command needs it. Q-356: wgpu tracks it
-            // from UNINITIALIZED.
+            // validation layer, spike check 1), so it has the sampled usage the helper's
+            // contract names. Q-356: wgpu tracks it from UNINITIALIZED.
             let texture =
                 unsafe { import_vulkan_texture(gpu.device(), raw, size, LAYERS, SOURCE_FORMAT) };
             Texture::from(texture)

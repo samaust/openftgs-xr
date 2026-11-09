@@ -9,17 +9,16 @@ use ftgsxr_core::UVec2;
 use super::device::SplatDevice;
 
 /// Imports the Vulkan image `image` (a raw `VkImage` handle) of `size` × `layers` array
-/// layers in `format` into a `wgpu::Texture` of `dev`'s device, usable as a copy source
-/// and for texture binding; its memory stays the image owner's (Q-339: once per
-/// swapchain image, for `ftgsxr_xr::depth`'s conversion pass into `DepthFrame.image`,
-/// Q-360).
+/// layers in `format` into a `wgpu::Texture` of `dev`'s device, usable for texture
+/// binding; its memory stays the image owner's (Q-339: once per swapchain image, for
+/// `ftgsxr_xr::depth`'s conversion pass into `DepthFrame.image`, Q-360).
 ///
 /// # Safety
 ///
 /// `image` must be a live `VkImage` of the `VkDevice` under `dev`'s wgpu device, of
 /// exactly this size, layer count, one mip level, one sample and `format`, created with
-/// the sampled and transfer-source usages, and initialized; it must outlive the returned
-/// texture and every use of it on the GPU, and not be destroyed through it.
+/// the sampled usage, and initialized; it must outlive the returned texture and every
+/// use of it on the GPU, and not be destroyed through it.
 ///
 /// # Panics
 ///
@@ -68,7 +67,7 @@ pub unsafe fn import_vulkan_texture(
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format,
-                    usage: wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
+                    usage: wgpu::TextureUses::RESOURCE,
                     memory_flags: wgpu::hal::MemoryFlags::empty(),
                     view_formats: vec![],
                 },
@@ -89,7 +88,7 @@ pub unsafe fn import_vulkan_texture(
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             },
         )
