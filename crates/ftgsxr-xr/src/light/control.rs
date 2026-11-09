@@ -6,8 +6,8 @@
 //! - The feature and the permission (Q-384): `XrFeatures.lighting` is `Absent` without a
 //!   session, without the platform's `CameraFrames`, or once `start` reported no
 //!   passthrough camera (Q-392); `Denied` after a denial; `Available` otherwise.
-//!   `Permission::Camera` is asked the first time an auto mode is wanted (Q-348's
-//!   pattern); a denial writes `lighting_mode = manual`, toasts E-XR-PERMISSION with Y
+//!   `Permission::Camera` is asked the first time an auto mode is wanted where the
+//!   camera would then run, the session running in passthrough mode (Q-348's pattern); a denial writes `lighting_mode = manual`, toasts E-XR-PERMISSION with Y
 //!   "light estimation" (Q-261) and lists the permission (Q-322); an auto mode selected
 //!   again or `AskPermissionAgain(Permission::Camera)` asks once more (Q-355).
 //! - The camera's life and the estimate (Q-385): the camera runs while the effective
@@ -218,8 +218,10 @@ impl Control {
             out.listed = Some(false);
         }
         // Q-348, Q-384: asked the first time an auto mode is wanted where the camera
-        // exists, whatever the environment mode.
+        // would then run (available, the session running, passthrough mode).
         if auto_setting(&setting)
+            && i.running
+            && i.env_mode == EnvironmentMode::Passthrough
             && self.feature() == FeatureState::Available
             && self.flow == Flow::Idle
         {
@@ -660,6 +662,20 @@ mod tests {
         let mut c = session();
         assert_eq!(frame(&mut c, &p, &mut e, now).feature, FeatureState::Absent);
         assert!(p.asked.lock().unwrap().is_empty());
+    }
+
+    /// Q-384, Q-348: the permission is asked only when the camera would otherwise run:
+    /// not in VR mode with an auto setting, then on the first passthrough frame.
+    #[test]
+    fn step_asks_the_camera_only_where_it_would_run() {
+        let now = Instant::now();
+        let (p, _) = fake(true, true);
+        let mut e = env("auto-global");
+        let mut c = session();
+        frame_with(&mut c, &p, &mut e, now, EnvironmentMode::Vr, false);
+        assert!(p.asked.lock().unwrap().is_empty(), "asked in VR mode");
+        frame(&mut c, &p, &mut e, now);
+        assert_eq!(*p.asked.lock().unwrap(), [Permission::Camera]);
     }
 
     /// Q-348, Q-355, Q-261, Q-322: asked on the first want; a denial writes `manual`,
