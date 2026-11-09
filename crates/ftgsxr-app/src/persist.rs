@@ -1236,8 +1236,14 @@ fn passthrough_mode(s: &Settings, headset: bool) -> bool {
 /// an auto mode counts as `manual` while the camera's feature is not `Available` (the
 /// desktop, `play --xr`, an older OS, a denied permission); the setting is kept.
 // Q-384
-pub(crate) fn effective_lighting_mode(s: &Settings, camera: FeatureState) -> &str {
-    match s.environment.lighting_mode.as_str() {
+fn effective_lighting_mode(s: &Settings, camera: FeatureState) -> &str {
+    effective_lighting_mode_of(&s.environment.lighting_mode, camera)
+}
+
+/// `effective_lighting_mode` of the setting's value.
+// Q-384
+pub(crate) fn effective_lighting_mode_of(mode: &str, camera: FeatureState) -> &str {
+    match mode {
         "auto-global" | "auto-local" if camera != FeatureState::Available => "manual",
         m => m,
     }
