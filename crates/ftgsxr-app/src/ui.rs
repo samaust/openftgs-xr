@@ -425,7 +425,9 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 /// selected later; `per_instance` is session state, `None` at start and saved nowhere.
 /// `too_dark` is the XR crate's, for the Environment tab: an auto mode waits for a
 /// reference the room is too dark to give (Q-385).
-// Q-383, Q-385
+/// `denied_auto` is the auto mode a camera denial was denied for, which the
+/// Environment tab's "Ask again" writes back (Q-384, Q-395).
+// Q-383, Q-385, Q-395
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Lighting {
     /// The environment's gains, the identity by default.
@@ -436,6 +438,12 @@ pub struct Lighting {
     /// An auto mode is in force, `lighting_reference` is `None`, the warm-up is over and
     /// the smoothed estimate is below the reference's floor (Q-385).
     pub too_dark: bool,
+    /// The auto mode (`"auto-global"` or `"auto-local"`, Q-50's spellings) that the last
+    /// denial of `Permission::Camera` wrote back to `manual`, written by the XR crate's
+    /// `light`; `None` by default, after a grant and without the XR crate. Session state,
+    /// saved nowhere.
+    // Q-395
+    pub denied_auto: Option<&'static str>,
 }
 
 impl Default for Lighting {
@@ -444,6 +452,7 @@ impl Default for Lighting {
             transform: ColorTransform::IDENTITY,
             per_instance: None,
             too_dark: false,
+            denied_auto: None,
         }
     }
 }

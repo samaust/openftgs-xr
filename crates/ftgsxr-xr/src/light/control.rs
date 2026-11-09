@@ -11,7 +11,10 @@
 //!   `Permission::Camera` is asked the first time an auto mode is wanted where the
 //!   camera would then run, the session running in passthrough mode (Q-348's pattern); a denial writes `lighting_mode = manual`, toasts E-XR-PERMISSION with Y
 //!   "light estimation" (Q-261) and lists the permission (Q-322); an auto mode selected
-//!   again or `AskPermissionAgain(Permission::Camera)` asks once more (Q-355).
+//!   again or `AskPermissionAgain(Permission::Camera)` asks once more (Q-355). The auto
+//!   mode a denial wrote back is kept as session state and published as
+//!   `Lighting.denied_auto`, which the Environment tab's "Ask again" writes back into the
+//!   setting, so a grant runs it with no second click; a grant clears it (Q-384, Q-395).
 //! - The camera's life and the estimate (Q-385): the camera runs while the effective
 //!   lighting mode is auto, the permission is granted, the session runs and the effective
 //!   environment mode is passthrough; the smoother restarts at each start; no new
@@ -142,6 +145,8 @@ pub(crate) struct Outputs {
     pub(crate) toasts: Vec<String>,
     /// `Permission::Camera` listed in (true) or out of (false) `DeniedPermissions`.
     pub(crate) listed: Option<bool>,
+    /// `Lighting.denied_auto`: the auto mode the last denial wrote back (Q-395).
+    pub(crate) denied_auto: Option<&'static str>,
 }
 
 /// The control's state, kept across sessions (the permission flow) and within one (the
@@ -159,6 +164,9 @@ pub(crate) struct Control {
     toasted: bool,
     /// The setting was an auto mode last frame (Q-355's re-selection).
     last_auto: bool,
+    /// The auto mode the last denial wrote back to `manual`, until a grant; kept across
+    /// sessions with the flow (Q-384, Q-395).
+    denied_auto: Option<&'static str>,
     /// The camera is started: since when a thumbnail was last new.
     started: Option<Instant>,
     /// A failed start is retried from then on (Q-392).
@@ -186,6 +194,7 @@ impl Default for Control {
             unsupported: false,
             toasted: false,
             last_auto: false,
+            denied_auto: None,
             started: None,
             retry_after: None,
             last_at_s: None,
@@ -234,11 +243,18 @@ impl Control {
     }
 
     /// A denial of `Permission::Camera` (Q-384, Q-261, Q-322, Q-355, Q-392): `Denied`,
-    /// listed, toasted, and an auto setting written back to `manual`.
+    /// listed, toasted, and an auto setting written back to `manual`, its mode kept for
+    /// the Environment tab's "Ask again" (Q-395).
     fn deny(&mut self, out: &mut Outputs, setting: &mut String, auto: bool) {
         self.flow = Flow::Denied;
         out.listed = Some(true);
         if auto {
+            // Q-395: Q-50's spellings, auto local or else auto global.
+            self.denied_auto = Some(if setting.as_str() == "auto-local" {
+                "auto-local"
+            } else {
+                "auto-global"
+            });
             *setting = "manual".into();
             out.write_mode = Some("manual");
         }
@@ -248,7 +264,7 @@ impl Control {
     }
 
     /// One frame (Q-384, Q-385, Q-389, Q-392).
-    // Q-161, Q-261, Q-322, Q-348, Q-355, Q-384, Q-385, Q-389, Q-392
+    // Q-161, Q-261, Q-322, Q-348, Q-355, Q-384, Q-385, Q-389, Q-392, Q-394, Q-395
     pub(crate) fn step(&mut self, platform: Option<&dyn Platform>, i: &Inputs) -> Outputs {
         let mut out = Outputs::default();
         if self.camera.is_none() {
@@ -425,6 +441,11 @@ impl Control {
         out.light_gains = self.started.map(|_| e14.map_or(Vec3::ONE, |t| t.gain));
         self.last_auto = auto_setting(&setting);
         out.feature = self.feature();
+        // Q-395: a grant ends the kept mode.
+        if self.flow == Flow::Granted {
+            self.denied_auto = None;
+        }
+        out.denied_auto = self.denied_auto;
         out
     }
 
@@ -561,6 +582,10 @@ fn control(
     }
     if lighting.too_dark != out.too_dark {
         lighting.too_dark = out.too_dark;
+    }
+    // Q-395: the kept auto mode, for the Environment tab's "Ask again".
+    if lighting.denied_auto != out.denied_auto {
+        lighting.denied_auto = out.denied_auto;
     }
     if hud.light_gains != out.light_gains {
         hud.light_gains = out.light_gains;
@@ -805,6 +830,83 @@ mod tests {
         assert_eq!(out.listed, Some(false));
         assert_eq!(out.feature, FeatureState::Available);
         assert_eq!(c.flow, Flow::Granted);
+    }
+
+    /// Q-384, Q-395 (#691): a denial in auto local or auto global keeps that mode; the
+    /// Environment tab's "Ask again" writes it back and sends `AskPermissionAgain`, which
+    /// asks once; on a grant the effective mode is that auto mode with no other input and
+    /// the kept mode ends.
+    #[test]
+    fn step_ask_again_restores_the_denied_auto_mode() {
+        for (setting, mode) in [
+            ("auto-local", LightingMode::AutoLocal),
+            ("auto-global", LightingMode::AutoGlobal),
+        ] {
+            let now = Instant::now();
+            let (p, cam) = fake(false, true);
+            let cam = cam.unwrap();
+            let mut e = env(setting);
+            let mut c = session();
+            let out = frame(&mut c, &p, &mut e, now);
+            assert_eq!(out.feature, FeatureState::Denied, "{setting}");
+            assert_eq!(e.lighting_mode, "manual", "{setting}");
+            assert_eq!(out.denied_auto, Some(setting), "kept, {setting}");
+            // Kept while denied.
+            let out = frame(&mut c, &p, &mut e, now);
+            assert_eq!(out.denied_auto, Some(setting), "{setting}");
+            // "Ask again": the tab writes the kept mode and sends the message.
+            *p.grant.lock().unwrap() = true;
+            e.lighting_mode = out.denied_auto.unwrap().into();
+            let out = frame_with(&mut c, &p, &mut e, now, EnvironmentMode::Passthrough, true);
+            assert_eq!(p.asked.lock().unwrap().len(), 2, "asked once, {setting}");
+            assert_eq!(out.listed, Some(false), "{setting}");
+            assert_eq!(out.feature, FeatureState::Available, "{setting}");
+            assert_eq!(e.lighting_mode, setting, "{setting}");
+            assert_eq!(c.mode_of(&e, &e.lighting_mode), mode, "{setting}");
+            assert!(out.transform.is_some(), "the auto mode in force, {setting}");
+            assert_eq!(*cam.starts.lock().unwrap(), 1, "the camera runs, {setting}");
+            assert_eq!(out.denied_auto, None, "a grant ends it, {setting}");
+            assert!(out.toasts.is_empty(), "{setting}");
+        }
+    }
+
+    /// Q-384, Q-395, Q-261, Q-322 (#691): after "Ask again", a second denial writes
+    /// `manual` again, toasts once and keeps the mode again; the Comfort tab's
+    /// `AskPermissionAgain` asks without changing the setting or the kept mode.
+    #[test]
+    fn step_ask_again_denied_again_writes_manual() {
+        let now = Instant::now();
+        let (p, _) = fake(false, true);
+        let mut e = env("auto-local");
+        let mut c = session();
+        let out = frame(&mut c, &p, &mut e, now);
+        assert_eq!(out.toasts.len(), 1);
+        // The Environment tab's "Ask again", denied again.
+        e.lighting_mode = out.denied_auto.unwrap().into();
+        let out = frame_with(&mut c, &p, &mut e, now, EnvironmentMode::Passthrough, true);
+        assert_eq!(p.asked.lock().unwrap().len(), 2, "asked once");
+        assert_eq!(out.feature, FeatureState::Denied);
+        assert_eq!(e.lighting_mode, "manual");
+        assert_eq!(out.listed, Some(true));
+        assert_eq!(
+            out.toasts,
+            ["E-XR-PERMISSION: Permission Camera denied; feature light estimation unavailable"]
+        );
+        assert_eq!(out.denied_auto, Some("auto-local"));
+        let out = frame(&mut c, &p, &mut e, now);
+        assert!(out.toasts.is_empty(), "toasted once");
+        // The Comfort tab's ask, denied: the setting and the kept mode stay.
+        let out = frame_with(&mut c, &p, &mut e, now, EnvironmentMode::Passthrough, true);
+        assert_eq!(p.asked.lock().unwrap().len(), 3);
+        assert_eq!(e.lighting_mode, "manual");
+        assert_eq!(out.denied_auto, Some("auto-local"));
+        // The Comfort tab's ask, granted: the setting stays manual.
+        *p.grant.lock().unwrap() = true;
+        let out = frame_with(&mut c, &p, &mut e, now, EnvironmentMode::Passthrough, true);
+        assert_eq!(p.asked.lock().unwrap().len(), 4);
+        assert_eq!(out.feature, FeatureState::Available);
+        assert_eq!(e.lighting_mode, "manual");
+        assert_eq!(out.denied_auto, None);
     }
 
     /// Q-392, Q-161: a start whose error begins with E-XR-UNSUPPORTED gives `Absent` for
