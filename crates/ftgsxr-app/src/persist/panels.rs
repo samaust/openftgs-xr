@@ -17,8 +17,8 @@ use super::{SettingsRes, pick_tier};
 use crate::intent::{Feature, Intent};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
-use crate::platform::{AskPermissionAgain, DeniedPermissions, Permission};
-use crate::ui::{FeatureState, UiCue, XrFeatures};
+use crate::platform::{AskPermissionAgain, DeniedPermissions, Headset, Permission};
+use crate::ui::{FeatureState, Lighting, UiCue, XrFeatures};
 
 /// The values `ftgsxr-io` accepts for the string keys (§1.11).
 const TIERS: &[&str] = &[
@@ -147,7 +147,8 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
 /// removal is off (§1.9); with occlusion its switch, soft or hard, δ
 /// and hand removal, with a note while the running tier's `occlusion` flag turns it off
 /// (Q-338); under a `Denied` feature "Ask again", which writes its toggle again (§1.15
-/// E-XR-PERMISSION). The mode switch writes `Toggle(Feature::Passthrough)`, whose consumer
+/// E-XR-PERMISSION); the lighting controls everywhere (`lighting_controls`). The mode
+/// switch writes `Toggle(Feature::Passthrough)`, whose consumer
 /// is the XR crate (Q-335); the other controls edit the settings directly.
 // Q-335, Q-336, Q-338, Q-366
 pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
@@ -164,6 +165,10 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .get_resource::<SplatTierState>()
         .filter(|t| !t.tier.occlusion)
         .map(|t| t.tier.name.clone());
+    // §1.9 Light estimation: the reason only manual mode is offered (Q-384).
+    let headset = world.contains_resource::<Headset>();
+    let mut light = world.get_resource::<Lighting>().copied();
+    let mut ask_camera = false;
     let mut toggles = Vec::new();
     edit(world, ui, |s, ui| {
         background(ui, &mut s.environment.background, training);
@@ -230,11 +235,105 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             }
             ui.checkbox(&mut e.hand_removal, "hand removal");
         }
+        ui.separator();
+        ask_camera = lighting_controls(ui, s, &features, headset, light.as_mut());
     });
+    if let Some(l) = light
+        && world.get_resource::<Lighting>().is_some_and(|w| *w != l)
+    {
+        world.insert_resource(l);
+    }
+    // Q-322: a denied camera permission is asked again.
+    if ask_camera {
+        world.write_message(AskPermissionAgain(Permission::Camera));
+        world.write_message(UiCue::Click);
+    }
     for feature in toggles {
         world.write_message(Intent::Toggle(feature));
         world.write_message(UiCue::Click);
     }
+}
+
+/// The lighting modes as the selector names them (§1.9), with their setting.
+const LIGHTING_CHOICES: [(&str, &str); 4] = [
+    ("off", "off"),
+    ("manual", "manual"),
+    ("auto-global", "auto global"),
+    ("auto-local", "auto local"),
+];
+
+/// The Environment tab's lighting controls (§1.9 Light estimation and color matching):
+/// the mode, offering the auto modes only where the camera is `Available` and otherwise
+/// showing an auto setting as manual, kept, with the reason (Q-384); picking an auto mode
+/// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion"
+/// beside auto local without occlusion's depth (Q-388); the manual sliders, the strength
+/// γ, the current gains and "per instance" (Q-383). True when "Ask again" was pressed
+/// for a denied camera (Q-322).
+// Q-322, Q-383, Q-384, Q-385, Q-388
+fn lighting_controls(
+    ui: &mut egui::Ui,
+    s: &mut Settings,
+    features: &XrFeatures,
+    headset: bool,
+    light: Option<&mut Lighting>,
+) -> bool {
+    let camera = features.lighting;
+    let occlusion_on = s.environment.occlusion && features.occlusion == FeatureState::Available;
+    let e = &mut s.environment;
+    let shown = super::effective_lighting_mode_of(&e.lighting_mode, camera).to_owned();
+    let offered = if camera == FeatureState::Available {
+        4
+    } else {
+        2
+    };
+    let mut ask = false;
+    ui.horizontal(|ui| {
+        ui.label("lighting");
+        for (mode, label) in &LIGHTING_CHOICES[..offered] {
+            if ui.selectable_label(shown == *mode, *label).clicked() && shown != *mode {
+                e.lighting_mode = (*mode).into();
+                if mode.starts_with("auto") {
+                    e.lighting_reference = None;
+                }
+            }
+        }
+    });
+    let auto_setting = e.lighting_mode.starts_with("auto");
+    match camera {
+        FeatureState::Denied => {
+            ui.horizontal(|ui| {
+                ui.label("permission denied");
+                ask = ui.button("Ask again").clicked();
+            });
+        }
+        FeatureState::Absent if auto_setting => {
+            ui.label(if headset {
+                "not available on this OS"
+            } else {
+                "no passthrough camera on the desktop"
+            });
+        }
+        _ => {}
+    }
+    if shown.starts_with("auto") {
+        if shown == "auto-local" && !occlusion_on {
+            ui.label("local needs occlusion");
+        }
+        if ui.button("re-capture reference").clicked() {
+            e.lighting_reference = None;
+        }
+    }
+    let m = &mut e.lighting_manual;
+    ui.add(egui::Slider::new(&mut m.exposure_ev, -4.0..=4.0).text("exposure (EV)"));
+    ui.add(egui::Slider::new(&mut m.temperature, -1.0..=1.0).text("temperature"));
+    ui.add(egui::Slider::new(&mut m.tint, -1.0..=1.0).text("tint"));
+    ui.add(egui::Slider::new(&mut e.lighting_gamma, 0.0..=1.0).text("strength γ"));
+    if let Some(l) = light {
+        let g = l.transform.gain;
+        ui.label(format!("gains {:.2} {:.2} {:.2}", g.x, g.y, g.z));
+        ui.checkbox(&mut l.per_instance, "per instance");
+    }
+    ask
 }
 
 /// A denied feature's line: why it is off and "Ask again" (§1.15 E-XR-PERMISSION).
@@ -845,5 +944,124 @@ mod tests {
                 "{label} with hand removal on: {texts:?}"
             );
         }
+    }
+
+    /// The Environment tab's lighting controls (§1.9 "only manual mode is offered and the
+    /// UI says why", §1.15 E-XR-PERMISSION, Q-384, Q-385, Q-322, `cpu`): off and manual
+    /// with the reason on the desktop and on the headset under `Absent` or `Denied`, an
+    /// auto setting shown as manual and kept; "Ask again" under `Denied` asks for the
+    /// camera; the four modes under `Available`, where an auto pick and "re-capture
+    /// reference" clear `lighting_reference`.
+    #[test]
+    fn the_environment_tab_offers_the_lighting_modes_the_camera_allows() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.init_resource::<Messages<AskPermissionAgain>>();
+        world
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .lighting_mode = "auto-global".into();
+        let ctx = egui::Context::default();
+        let has =
+            |texts: &[(String, egui::Pos2)], label: &str| texts.iter().any(|(t, _)| t == label);
+        let frame = |world: &mut World| {
+            frame_of(&ctx, world, Vec::new(), environment_section);
+            frame_of(&ctx, world, Vec::new(), environment_section)
+        };
+        let mode = |world: &World| {
+            world
+                .resource::<SettingsRes>()
+                .0
+                .environment
+                .lighting_mode
+                .clone()
+        };
+        let lighting = |state| XrFeatures {
+            lighting: state,
+            ..XrFeatures::default()
+        };
+        let cases = [
+            (
+                false,
+                FeatureState::Absent,
+                "no passthrough camera on the desktop",
+            ),
+            (true, FeatureState::Absent, "not available on this OS"),
+            (true, FeatureState::Denied, "permission denied"),
+        ];
+        for (headset, state, reason) in cases {
+            if headset {
+                world.insert_resource(Headset);
+            }
+            world.insert_resource(lighting(state));
+            let texts = frame(&mut world);
+            for label in ["off", "manual", reason] {
+                assert!(has(&texts, label), "{label}, {state:?}: {texts:?}");
+            }
+            for label in ["auto global", "auto local"] {
+                assert!(!has(&texts, label), "{label}, {state:?}: {texts:?}");
+            }
+            assert_eq!(mode(&world), "auto-global", "the setting is kept");
+        }
+        // Denied: "Ask again" asks for the camera.
+        let texts = frame(&mut world);
+        for events in click(at(&texts, "Ask again")) {
+            frame_of(&ctx, &mut world, events, environment_section);
+        }
+        let asked: Vec<AskPermissionAgain> = world
+            .resource_mut::<Messages<AskPermissionAgain>>()
+            .drain()
+            .collect();
+        assert_eq!(asked, [AskPermissionAgain(Permission::Camera)]);
+        // Available: four modes; picking auto local clears the reference.
+        world.insert_resource(lighting(FeatureState::Available));
+        let reference = Some([0.5, 0.4, 0.3, 0.42]);
+        world
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .lighting_reference = reference;
+        let texts = frame(&mut world);
+        for label in [
+            "off",
+            "manual",
+            "auto global",
+            "auto local",
+            "re-capture reference",
+        ] {
+            assert!(has(&texts, label), "{label}: {texts:?}");
+        }
+        assert!(!has(&texts, "permission denied"), "{texts:?}");
+        for events in click(at(&texts, "auto local")) {
+            frame_of(&ctx, &mut world, events, environment_section);
+        }
+        let env = world.resource::<SettingsRes>().0.environment.clone();
+        assert_eq!(env.lighting_mode, "auto-local");
+        assert_eq!(
+            env.lighting_reference, None,
+            "an auto pick clears the reference"
+        );
+        // Q-388: auto local without occlusion's depth says so.
+        let texts = frame(&mut world);
+        assert!(has(&texts, "local needs occlusion"), "{texts:?}");
+        world
+            .resource_mut::<SettingsRes>()
+            .0
+            .environment
+            .lighting_reference = reference;
+        for events in click(at(&texts, "re-capture reference")) {
+            frame_of(&ctx, &mut world, events, environment_section);
+        }
+        assert_eq!(
+            world
+                .resource::<SettingsRes>()
+                .0
+                .environment
+                .lighting_reference,
+            None
+        );
     }
 }
