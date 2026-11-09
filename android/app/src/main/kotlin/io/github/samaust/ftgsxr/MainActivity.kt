@@ -23,6 +23,12 @@ class MainActivity : GameActivity() {
         super.onCreate(savedInstanceState)
     }
 
+    override fun onPause() {
+        // Q-386: the camera closes on pause; Rust starts it again once the session runs.
+        Shim.onPause()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         Shim.detach(this)
         super.onDestroy()
