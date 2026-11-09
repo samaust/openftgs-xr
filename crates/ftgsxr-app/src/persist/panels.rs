@@ -1244,7 +1244,7 @@ mod tests {
             !has(&texts, "local needs occlusion and a selected instance"),
             "occlusion on, an instance selected: {texts:?}"
         );
-        world.despawn(selected);
+        world.entity_mut(selected).remove::<Selected>();
         // Q-383: a pinned target stands for the selection.
         world.init_resource::<Lighting>();
         world.resource_mut::<Lighting>().per_instance = Some(selected);
@@ -1254,6 +1254,7 @@ mod tests {
             "occlusion on, a target pinned: {texts:?}"
         );
         world.remove_resource::<Lighting>();
+        world.despawn(selected);
         world
             .resource_mut::<SettingsRes>()
             .0
