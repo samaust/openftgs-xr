@@ -2579,6 +2579,7 @@ dependencies = [
  "bevy",
  "bevy_mod_xr",
  "ftgsxr-app",
+ "ftgsxr-testkit",
  "ftgsxr-xr",
  "jni 0.20.0",
  "ndk-context",

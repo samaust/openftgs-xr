@@ -44,3 +44,11 @@ jni.workspace = true
 ndk-context.workspace = true
 # §2.1
 tracing = { workspace = true, features = ["log"] }
+
+# #660: the E-XR-RUNTIME exit's tests on the host, the session's message and reference
+# space from bevy_mod_xr (§2.1), and the `gpu_` variant's render half (as `ftgsxr-app`'s
+# test support adds it) and layer guard (R-16).
+[dev-dependencies]
+bevy = { workspace = true, features = ["bevy_core_pipeline", "multi_threaded"] }
+bevy_mod_xr.workspace = true
+ftgsxr-testkit.workspace = true
