@@ -135,7 +135,7 @@ pub(crate) fn thumb_depths(thumb: &CameraThumb, depth: &DepthSnapshot) -> Vec<f3
     out
 }
 
-/// Auto local's band instance (Q-383, Q-388): `per_instance`'s target while one is set,
+/// The depth band's instance (Q-383, Q-388): `per_instance`'s target while one is set,
 /// whatever is selected (none when it is not among `instances`), else the one selected
 /// instance; each item is an instance, whether it is `Selected`, and what the caller
 /// needs of it.
@@ -158,8 +158,9 @@ pub(crate) fn band_instance<T>(
 }
 
 /// Whether a readback is spawned for the left view's capture `age_frames` old: the
-/// effective `mode` auto local, a band instance (the band needs d_m: "per instance"'s
-/// target, else the selected instance, Q-383), passthrough mode and a new capture (Q-388).
+/// effective `mode` auto local, an instance for the depth band (the band needs d_m:
+/// "per instance"'s target, else the selected instance, Q-383), passthrough mode and a
+/// new capture (Q-388).
 // Q-383, Q-388
 fn readback_wanted(
     mode: &LightingMode,
@@ -171,9 +172,9 @@ fn readback_wanted(
 }
 
 /// The frame's request (main world, `Update`, before the control): while auto local is
-/// in force (`XrFeatures.lighting` as of the last frame's control), a band instance
-/// ("per instance"'s target, else the selected one, Q-383),
-/// in passthrough mode and the provider runs, a one-shot `Readback::texture` of the
+/// in force (`XrFeatures.lighting` as of the last frame's control), an instance for the
+/// depth band ("per instance"'s target, else the selected one, Q-383), in passthrough
+/// mode and the provider runs, a one-shot `Readback::texture` of the
 /// left view's `DepthFrame.image` is spawned when a new capture arrived (`age_frames`
 /// 0) and none is in flight. Its `Readback` is removed the frame after (one extract
 /// copies it once, encoded by Bevy's render system after the drive's median pass was
@@ -311,15 +312,18 @@ mod tests {
     }
 
     /// Q-388: the readback is wanted only in the effective auto local mode (an auto local
-    /// setting without the camera is manual), with a band instance, in passthrough
-    /// mode, for a new capture.
+    /// setting without the camera is manual), with an instance for the depth band, in
+    /// passthrough mode, for a new capture.
     #[test]
-    fn readback_wanted_needs_effective_auto_local_a_band_instance_and_a_new_capture() {
+    fn readback_wanted_needs_effective_auto_local_an_instance_and_a_new_capture() {
         let mut env = ftgsxr_io::Settings::default().environment;
         env.lighting_mode = "auto-local".into();
         let local = LightingMode::from_settings(&env, FeatureState::Available);
         assert!(readback_wanted(&local, true, true, 0));
-        assert!(!readback_wanted(&local, false, true, 0), "no band instance");
+        assert!(
+            !readback_wanted(&local, false, true, 0),
+            "no instance for the band"
+        );
         assert!(!readback_wanted(&local, true, false, 0), "VR mode");
         assert!(!readback_wanted(&local, true, true, 1), "no new capture");
         let gated = LightingMode::from_settings(&env, FeatureState::Absent);

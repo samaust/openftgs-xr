@@ -449,7 +449,7 @@ fn control(
     let Some(mut settings) = settings else {
         return;
     };
-    // Q-388: d_m from the head (the views' midpoint) to the band instance's posed B_m
+    // Q-388: d_m from the head (the views' midpoint) to the depth band's instance's posed B_m
     // centre: "per instance"'s target while one is set, else the selected one (Q-383).
     let target = band_instance(
         lighting.per_instance,

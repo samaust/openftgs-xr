@@ -285,8 +285,9 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// selected instance (Q-388); the manual sliders, the strength
 /// γ, the current gains and "per instance" (Q-383: turning it on pins the instance then
 /// selected, it can't be turned on while nothing is selected and turning it off sets
-/// `None`; a pinned target stands for the selection in the note). True when "Ask again" was pressed
-/// for a denied camera (Q-322).
+/// `None`; a pinned target stands for the selection in the note, as the XR crate's
+/// band takes it for the depth band's instance). True when "Ask again" was pressed for
+/// a denied camera (Q-322).
 // Q-322, Q-383, Q-384, Q-385, Q-388
 fn lighting_controls(
     ui: &mut egui::Ui,
