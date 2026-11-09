@@ -89,6 +89,9 @@ pub use ftgsxr_io::{DocumentProvider, ModelRef, Url};
 // with, and the source Dv-10's runner adds (§2.1's `ftgsxr-quest` depends on the app
 // alone), as Q-168.
 pub use ftgsxr_io::{Entry, EntryKind, SourceSpec, classify_name};
+// Q-393: what `ftgsxr_quest::QuestPlatform`'s `CameraFrames` builds a thumbnail's camera
+// with (Q-387), as Q-296.
+pub use ftgsxr_core::{Camera, Fov};
 // Q-89: the tier `cmd_render` (and M-4's `AppPlugin`) takes, for callers that depend on
 // the app alone (§2.1's `ftgsxr-desktop`).
 pub use ftgsxr_render::QualityTier;

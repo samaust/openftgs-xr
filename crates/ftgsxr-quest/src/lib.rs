@@ -9,6 +9,8 @@
 
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(any(test, target_os = "android"))]
+mod camera;
 #[cfg(target_os = "android")]
 mod device_test;
 #[cfg(any(test, target_os = "android"))]

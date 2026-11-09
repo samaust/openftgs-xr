@@ -17,7 +17,7 @@ use ftgsxr_app::{
     AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SettingsRes, SortMode, SplatLoad, Toast,
     ToastLevel, load_settings,
 };
-use ftgsxr_xr::{XrPlugin, add_xr};
+use ftgsxr_xr::{XrHands, XrPlugin, add_xr};
 
 use crate::exit::{EXIT_ENVIRONMENT, exit_code, exit_without_session};
 use crate::platform::QuestPlatform;
@@ -148,8 +148,18 @@ fn main() {
     // Q-266: before `AppPlugin`, so panel mode, spatial audio and D-11's auto-fit apply.
     app.insert_resource(Headset);
     // Q-163: `SettingsRes` above is left alone by `AppPlugin`.
+    let platform = QuestPlatform::new(paths);
+    // Q-387: the head's stage pose for the camera's thumbnails, in `Last`, after
+    // `tracking` wrote this frame's `XrHands.head` in PostUpdate; `light` reads it from
+    // the next frame's `latest`.
+    let head = platform.clone();
+    app.add_systems(Last, move |hands: Option<Res<XrHands>>| {
+        if let Some(hands) = hands {
+            head.set_head(hands.head.translation, hands.head.rotation);
+        }
+    });
     app.add_plugins(AppPlugin {
-        platform: Arc::new(QuestPlatform::new(paths)),
+        platform: Arc::new(platform),
         tier,
         initial: Vec::new(),
         scene: None,
