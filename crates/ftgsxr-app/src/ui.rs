@@ -256,7 +256,8 @@ pub struct HudData {
     // Q-345
     pub anchor: Option<HudAnchor>,
     /// The light estimate's gains (§1.13 HUD) while an auto lighting mode runs the
-    /// camera; `None` otherwise. The XR crate's to write.
+    /// camera; `None` otherwise. The value is g·w per channel, as `ColorTransform.gain`
+    /// holds it, not E14's g and w apart. The XR crate's to write.
     // Q-389
     pub light_gains: Option<Vec3>,
 }
