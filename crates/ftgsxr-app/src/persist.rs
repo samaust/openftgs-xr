@@ -604,8 +604,11 @@ fn run_commands(world: &mut World, mut cursor: Local<MessageCursor<PersistComman
     // crate has answered `Ready(uuid)` the waiting file is written, anchor first and file
     // second (§1.9), before this frame's commands can replace its path, clear its anchor
     // or load another scene over it.
-    // Q-343, Q-350, Q-353
-    if matches!(world.resource::<SceneAnchor>(), SceneAnchor::Ready(_)) {
+    // Q-343, Q-350
+    if matches!(
+        world.get_resource::<SceneAnchor>(),
+        Some(SceneAnchor::Ready(_))
+    ) {
         finish_anchor_wait(world);
     }
     for c in commands {
