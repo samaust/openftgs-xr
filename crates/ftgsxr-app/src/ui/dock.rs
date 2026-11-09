@@ -505,9 +505,11 @@ fn library_tab(
         .map(|(s, _)| format!("{s:?}"))
         .collect();
     let entries = library.entries.clone();
+    // #627: every row wraps, or sizes its field, to the tab's width, down to §1.7's
+    // narrowest dock: a control past the edge can't be used.
     for (i, s) in sources.iter().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(s);
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::Label::new(s).wrap());
             if button(ui, "Refresh", out, hv) {
                 out.push(Out::Library(LibraryCommand::Refresh(i)));
             }
@@ -518,15 +520,36 @@ fn library_tab(
         });
     }
     // §1.5 Sources, §1.7 Panels: an HTTP index URL or a local folder (Q-160).
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let mut state = world.resource_mut::<UiState>();
+        // The field fills what "Add source" leaves of the row, or the whole row with the
+        // button on the next where that would leave the field too narrow.
+        let add = "Add source";
+        let add_width = egui::WidgetText::from(add)
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            )
+            .size()
+            .x
+            + 2.0 * ui.spacing().button_padding.x
+            + ui.spacing().item_spacing.x;
+        let row = ui.available_width();
+        let field = if row - add_width >= row / 2.0 {
+            row - add_width
+        } else {
+            row
+        };
         ui.add(
             egui::TextEdit::singleline(&mut state.new_source)
-                .hint_text("https://… index or /path/to/folder"),
+                .hint_text("https://… index or /path/to/folder")
+                .desired_width(field),
         );
         let spec = source_from_input(&state.new_source);
         if ui
-            .add_enabled(spec.is_some(), egui::Button::new("Add source"))
+            .add_enabled(spec.is_some(), egui::Button::new(add))
             .clicked()
             && let Some(spec) = spec
         {
@@ -535,7 +558,7 @@ fn library_tab(
             out.push(Out::Library(LibraryCommand::AddSource(spec)));
         }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if button(ui, "Open files…", out, hv) {
             out.push(Out::Library(LibraryCommand::Pick(PickKind::Files)));
         }
@@ -546,9 +569,10 @@ fn library_tab(
     let mut state = world.resource_mut::<UiState>();
     ui.horizontal(|ui| {
         ui.label("Name");
-        ui.text_edit_singleline(&mut state.filter_name);
+        let rest = ui.available_width();
+        ui.add(egui::TextEdit::singleline(&mut state.filter_name).desired_width(rest));
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for (i, k) in ["ftgs-if", "checkpoint", "PLY", "folders"]
             .iter()
             .enumerate()
@@ -569,8 +593,8 @@ fn library_tab(
         {
             continue;
         }
-        ui.horizontal(|ui| {
-            ui.label(&e.entry.name);
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::Label::new(&e.entry.name).wrap());
             match &e.state {
                 EntryState::Listed => {
                     if button(ui, "Load", out, hv) {
@@ -2043,6 +2067,18 @@ mod tests {
         width: f32,
         events: Vec<egui::Event>,
     ) -> (Vec<(String, egui::Rect)>, Vec<Out>) {
+        let (texts, _, out) = library_frame_shapes(ctx, world, width, events);
+        (texts, out)
+    }
+
+    /// `library_frame`, with every painted shape's visual bounds as well (the frames of
+    /// text fields and checkboxes, which draw no text of their own).
+    fn library_frame_shapes(
+        ctx: &egui::Context,
+        world: &mut World,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) -> (Vec<(String, egui::Rect)>, Vec<egui::Rect>, Vec<Out>) {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -2059,19 +2095,30 @@ mod tests {
             });
         });
         full.textures_delta.clear();
-        let mut texts = Vec::new();
-        fn walk(s: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+        let (mut texts, mut rects) = (Vec::new(), Vec::new());
+        fn walk(
+            s: &egui::Shape,
+            texts: &mut Vec<(String, egui::Rect)>,
+            rects: &mut Vec<egui::Rect>,
+        ) {
             match s {
                 egui::Shape::Text(t) => texts.push((
                     t.galley.text().to_string(),
                     t.galley.rect.translate(t.pos.to_vec2()),
                 )),
-                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts)),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts, rects)),
                 _ => {}
             }
+            // A shape that paints nothing (an empty mesh or text) has no finite bounds.
+            let r = s.visual_bounding_rect();
+            if !matches!(s, egui::Shape::Vec(_)) && r.is_finite() {
+                rects.push(r);
+            }
         }
-        full.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
-        (texts, out)
+        full.shapes
+            .iter()
+            .for_each(|c| walk(&c.shape, &mut texts, &mut rects));
+        (texts, rects, out)
     }
 
     /// The texts drawn by two frames of the Library tab `width` points wide (the second
@@ -2129,8 +2176,8 @@ mod tests {
                 "{label} is drawn: {texts:?}"
             );
         }
-        // The entry's own row; the source controls above it are not #620's. Half a
-        // point of slack for the layout's rounding of positions.
+        // The entry's own row (#627's tests check the whole tab). Half a point of slack
+        // for the layout's rounding of positions.
         for (t, r) in texts
             .iter()
             .filter(|(t, _)| [LONG, "kitchen", "Retry"].contains(&&**t))
@@ -2171,5 +2218,142 @@ mod tests {
                 reduce: false
             }]
         );
+    }
+
+    // #627: every control of the Library tab inside the tab's width, from §1.7's
+    // narrowest dock to its default and the main panel's (§1.8).
+
+    /// A world whose library holds one local source with a long path and one entry,
+    /// `kitchen`, in `state`.
+    fn library_with_source(state: crate::library::EntryState) -> World {
+        let mut world = library_with(state);
+        let root = "/home/someone/models/openftgs-synth-kitchen-and-courtyard";
+        let spec = source_from_input(root).expect("an absolute path is a source");
+        let source: std::sync::Arc<dyn ftgsxr_io::ModelSource> =
+            std::sync::Arc::new(ftgsxr_io::LocalDir { root: root.into() });
+        world
+            .resource_mut::<crate::library::Library>()
+            .sources
+            .push((spec, source));
+        world
+    }
+
+    /// The entry states, each with the texts its row draws.
+    fn entry_states() -> Vec<crate::library::EntryState> {
+        use crate::library::EntryState;
+        vec![
+            EntryState::Listed,
+            EntryState::Fetching(ftgsxr_io::Progress {
+                done: 1,
+                total: Some(4),
+            }),
+            EntryState::Loading,
+            EntryState::Failed(LONG.into()),
+            EntryState::Missing,
+        ]
+    }
+
+    /// Every text and every painted shape of two frames of the Library tab, drawn in a
+    /// column `width` points wide with `ctx`, lies inside the column (half a point of
+    /// slack for the rounding of positions); `labels` are all drawn.
+    fn assert_library_inside(ctx: &egui::Context, world: &mut World, width: f32, labels: &[&str]) {
+        library_frame_shapes(ctx, world, width, Vec::new());
+        let (texts, rects, _) = library_frame_shapes(ctx, world, width, Vec::new());
+        for label in labels {
+            assert!(
+                texts.iter().any(|(t, _)| t == label),
+                "{label} is drawn at {width}: {texts:?}"
+            );
+        }
+        for (t, r) in &texts {
+            assert!(
+                r.min.x >= -0.5 && r.max.x <= width + 0.5,
+                "{t:?} at {r:?} in a column {width} wide"
+            );
+        }
+        for r in &rects {
+            assert!(
+                r.min.x >= -0.5 && r.max.x <= width + 0.5,
+                "a shape at {r:?} in a column {width} wide"
+            );
+        }
+    }
+
+    /// The controls every state draws: the source row, the new source's row, the
+    /// pickers, the filters.
+    const CONTROLS: [&str; 11] = [
+        "Refresh",
+        "https://… index or /path/to/folder",
+        "Add source",
+        "Open files…",
+        "Add folder…",
+        "Name",
+        "ftgs-if",
+        "checkpoint",
+        "PLY",
+        "folders",
+        "Reduce to budget",
+    ];
+
+    #[test]
+    fn library_tab_keeps_every_control_inside_the_narrowest_and_the_default_dock() {
+        for width in [160.0, 320.0] {
+            for state in entry_states() {
+                let mut world = library_with_source(state);
+                assert_library_inside(&font_context(), &mut world, width, &CONTROLS);
+            }
+        }
+    }
+
+    #[test]
+    fn library_tab_keeps_a_missing_entry_s_buttons_inside_the_narrowest_dock() {
+        let mut world = library_with_source(crate::library::EntryState::Missing);
+        let labels = ["kitchen", "missing", "Locate…", "Replace with…"];
+        assert_library_inside(&font_context(), &mut world, 160.0, &labels);
+    }
+
+    #[test]
+    fn library_tab_keeps_every_control_inside_the_main_panel() {
+        // §1.8: the 1024-pixel texture at the panel's zoom, less the central panel's
+        // margins, with the panel's style (Q-267, Q-293); rounded down to a whole point,
+        // where the separator's half-point stroke lands on the edge.
+        let ctx = font_context();
+        ctx.all_styles_mut(crate::ui::panel::panel_style);
+        let margins = egui::Frame::central_panel(&ctx.global_style())
+            .total_margin()
+            .sum()
+            .x;
+        let width = (1024.0 / crate::ui::panel::PANEL_ZOOM - margins).floor();
+        for state in entry_states() {
+            let mut world = library_with_source(state);
+            assert_library_inside(&ctx, &mut world, width, &CONTROLS);
+        }
+    }
+
+    #[test]
+    fn library_tab_adds_a_typed_source_and_toggles_the_kinds_in_the_narrowest_dock() {
+        let mut world = library_with_source(crate::library::EntryState::Listed);
+        world.resource_mut::<crate::ui::UiState>().new_source = "/m/more".into();
+        let out = library_click(&mut world, 160.0, "Add source");
+        let added: Vec<_> = out
+            .iter()
+            .filter_map(|o| match o {
+                Out::Library(crate::library::LibraryCommand::AddSource(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(added, vec![source_from_input("/m/more").unwrap()]);
+        for (i, kind) in ["ftgs-if", "checkpoint", "PLY", "folders"]
+            .iter()
+            .enumerate()
+        {
+            let before = world.resource::<crate::ui::UiState>().filter_kinds;
+            library_click(&mut world, 160.0, kind);
+            let after = world.resource::<crate::ui::UiState>().filter_kinds;
+            assert_eq!(after[i], !before[i], "{kind} toggles");
+            for j in (0..4).filter(|&j| j != i) {
+                assert_eq!(after[j], before[j], "{kind} leaves the others");
+            }
+        }
     }
 }
