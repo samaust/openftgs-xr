@@ -39,6 +39,11 @@ struct Model {
     sh_degree: u32,
     half_flags: u32,
     single: u32,
+    // W, the words of one SH range (Q-376).
+    sh_range_words: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 // One instance (§1.4 stage 1).
@@ -135,7 +140,16 @@ const SH_C33: f32 = 0.5900435899266435;
 @group(0) @binding(5) var<storage, read> scale: array<u32>;
 @group(0) @binding(6) var<storage, read> rotation: array<u32>;
 @group(0) @binding(7) var<storage, read> opacity: array<u32>;
-@group(0) @binding(8) var<storage, read> sh: array<u32>;
+// The SH array as its eight SH ranges of W words (Q-376); the slots past the model's last
+// range repeat it.
+@group(0) @binding(8) var<storage, read> sh0: array<u32>;
+@group(0) @binding(9) var<storage, read> sh1: array<u32>;
+@group(0) @binding(10) var<storage, read> sh2: array<u32>;
+@group(0) @binding(11) var<storage, read> sh3: array<u32>;
+@group(0) @binding(12) var<storage, read> sh4: array<u32>;
+@group(0) @binding(13) var<storage, read> sh5: array<u32>;
+@group(0) @binding(14) var<storage, read> sh6: array<u32>;
+@group(0) @binding(15) var<storage, read> sh7: array<u32>;
 
 @group(1) @binding(0) var<storage, read_write> records: array<u32>;
 @group(1) @binding(1) var<storage, read_write> keys: array<u32>;
@@ -146,10 +160,10 @@ const SH_C33: f32 = 0.5900435899266435;
 @group(2) @binding(0) var<uniform> inst: Instance;
 
 // Stage 3's own bindings (a pipeline layout of its own).
-@group(0) @binding(10) var<storage, read_write> size_counters: array<atomic<u32>, 12>;
-@group(0) @binding(11) var<storage, read_write> size_dispatch: array<u32, 6>;
-@group(0) @binding(12) var<storage, read_write> size_stats: array<u32, 20>;
-@group(0) @binding(13) var<uniform> size_frame: Frame;
+@group(0) @binding(16) var<storage, read_write> size_counters: array<atomic<u32>, 12>;
+@group(0) @binding(17) var<storage, read_write> size_dispatch: array<u32, 6>;
+@group(0) @binding(18) var<storage, read_write> size_stats: array<u32, 20>;
+@group(0) @binding(19) var<uniform> size_frame: Frame;
 
 fn record_words() -> u32 {
     if RECORD_MODE == 1u {
@@ -193,9 +207,24 @@ fn opacity_at(m: u32) -> f32 {
     return unpack_value(opacity[field_index(m, half)], m, half);
 }
 
+// Word w of the SH array: word w mod W of range w ÷ W (Q-376).
+fn sh_word(w: u32) -> u32 {
+    let i = w % model.sh_range_words;
+    switch w / model.sh_range_words {
+        case 0u: { return sh0[i]; }
+        case 1u: { return sh1[i]; }
+        case 2u: { return sh2[i]; }
+        case 3u: { return sh3[i]; }
+        case 4u: { return sh4[i]; }
+        case 5u: { return sh5[i]; }
+        case 6u: { return sh6[i]; }
+        default: { return sh7[i]; }
+    }
+}
+
 fn sh_at(m: u32) -> f32 {
     let half = (model.half_flags & 16u) != 0u;
-    return unpack_value(sh[field_index(m, half)], m, half);
+    return unpack_value(sh_word(field_index(m, half)), m, half);
 }
 
 // The largest finite float32.
