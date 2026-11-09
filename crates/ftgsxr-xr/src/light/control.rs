@@ -14,14 +14,21 @@
 //!   again or `AskPermissionAgain(Permission::Camera)` asks once more (Q-355). The auto
 //!   mode a denial wrote back is kept as session state and published as
 //!   `Lighting.denied_auto`, which the Environment tab's "Ask again" writes back into the
-//!   setting, so a grant runs it with no second click; a grant clears it (Q-384, Q-394).
+//!   setting, so a grant runs it with no second click; a grant clears it (Q-384, Q-395).
 //! - The camera's life and the estimate (Q-385): the camera runs while the effective
 //!   lighting mode is auto, the permission is granted, the session runs and the effective
 //!   environment mode is passthrough; the smoother restarts at each start; no new
 //!   thumbnail for 2 s while started counts as a stop. Each new thumbnail is pushed into
-//!   the smoother; while `lighting_reference` is `None` the next smoothed estimate is
-//!   written into it; the gains go into `Lighting.transform` in the auto modes (the
-//!   identity in VR mode) and `HudData.light_gains` while the camera runs (Q-389).
+//!   the smoother. The warm-up, restarted with the smoother, is over once two thumbnails
+//!   have arrived and the newest one's `at_s` is 3τ after the first one's. While
+//!   `lighting_reference` is `None`, or below the floor of 1/255 or not finite, the
+//!   smoothed estimate is written into it at the first new thumbnail after the warm-up
+//!   where the estimate passes the floor, `Lighting.too_dark` set while it waits for the
+//!   floor. In the auto modes `Lighting.transform` is the manual form of
+//!   `lighting_manual` times E14's gains (E14, revision 52), the manual form alone where
+//!   the gains are not in force (VR mode, during the warm-up and while the capture
+//!   waits); `HudData.light_gains` holds E14's part alone while the camera runs (Q-389,
+//!   Q-394).
 
 use std::sync::Arc;
 use std::task::Poll;
@@ -32,7 +39,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::log::{info, warn};
 use bevy::math::Vec3;
 use bevy::prelude::{
-    Commands, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut, Resource, With,
+    Commands, Entity, GlobalTransform, Has, IntoScheduleConfigs, Query, Res, ResMut, Resource,
 };
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrState};
 use ftgsxr_app::{
@@ -43,8 +50,8 @@ use ftgsxr_io::EnvironmentSettings;
 use ftgsxr_render::ColorTransform;
 use ftgsxr_render::SplatBounds;
 
-use super::band::{DepthReadback, DepthSnapshot, thumb_depths};
-use super::{LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains, light_gains};
+use super::band::{DepthReadback, DepthSnapshot, band_instance, thumb_depths};
+use super::{LightEstimate, LightSmoother, LightingMode, band_mask, light_gains, manual_gains};
 use crate::error::{XrError, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode};
 use crate::tracking::XrHands;
@@ -72,6 +79,27 @@ pub(crate) fn wanted(
     env: EnvironmentMode,
 ) -> bool {
     mode.is_auto() && granted && running && env == EnvironmentMode::Passthrough
+}
+
+/// Q-385: the warm-up is over once two thumbnails have arrived since the start and the
+/// newest one's `at_s` is at least 3τ after the first one's.
+// Q-385
+fn warmed_up(warmup: Option<(f64, f64, u32)>) -> bool {
+    warmup.is_some_and(|(first, newest, n)| n >= 2 && newest - first >= f64::from(3.0 * TAU_S))
+}
+
+/// Q-385, Q-386: the reference's floor, one code value of the thumbnail's gamma-encoded
+/// full-range values.
+// Q-385, Q-386
+const REFERENCE_FLOOR: f32 = 1.0 / 255.0;
+
+/// Q-385: Ȳ, r̄, ḡ and b̄ all finite and at least [`REFERENCE_FLOOR`], so Q-382's ratios against
+/// the estimate as a reference stay off the clamps.
+// Q-382, Q-385, Q-386
+fn passes_floor(e: &LightEstimate) -> bool {
+    std::iter::once(e.luma)
+        .chain(e.rgb)
+        .all(|v| v.is_finite() && v >= REFERENCE_FLOOR)
 }
 
 /// What one frame of the control reads.
@@ -102,19 +130,22 @@ pub(crate) struct Band<'a> {
 pub(crate) struct Outputs {
     /// `XrFeatures.lighting`.
     pub(crate) feature: FeatureState,
-    /// `Lighting.transform`, in an effective auto mode only (Q-383).
+    /// `Lighting.transform`, in an effective auto mode only: the manual form times E14's
+    /// gains, or the manual form alone where the gains are not in force (Q-383).
     pub(crate) transform: Option<ColorTransform>,
-    /// `HudData.light_gains` (Q-389).
+    /// `HudData.light_gains`: E14's part alone (Q-389, Q-394).
     pub(crate) light_gains: Option<Vec3>,
     /// `lighting_mode` written back (Q-355, Q-392).
     pub(crate) write_mode: Option<&'static str>,
     /// `lighting_reference` captured (Q-385).
     pub(crate) write_reference: Option<[f32; 4]>,
+    /// `Lighting.too_dark` (Q-385).
+    pub(crate) too_dark: bool,
     /// Toasts raised.
     pub(crate) toasts: Vec<String>,
     /// `Permission::Camera` listed in (true) or out of (false) `DeniedPermissions`.
     pub(crate) listed: Option<bool>,
-    /// `Lighting.denied_auto`: the auto mode the last denial wrote back (Q-394).
+    /// `Lighting.denied_auto`: the auto mode the last denial wrote back (Q-395).
     pub(crate) denied_auto: Option<&'static str>,
 }
 
@@ -134,7 +165,7 @@ pub(crate) struct Control {
     /// The setting was an auto mode last frame (Q-355's re-selection).
     last_auto: bool,
     /// The auto mode the last denial wrote back to `manual`, until a grant; kept across
-    /// sessions with the flow (Q-384, Q-394).
+    /// sessions with the flow (Q-384, Q-395).
     denied_auto: Option<&'static str>,
     /// The camera is started: since when a thumbnail was last new.
     started: Option<Instant>,
@@ -143,6 +174,9 @@ pub(crate) struct Control {
     /// The last thumbnail's `at_s`.
     pub(crate) last_at_s: Option<f64>,
     pub(crate) smoother: LightSmoother,
+    /// Q-385's warm-up since the start: the first pushed thumbnail's `at_s`, the newest
+    /// one's and how many were pushed.
+    warmup: Option<(f64, f64, u32)>,
     /// The last new thumbnail's raw estimate (Dv-11).
     pub(crate) raw: Option<LightEstimate>,
     /// The new thumbnails since the plugin started (Dv-11).
@@ -165,6 +199,7 @@ impl Default for Control {
             retry_after: None,
             last_at_s: None,
             smoother: LightSmoother::new(TAU_S),
+            warmup: None,
             raw: None,
             thumbs: 0,
             pose_seen: false,
@@ -209,12 +244,12 @@ impl Control {
 
     /// A denial of `Permission::Camera` (Q-384, Q-261, Q-322, Q-355, Q-392): `Denied`,
     /// listed, toasted, and an auto setting written back to `manual`, its mode kept for
-    /// the Environment tab's "Ask again" (Q-394).
+    /// the Environment tab's "Ask again" (Q-395).
     fn deny(&mut self, out: &mut Outputs, setting: &mut String, auto: bool) {
         self.flow = Flow::Denied;
         out.listed = Some(true);
         if auto {
-            // Q-394: Q-50's spellings, auto local or else auto global.
+            // Q-395: Q-50's spellings, auto local or else auto global.
             self.denied_auto = Some(if setting.as_str() == "auto-local" {
                 "auto-local"
             } else {
@@ -229,7 +264,7 @@ impl Control {
     }
 
     /// One frame (Q-384, Q-385, Q-389, Q-392).
-    // Q-161, Q-261, Q-322, Q-348, Q-355, Q-384, Q-385, Q-389, Q-392, Q-394
+    // Q-161, Q-261, Q-322, Q-348, Q-355, Q-384, Q-385, Q-389, Q-392, Q-394, Q-395
     pub(crate) fn step(&mut self, platform: Option<&dyn Platform>, i: &Inputs) -> Outputs {
         let mut out = Outputs::default();
         if self.camera.is_none() {
@@ -300,6 +335,7 @@ impl Control {
                     self.started = Some(i.now);
                     self.retry_after = None;
                     self.smoother.reset();
+                    self.warmup = None;
                     self.last_at_s = None;
                 }
                 Err(e) if e.starts_with(XrError::Unsupported("").code()) => {
@@ -351,44 +387,61 @@ impl Control {
             if let Some(e) = LightEstimate::from_thumb(&thumb, mask.as_deref()) {
                 self.raw = Some(e);
                 self.smoother.push(e, thumb.at_s);
+                self.warmup = Some(match self.warmup {
+                    None => (thumb.at_s, thumb.at_s, 1),
+                    Some((first, _, n)) => (first, thumb.at_s, n.saturating_add(1)),
+                });
                 new = true;
             }
         }
 
+        // Q-385: the capture waits for the warm-up and the floor; a reference below the
+        // floor reads as `None`; E14's gains are not in force until the warm-up is over,
+        // nor while the capture waits.
         let auto = mode.is_auto();
-        let mut reference = i.env.lighting_reference;
+        let warm = self.started.is_some() && warmed_up(self.warmup);
+        let mut reference = i
+            .env
+            .lighting_reference
+            .map(|[luma, r, g, b]| LightEstimate {
+                luma,
+                rgb: [r, g, b],
+            })
+            .filter(passes_floor);
+        let estimate = self.smoother.current();
+        let usable = estimate.filter(passes_floor);
         if auto
             && reference.is_none()
             && new
-            && let Some(e) = self.smoother.current()
+            && warm
+            && let Some(e) = usable
         {
-            let r = [e.luma, e.rgb[0], e.rgb[1], e.rgb[2]];
-            reference = Some(r);
-            out.write_reference = Some(r);
+            reference = Some(e);
+            out.write_reference = Some([e.luma, e.rgb[0], e.rgb[1], e.rgb[2]]);
         }
+        out.too_dark = auto && reference.is_none() && warm && usable.is_none();
+        // E14's gains where they are in force, `None` where they are not.
+        let e14 = match (auto, i.env_mode, estimate, reference) {
+            (true, EnvironmentMode::Passthrough, Some(e), Some(r)) if warm => {
+                Some(light_gains(&e, &r, i.env.lighting_gamma))
+            }
+            _ => None,
+        };
         if auto {
-            let t = match (i.env_mode, self.smoother.current()) {
-                (EnvironmentMode::Vr, _) | (_, None) => ColorTransform::IDENTITY,
-                (_, Some(e)) => match reference {
-                    Some([luma, r, g, b]) => light_gains(
-                        &e,
-                        &LightEstimate {
-                            luma,
-                            rgb: [r, g, b],
-                        },
-                        i.env.lighting_gamma,
-                    ),
-                    None => grey_world_gains(&e),
-                },
-            };
-            out.transform = Some(t);
+            // E14 (revision 52, #689): the manual form times E14's gains per channel,
+            // the product unclamped, or the manual form alone where the gains are not
+            // in force; read each frame, so a slider change applies at the next.
+            // Q-383, Q-385
+            let manual = manual_gains(&i.env.lighting_manual);
+            out.transform = Some(ColorTransform {
+                gain: manual.gain * e14.map_or(Vec3::ONE, |t| t.gain),
+            });
         }
-        out.light_gains = self
-            .started
-            .and_then(|_| out.transform.map(|t| t.gain).or(Some(Vec3::ONE)));
+        // Q-389, Q-394: E14's part alone, without the manual offset.
+        out.light_gains = self.started.map(|_| e14.map_or(Vec3::ONE, |t| t.gain));
         self.last_auto = auto_setting(&setting);
         out.feature = self.feature();
-        // Q-394: a grant ends the kept mode.
+        // Q-395: a grant ends the kept mode.
         if self.flow == Flow::Granted {
             self.denied_auto = None;
         }
@@ -441,6 +494,14 @@ fn end_session(mut control: ResMut<Control>) {
     control.session = false;
 }
 
+/// An instance as auto local's band reads it: its pose, its bounds, whether it is selected.
+type BandItem = (
+    Entity,
+    &'static GlobalTransform,
+    &'static SplatBounds,
+    Has<Selected>,
+);
+
 /// The frame's control: `Control::step` over the world's resources.
 #[allow(clippy::too_many_arguments)]
 fn control(
@@ -456,25 +517,30 @@ fn control(
     mut lighting: ResMut<Lighting>,
     readback: Res<DepthReadback>,
     hands: Option<Res<XrHands>>,
-    selected: Query<(&GlobalTransform, &SplatBounds), With<Selected>>,
+    instances: Query<BandItem>,
     mut commands: Commands,
 ) {
     let Some(mut settings) = settings else {
         return;
     };
-    // Q-388: d_m from the head (the views' midpoint) to the selected instance's posed
-    // B_m centre.
-    let band = readback
-        .latest
-        .as_ref()
-        .zip(hands)
-        .zip(selected.single().ok())
-        .map(|((depth, hands), (at, bounds))| Band {
-            depth,
-            d_m: at
-                .transform_point(bounds.aabb.center())
-                .distance(hands.head.translation),
-        });
+    // Q-388: d_m from the head (the views' midpoint) to the depth band's instance's posed B_m
+    // centre: "per instance"'s target while one is set, else the selected one (Q-383).
+    let target = band_instance(
+        lighting.per_instance,
+        instances.iter().map(|(e, at, b, s)| (e, s, (at, b))),
+    );
+    let band =
+        readback
+            .latest
+            .as_ref()
+            .zip(hands)
+            .zip(target)
+            .map(|((depth, hands), (at, bounds))| Band {
+                depth,
+                d_m: at
+                    .transform_point(bounds.aabb.center())
+                    .distance(hands.head.translation),
+            });
     let asked_again = again.read().any(|a| a.0 == Permission::Camera);
     let out = control.step(
         platform.as_deref().map(|p| &*p.0),
@@ -514,7 +580,10 @@ fn control(
     {
         lighting.transform = t;
     }
-    // Q-394: the kept auto mode, for the Environment tab's "Ask again".
+    if lighting.too_dark != out.too_dark {
+        lighting.too_dark = out.too_dark;
+    }
+    // Q-395: the kept auto mode, for the Environment tab's "Ask again".
     if lighting.denied_auto != out.denied_auto {
         lighting.denied_auto = out.denied_auto;
     }
@@ -763,7 +832,7 @@ mod tests {
         assert_eq!(c.flow, Flow::Granted);
     }
 
-    /// Q-384, Q-394 (#691): a denial in auto local or auto global keeps that mode; the
+    /// Q-384, Q-395 (#691): a denial in auto local or auto global keeps that mode; the
     /// Environment tab's "Ask again" writes it back and sends `AskPermissionAgain`, which
     /// asks once; on a grant the effective mode is that auto mode with no other input and
     /// the kept mode ends.
@@ -801,7 +870,7 @@ mod tests {
         }
     }
 
-    /// Q-384, Q-394, Q-261, Q-322 (#691): after "Ask again", a second denial writes
+    /// Q-384, Q-395, Q-261, Q-322 (#691): after "Ask again", a second denial writes
     /// `manual` again, toasts once and keeps the mode again; the Comfort tab's
     /// `AskPermissionAgain` asks without changing the setting or the kept mode.
     #[test]
@@ -918,9 +987,10 @@ mod tests {
         assert_eq!(*cam.starts.lock().unwrap(), 2);
     }
 
-    /// Q-385, Q-389: the first smoothed estimate captured into `lighting_reference` when
-    /// it is `None`; the gains into `Lighting.transform` and `HudData.light_gains`; the
-    /// identity in VR mode with the camera stopped; the smoother restarted at a start.
+    /// Q-385, Q-389: the smoothed estimate captured into `lighting_reference` when it is
+    /// `None` and the warm-up is over; the gains into `Lighting.transform` and
+    /// `HudData.light_gains`; the identity in VR mode with the camera stopped; the smoother
+    /// and the warm-up restarted at a start.
     #[test]
     fn step_reference_and_gains() {
         let t0 = Instant::now();
@@ -936,9 +1006,11 @@ mod tests {
         assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
         assert_eq!(out.light_gains, Some(Vec3::ONE));
         assert_eq!(e.lighting_reference, None);
-        // The first thumbnail: captured as the reference, gains 1.
+        // Two thumbnails 1.5 s apart: captured as the reference, gains 1.
         *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 10.0));
-        let out = frame(&mut c, &p, &mut e, at(0.1));
+        frame(&mut c, &p, &mut e, at(0.1));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 11.5));
+        let out = frame(&mut c, &p, &mut e, at(0.2));
         let r = e.lighting_reference.expect("captured");
         assert!((r[0] - 0.2).abs() < 1e-6 && (r[1] - 0.2).abs() < 1e-6);
         assert!(
@@ -949,27 +1021,292 @@ mod tests {
         );
         // A doubled luma, long after (the smoother at the sample): g = 2 at γ = 1.
         *cam.thumb.lock().unwrap() = Some(thumb([0.4, 0.4, 0.4], 1000.0));
-        let out = frame(&mut c, &p, &mut e, at(0.2));
+        let out = frame(&mut c, &p, &mut e, at(0.3));
         let g = out.transform.unwrap().gain;
         assert!((g - Vec3::splat(2.0)).abs().max_element() < 1e-5, "{g}");
         assert_eq!(out.light_gains, Some(g));
         assert_eq!(e.lighting_reference, Some(r), "captured once");
         // VR mode: the identity, the camera stopped, no HUD gains.
-        let out = frame_with(&mut c, &p, &mut e, at(0.3), EnvironmentMode::Vr, false);
+        let out = frame_with(&mut c, &p, &mut e, at(0.4), EnvironmentMode::Vr, false);
         assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
         assert_eq!(out.light_gains, None);
         assert_eq!(*cam.stops.lock().unwrap(), 1);
-        // Back in passthrough: a new start with the smoother restarted, so a thumbnail
-        // of a fourfold luma is taken as it is (g = 4), not averaged with the old ones.
+        // Back in passthrough: a new start, the warm-up again, so the identity with the
+        // saved reference until 1.5 s of `at_s`.
         *cam.thumb.lock().unwrap() = Some(thumb([0.8, 0.8, 0.8], 1000.01));
-        let out = frame(&mut c, &p, &mut e, at(0.4));
+        let out = frame(&mut c, &p, &mut e, at(0.5));
         assert_eq!(*cam.starts.lock().unwrap(), 2);
+        assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
+        assert_eq!(out.light_gains, Some(Vec3::ONE));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.8, 0.8, 0.8], 1001.0));
+        let out = frame(&mut c, &p, &mut e, at(0.6));
+        assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
+        // The smoother restarted too: after the warm-up the estimate is the fourfold
+        // luma alone (g = 4), not averaged with the thumbnails before the stop.
+        *cam.thumb.lock().unwrap() = Some(thumb([0.8, 0.8, 0.8], 1001.51));
+        let out = frame(&mut c, &p, &mut e, at(0.7));
         let g = out.transform.unwrap().gain;
         assert!((g - Vec3::splat(4.0)).abs().max_element() < 1e-5, "{g}");
+        assert_eq!(e.lighting_reference, Some(r), "the saved reference kept");
         // Manual mode: the transform is persist's; the camera stopped.
         e.lighting_mode = "manual".into();
-        let out = frame(&mut c, &p, &mut e, at(0.6));
+        let out = frame(&mut c, &p, &mut e, at(0.8));
         assert!(out.transform.is_none(), "manual's transform is persist's");
+        assert_eq!(out.light_gains, None);
+    }
+
+    /// Q-385's warm-up: no capture while one thumbnail has arrived since the start, however
+    /// long the wall clock runs, nor before the newest thumbnail's `at_s` is 1.5 s (3τ)
+    /// after the first one's; the identity meanwhile; a capture at the first thumbnail
+    /// after both, with gains 1.
+    #[test]
+    fn step_captures_after_the_warm_up() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        let mut c = session();
+        frame(&mut c, &p, &mut e, at(0.0));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 10.0));
+        for k in 1..19 {
+            let out = frame(&mut c, &p, &mut e, at(0.1 * k as f64));
+            assert_eq!(e.lighting_reference, None, "one thumbnail, frame {k}");
+            assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
+            assert!(!out.too_dark);
+        }
+        // The wall clock is the frames'; `at_s` is the shim's.
+        for (k, at_s) in [10.5, 11.0, 11.49].into_iter().enumerate() {
+            *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], at_s));
+            let out = frame(&mut c, &p, &mut e, at(1.85 + 0.01 * k as f64));
+            assert_eq!(e.lighting_reference, None, "at_s {at_s}");
+            assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
+        }
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 11.5));
+        let out = frame(&mut c, &p, &mut e, at(1.9));
+        let r = e.lighting_reference.expect("captured after 1.5 s");
+        for v in r {
+            assert!((v - 0.2).abs() < 1e-6, "{r:?}");
+        }
+        let g = out.transform.unwrap().gain;
+        assert!((g - Vec3::ONE).abs().max_element() < 1e-6, "{g}");
+    }
+
+    /// Q-385, Q-386: after the warm-up, no capture while Ȳ or a channel mean is below
+    /// 1/255 (one code value), `too_dark` set and the identity meanwhile; a capture once
+    /// the smoothed estimate rises above the floor, `too_dark` then clear.
+    #[test]
+    fn step_waits_above_the_floor() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        for dark in [[0.002, 0.002, 0.002], [0.5, 0.5, 0.003]] {
+            let (p, cam) = fake(true, true);
+            let cam = cam.unwrap();
+            let mut e = env("auto-global");
+            let mut c = session();
+            frame(&mut c, &p, &mut e, at(0.0));
+            *cam.thumb.lock().unwrap() = Some(thumb(dark, 10.0));
+            let out = frame(&mut c, &p, &mut e, at(0.1));
+            assert!(!out.too_dark, "{dark:?}: not during the warm-up");
+            for (k, at_s) in [11.5, 11.6, 11.7].into_iter().enumerate() {
+                *cam.thumb.lock().unwrap() = Some(thumb(dark, at_s));
+                let out = frame(&mut c, &p, &mut e, at(0.2 + 0.1 * k as f64));
+                assert_eq!(e.lighting_reference, None, "{dark:?} at {at_s}");
+                assert!(out.too_dark, "{dark:?} at {at_s}");
+                assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
+            }
+            *cam.thumb.lock().unwrap() = Some(thumb([0.5, 0.5, 0.5], 11.8));
+            let out = frame(&mut c, &p, &mut e, at(0.6));
+            let r = e.lighting_reference.expect("captured above the floor");
+            assert!(r.iter().all(|&v| v >= 1.0 / 255.0), "{r:?}");
+            assert!(!out.too_dark);
+        }
+    }
+
+    /// Q-385: "re-capture reference" (the tab writing `None`) after the warm-up captures
+    /// at the next new thumbnail, not at a frame without one.
+    #[test]
+    fn step_recapture_after_the_warm_up_takes_the_next_thumbnail() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        let mut c = session();
+        frame(&mut c, &p, &mut e, at(0.0));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 10.0));
+        frame(&mut c, &p, &mut e, at(0.1));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 11.5));
+        frame(&mut c, &p, &mut e, at(0.2));
+        assert!(e.lighting_reference.is_some(), "captured");
+        e.lighting_reference = None;
+        let out = frame(&mut c, &p, &mut e, at(0.3));
+        assert_eq!(e.lighting_reference, None, "no new thumbnail");
+        assert_eq!(out.transform, Some(ColorTransform::IDENTITY));
+        assert!(!out.too_dark);
+        *cam.thumb.lock().unwrap() = Some(thumb([0.4, 0.4, 0.4], 100.0));
+        frame(&mut c, &p, &mut e, at(0.4));
+        let r = e
+            .lighting_reference
+            .expect("captured at the next thumbnail");
+        assert!((r[0] - 0.4).abs() < 1e-5, "{r:?}");
+    }
+
+    /// Q-385: a saved reference that passes the floor is kept, the transform the identity
+    /// during the warm-up and E14's gains after it; a saved reference below the floor or
+    /// not finite reads as `None` and is captured again after the warm-up.
+    #[test]
+    fn step_saved_reference_after_the_warm_up() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let run = |saved: [f32; 4]| {
+            let (p, cam) = fake(true, true);
+            let cam = cam.unwrap();
+            let mut e = env("auto-global");
+            e.lighting_gamma = 1.0;
+            e.lighting_reference = Some(saved);
+            let mut c = session();
+            frame(&mut c, &p, &mut e, at(0.0));
+            *cam.thumb.lock().unwrap() = Some(thumb([0.4, 0.4, 0.4], 10.0));
+            let first = frame(&mut c, &p, &mut e, at(0.1));
+            *cam.thumb.lock().unwrap() = Some(thumb([0.4, 0.4, 0.4], 11.0));
+            let second = frame(&mut c, &p, &mut e, at(0.2));
+            for out in [&first, &second] {
+                assert_eq!(out.transform, Some(ColorTransform::IDENTITY), "{saved:?}");
+                assert_eq!(out.light_gains, Some(Vec3::ONE));
+            }
+            assert_eq!(
+                e.lighting_reference.map(|r| r.map(f32::to_bits)),
+                Some(saved.map(f32::to_bits)),
+                "kept during the warm-up"
+            );
+            *cam.thumb.lock().unwrap() = Some(thumb([0.4, 0.4, 0.4], 11.5));
+            let out = frame(&mut c, &p, &mut e, at(0.3));
+            (out, e.lighting_reference)
+        };
+        // Ȳ = 0.2 against an estimate of 0.4: g = 2 at γ = 1.
+        let saved = [0.2; 4];
+        let (out, kept) = run(saved);
+        assert_eq!(kept, Some(saved));
+        let g = out.transform.unwrap().gain;
+        assert!((g - Vec3::splat(2.0)).abs().max_element() < 1e-5, "{g}");
+        for saved in [
+            [0.001, 0.2, 0.2, 0.2],
+            [0.2, 0.2, 0.2, 0.0],
+            [0.2, f32::NAN, 0.2, 0.2],
+        ] {
+            let (out, captured) = run(saved);
+            let r = captured.expect("captured");
+            assert!(r.iter().all(|v| (v - 0.4).abs() < 1e-5), "{saved:?}: {r:?}");
+            let g = out.transform.unwrap().gain;
+            assert!((g - Vec3::ONE).abs().max_element() < 1e-5, "{saved:?}: {g}");
+        }
+    }
+
+    /// Q-385: the floor takes Ȳ, r̄, ḡ and b̄ finite and at least 1/255.
+    #[test]
+    fn passes_floor_needs_four_finite_components_of_a_code_value() {
+        let est = |luma, rgb| LightEstimate { luma, rgb };
+        let f = 1.0 / 255.0;
+        assert!(passes_floor(&est(f, [f; 3])));
+        assert!(passes_floor(&est(0.5, [1.0, 0.2, 0.01])));
+        assert!(!passes_floor(&est(0.0039, [0.5; 3])));
+        assert!(!passes_floor(&est(0.5, [0.5, 0.0039, 0.5])));
+        assert!(!passes_floor(&est(f32::NAN, [0.5; 3])));
+        assert!(!passes_floor(&est(0.5, [0.5, 0.5, f32::INFINITY])));
+    }
+
+    /// U-20's clause (E14, revision 52) at U-20's tolerance 10⁻⁶, through the control,
+    /// where the product is formed (nothing public composes it): manual EV 1 with auto
+    /// g = √2 (a doubled luma at γ = 0.5) gives `Lighting.transform` g = 2√2, while
+    /// `HudData.light_gains` stays E14's √2 (Q-394).
+    #[test]
+    fn step_manual_offset_composes_with_the_auto_gains() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        e.lighting_gamma = 0.5;
+        e.lighting_manual.exposure_ev = 1.0;
+        let mut c = session();
+        frame(&mut c, &p, &mut e, at(0.0));
+        // Two thumbnails 1.5 s apart: the warm-up over, the reference captured.
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 10.0));
+        frame(&mut c, &p, &mut e, at(0.1));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.2, 0.2, 0.2], 11.5));
+        frame(&mut c, &p, &mut e, at(0.2));
+        assert!(e.lighting_reference.is_some(), "captured");
+        *cam.thumb.lock().unwrap() = Some(thumb([0.4, 0.4, 0.4], 1000.0));
+        let out = frame(&mut c, &p, &mut e, at(0.3));
+        let g = out.transform.unwrap().gain;
+        let want = 2.0 * 2f32.sqrt();
+        assert!((g - Vec3::splat(want)).abs().max_element() <= 1e-6, "{g}");
+        let hud = out.light_gains.unwrap();
+        assert!(
+            (hud - Vec3::splat(2f32.sqrt())).abs().max_element() <= 1e-6,
+            "{hud}"
+        );
+    }
+
+    /// E14 (revision 52): where the gains are not in force (started without an estimate,
+    /// the warm-up, the capture waiting for the floor, VR mode) the transform is the
+    /// manual form alone; with E14's gains at their clamp of 4, EV 1 gives 8 (the product
+    /// is not clamped); EV −1 at the next frame halves E14's gains.
+    #[test]
+    fn step_manual_offset_alone_or_unclamped() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let close = |g: Vec3, want: f32| {
+            assert!(
+                (g - Vec3::splat(want)).abs().max_element() < 1e-5,
+                "{g} vs {want}"
+            );
+        };
+        // The capture waiting for the floor: the manual form alone, `too_dark` set.
+        {
+            let (p, cam) = fake(true, true);
+            let cam = cam.unwrap();
+            let mut e = env("auto-global");
+            e.lighting_manual.exposure_ev = 1.0;
+            let mut c = session();
+            frame(&mut c, &p, &mut e, at(0.0));
+            *cam.thumb.lock().unwrap() = Some(thumb([0.002; 3], 10.0));
+            frame(&mut c, &p, &mut e, at(0.1));
+            *cam.thumb.lock().unwrap() = Some(thumb([0.002; 3], 11.5));
+            let out = frame(&mut c, &p, &mut e, at(0.2));
+            assert!(out.too_dark);
+            close(out.transform.unwrap().gain, 2.0);
+            close(out.light_gains.unwrap(), 1.0);
+        }
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        e.lighting_gamma = 1.0;
+        e.lighting_manual.exposure_ev = 1.0;
+        let mut c = session();
+        // Started, no thumbnail yet: the manual form alone (2), E14's part 1.
+        let out = frame(&mut c, &p, &mut e, at(0.0));
+        close(out.transform.unwrap().gain, 2.0);
+        close(out.light_gains.unwrap(), 1.0);
+        // The warm-up: still the manual form alone.
+        *cam.thumb.lock().unwrap() = Some(thumb([0.01, 0.01, 0.01], 10.0));
+        let out = frame(&mut c, &p, &mut e, at(0.1));
+        close(out.transform.unwrap().gain, 2.0);
+        // The reference at Ȳ = 0.01, then Ȳ = 1 at γ = 1: E14's g clamped at 4.
+        *cam.thumb.lock().unwrap() = Some(thumb([0.01, 0.01, 0.01], 11.5));
+        frame(&mut c, &p, &mut e, at(0.2));
+        *cam.thumb.lock().unwrap() = Some(thumb([1.0, 1.0, 1.0], 1000.0));
+        let out = frame(&mut c, &p, &mut e, at(0.3));
+        close(out.transform.unwrap().gain, 8.0);
+        close(out.light_gains.unwrap(), 4.0);
+        // EV −1 at the next frame: 0.5 × 4.
+        e.lighting_manual.exposure_ev = -1.0;
+        let out = frame(&mut c, &p, &mut e, at(0.4));
+        close(out.transform.unwrap().gain, 2.0);
+        // VR mode: the manual form alone.
+        let out = frame_with(&mut c, &p, &mut e, at(0.5), EnvironmentMode::Vr, false);
+        close(out.transform.unwrap().gain, 0.5);
         assert_eq!(out.light_gains, None);
     }
 
