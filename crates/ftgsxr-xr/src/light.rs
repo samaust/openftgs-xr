@@ -73,9 +73,9 @@ pub struct LightEstimate {
 }
 
 impl LightEstimate {
-    /// The mean RGB over the masked pixels (all when `mask` is `None`) and BT.709's luma
-    /// of that mean; `None` for an empty thumbnail, a mask of another length than the
-    /// pixel count, or a mask selecting nothing.
+    /// The mean RGB over the masked pixels (all when `mask` is `None`) and E14's BT.601
+    /// (JFIF) luma of that mean; `None` for an empty thumbnail, a mask of another length
+    /// than the pixel count, or a mask selecting nothing.
     // Q-382
     pub fn from_thumb(thumb: &CameraThumb, mask: Option<&[bool]>) -> Option<LightEstimate> {
         let (pixels, _) = thumb.rgb.as_chunks::<3>();
@@ -97,7 +97,7 @@ impl LightEstimate {
             return None;
         }
         let rgb = sum.map(|s| (s / count as f64) as f32);
-        let luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+        let luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
         Some(LightEstimate { luma, rgb })
     }
 }
