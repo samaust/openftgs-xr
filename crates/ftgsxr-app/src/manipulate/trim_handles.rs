@@ -38,7 +38,7 @@ pub(super) fn handle_hit(
     let mut best: Option<(TrimHandle, f32)> = None;
     for (h, p) in trim.handles() {
         let p = pose.transform_point(p);
-        // t, which a drag keeps as t₀: the handle point's projection on the ray. Q-379
+        // t, which a drag keeps as t_h: the handle point's projection on the ray. Q-379
         let t = (p - o).dot(d);
         if !(0.0..=max_m).contains(&t) || (o + t * d).distance(p) > reach {
             continue;
@@ -52,7 +52,7 @@ pub(super) fn handle_hit(
 
 /// A drag under way (E18): the instance, the handle, the trim at the drag's start, the
 /// model-space drag point p₀ and what the drag point needs: the handle's model point at
-/// the start, the start ray (the desktop center's plane) and t₀ on the ray (XR).
+/// the start, the start ray (the desktop center's plane) and t_h on the ray (XR).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct TrimDrag {
     pub(super) entity: bevy::ecs::entity::Entity,
@@ -81,7 +81,7 @@ fn axis_of(h: TrimHandle) -> Option<usize> {
 
 /// E18's drag point in stage space for `ray`, under the instance's current pose: the
 /// mouse's closest point of the handle's line, or its crossing of the plane through the
-/// center facing the start ray; a hand's point at t₀ on its ray. `None` when the ray
+/// center facing the start ray; a hand's point at t_h on its ray. `None` when the ray
 /// runs along the line or the plane.
 pub(super) fn drag_point(
     hand: Hand,
@@ -206,7 +206,7 @@ mod tests {
         let ray = (Vec3::new(0.3, 5.0, -2.0), -Vec3::Y);
         let p = drag_point(Hand::Mouse, face, anchor, start, 0.0, &pose, ray).unwrap();
         assert!((p - Vec3::new(0.0, 0.0, -2.0)).length() < 1e-6, "{p}");
-        // A hand's point at t₀ on its current ray, whatever the handle.
+        // A hand's point at t_h on its current ray, whatever the handle.
         let hand = (Vec3::new(1.0, 2.0, 3.0), Vec3::X);
         assert_eq!(
             drag_point(Hand::Left, face, anchor, start, 2.0, &pose, hand),
