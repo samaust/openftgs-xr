@@ -3,6 +3,13 @@
 //! The light estimator's pure part (§1.9, E14, D-15, D-38): the lighting mode read from
 //! the settings, the thumbnail statistics, the band mask, the smoother and the gains.
 
+mod control;
+// Dv-11's device side (Q-390, Q-308), built for the device and the host tests.
+#[cfg(any(test, target_os = "android"))]
+mod dv11;
+
+pub(crate) use control::LightPlugin;
+
 use bevy::math::Vec3;
 use ftgsxr_app::{CameraThumb, FeatureState};
 use ftgsxr_io::{EnvironmentSettings, ManualLighting};

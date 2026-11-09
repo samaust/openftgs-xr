@@ -26,6 +26,7 @@ use crate::anchors::AnchorsPlugin;
 use crate::depth::DepthPlugin;
 use crate::display::DisplayPlugin;
 use crate::error::{XrError, log_runtime, log_warning};
+use crate::light::LightPlugin;
 use crate::panel::PanelPlugin;
 use crate::passthrough::{self, Environment, EnvironmentMode, PassthroughStyle};
 use crate::session::{SessionConfig, SessionPlugin};
@@ -260,6 +261,8 @@ impl Plugin for XrTail {
             app.add_plugins(passthrough::PassthroughPlugin);
             // §1.9 Depth occlusion (#570): the Depth API needs passthrough (E.2).
             app.add_plugins(DepthPlugin);
+            // §1.9 Light estimation (#668): the camera runs in passthrough mode only (Q-385).
+            app.add_plugins(LightPlugin);
         }
     }
 }
