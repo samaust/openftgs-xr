@@ -22,9 +22,10 @@ use bevy_mod_openxr::openxr_session_running;
 use bevy_mod_openxr::session::OxrSession;
 use ftgsxr_app::{
     Grabbed, Hand, Hovered, Intent, LoadedModel, Locomotion, ManipulateSettings, PanelPointer,
-    PlayUiSound, Selected, SettingsRes, UiSound, panel_hit, pick_instance, stick_response,
+    PlayUiSound, Selected, SettingsRes, TrimHandles, UiSound, panel_hit, pick_instance,
+    stick_response,
 };
-use ftgsxr_core::{Aabb, Pose, ray_hit};
+use ftgsxr_core::{Aabb, Pose, TrimHandle, ray_hit};
 use ftgsxr_render::{Colormap, RenderMode, SplatBounds, SplatMode};
 
 use super::{SIDES, XrInputConfig, XrInputState, aim_ray, hands_to_intents};
@@ -513,11 +514,14 @@ fn draw(frame: Res<Frame>, settings: Option<Res<SettingsRes>>, mut gizmos: Gizmo
 }
 
 /// What the haptics compare frame to frame: each hovered instance with its hand, each
-/// grabbed instance with the hands holding it.
+/// grabbed instance with the hands holding it, and E18's trim handles each hand hovers
+/// or drags (`TrimHandles`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Touches {
     pub(crate) hovered: Vec<(Entity, Hand)>,
     pub(crate) grabbed: Vec<(Entity, Vec<Hand>)>,
+    pub(crate) handles_hovered: Vec<(Entity, Hand, TrimHandle)>,
+    pub(crate) handles_dragged: Vec<(Entity, Hand, TrimHandle)>,
 }
 
 /// A start or an end of the main panel's grab by its title bar (§1.8: "Grabbing a UI
@@ -597,6 +601,22 @@ pub(crate) fn select_pulses(
             }
         }
     }
+    // E18: a handle drag gives the hover and grab pulses (§1.8). Q-377
+    for t in &now.handles_hovered {
+        if !prev.handles_hovered.contains(t) {
+            add(t.1, HOVER);
+        }
+    }
+    for t in &now.handles_dragged {
+        if !prev.handles_dragged.contains(t) {
+            add(t.1, GRAB);
+        }
+    }
+    for t in &prev.handles_dragged {
+        if !now.handles_dragged.contains(t) {
+            add(t.1, GRAB);
+        }
+    }
     for &hand in panel_grabs {
         add(hand, GRAB);
     }
@@ -620,6 +640,7 @@ fn haptics(
     hands: Res<XrHands>,
     hovered: Query<(Entity, &Hovered)>,
     grabbed: Query<(Entity, &Grabbed)>,
+    handles: Query<(Entity, &TrimHandles)>,
     mut intents: MessageReader<Intent>,
     mut pointers: MessageReader<PanelPointer>,
     mut sounds: MessageReader<PlayUiSound>,
@@ -638,6 +659,14 @@ fn haptics(
                 };
                 (e, hands)
             })
+            .collect(),
+        handles_hovered: handles
+            .iter()
+            .flat_map(|(e, t)| t.hovered.iter().map(move |&(h, k)| (e, h, k)))
+            .collect(),
+        handles_dragged: handles
+            .iter()
+            .flat_map(|(e, t)| t.dragged.iter().map(move |&(h, k)| (e, h, k)))
             .collect(),
     };
     let snap_turned = intents
@@ -754,6 +783,39 @@ mod tests {
         Entity::from_raw_u32(n).unwrap()
     }
 
+    /// Q-377 (E18, §1.8): a trim handle's hover gives the hover pulse on its hand, a
+    /// drag's start and end the grab pulse.
+    #[test]
+    fn select_pulses_trim_handles_hover_and_drag() {
+        let face = TrimHandle::Face {
+            axis: 1,
+            max: false,
+        };
+        let none = Touches::default();
+        let hover = Touches {
+            handles_hovered: vec![(e(3), Hand::Left, face)],
+            ..Touches::default()
+        };
+        let drag = Touches {
+            handles_dragged: vec![(e(3), Hand::Left, face)],
+            ..Touches::default()
+        };
+        assert_eq!(
+            select_pulses(&none, &hover, false, &[], &[], false),
+            [(Hand::Left, HOVER)]
+        );
+        assert!(select_pulses(&hover, &hover, false, &[], &[], false).is_empty());
+        assert_eq!(
+            select_pulses(&hover, &drag, false, &[], &[], false),
+            [(Hand::Left, GRAB)]
+        );
+        assert!(select_pulses(&drag, &drag, false, &[], &[], false).is_empty());
+        assert_eq!(
+            select_pulses(&drag, &none, false, &[], &[], false),
+            [(Hand::Left, GRAB)]
+        );
+    }
+
     /// Q-270, D-44: which hand and which pulse each of a frame's events gives.
     #[test]
     fn select_pulses_hover_grab_snap_and_click() {
@@ -834,6 +896,7 @@ mod tests {
         let both = Touches {
             hovered: vec![(e(2), Hand::Left)],
             grabbed: vec![(e(2), vec![Hand::Left])],
+            ..Touches::default()
         };
         assert_eq!(
             select_pulses(&none, &both, false, &[Hand::Left], &[], false),
