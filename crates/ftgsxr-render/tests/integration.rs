@@ -55,3 +55,4 @@ mod shared_center_records;
 mod stereo_stats;
 mod u20_manual_transform;
 mod u34_render_error_catalog;
+mod warm_up_teardown;
