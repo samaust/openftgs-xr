@@ -52,7 +52,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_created_without_its_reference_space_ends_the_app_with_code_2() {
+    fn exit_without_session_ends_the_app_with_code_2_without_a_reference_space() {
         let mut app = app();
         app.world_mut().write_message(XrSessionCreatedMessage);
         app.update();
@@ -60,14 +60,14 @@ mod tests {
     }
 
     #[test]
-    fn the_process_exits_with_the_app_exit_s_code() {
+    fn exit_code_is_the_app_exit_s_code() {
         assert_eq!(exit_code(&AppExit::Success), 0);
         assert_eq!(exit_code(&AppExit::from_code(EXIT_ENVIRONMENT)), 2, "§1.15");
         assert_eq!(exit_code(&AppExit::error()), 1);
     }
 
     #[test]
-    fn no_session_created_no_exit() {
+    fn exit_without_session_writes_no_exit_without_a_session_created() {
         let mut app = app();
         app.update();
         assert_eq!(app.should_exit(), None);
@@ -114,7 +114,8 @@ mod tests {
         }
 
         /// A platform with its directories under a scratch folder and nothing else: no
-        /// pick, permission, document or camera is asked for here.
+        /// pick, permission, document or camera is asked for here (a smaller
+        /// `StubPlatform` of `ftgsxr-app`'s test support, which this crate cannot use).
         struct NoPlatform(AppPaths);
 
         impl Platform for NoPlatform {
@@ -192,7 +193,7 @@ mod tests {
 
         #[test]
         #[ignore = "gpu"]
-        fn gpu_a_session_failure_during_the_warm_up_ends_the_app_and_leaves_no_warm_up_thread() {
+        fn gpu_exit_without_session_during_the_warm_up_leaves_no_warm_up_thread() {
             let _layer = layer_messages(); // R-16, Q-105
             let mut app = app();
             let start = Instant::now();
@@ -202,8 +203,8 @@ mod tests {
                 running = warm_up_threads();
             }
             assert!(running > 0, "the warm-up started (Q-325)");
-            // The session fails while the warm-up compiles: the app ends, not the process
-            // (the old `process::exit` ended this test's process with code 2). Whether a
+            // The session fails while the warm-up compiles: the app ends, not the process.
+            // Whether a
             // warm-up thread is still running when Q-236's hold lets the exit through
             // depends on the GPU (on an RTX 4090 the warm-up has ended by then); the join
             // itself is Q-381's own test, in `ftgsxr-render`.
