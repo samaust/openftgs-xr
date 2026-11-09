@@ -1489,32 +1489,34 @@ mod tests {
         assert_eq!(dock.saved, 600.0);
     }
 
-    // §1.7 Panels, Q-252, Q-376 (#628): the Library tab's rows, wider than the dock at
-    // 160 points and at the default 320, neither widen the dock nor change its saved
-    // width over frames with no input.
+    // §1.7 Panels, Q-252, Q-376 (#628, #627): the Library tab, drawn in the dock's
+    // scroll area at 160 points and at the default 320, keeps its rows inside the dock
+    // (#627: they wrap to the dock's width, which the two-way scroll area leaves them)
+    // and leaves the dock's saved width unchanged over frames with no input. Content
+    // wider than the dock is `..._with_content_of_any_width`'s case.
     #[test]
     fn show_dock_panel_keeps_the_saved_width_with_the_library_tab() {
         for saved in [160.0, 320.0] {
-            let mut world = World::new();
-            world.init_resource::<crate::ui::UiState>();
-            world.init_resource::<crate::library::Library>();
-            // The case holds only while some row of the tab is wider than the dock.
-            let right = library_texts(&mut world, saved)
-                .iter()
-                .map(|(_, r)| r.max.x)
-                .fold(0.0, f32::max);
-            assert!(right > saved, "a row wider than {saved}: {right}");
+            let mut world = library_with_source(crate::library::EntryState::Missing);
             let mut dock = Dock {
                 ctx: font_context(),
                 saved,
             };
             for _ in 0..5 {
+                let (mut edge, mut right) = (0.0, 0.0);
                 let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
                     let (mut out, mut hv) = (Vec::new(), None);
-                    dock_scroll_area()
-                        .show(ui, |ui| library_tab(&mut world, ui, &mut out, &mut hv));
+                    edge = ui.max_rect().max.x;
+                    dock_scroll_area().show(ui, |ui| {
+                        library_tab(&mut world, ui, &mut out, &mut hv);
+                        right = ui.min_rect().max.x;
+                    });
                 });
                 assert_eq!((drawn, dock.saved), (saved, saved));
+                assert!(
+                    right <= edge + 0.5,
+                    "the tab's right {right}, the dock's {edge}"
+                );
             }
         }
     }
