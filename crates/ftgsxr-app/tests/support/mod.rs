@@ -341,7 +341,7 @@ impl TestApp {
 /// Dropping a `gpu_` app first lets its compiles finish. Not while panicking: a failed test
 /// must report, not abort on a second panic. The adapter's warm-up threads (Q-325), which
 /// compile outside `PipelineCache`, are joined by the adapter itself when the app drops
-/// (Q-380, #650).
+/// (Q-381, #650).
 impl Drop for TestApp {
     fn drop(&mut self) {
         if !std::thread::panicking() {

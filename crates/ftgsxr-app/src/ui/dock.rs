@@ -345,12 +345,12 @@ fn show_dock_panel<R>(
     (drawn, ((drawn - shown).abs() >= 0.5).then_some(drawn))
 }
 
-/// The scroll area of the dock's tab body: both ways, so a row wider than the dock is
-/// reached by the horizontal bar, and as wide as the dock, so the vertical bar stays at
-/// the dock's right edge, where a vertical-only area would put it at its content's,
-/// past the clip (Q-376).
-// Q-376
-fn dock_scroll_area() -> egui::ScrollArea {
+/// The scroll area of a tab body, the dock's and the main panel's: both ways, so a row
+/// wider than the surface is reached by the horizontal bar, and as wide as the surface,
+/// so the vertical bar stays at its right edge, where a vertical-only area would put it
+/// at its content's, past the clip (Q-376, Q-380).
+// Q-376, Q-380
+pub(super) fn tab_scroll_area() -> egui::ScrollArea {
     egui::ScrollArea::both().auto_shrink([false, true])
 }
 
@@ -378,7 +378,7 @@ fn dock(world: &mut World, ctx: &mut egui::Ui, out: &mut Vec<Out>, hv: &mut Opti
             }
         });
         ui.separator();
-        dock_scroll_area().show(ui, |ui| tab_body(world, ui, tab, out, hv, false));
+        tab_scroll_area().show(ui, |ui| tab_body(world, ui, tab, out, hv, false));
     });
     if let Some(w) = dragged {
         world.resource_mut::<UiState>().dock_width = w;
@@ -1333,9 +1333,9 @@ fn load_choices(world: &World) -> Vec<std::path::PathBuf> {
 mod tests {
     use super::{
         Colormap, Entity, InstanceAction, Intent, LoadedModel, Out, RenderMode, SplatMode,
-        Transform, Visibility, World, display_tab, dock_scroll_area, egui, library_tab,
-        load_choices, playback_tab, replay_lines, replay_loaded_degree, scene_tab, show_dock_panel,
-        source_from_input,
+        Transform, Visibility, World, display_tab, egui, library_tab, load_choices, playback_tab,
+        replay_lines, replay_loaded_degree, scene_tab, show_dock_panel, source_from_input,
+        tab_scroll_area,
     };
     use crate::SplatEvent;
     use crate::manipulate::Selected;
@@ -1510,7 +1510,7 @@ mod tests {
                 let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
                     let (mut out, mut hv) = (Vec::new(), None);
                     edge = ui.max_rect().max.x;
-                    dock_scroll_area().show(ui, |ui| {
+                    tab_scroll_area().show(ui, |ui| {
                         library_tab(&mut world, ui, &mut out, &mut hv);
                         right = ui.min_rect().max.x;
                     });
@@ -1537,7 +1537,7 @@ mod tests {
                 for _ in 0..5 {
                     let drawn = dock.frame_with(1000.0, Vec::new(), |ui| {
                         if scrolled {
-                            dock_scroll_area().show(ui, |ui| {
+                            tab_scroll_area().show(ui, |ui| {
                                 ui.allocate_space(egui::vec2(content, 1.0));
                             });
                         } else {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Q-380 (#650, §2.4 Threads, Q-325, `gpu`): the adapter's warm-up threads end with the
+//! Q-381 (#650, §2.4 Threads, Q-325, `gpu`): the adapter's warm-up threads end with the
 //! app. An app dropped while its warm-up compiles leaves no warm-up thread running, so
 //! none can hold the device after the drop and release it while the process exits
 //! (a SIGSEGV in the Vulkan driver's exit-time teardown).
@@ -85,5 +85,5 @@ fn gpu_an_app_dropped_while_its_warm_up_compiles_leaves_no_warm_up_thread() {
         std::thread::sleep(Duration::from_millis(1));
         left = warm_up_threads();
     }
-    assert_eq!(left, 0, "a warm-up thread outlived the app (Q-380)");
+    assert_eq!(left, 0, "a warm-up thread outlived the app (Q-381)");
 }

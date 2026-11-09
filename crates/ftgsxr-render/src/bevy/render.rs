@@ -111,7 +111,7 @@ struct Instance {
 }
 
 /// The warm-up threads by passes key (Q-325), each holding the device until it ends.
-/// Dropping them joins every thread still running (Q-380): with the render world, or at a
+/// Dropping them joins every thread still running (Q-381): with the render world, or at a
 /// new device or tier (Q-239), so no thread outlives the state that started it and
 /// releases the device on its own, during the process's exit (#650).
 #[derive(Default)]
@@ -133,7 +133,7 @@ impl Warming {
     }
 }
 
-// Q-380
+// Q-381
 impl Drop for Warming {
     fn drop(&mut self) {
         for (_, handle) in self.0.drain() {
@@ -439,8 +439,8 @@ fn compile(
 /// splat camera draws, nor in the frame the governor first switches the sort mode.
 /// `prepare_view` takes a key's result, waiting for it if it is not ready, so the first
 /// frame still draws; a thread that cannot start leaves its key to compile there. A
-/// thread not taken by then is joined when `Views` drops or resets (Q-380).
-// Q-325, Q-380
+/// thread not taken by then is joined when `Views` drops or resets (Q-381).
+// Q-325, Q-381
 fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
     for sort in [SortMode::PerView, SortMode::SharedCenter] {
         let dev = Arc::clone(dev);

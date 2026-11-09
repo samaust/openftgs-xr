@@ -7,7 +7,7 @@
 //! The adapter's warm-up threads (Q-325) compile beside them, outside `PipelineCache`: one
 //! still running after the app was dropped held the last reference to the device and
 //! destroyed the Vulkan instance during the process's exit (#650); the adapter joins them
-//! when the app drops (Q-380).
+//! when the app drops (Q-381).
 //! A process's exit right after such a frame is the crash's check: the crate's tests share
 //! one test binary (#413), so the test also runs again in a child process of it, alone, which
 //! exits once the test returns.
