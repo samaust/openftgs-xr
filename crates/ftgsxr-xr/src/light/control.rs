@@ -26,20 +26,27 @@ use bevy::app::{App, Plugin, Update};
 use bevy::ecs::message::MessageReader;
 use bevy::log::{info, warn};
 use bevy::math::Vec3;
-use bevy::prelude::{Commands, IntoScheduleConfigs, Res, ResMut, Resource};
+use bevy::prelude::{
+    Commands, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut, Resource, With,
+};
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrState};
 use ftgsxr_app::{
     AskPermissionAgain, CameraFrames, DeniedPermissions, FeatureState, HudData, Lighting,
-    Permission, Platform, PlatformRes, SettingsRes, Toast, ToastLevel, XrFeatures,
+    Permission, Platform, PlatformRes, Selected, SettingsRes, Toast, ToastLevel, XrFeatures,
 };
 use ftgsxr_io::EnvironmentSettings;
 use ftgsxr_render::ColorTransform;
+use ftgsxr_render::SplatBounds;
 
-use super::{LightEstimate, LightSmoother, LightingMode, grey_world_gains, light_gains};
+use super::band::{DepthReadback, DepthSnapshot, thumb_depths};
+use super::{LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains, light_gains};
 use crate::error::{XrError, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode};
+use crate::tracking::XrHands;
 use crate::tracking::hands::{Flow, denied_text};
 
+/// E14's band half-width Δ.
+const BAND_DELTA_M: f32 = 0.5;
 /// E14's time constant.
 const TAU_S: f32 = 0.5;
 /// Q-385, Q-392: no new thumbnail for this long while started counts as a stop, and a
@@ -77,6 +84,15 @@ pub(crate) struct Inputs<'a> {
     pub(crate) asked_again: bool,
     /// The wall clock.
     pub(crate) now: Instant,
+    /// Auto local's band: the depth while the provider runs and an instance is selected.
+    pub(crate) band: Option<Band<'a>>,
+}
+
+/// Auto local's depth and the selected instance's distance d_m from the head (Q-388).
+#[derive(Clone, Copy)]
+pub(crate) struct Band<'a> {
+    pub(crate) depth: &'a DepthSnapshot,
+    pub(crate) d_m: f32,
 }
 
 /// What one frame of the control writes.
@@ -288,8 +304,15 @@ impl Control {
             self.started = Some(i.now);
             self.thumbs += 1;
             self.pose_seen |= thumb.camera.is_some();
-            // Auto local's band is #669's: over the frame here.
-            if let Some(e) = LightEstimate::from_thumb(&thumb, None) {
+            // E14 local (Q-388): the band while the depth and a selection exist and
+            // enough pixels qualify, else the frame.
+            let mask = match (&mode, i.band) {
+                (LightingMode::AutoLocal, Some(b)) => {
+                    band_mask(&thumb_depths(&thumb, b.depth), b.d_m, BAND_DELTA_M)
+                }
+                _ => None,
+            };
+            if let Some(e) = LightEstimate::from_thumb(&thumb, mask.as_deref()) {
                 self.raw = Some(e);
                 self.smoother.push(e, thumb.at_s);
                 new = true;
@@ -351,7 +374,13 @@ impl Plugin for LightPlugin {
             .add_message::<AskPermissionAgain>()
             .add_systems(XrSessionCreated, new_session)
             .add_systems(XrPreDestroySession, end_session)
-            .add_systems(Update, control.after(crate::tracking::hands::write_feature));
+            .init_resource::<DepthReadback>()
+            .add_systems(
+                Update,
+                (super::band::request, control)
+                    .chain()
+                    .after(crate::tracking::hands::write_feature),
+            );
         // Dv-11: inert until the quest runner's entity names it (Q-308, Q-390).
         #[cfg(target_os = "android")]
         super::dv11::add(app);
@@ -384,11 +413,27 @@ fn control(
     mut features: ResMut<XrFeatures>,
     mut hud: ResMut<HudData>,
     mut lighting: ResMut<Lighting>,
+    readback: Res<DepthReadback>,
+    hands: Option<Res<XrHands>>,
+    selected: Query<(&GlobalTransform, &SplatBounds), With<Selected>>,
     mut commands: Commands,
 ) {
     let Some(mut settings) = settings else {
         return;
     };
+    // Q-388: d_m from the head (the views' midpoint) to the selected instance's posed
+    // B_m centre.
+    let band = readback
+        .latest
+        .as_ref()
+        .zip(hands)
+        .zip(selected.single().ok())
+        .map(|((depth, hands), (at, bounds))| Band {
+            depth,
+            d_m: at
+                .transform_point(bounds.aabb.center())
+                .distance(hands.head.translation),
+        });
     let asked_again = again.read().any(|a| a.0 == Permission::Camera);
     let out = control.step(
         platform.as_deref().map(|p| &*p.0),
@@ -398,6 +443,7 @@ fn control(
             running: state.as_deref() == Some(&XrState::Running),
             asked_again,
             now: Instant::now(),
+            band,
         },
     );
     // Only a write touches the settings (persist's debounced save follows a change).
@@ -587,6 +633,7 @@ mod tests {
                 running: true,
                 asked_again,
                 now,
+                band: None,
             },
         );
         if let Some(m) = out.write_mode {
@@ -765,5 +812,91 @@ mod tests {
         frame(&mut c, &p, &mut e, t0 + Duration::from_secs(2));
         assert_eq!(*cam.stops.lock().unwrap(), 1);
         assert_eq!(*cam.starts.lock().unwrap(), 2);
+    }
+
+    /// E14 local, Q-388, through the control: a thumbnail whose left half is (0.8, 0.4,
+    /// 0.2) and right half (0.2, 0.2, 0.2), a fake depth with a wall at 2 m over its left
+    /// half. Auto local with the band at d_m = 2 m takes the statistics over the band (the
+    /// left half's colour); without the band (no provider, or no selection) and in auto
+    /// global they are the frame's mean (0.5, 0.3, 0.2).
+    #[test]
+    fn step_auto_local_takes_the_band() {
+        use super::super::band::DepthSnapshot;
+        use ftgsxr_app::{Camera, Fov};
+        let t0 = Instant::now();
+        let fov = Fov::Angles {
+            left: -0.7,
+            right: 0.7,
+            up: 0.6,
+            down: -0.6,
+        };
+        let pose = (
+            bevy::math::Vec3::new(0.0, 1.6, 0.0),
+            bevy::math::Quat::IDENTITY,
+        );
+        let depth = DepthSnapshot {
+            stored: (0..320 * 320)
+                .map(|i| if i % 320 < 160 { 0.95 } else { 1.0 })
+                .collect(),
+            camera: Camera::from_stage_pose(pose.0, pose.1, fov, 320, 320),
+            near: 0.1,
+            far: f32::INFINITY,
+        };
+        let rgb: Vec<f32> = (0..64 * 48)
+            .flat_map(|i| {
+                if i % 64 < 32 {
+                    [0.8, 0.4, 0.2]
+                } else {
+                    [0.2; 3]
+                }
+            })
+            .collect();
+        let shot = |at_s| CameraThumb {
+            width: 64,
+            height: 48,
+            rgb: rgb.clone(),
+            at_s,
+            camera: Some(Camera::from_stage_pose(pose.0, pose.1, fov, 64, 48)),
+        };
+        let band = Band {
+            depth: &depth,
+            d_m: 2.0,
+        };
+        let cases = [
+            ("auto-local", Some(band), [0.8, 0.4, 0.2]),
+            ("auto-local", None, [0.5, 0.3, 0.2]),
+            ("auto-global", Some(band), [0.5, 0.3, 0.2]),
+        ];
+        for (k, (mode, band, want)) in cases.into_iter().enumerate() {
+            let (p, cam) = fake(true, true);
+            let cam = cam.unwrap();
+            let e = env(mode);
+            let mut c = session();
+            let mut step = |at: f64| {
+                c.step(
+                    Some(&p),
+                    &Inputs {
+                        env: &e,
+                        env_mode: EnvironmentMode::Passthrough,
+                        running: true,
+                        asked_again: false,
+                        now: t0 + Duration::from_secs_f64(at),
+                        band,
+                    },
+                )
+            };
+            step(0.0);
+            *cam.thumb.lock().unwrap() = Some(shot(1.0 + k as f64));
+            step(0.1);
+            let raw = c.raw.expect("an estimate");
+            for (got, want) in raw.rgb.iter().zip(want) {
+                assert!(
+                    (got - want).abs() < 1e-5,
+                    "{mode}, band {}: {:?}",
+                    band.is_some(),
+                    raw.rgb
+                );
+            }
+        }
     }
 }
