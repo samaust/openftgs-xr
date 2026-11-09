@@ -1135,7 +1135,7 @@ mod tests {
     }
 
     /// E14 (revision 52): where the gains are not in force (started without an estimate,
-    /// the warm-up, the capture waiting above the floor, VR mode) the transform is the
+    /// the warm-up, the capture waiting for the floor, VR mode) the transform is the
     /// manual form alone; with E14's gains at their clamp of 4, EV 1 gives 8 (the product
     /// is not clamped); EV −1 at the next frame halves E14's gains.
     #[test]
