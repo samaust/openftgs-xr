@@ -5,10 +5,10 @@
 
 use bevy::log::{info, warn};
 use bevy::math::{DMat3, DVec3};
-use bevy::prelude::{Commands, Entity, On, Query, Res, ResMut, Resource, With};
+use bevy::prelude::{Commands, Entity, Has, On, Query, Res, ResMut, Resource, With};
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
-use ftgsxr_app::{Camera, CameraThumb, FeatureState, Selected, SettingsRes, XrFeatures};
-use ftgsxr_render::SplatOcclusion;
+use ftgsxr_app::{Camera, CameraThumb, FeatureState, Lighting, Selected, SettingsRes, XrFeatures};
+use ftgsxr_render::{SplatBounds, SplatOcclusion};
 
 use super::LightingMode;
 use crate::passthrough::{Environment, EnvironmentMode};
@@ -135,35 +135,61 @@ pub(crate) fn thumb_depths(thumb: &CameraThumb, depth: &DepthSnapshot) -> Vec<f3
     out
 }
 
+/// The depth band's instance (Q-383, Q-388): `per_instance`'s target while one is set,
+/// whatever is selected (none when it is not among `instances`), else the one selected
+/// instance; each item is an instance, whether it is `Selected`, and what the caller
+/// needs of it.
+// Q-383, Q-388
+pub(crate) fn band_instance<T>(
+    per_instance: Option<Entity>,
+    instances: impl IntoIterator<Item = (Entity, bool, T)>,
+) -> Option<T> {
+    let mut items = instances.into_iter();
+    match per_instance {
+        Some(t) => items.find(|(e, _, _)| *e == t).map(|(_, _, v)| v),
+        None => {
+            let mut selected = items.filter(|(_, s, _)| *s);
+            match (selected.next(), selected.next()) {
+                (Some((_, _, v)), None) => Some(v),
+                _ => None,
+            }
+        }
+    }
+}
+
 /// Whether a readback is spawned for the left view's capture `age_frames` old: the
-/// effective `mode` auto local, an instance selected (the band needs d_m), passthrough
-/// mode and a new capture (Q-388).
-// Q-388
+/// effective `mode` auto local, an instance for the depth band (the band needs d_m:
+/// "per instance"'s target, else the selected instance, Q-383), passthrough mode and a
+/// new capture (Q-388).
+// Q-383, Q-388
 fn readback_wanted(
     mode: &LightingMode,
-    selected: bool,
+    instance: bool,
     passthrough: bool,
     age_frames: u32,
 ) -> bool {
-    matches!(mode, LightingMode::AutoLocal) && selected && passthrough && age_frames == 0
+    matches!(mode, LightingMode::AutoLocal) && instance && passthrough && age_frames == 0
 }
 
 /// The frame's request (main world, `Update`, before the control): while auto local is
-/// in force (`XrFeatures.lighting` as of the last frame's control), an instance selected,
-/// in passthrough mode and the provider runs, a one-shot `Readback::texture` of the
+/// in force (`XrFeatures.lighting` as of the last frame's control), an instance for the
+/// depth band ("per instance"'s target, else the selected one, Q-383), in passthrough
+/// mode and the provider runs, a one-shot `Readback::texture` of the
 /// left view's `DepthFrame.image` is spawned when a new capture arrived (`age_frames`
 /// 0) and none is in flight. Its `Readback` is removed the frame after (one extract
 /// copies it once, encoded by Bevy's render system after the drive's median pass was
 /// submitted in `PrepareResources`), the entity kept for `ReadbackComplete`. Nothing
 /// waits for the GPU (§2.4 rule 1).
-// Q-388
+// Q-383, Q-388
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn request(
     mut rb: ResMut<DepthReadback>,
     occlusion: Option<Res<SplatOcclusion>>,
     settings: Option<Res<SettingsRes>>,
     env: Option<Res<Environment>>,
     features: Option<Res<XrFeatures>>,
-    selected: Query<(), With<Selected>>,
+    lighting: Option<Res<Lighting>>,
+    instances: Query<(Entity, Has<Selected>), With<SplatBounds>>,
     mut commands: Commands,
 ) {
     let left = occlusion.as_deref().and_then(|o| o.frames.first());
@@ -187,8 +213,13 @@ pub(crate) fn request(
         LightingMode::from_settings(&s.0.environment, camera)
     });
     let passthrough = env.is_some_and(|e| e.mode == EnvironmentMode::Passthrough);
+    let instance = band_instance(
+        lighting.and_then(|l| l.per_instance),
+        instances.iter().map(|(e, s)| (e, s, ())),
+    )
+    .is_some();
     if let Some(f) = left
-        && readback_wanted(&mode, !selected.is_empty(), passthrough, f.age_frames)
+        && readback_wanted(&mode, instance, passthrough, f.age_frames)
     {
         let entity = commands
             .spawn(Readback::texture(f.image.clone()))
@@ -247,16 +278,52 @@ mod tests {
     use super::super::band_mask;
     use super::*;
 
-    /// Q-388: the readback is wanted only in the effective auto local mode (an auto local
-    /// setting without the camera is manual), with an instance selected, in passthrough
-    /// mode, for a new capture.
+    /// Q-383, Q-388: auto local's band is measured around "per instance"'s target while
+    /// one is set, whatever is selected (another instance, or nothing); without one,
+    /// around the selected instance; a target not among the instances gives none.
     #[test]
-    fn readback_wanted_needs_effective_auto_local_a_selection_and_a_new_capture() {
+    fn band_instance_is_the_target_while_one_is_set() {
+        let mut world = bevy::prelude::World::new();
+        let (a, b) = (world.spawn_empty().id(), world.spawn_empty().id());
+        let gone = world.spawn_empty().id();
+        // A at 2 m from the head, B at 4 m.
+        let at = |sel_a: bool, sel_b: bool| [(a, sel_a, 2.0_f32), (b, sel_b, 4.0)];
+        assert_eq!(
+            band_instance(Some(a), at(false, true)),
+            Some(2.0),
+            "B selected"
+        );
+        assert_eq!(
+            band_instance(Some(a), at(false, false)),
+            Some(2.0),
+            "none selected"
+        );
+        assert_eq!(band_instance(None, at(false, true)), Some(4.0), "no target");
+        assert_eq!(
+            band_instance(None, at(false, false)),
+            None,
+            "no target, none selected"
+        );
+        assert_eq!(
+            band_instance(Some(gone), at(false, true)),
+            None,
+            "target gone"
+        );
+    }
+
+    /// Q-388: the readback is wanted only in the effective auto local mode (an auto local
+    /// setting without the camera is manual), with an instance for the depth band, in
+    /// passthrough mode, for a new capture.
+    #[test]
+    fn readback_wanted_needs_effective_auto_local_an_instance_and_a_new_capture() {
         let mut env = ftgsxr_io::Settings::default().environment;
         env.lighting_mode = "auto-local".into();
         let local = LightingMode::from_settings(&env, FeatureState::Available);
         assert!(readback_wanted(&local, true, true, 0));
-        assert!(!readback_wanted(&local, false, true, 0), "no selection");
+        assert!(
+            !readback_wanted(&local, false, true, 0),
+            "no instance for the band"
+        );
         assert!(!readback_wanted(&local, true, false, 0), "VR mode");
         assert!(!readback_wanted(&local, true, true, 1), "no new capture");
         let gated = LightingMode::from_settings(&env, FeatureState::Absent);

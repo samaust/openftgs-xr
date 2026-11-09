@@ -185,12 +185,12 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .map(|t| t.tier.name.clone());
     // §1.9 Light estimation: the reason only manual mode is offered (Q-384).
     let headset = world.contains_resource::<Headset>();
-    // Q-388: auto local's band needs a selected instance.
+    // Q-388: auto local's band needs a selected instance (or "per instance"'s target,
+    // Q-383); turning "per instance" on pins the selected one.
     let selected = world
-        .query_filtered::<(), With<Selected>>()
+        .query_filtered::<Entity, With<Selected>>()
         .iter(world)
-        .next()
-        .is_some();
+        .next();
     let mut light = world.get_resource::<Lighting>().copied();
     // Q-394: E14's part of the gains, for the auto modes.
     let e14_gains = world.get_resource::<HudData>().and_then(|h| h.light_gains);
@@ -296,17 +296,20 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// `Lighting.too_dark` (Q-385); "local needs occlusion
 /// and a selected instance" beside auto local without occlusion's depth or without a
 /// selected instance (Q-388); the manual sliders, the strength
-/// γ, the current gains and "per instance" (Q-383): in the auto modes E14's part `e14_gains`
-/// (`HudData.light_gains`), 1 per channel where it is `None`, without the manual offset
-/// the sliders show (Q-394); otherwise `Lighting.transform`'s. True when "Ask again" was
-/// pressed for a denied camera (Q-322).
+/// γ, the current gains and "per instance" (Q-383: turning it on pins the instance then
+/// selected, it can't be turned on while nothing is selected and turning it off sets
+/// `None`; a pinned target stands for the selection in the note, as the XR crate's
+/// band takes it for the depth band's instance). The gains are, in the auto modes,
+/// E14's part `e14_gains` (`HudData.light_gains`), 1 per channel where it is `None`,
+/// without the manual offset the sliders show (Q-394); otherwise `Lighting.transform`'s.
+/// True when "Ask again" was pressed for a denied camera (Q-322).
 // Q-322, Q-383, Q-384, Q-385, Q-388, Q-394
 fn lighting_controls(
     ui: &mut egui::Ui,
     s: &mut Settings,
     features: &XrFeatures,
     headset: bool,
-    selected: bool,
+    selected: Option<Entity>,
     light: Option<&mut Lighting>,
     e14_gains: Option<Vec3>,
 ) -> bool {
@@ -349,7 +352,9 @@ fn lighting_controls(
         _ => {}
     }
     if auto {
-        if shown == "auto-local" && !(occlusion_on && selected) {
+        // Q-383: while a target is pinned, the band is measured around it.
+        let target = selected.is_some() || light.as_ref().is_some_and(|l| l.per_instance.is_some());
+        if shown == "auto-local" && !(occlusion_on && target) {
             ui.label("local needs occlusion and a selected instance");
         }
         // Q-385: why an auto mode has no reference yet.
@@ -376,7 +381,14 @@ fn lighting_controls(
             l.transform.gain
         };
         ui.label(format!("gains {:.2} {:.2} {:.2}", g.x, g.y, g.z));
-        ui.checkbox(&mut l.per_instance, "per instance");
+        let mut on = l.per_instance.is_some();
+        let enabled = on || selected.is_some();
+        if ui
+            .add_enabled(enabled, egui::Checkbox::new(&mut on, "per instance"))
+            .changed()
+        {
+            l.per_instance = if on { selected } else { None };
+        }
     }
     ask
 }
@@ -991,6 +1003,47 @@ mod tests {
         }
     }
 
+    /// Q-383 (`cpu`): "per instance" can't be turned on while nothing is selected; turned
+    /// on, it pins the instance then selected, which a later change of selection leaves
+    /// pinned; turned off, it sets `None`.
+    #[test]
+    fn per_instance_pins_the_instance_selected_when_turned_on() {
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        world.init_resource::<Lighting>();
+        world.init_resource::<Messages<Intent>>();
+        world.init_resource::<Messages<UiCue>>();
+        world.init_resource::<Messages<AskPermissionAgain>>();
+        let ctx = egui::Context::default();
+        let frame = |world: &mut World| {
+            frame_of(&ctx, world, Vec::new(), environment_section);
+            frame_of(&ctx, world, Vec::new(), environment_section)
+        };
+        let toggle = |world: &mut World| {
+            let texts = frame(world);
+            for events in click(at(&texts, "per instance")) {
+                frame_of(&ctx, world, events, environment_section);
+            }
+        };
+        let target = |world: &World| world.resource::<Lighting>().per_instance;
+        // Nothing selected: the click doesn't turn it on.
+        toggle(&mut world);
+        assert_eq!(target(&world), None);
+        // A selected: on pins A.
+        let a = world.spawn(Selected).id();
+        toggle(&mut world);
+        assert_eq!(target(&world), Some(a));
+        // B selected instead: A stays the target, and with nothing selected it can still be
+        // turned off.
+        world.entity_mut(a).remove::<Selected>();
+        let b = world.spawn(Selected).id();
+        frame(&mut world);
+        assert_eq!(target(&world), Some(a));
+        world.entity_mut(b).remove::<Selected>();
+        toggle(&mut world);
+        assert_eq!(target(&world), None);
+    }
+
     /// Q-385's two status lines (`cpu`): while an auto mode is shown and
     /// `lighting_reference` is `None`, "too dark to capture a reference" when
     /// `Lighting.too_dark` is set and "capturing reference…" otherwise; neither with a
@@ -1191,6 +1244,16 @@ mod tests {
             !has(&texts, "local needs occlusion and a selected instance"),
             "occlusion on, an instance selected: {texts:?}"
         );
+        world.entity_mut(selected).remove::<Selected>();
+        // Q-383: a pinned target stands for the selection.
+        world.init_resource::<Lighting>();
+        world.resource_mut::<Lighting>().per_instance = Some(selected);
+        let texts = frame(&mut world);
+        assert!(
+            !has(&texts, "local needs occlusion and a selected instance"),
+            "occlusion on, a target pinned: {texts:?}"
+        );
+        world.remove_resource::<Lighting>();
         world.despawn(selected);
         world
             .resource_mut::<SettingsRes>()

@@ -773,7 +773,7 @@ The 64 × 48 RGB reduction of one passthrough camera frame the shim hands the pl
 _Avoid_: camera frame (the full image), preview, snapshot
 
 **Depth band**:
-The thumbnail pixels whose environment depth lies within Δ of the selected instance's distance from the eye, the region auto local estimates over. E14
+The thumbnail pixels whose environment depth lies within Δ of an instance's distance from the eye, the region auto local estimates over. The instance is the "per instance" target while one is set, whatever is selected, and otherwise the selected instance. E14, §1.9
 _Avoid_: depth slice, depth mask (the implementation's array), region of interest
 
 ### Files

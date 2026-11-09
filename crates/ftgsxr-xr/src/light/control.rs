@@ -36,7 +36,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::log::{info, warn};
 use bevy::math::Vec3;
 use bevy::prelude::{
-    Commands, GlobalTransform, IntoScheduleConfigs, Query, Res, ResMut, Resource, With,
+    Commands, Entity, GlobalTransform, Has, IntoScheduleConfigs, Query, Res, ResMut, Resource,
 };
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrState};
 use ftgsxr_app::{
@@ -47,7 +47,7 @@ use ftgsxr_io::EnvironmentSettings;
 use ftgsxr_render::ColorTransform;
 use ftgsxr_render::SplatBounds;
 
-use super::band::{DepthReadback, DepthSnapshot, thumb_depths};
+use super::band::{DepthReadback, DepthSnapshot, band_instance, thumb_depths};
 use super::{LightEstimate, LightSmoother, LightingMode, band_mask, light_gains, manual_gains};
 use crate::error::{XrError, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode};
@@ -473,6 +473,14 @@ fn end_session(mut control: ResMut<Control>) {
     control.session = false;
 }
 
+/// An instance as auto local's band reads it: its pose, its bounds, whether it is selected.
+type BandItem = (
+    Entity,
+    &'static GlobalTransform,
+    &'static SplatBounds,
+    Has<Selected>,
+);
+
 /// The frame's control: `Control::step` over the world's resources.
 #[allow(clippy::too_many_arguments)]
 fn control(
@@ -488,25 +496,30 @@ fn control(
     mut lighting: ResMut<Lighting>,
     readback: Res<DepthReadback>,
     hands: Option<Res<XrHands>>,
-    selected: Query<(&GlobalTransform, &SplatBounds), With<Selected>>,
+    instances: Query<BandItem>,
     mut commands: Commands,
 ) {
     let Some(mut settings) = settings else {
         return;
     };
-    // Q-388: d_m from the head (the views' midpoint) to the selected instance's posed
-    // B_m centre.
-    let band = readback
-        .latest
-        .as_ref()
-        .zip(hands)
-        .zip(selected.single().ok())
-        .map(|((depth, hands), (at, bounds))| Band {
-            depth,
-            d_m: at
-                .transform_point(bounds.aabb.center())
-                .distance(hands.head.translation),
-        });
+    // Q-388: d_m from the head (the views' midpoint) to the depth band's instance's posed B_m
+    // centre: "per instance"'s target while one is set, else the selected one (Q-383).
+    let target = band_instance(
+        lighting.per_instance,
+        instances.iter().map(|(e, at, b, s)| (e, s, (at, b))),
+    );
+    let band =
+        readback
+            .latest
+            .as_ref()
+            .zip(hands)
+            .zip(target)
+            .map(|((depth, hands), (at, bounds))| Band {
+                depth,
+                d_m: at
+                    .transform_point(bounds.aabb.center())
+                    .distance(hands.head.translation),
+            });
     let asked_again = again.read().any(|a| a.0 == Permission::Camera);
     let out = control.step(
         platform.as_deref().map(|p| &*p.0),
