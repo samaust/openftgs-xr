@@ -348,7 +348,7 @@ struct HandStates {
     trim_sent: HashMap<Entity, Trim>,
     /// The instances one of whose drags started or ended this frame, whose drags
     /// `run_intents` re-anchors before it moves them (Q-379).
-    reanchor: Vec<Entity>,
+    to_reanchor: Vec<Entity>,
 }
 
 /// The `SetTrim` intents a frame's drags send (E18), written by `send_trim_drags`:
@@ -372,14 +372,21 @@ impl HandStates {
         self.retain_trim_drags(|d| d.hand != hand);
     }
 
+    /// Marks `e`, one of whose drags started or ended, for the re-anchor of its drags.
+    fn mark_reanchor(to_reanchor: &mut Vec<Entity>, e: Entity) {
+        if !to_reanchor.contains(&e) {
+            to_reanchor.push(e);
+        }
+    }
+
     /// Keeps the drags `keep` keeps, marking the instance of each drag it ends for the
     /// re-anchor of its other drags (Q-379).
     fn retain_trim_drags(&mut self, mut keep: impl FnMut(&TrimDrag) -> bool) {
-        let ended = &mut self.reanchor;
+        let ended = &mut self.to_reanchor;
         self.trim_drags.retain(|d| {
             let k = keep(d);
-            if !k && !ended.contains(&d.entity) {
-                ended.push(d.entity);
+            if !k {
+                Self::mark_reanchor(ended, d.entity);
             }
             k
         });
@@ -391,7 +398,7 @@ impl HandStates {
     /// does not change. t_h, the anchor and the start ray stay as each drag began.
     // Q-379
     fn reanchor_trim_drags(&mut self, trim_of: impl Fn(Entity) -> Option<Trim>) {
-        for e in std::mem::take(&mut self.reanchor) {
+        for e in std::mem::take(&mut self.to_reanchor) {
             let Some(t0) = self.trim_sent.get(&e).copied().or_else(|| trim_of(e)) else {
                 continue;
             };
@@ -877,9 +884,7 @@ fn begin_trim_drag(
     });
     // Its t₀ is the trim the instance's drags last gave, with the others re-anchored.
     // Q-379
-    if !hs.reanchor.contains(&e) {
-        hs.reanchor.push(e);
-    }
+    HandStates::mark_reanchor(&mut hs.to_reanchor, e);
     true
 }
 
