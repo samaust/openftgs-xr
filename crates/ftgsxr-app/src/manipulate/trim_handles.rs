@@ -38,6 +38,7 @@ pub(super) fn handle_hit(
     let mut best: Option<(TrimHandle, f32)> = None;
     for (h, p) in trim.handles() {
         let p = pose.transform_point(p);
+        // t, which a drag keeps as t₀: the handle point's projection on the ray. Q-378
         let t = (p - o).dot(d);
         if !(0.0..=max_m).contains(&t) || (o + t * d).distance(p) > reach {
             continue;

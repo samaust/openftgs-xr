@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! I-24, trim handles in the app (§3.3; E18, §1.7, §1.8, D-57), `cpu` lane. Desktop: in
-//! `GizmoMode::Trim` a mouse drag of a face handle sends the trim with the expected
-//! limit, a handle hit wins over the instance pick, there are no handles with the trim
+//! `GizmoMode::Trim` a mouse drag of a face handle sends `SetTrim` with the expected
+//! limit (read back as the `SplatTrim` it gives), a handle hit wins over the instance
+//! pick, even behind a nearer instance hit, there are no handles with the trim
 //! off or in another gizmo mode, C is ignored with the trim off and turning the trim off
 //! returns the gizmo to translate. XR, from `Pointer`, `Select` and `Grab*` intents: a
 //! `grab` drag of a face handle moves it by p = o + t₀·d, a `select` drag of the center
@@ -130,7 +131,18 @@ fn act(instance: Entity, action: InstanceAction) -> Intent {
     Intent::Instance { instance, action }
 }
 
+/// Writes the intents and runs two frames: a drag's `SetTrim` is written after
+/// `manipulate` reads the frame's intents, and applied in the next frame.
 fn send(t: &mut TestApp, intents: &[Intent]) {
+    for i in intents {
+        t.app.world_mut().write_message(*i);
+    }
+    t.frames(2);
+}
+
+/// Writes the intents and runs one frame: hover is recomputed from each frame's own
+/// `Pointer` intents (Q-263).
+fn point(t: &mut TestApp, intents: &[Intent]) {
     for i in intents {
         t.app.world_mut().write_message(*i);
     }
@@ -234,12 +246,39 @@ fn i24_desktop_a_face_drag_sets_its_limit_and_the_handle_wins_over_the_pick() {
     assert!(close(trim(&t, e).box_max.x, 1.25), "the drag has ended");
 }
 
+/// A ray from (0, 3, 5) to the −z face's handle at (0, 0, −1): it enters B_m at z = 0.93,
+/// t ≈ 4.6, before the handle at t ≈ 6.7, and passes 0.45 or more from every other handle.
+fn oblique(hand: Hand) -> Intent {
+    Intent::Pointer {
+        hand,
+        origin: Vec3::new(0.0, 3.0, 5.0),
+        dir: Vec3::new(0.0, -3.0, -6.0).normalize(),
+    }
+}
+
+#[test]
+fn i24_a_handle_behind_a_nearer_instance_hit_still_wins() {
+    let minus_z = TrimHandle::Face {
+        axis: 2,
+        max: false,
+    };
+    let (mut t, e) = setup("i24_behind", unit_box());
+    send(&mut t, &[Intent::Gizmo(GizmoMode::Trim)]);
+    send(&mut t, &[oblique(Hand::Mouse), press(Hand::Mouse)]);
+    assert_eq!(dragged(&t, e), [(Hand::Mouse, minus_z)]);
+    send(&mut t, &[release(Hand::Mouse)]);
+    // A hand's grab takes the handle, not the instance its ray meets first.
+    send(&mut t, &[oblique(Hand::Left), grab(Hand::Left)]);
+    assert_eq!(dragged(&t, e), [(Hand::Left, minus_z)]);
+    assert!(t.app.world().get::<Grabbed>(e).is_none());
+}
+
 #[test]
 fn i24_desktop_no_handles_in_another_mode_or_with_the_trim_off_and_c_ignored() {
     let (mut t, e) = setup("i24_desktop_modes", unit_box());
     // The scale cube's mode: the handle's ray picks, misses B_m and deselects.
     send(&mut t, &[Intent::Gizmo(GizmoMode::Scale)]);
-    send(&mut t, &[down(Hand::Mouse, Vec3::new(1.0, 0.0, 5.0))]);
+    point(&mut t, &[down(Hand::Mouse, Vec3::new(1.0, 0.0, 5.0))]);
     assert!(
         handles(&t, e).hovered.is_empty(),
         "no handles in another mode"
@@ -260,7 +299,7 @@ fn i24_desktop_no_handles_in_another_mode_or_with_the_trim_off_and_c_ignored() {
             act(e, InstanceAction::SetTrim(off)),
         ],
     );
-    send(&mut t, &[down(Hand::Mouse, Vec3::new(1.0, 0.0, 5.0))]);
+    point(&mut t, &[down(Hand::Mouse, Vec3::new(1.0, 0.0, 5.0))]);
     assert!(
         handles(&t, e).hovered.is_empty(),
         "no handles with the trim off"
@@ -305,7 +344,7 @@ fn i24_desktop_turning_the_trim_off_returns_the_gizmo_to_translate() {
     send(&mut t, &[act(e, InstanceAction::SetTrim(off))]);
     send(&mut t, &[act(e, InstanceAction::SetTrim(unit_box()))]);
     // The −x face's handle at (−1, 0, 0): with the gizmo back on translate, no trim drag.
-    send(
+    point(
         &mut t,
         &[
             down(Hand::Mouse, Vec3::new(-1.0, 0.0, 5.0)),
@@ -320,7 +359,7 @@ fn i24_desktop_turning_the_trim_off_returns_the_gizmo_to_translate() {
 fn i24_xr_a_grab_drag_moves_a_face_by_the_point_on_the_ray() {
     let (mut t, e) = setup("i24_xr_face", unit_box());
     // Hovering the handle hovers it, not the instance.
-    send(&mut t, &[down(Hand::Left, Vec3::new(1.0, 0.0, 5.0))]);
+    point(&mut t, &[down(Hand::Left, Vec3::new(1.0, 0.0, 5.0))]);
     assert_eq!(handles(&t, e).hovered, [(Hand::Left, PLUS_X)]);
     assert!(t.app.world().get::<Hovered>(e).is_none());
     send(&mut t, &[grab(Hand::Left)]);
@@ -458,7 +497,7 @@ fn i24_xr_no_instance_grab_during_a_drag_and_no_handles_while_grabbed() {
         &[diagonal(Hand::Right, Vec3::ZERO), grab(Hand::Right)],
     );
     assert!(t.app.world().get::<Grabbed>(e).is_some());
-    send(&mut t, &[down(Hand::Left, Vec3::new(1.0, 0.0, 5.0))]);
+    point(&mut t, &[down(Hand::Left, Vec3::new(1.0, 0.0, 5.0))]);
     assert!(handles(&t, e).hovered.is_empty());
     send(&mut t, &[grab(Hand::Left)]);
     assert!(dragged(&t, e).is_empty());

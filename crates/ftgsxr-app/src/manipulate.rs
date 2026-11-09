@@ -156,12 +156,19 @@ impl Plugin for ManipulatePlugin {
             .add_message::<LibraryCommand>()
             .init_resource::<HandStates>()
             .init_resource::<GizmoState>()
+            .init_resource::<TrimSends>()
             .init_resource::<HighContrast>()
             .add_observer(on_loaded)
             .add_message::<SetPoseExtras>()
             .add_systems(
                 Update,
-                (set_pose_extras, run_intents, step_target_follows_selection).chain(),
+                (
+                    set_pose_extras,
+                    run_intents,
+                    send_trim_drags,
+                    step_target_follows_selection,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -336,6 +343,21 @@ struct HandStates {
     grabs: HashMap<Entity, (Grabbed, Option<(Hand, Hand)>)>,
     /// E18's drags under way, one per hand at most, in the order they began.
     trim_drags: Vec<TrimDrag>,
+    /// The trim last sent for each dragged instance, so an unchanged shape is not sent
+    /// again while the `SetTrim` is on its way.
+    trim_sent: HashMap<Entity, Trim>,
+}
+
+/// The `SetTrim` intents a frame's drags send (E18), written by `send_trim_drags`:
+/// `run_intents` reads the intents, so it cannot write them too.
+#[derive(Resource, Default)]
+struct TrimSends(Vec<Intent>);
+
+/// Writes the frame's `SetTrim` intents of E18's drags.
+fn send_trim_drags(mut sends: ResMut<TrimSends>, mut intents: MessageWriter<Intent>) {
+    for i in sends.0.drain(..) {
+        intents.write(i);
+    }
 }
 
 impl HandStates {
@@ -729,7 +751,7 @@ fn trim_of(now: &HashMap<Entity, Trim>, trims: &Query<&SplatTrim>, e: Entity) ->
 }
 
 /// The instance whose trim handles a hand may touch (E18, §1.7): the selected one, while
-/// its trim is on and it is not grabbed, the mouse only in the trim gizmo mode; with its
+/// its trim is on and it is not grabbed, the mouse only in the gizmo's trim mode; with its
 /// trim and stage pose.
 #[allow(clippy::too_many_arguments)]
 fn trim_target(
@@ -780,12 +802,14 @@ fn begin_trim_drag(
     let Some(ray) = hs.hands.get(&hand).and_then(|h| h.ray) else {
         return false;
     };
+    // L's eye: the head, else the ray's origin. Q-378
     let Some(size) = trim_handles::handle_size(&trim, &pose, eye.unwrap_or(ray.0)) else {
         return false;
     };
     let Some((handle, t0)) = trim_handles::handle_hit(&trim, &pose, size, ray, max_m) else {
         return false;
     };
+    // A handle another hand drags is the handles' action: no pick, no grab. Q-378
     if hs
         .trim_drags
         .iter()
@@ -839,6 +863,7 @@ fn run_intents(
     time: Res<Time>,
     mut library: MessageWriter<LibraryCommand>,
     touched: Query<(Entity, &TrimHandles)>,
+    mut sends: ResMut<TrimSends>,
     mut commands: Commands,
 ) {
     let s = *settings;
@@ -1083,10 +1108,13 @@ fn run_intents(
                 {
                     continue;
                 }
+                // E18: a gizmo mode change ends the mouse's drag; the same mode again is
+                // no change.
+                if mode != gizmo.mode {
+                    hs.end_trim_drag(Hand::Mouse);
+                }
                 gizmo.mode = mode;
                 gizmo.drag = None;
-                // E18: a gizmo mode change ends the mouse's drag.
-                hs.end_trim_drag(Hand::Mouse);
             }
             Intent::Nudge { instance, delta } => {
                 if let Some(mut p) = stage_pose(&q, &groups, instance) {
@@ -1235,7 +1263,7 @@ fn run_intents(
             commands.entity(e).insert(Selected);
         }
     }
-    // §1.7: the trim gizmo mode returns to translate when the selected instance's trim
+    // §1.7: the gizmo's trim mode returns to translate when the selected instance's trim
     // is off (Q-378).
     // Q-378
     let sel_trim_on = |now: &HashMap<Entity, Trim>, e: Entity| {
@@ -1248,7 +1276,7 @@ fn run_intents(
         gizmo.mode = GizmoMode::Translate;
     }
     // E18's ends: deselected or gone, the trim turned off, reset or switched between box
-    // and sphere, the instance grabbed, and the mouse's out of the trim gizmo mode.
+    // and sphere, the instance grabbed, and the mouse's out of the gizmo's trim mode.
     let mode = gizmo.mode;
     hs.trim_drags.retain(|d| {
         sel == Some(d.entity)
@@ -1256,7 +1284,8 @@ fn run_intents(
             && (d.hand != Hand::Mouse || mode == GizmoMode::Trim)
     });
     // E18's drags: each drag point from its hand's last ray under the current pose, then
-    // each dragged instance's trim, sent as `SetTrim` would (Q-374, Q-378).
+    // each dragged instance's trim, sent as `InstanceAction::SetTrim` when it changes;
+    // `send_trim_drags` writes it after this system, and the next frame applies it.
     let rays: HashMap<Hand, (Vec3, Vec3)> = hs
         .hands
         .iter()
@@ -1276,14 +1305,23 @@ fn run_intents(
     let mut dragged: Vec<Entity> = hs.trim_drags.iter().map(|d| d.entity).collect();
     dragged.sort_unstable();
     dragged.dedup();
+    hs.trim_sent.retain(|e, _| dragged.contains(e));
     for e in dragged {
         let drags: Vec<&TrimDrag> = hs.trim_drags.iter().filter(|d| d.entity == e).collect();
-        if let Some(t) = trim_handles::dragged_trim(&drags)
-            && t.is_valid()
-            && trim_of(&trim_now, &trims, e) != Some(t)
-        {
-            commands.entity(e).insert(SplatTrim(t));
-            trim_now.insert(e, t);
+        let Some(t) = trim_handles::dragged_trim(&drags) else {
+            continue;
+        };
+        let sent = hs
+            .trim_sent
+            .get(&e)
+            .copied()
+            .or(trim_of(&trim_now, &trims, e));
+        if t.is_valid() && sent != Some(t) {
+            sends.0.push(Intent::Instance {
+                instance: e,
+                action: InstanceAction::SetTrim(t),
+            });
+            hs.trim_sent.insert(e, t);
         }
     }
     // Hovered: recomputed each frame from that frame's `Pointer` intents, each hand's
@@ -1306,7 +1344,7 @@ fn run_intents(
             continue;
         };
         // A dragging hand hovers nothing; a hand over a trim handle hovers the handle,
-        // not the instance (E18).
+        // not the instance (E18). `pointed` is in hand order, so `hovered` is. Q-378
         if hs.trim_drag(hand).is_some() {
             continue;
         }
@@ -1572,7 +1610,7 @@ type TrimHandleItem = (
 
 /// E18's handles of the selected instance while its trim is on and it is not grabbed:
 /// spheres of radius 0.1 L in the trim's color, the hovered or dragged ones in the hover
-/// color; on the desktop only in the trim gizmo mode, in XR whatever the mode.
+/// color; on the desktop only in the gizmo's trim mode, in XR whatever the mode.
 // Q-378
 fn draw_trim_handles(
     mut gizmos: Gizmos<TrimHandleGizmos>,
