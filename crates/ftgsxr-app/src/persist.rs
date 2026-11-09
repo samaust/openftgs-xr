@@ -545,7 +545,8 @@ fn fit_to_sync(
 /// UI's, which confirms and sends `PersistCommand::LoadScene`. The overlay toggles (Appendix D.1 B, V; the Display tab): an overlay
 /// is a `[display.overlays]` setting, flipped here and mapped onto every instance by
 /// `sync_settings` (Q-207). `Toggle(Feature::Occlusion)` flips `[environment] occlusion`
-/// (Q-336); `Toggle(Feature::Lighting)` turns `lighting_mode` off and back (Q-391);
+/// (Q-336); `Toggle(Feature::Lighting)` turns `lighting_mode` off and back, clearing
+/// `lighting_reference` when an auto mode comes back (Q-391);
 /// `Toggle(Feature::Passthrough)` is the XR crate's (Q-335).
 // Q-336, Q-391
 fn run_intents(
@@ -577,7 +578,8 @@ fn run_intents(
                 let e = &mut settings.0.environment;
                 e.occlusion = !e.occlusion;
             }
-            // Q-391: off when it is not, else the mode last set (manual when none).
+            // Q-391: off when it is not, else the mode last set (manual when none), an auto
+            // mode restored clearing `lighting_reference`.
             Intent::Toggle(Feature::Lighting) => {
                 let e = &mut settings.0.environment;
                 if e.lighting_mode != "off" {
@@ -585,6 +587,11 @@ fn run_intents(
                     e.lighting_mode = "off".into();
                 } else {
                     e.lighting_mode = last_lighting.clone().unwrap_or_else(|| "manual".into());
+                    // §1.9: an auto mode restored is enabled, so its reference is captured
+                    // anew (owner, 2026-11-09).
+                    if e.lighting_mode.starts_with("auto") {
+                        e.lighting_reference = None;
+                    }
                 }
             }
             _ => {}
