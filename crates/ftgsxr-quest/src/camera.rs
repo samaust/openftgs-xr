@@ -6,7 +6,8 @@
 //! texts (Q-392). Built on the host for its tests, as `tree` is.
 
 use bevy::math::{Quat, Vec3};
-use ftgsxr_app::{Camera, CameraThumb, Fov};
+use ftgsxr_app::{Camera, CameraThumb, Fov, Permission};
+use ftgsxr_xr::XrError;
 
 /// The thumbnail's size (§1.9, §2.5: 64 × 48 RGB, 9216 floats).
 pub(crate) const WIDTH: u32 = 64;
@@ -94,18 +95,28 @@ pub(crate) fn thumb(parsed: Parsed, head_position: Vec3, head_rotation: Quat) ->
     }
 }
 
+/// `CameraFrames::start`'s error when the camera did not open, with its `cause`.
+pub(crate) fn not_opened(cause: impl std::fmt::Display) -> String {
+    format!("the passthrough camera could not be opened: {cause}")
+}
+
 /// `startCamera`'s code as `CameraFrames::start`'s result (Q-392): 0 opening; 1 and 2
 /// begin with §1.15's codes; 3 (or an unknown code) is the open's failure, with no code.
 // Q-392
 pub(crate) fn start_result(code: i32) -> Result<(), String> {
     match code {
         0 => Ok(()),
-        1 => Err("E-XR-UNSUPPORTED: no passthrough camera".into()),
-        2 => Err("E-XR-PERMISSION: the camera permissions are not granted".into()),
-        _ => Err(format!(
-            "the passthrough camera could not be opened: code {code}, the shim's log has the \
-             cause"
+        1 => Err(format!(
+            "{}: no passthrough camera",
+            XrError::Unsupported("").code()
         )),
+        2 => Err(format!(
+            "{}: the camera permissions are not granted",
+            XrError::Permission(Permission::Camera).code()
+        )),
+        _ => Err(not_opened(format!(
+            "code {code}, the shim's log has the cause"
+        ))),
     }
 }
 
