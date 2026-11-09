@@ -340,7 +340,10 @@ object Shim {
     private fun isLeftPassthrough(c: CameraCharacteristics): Boolean =
         vendorInt(c, CAMERA_SOURCE) == 0 && vendorInt(c, CAMERA_POSITION) == 0
 
-    /** A vendor tag as an integer: the Quest 3 stores these as one byte. */
+    /**
+     * A vendor tag as an integer: the Quest 3 stores these as one byte (observed on the
+     * owner's Quest 3 with `adb shell dumpsys media.camera`, 2026-11-09, #667).
+     */
     private fun vendorInt(c: CameraCharacteristics, name: String): Int? {
         try {
             c.get(CameraCharacteristics.Key(name, Byte::class.javaObjectType))?.let { return it.toInt() }
@@ -357,8 +360,9 @@ object Shim {
     /**
      * The lens pose relative to the headset in OpenXR's axes and the stream's field of
      * view, 11 floats, or null without the characteristics. `LENS_POSE_ROTATION` rotates
-     * Android's sensor axes (x right, y up, z back on the Quest 3: OpenXR's) into the
-     * camera's (x along the long side, y down the short side, z along the optical axis);
+     * Android's sensor axes (x right, y up, z back on the Quest 3: OpenXR's, as observed
+     * on the owner's Quest 3 with `adb shell dumpsys media.camera`, 2026-11-09, #667)
+     * into the camera's (x along the long side, y down the short side, z along the optical axis);
      * the camera's orientation looking along −z with y up is its inverse turned by π about
      * x. The intrinsics are in the pre-correction array's pixels; the 1280 × 960 stream is
      * that array's centred crop to 4:3 (`SCALER_CROP_REGION`), against which the four
@@ -526,7 +530,7 @@ object Shim {
                 val y = ySums[bx] / (BLOCK * BLOCK * 255f)
                 val cb = uSums[bx] / (half * half * 255f) - 0.5f
                 val cr = vSums[bx] / (half * half * 255f) - 0.5f
-                // BT.709, full range: R = Y + 1.5748 Cr, G = Y − 0.1873 Cb − 0.4681 Cr,
+                // BT.709, full range: R = Y + 1.5748 Cr, G = Y − 0.18732 Cb − 0.46812 Cr,
                 // B = Y + 1.8556 Cb.
                 val i = (by * THUMB_WIDTH + bx) * 3
                 out[i] = (y + 1.5748f * cr).coerceIn(0f, 1f)

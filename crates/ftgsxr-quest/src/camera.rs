@@ -66,8 +66,10 @@ pub(crate) fn parse(array: &[f32]) -> Result<Parsed, String> {
 // Q-387
 pub(crate) fn thumb(parsed: Parsed, head_position: Vec3, head_rotation: Quat) -> CameraThumb {
     // The head pose is the frame's, not the capture's (20–40 ms earlier, E.2), and the
-    // lens's origin is the headset's gyroscope (`LENS_POSE_REFERENCE` on the Quest 3), not
-    // the views' midpoint: both errors are centimetres against E14's Δ = 0.5 m (Q-387).
+    // lens's origin is the headset's gyroscope (`LENS_POSE_REFERENCE` on the Quest 3, as
+    // observed on the owner's Quest 3 with `adb shell dumpsys media.camera`, 2026-11-09,
+    // #667), not the views' midpoint: both errors are centimetres against E14's Δ = 0.5 m
+    // (Q-387).
     let camera = parsed.lens.map(|lens| {
         let [left, right, up, down] = lens.fov;
         Camera::from_stage_pose(
