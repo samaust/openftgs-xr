@@ -772,6 +772,10 @@ _Avoid_: baseline, calibration, white point
 The 64 × 48 RGB reduction of one passthrough camera frame the shim hands the player, with its timestamp and, when known, the camera's pose and field of view. §1.9, §2.5, D-15
 _Avoid_: camera frame (the full image), preview, snapshot
 
+**Light warm-up**:
+The span after each start of the passthrough camera while its auto-exposure settles, during which no lighting reference is captured and an auto mode's gains are not in force; measured in the thumbnails' own time, not the wall clock. E14, §1.9, Q-385
+_Avoid_: warm-up (unqualified; the active SH degree's rise is sometimes called the SH warm-up), settling time, auto-exposure lock (the camera's own exposure control)
+
 **Depth band**:
 The thumbnail pixels whose environment depth lies within Δ of an instance's distance from the eye, the region auto local estimates over. The instance is the "per instance" target while one is set, whatever is selected, and otherwise the selected instance. E14, §1.9
 _Avoid_: depth slice, depth mask (the implementation's array), region of interest
