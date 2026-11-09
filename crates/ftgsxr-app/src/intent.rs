@@ -251,6 +251,8 @@ pub enum GizmoMode {
     Rotate,
     /// The uniform-scale cube.
     Scale,
+    /// E18's trim handles, while the selected instance's trim is on.
+    Trim,
 }
 
 /// An overlay (§1.4).

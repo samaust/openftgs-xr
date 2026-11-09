@@ -55,6 +55,7 @@ mod i19_pick;
 mod i20_drop;
 mod i21_net_index;
 mod i23_trim;
+mod i24_trim_handles;
 mod keymap_names;
 mod library_first_run;
 mod library_refresh;

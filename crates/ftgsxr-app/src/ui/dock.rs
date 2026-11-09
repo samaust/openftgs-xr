@@ -348,8 +348,8 @@ fn show_dock_panel<R>(
 /// The scroll area of a tab body, the dock's and the main panel's: both ways, so a row
 /// wider than the surface is reached by the horizontal bar, and as wide as the surface,
 /// so the vertical bar stays at its right edge, where a vertical-only area would put it
-/// at its content's, past the clip (Q-376, Q-378).
-// Q-376, Q-378
+/// at its content's, past the clip (Q-376, Q-380).
+// Q-376, Q-380
 pub(super) fn tab_scroll_area() -> egui::ScrollArea {
     egui::ScrollArea::both().auto_shrink([false, true])
 }

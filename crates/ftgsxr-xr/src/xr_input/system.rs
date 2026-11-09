@@ -22,10 +22,11 @@ use bevy_mod_openxr::openxr_session_running;
 use bevy_mod_openxr::session::OxrSession;
 use ftgsxr_app::{
     Grabbed, Hand, Hovered, Intent, LoadedModel, Locomotion, ManipulateSettings, PanelPointer,
-    PlayUiSound, Selected, SettingsRes, UiSound, panel_hit, pick_instance, stick_response,
+    PlayUiSound, Selected, SettingsRes, TrimHandles, UiSound, panel_hit, pick_instance,
+    stick_response,
 };
-use ftgsxr_core::{Aabb, Pose, ray_hit};
-use ftgsxr_render::{Colormap, RenderMode, SplatBounds, SplatMode};
+use ftgsxr_core::{Aabb, Pose, TrimHandle, ray_hit};
+use ftgsxr_render::{Colormap, RenderMode, SplatBounds, SplatMode, SplatTrim};
 
 use super::{SIDES, XrInputConfig, XrInputState, aim_ray, hands_to_intents};
 use crate::XrError;
@@ -202,6 +203,15 @@ pub(crate) fn teleport_arc(aim: &Pose) -> Option<Vec<Vec3>> {
     Some(points)
 }
 
+/// A transform as a pose, the scale from x.
+fn pose_of(t: &Transform) -> Pose {
+    Pose {
+        translation: t.translation,
+        rotation: t.rotation,
+        scale: t.scale.x,
+    }
+}
+
 /// Every instance's (entity, stage pose, B_m) for E10, as `manipulate` picks them: its
 /// pose relative to the content group followed by the group's (§1.14), the scale from
 /// x, B_m its `SplatBounds`, trimmed while a trim is on (E17); an instance whose boxes are
@@ -210,11 +220,7 @@ fn instance_boxes(
     instances: &Query<(Entity, &Transform, &SplatBounds, Option<&ChildOf>), With<LoadedModel>>,
     groups: &Query<&Transform, Without<LoadedModel>>,
 ) -> Vec<(Entity, Pose, Aabb)> {
-    let pose = |t: &Transform| Pose {
-        translation: t.translation,
-        rotation: t.rotation,
-        scale: t.scale.x,
-    };
+    let pose = pose_of;
     instances
         .iter()
         .map(|(e, t, b, parent)| {
@@ -239,6 +245,18 @@ fn holding(grabbed: &Query<&Grabbed>) -> Vec<Hand> {
     out
 }
 
+/// The hands that drag a trim handle (`TrimHandles`): like a holding hand, a panel never
+/// takes their ray or presses, so the release that ends the drag reaches `manipulate`
+/// (E18), and their stick does nothing (E18: "another action on that hand during a drag
+/// does nothing").
+// Q-379
+fn dragging(handles: &Query<&TrimHandles>) -> Vec<Hand> {
+    handles
+        .iter()
+        .flat_map(|t| t.dragged.iter().map(|(h, _)| *h))
+        .collect()
+}
+
 /// One frame of input: the arbitration (Q-263), `hands_to_intents`, the teleport
 /// (Q-269), and the frame's record for the drawing.
 // Q-263, Q-269, Q-303, Q-304
@@ -250,6 +268,7 @@ fn write_intents(
     time: Option<Res<Time>>,
     selected: Query<(Entity, Option<&SplatMode>), With<Selected>>,
     grabbed: Query<&Grabbed>,
+    trim_handles: Query<&TrimHandles>,
     instances: Query<(Entity, &Transform, &SplatBounds, Option<&ChildOf>), With<LoadedModel>>,
     groups: Query<&Transform, Without<LoadedModel>>,
     manipulate: Option<Res<ManipulateSettings>>,
@@ -272,6 +291,7 @@ fn write_intents(
     });
     state.input.set_selected(sel);
     let held = holding(&grabbed);
+    let drags = dragging(&trim_handles);
     let quads: Vec<(Entity, Pose, PanelQuad)> = quads
         .iter()
         .filter(|(.., v)| v.is_none_or(|v| v.get()))
@@ -309,7 +329,10 @@ fn write_intents(
             continue;
         }
         let (origin, dir) = aim_ray(&t.aim);
-        let hit = if held.contains(&side) {
+        if drags.contains(&side) {
+            t.stick = Vec2::ZERO;
+        }
+        let hit = if held.contains(&side) || drags.contains(&side) {
             None
         } else {
             // Q-317 (#550): an instance whose box holds the ray's origin (E10's t_in ≤ 0,
@@ -471,25 +494,60 @@ fn colors(high_contrast: bool) -> (Color, Color) {
 /// Each ray's end at the hit of the target that took it: the quad's hit when a quad
 /// took the ray (Q-263, Q-317), otherwise the hand's own E10 hit on the instances'
 /// boxes as they stand after this frame's grabs, whichever hand holds the instance's
-/// `Hovered` (Q-182); else 10 m, a dot only at a hit (§1.8 Rays, Q-304, #552).
-// Q-304
+/// `Hovered` (Q-182); a trim handle the hand hovers or drags comes first, the ray
+/// ending at the handle point's projection on it (E18, Q-379); else 10 m, a dot only at
+/// a hit (§1.8 Rays, Q-304, #552).
+// Q-304, Q-379
 fn ray_ends(
     mut frame: ResMut<Frame>,
     instances: Query<(Entity, &Transform, &SplatBounds, Option<&ChildOf>), With<LoadedModel>>,
+    touched: Query<(&Transform, &SplatTrim, &TrimHandles, Option<&ChildOf>)>,
     groups: Query<&Transform, Without<LoadedModel>>,
     manipulate: Option<Res<ManipulateSettings>>,
 ) {
     let boxes = instance_boxes(&instances, &groups);
     let ray_max_m = manipulate.map_or(RAY_M, |m| m.ray_max_m);
+    let handle_hit = |hand: Hand, origin: Vec3, dir: Vec3| -> Option<f32> {
+        let mut best: Option<f32> = None;
+        for (t, trim, th, parent) in &touched {
+            let group = parent
+                .and_then(|c| groups.get(c.parent()).ok())
+                .map_or(Pose::IDENTITY, pose_of);
+            let at = pose_of(t).then(&group);
+            let mine = th
+                .hovered
+                .iter()
+                .chain(&th.dragged)
+                .filter(|(h, _)| *h == hand);
+            for (_, k) in mine {
+                let Some(p) = trim
+                    .0
+                    .handles()
+                    .into_iter()
+                    .find_map(|(h, p)| (h == *k).then_some(p))
+                else {
+                    continue;
+                };
+                let d = (at.transform_point(p) - origin).dot(dir).max(0.0);
+                if best.is_none_or(|b| d < b) {
+                    best = Some(d);
+                }
+            }
+        }
+        best
+    };
     let rays = frame.rays;
-    frame.ends = rays.map(|slot| {
-        slot.map(|r| {
+    let mut ends = [None, None];
+    for (i, slot) in rays.into_iter().enumerate() {
+        ends[i] = slot.map(|r| {
             let hit = r
                 .panel
+                .or_else(|| handle_hit(SIDES[i], r.origin, r.dir))
                 .or_else(|| pick_instance(r.origin, r.dir, &boxes, ray_max_m).map(|(_, t)| t));
             (r.origin + r.dir * hit.unwrap_or(RAY_M), hit.is_some())
-        })
-    });
+        });
+    }
+    frame.ends = ends;
 }
 
 /// The rays to their ends (`ray_ends`) with a dot at a hit, and the teleport arc
@@ -513,11 +571,14 @@ fn draw(frame: Res<Frame>, settings: Option<Res<SettingsRes>>, mut gizmos: Gizmo
 }
 
 /// What the haptics compare frame to frame: each hovered instance with its hand, each
-/// grabbed instance with the hands holding it.
+/// grabbed instance with the hands holding it, and E18's trim handles each hand hovers
+/// or drags (`TrimHandles`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Touches {
     pub(crate) hovered: Vec<(Entity, Hand)>,
     pub(crate) grabbed: Vec<(Entity, Vec<Hand>)>,
+    pub(crate) handles_hovered: Vec<(Entity, Hand, TrimHandle)>,
+    pub(crate) handles_dragged: Vec<(Entity, Hand, TrimHandle)>,
 }
 
 /// A start or an end of the main panel's grab by its title bar (§1.8: "Grabbing a UI
@@ -597,6 +658,22 @@ pub(crate) fn select_pulses(
             }
         }
     }
+    // E18: a handle drag gives the hover and grab pulses (§1.8). Q-379
+    for t in &now.handles_hovered {
+        if !prev.handles_hovered.contains(t) {
+            add(t.1, HOVER);
+        }
+    }
+    for t in &now.handles_dragged {
+        if !prev.handles_dragged.contains(t) {
+            add(t.1, GRAB);
+        }
+    }
+    for t in &prev.handles_dragged {
+        if !now.handles_dragged.contains(t) {
+            add(t.1, GRAB);
+        }
+    }
     for &hand in panel_grabs {
         add(hand, GRAB);
     }
@@ -620,6 +697,7 @@ fn haptics(
     hands: Res<XrHands>,
     hovered: Query<(Entity, &Hovered)>,
     grabbed: Query<(Entity, &Grabbed)>,
+    handles: Query<(Entity, &TrimHandles)>,
     mut intents: MessageReader<Intent>,
     mut pointers: MessageReader<PanelPointer>,
     mut sounds: MessageReader<PlayUiSound>,
@@ -638,6 +716,14 @@ fn haptics(
                 };
                 (e, hands)
             })
+            .collect(),
+        handles_hovered: handles
+            .iter()
+            .flat_map(|(e, t)| t.hovered.iter().map(move |&(h, k)| (e, h, k)))
+            .collect(),
+        handles_dragged: handles
+            .iter()
+            .flat_map(|(e, t)| t.dragged.iter().map(move |&(h, k)| (e, h, k)))
             .collect(),
     };
     let snap_turned = intents
@@ -754,6 +840,39 @@ mod tests {
         Entity::from_raw_u32(n).unwrap()
     }
 
+    /// Q-379 (E18, §1.8): a trim handle's hover gives the hover pulse on its hand, a
+    /// drag's start and end the grab pulse.
+    #[test]
+    fn select_pulses_trim_handles_hover_and_drag() {
+        let face = TrimHandle::Face {
+            axis: 1,
+            max: false,
+        };
+        let none = Touches::default();
+        let hover = Touches {
+            handles_hovered: vec![(e(3), Hand::Left, face)],
+            ..Touches::default()
+        };
+        let drag = Touches {
+            handles_dragged: vec![(e(3), Hand::Left, face)],
+            ..Touches::default()
+        };
+        assert_eq!(
+            select_pulses(&none, &hover, false, &[], &[], false),
+            [(Hand::Left, HOVER)]
+        );
+        assert!(select_pulses(&hover, &hover, false, &[], &[], false).is_empty());
+        assert_eq!(
+            select_pulses(&hover, &drag, false, &[], &[], false),
+            [(Hand::Left, GRAB)]
+        );
+        assert!(select_pulses(&drag, &drag, false, &[], &[], false).is_empty());
+        assert_eq!(
+            select_pulses(&drag, &none, false, &[], &[], false),
+            [(Hand::Left, GRAB)]
+        );
+    }
+
     /// Q-270, D-44: which hand and which pulse each of a frame's events gives.
     #[test]
     fn select_pulses_hover_grab_snap_and_click() {
@@ -834,6 +953,7 @@ mod tests {
         let both = Touches {
             hovered: vec![(e(2), Hand::Left)],
             grabbed: vec![(e(2), vec![Hand::Left])],
+            ..Touches::default()
         };
         assert_eq!(
             select_pulses(&none, &both, false, &[Hand::Left], &[], false),

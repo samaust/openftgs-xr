@@ -59,4 +59,5 @@ mod u36_scene_manifest;
 mod u38_model_bounds;
 mod u39_trim;
 mod u40_trimmed_bounds;
+mod u42_trim_handles;
 mod write_exchange;
