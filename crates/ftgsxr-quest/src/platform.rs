@@ -214,6 +214,17 @@ impl CameraFrames for QuestPlatform {
             Ok(None) => {}
             Ok(Some(array)) => match camera::parse(&array) {
                 Ok(parsed) => {
+                    // The first thumbnail since a start logs the converted lens beside the
+                    // shim's raw line (Q-386), for a device run to compare.
+                    if thumb.is_none() {
+                        match &parsed.lens {
+                            Some(l) => info!(
+                                "camera lens: position {} rotation {} fov {:?}",
+                                l.position, l.rotation, l.fov
+                            ),
+                            None => info!("camera lens: unknown"),
+                        }
+                    }
                     let (position, rotation) = *lock(&self.inner.head);
                     *thumb = Some(camera::thumb(parsed, position, rotation));
                 }

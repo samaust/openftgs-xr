@@ -245,7 +245,7 @@ object Shim {
     private var cameraDevice: CameraDevice? = null
     private var cameraSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
-    /** The lens pose and field of view (11 floats), or null when the characteristics lack them. */
+    /** The raw lens characteristics (17 floats, Q-386), or null when the characteristics lack them. */
     private var cameraLens: FloatArray? = null
     private var dataSpaceLogged = false
     /** Set while a frame is being reduced: a frame arriving meanwhile is dropped. */
@@ -276,7 +276,7 @@ object Shim {
             } ?: return 1
             val chars = manager.getCameraCharacteristics(id)
             cameraLens = lens(chars)
-            Log.i(TAG, "passthrough camera $id, lens ${cameraLens?.joinToString(",") ?: "unknown"}")
+            Log.i(TAG, "passthrough camera $id, raw lens ${cameraLens?.joinToString(",") ?: "unknown"}")
             val thread = HandlerThread("ftgsxr-camera").also { it.start() }
             val handler = Handler(thread.looper)
             cameraThread = thread
@@ -358,15 +358,12 @@ object Shim {
     }
 
     /**
-     * The lens pose relative to the headset in OpenXR's axes and the stream's field of
-     * view, 11 floats, or null without the characteristics. `LENS_POSE_ROTATION` rotates
-     * Android's sensor axes (x right, y up, z back on the Quest 3: OpenXR's, as observed
-     * on the owner's Quest 3 with `adb shell dumpsys media.camera`, 2026-11-09, #667)
-     * into the camera's (x along the long side, y down the short side, z along the optical axis);
-     * the camera's orientation looking along −z with y up is its inverse turned by π about
-     * x. The intrinsics are in the pre-correction array's pixels; the 1280 × 960 stream is
-     * that array's centred crop to 4:3 (`SCALER_CROP_REGION`), against which the four
-     * angles are taken.
+     * The camera's raw lens characteristics, 17 floats (Q-386), or null without them:
+     * `LENS_POSE_TRANSLATION` (3), `LENS_POSE_ROTATION` (4, x, y, z, w), the first four
+     * values of `LENS_INTRINSIC_CALIBRATION` (fx, fy, cx, cy; the skew is dropped),
+     * `SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE` (left, top, right, bottom) and the
+     * stream's size. Rust converts them to the pose in OpenXR's axes and the field of view
+     * (D-15: the mathematics stays in Rust).
      */
     private fun lens(c: CameraCharacteristics): FloatArray? {
         val t = c.get(CameraCharacteristics.LENS_POSE_TRANSLATION) ?: return null
@@ -374,25 +371,11 @@ object Shim {
         val k = c.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION) ?: return null
         val array = c.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
             ?: return null
-        if (t.size < 3 || q.size < 4 || k.size < 4 || k[0] <= 0f || k[1] <= 0f) return null
-        // conj(q) ⊗ (1, 0, 0, 0), as (x, y, z, w).
-        val (qx, qy, qz, qw) = listOf(-q[0], -q[1], -q[2], q[3])
-        val rx = qw
-        val ry = qz
-        val rz = -qy
-        val rw = -qx
-        val w = array.width().toFloat()
-        val h = array.height().toFloat()
-        val aspect = CAMERA_WIDTH.toFloat() / CAMERA_HEIGHT
-        val cw = minOf(w, h * aspect)
-        val ch = minOf(h, w / aspect)
-        val ox = (w - cw) / 2f
-        val oy = (h - ch) / 2f
-        val (fx, fy, cx, cy) = listOf(k[0], k[1], k[2] - ox, k[3] - oy)
+        if (t.size < 3 || q.size < 4 || k.size < 4) return null
         return floatArrayOf(
-            t[0], t[1], t[2], rx, ry, rz, rw,
-            -kotlin.math.atan(cx / fx), kotlin.math.atan((cw - cx) / fx),
-            kotlin.math.atan(cy / fy), -kotlin.math.atan((ch - cy) / fy),
+            t[0], t[1], t[2], q[0], q[1], q[2], q[3], k[0], k[1], k[2], k[3],
+            array.left.toFloat(), array.top.toFloat(), array.right.toFloat(), array.bottom.toFloat(),
+            CAMERA_WIDTH.toFloat(), CAMERA_HEIGHT.toFloat(),
         )
     }
 
@@ -471,7 +454,7 @@ object Shim {
     /**
      * The 64 × 48 thumbnail: the mean of each 20 × 20 Y block and its 10 × 10 Cb and Cr
      * blocks, through BT.709's full-range matrix to RGB in [0, 1]; then the timestamp as
-     * whole seconds and fraction, and the lens's 11 floats when known (Q-386).
+     * whole seconds and fraction, and the lens's 17 raw floats when known (Q-386).
      */
     private fun reduce(image: Image): FloatArray {
         val planes = image.planes
