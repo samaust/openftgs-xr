@@ -184,6 +184,12 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
         .map(|t| t.tier.name.clone());
     // §1.9 Light estimation: the reason only manual mode is offered (Q-384).
     let headset = world.contains_resource::<Headset>();
+    // Q-388: auto local's band needs a selected instance.
+    let selected = world
+        .query_filtered::<(), With<Selected>>()
+        .iter(world)
+        .next()
+        .is_some();
     let mut light = world.get_resource::<Lighting>().copied();
     let mut ask_camera = false;
     let mut toggles = Vec::new();
@@ -253,7 +259,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
             ui.checkbox(&mut e.hand_removal, "hand removal");
         }
         ui.separator();
-        ask_camera = lighting_controls(ui, s, &features, headset, light.as_mut());
+        ask_camera = lighting_controls(ui, s, &features, headset, selected, light.as_mut());
     });
     if let Some(l) = light
         && world.get_resource::<Lighting>().is_some_and(|w| *w != l)
@@ -274,8 +280,9 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// The Environment tab's lighting controls (§1.9 Light estimation and color matching):
 /// the mode, offering the auto modes only where the camera is `Available` and otherwise
 /// showing an auto setting as manual, kept, and the reason whatever the setting (Q-384); picking an auto mode
-/// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion"
-/// beside auto local without occlusion's depth (Q-388); the manual sliders, the strength
+/// or "re-capture reference" clears `lighting_reference` (Q-385); "local needs occlusion
+/// and a selected instance" beside auto local without occlusion's depth or without a
+/// selected instance (Q-388); the manual sliders, the strength
 /// γ, the current gains and "per instance" (Q-383). True when "Ask again" was pressed
 /// for a denied camera (Q-322).
 // Q-322, Q-383, Q-384, Q-385, Q-388
@@ -284,6 +291,7 @@ fn lighting_controls(
     s: &mut Settings,
     features: &XrFeatures,
     headset: bool,
+    selected: bool,
     light: Option<&mut Lighting>,
 ) -> bool {
     let camera = features.lighting;
@@ -324,8 +332,8 @@ fn lighting_controls(
         _ => {}
     }
     if shown.starts_with("auto") {
-        if shown == "auto-local" && !occlusion_on {
-            ui.label("local needs occlusion");
+        if shown == "auto-local" && !(occlusion_on && selected) {
+            ui.label("local needs occlusion and a selected instance");
         }
         if ui.button("re-capture reference").clicked() {
             e.lighting_reference = None;
@@ -1076,9 +1084,31 @@ mod tests {
             env.lighting_reference, None,
             "an auto pick clears the reference"
         );
-        // Q-388: auto local without occlusion's depth says so.
+        // Q-388: auto local without occlusion's depth, or without a selected instance,
+        // says so.
         let texts = frame(&mut world);
-        assert!(has(&texts, "local needs occlusion"), "{texts:?}");
+        assert!(
+            has(&texts, "local needs occlusion and a selected instance"),
+            "occlusion off: {texts:?}"
+        );
+        world.resource_mut::<SettingsRes>().0.environment.occlusion = true;
+        world.insert_resource(XrFeatures {
+            lighting: FeatureState::Available,
+            occlusion: FeatureState::Available,
+            ..XrFeatures::default()
+        });
+        let texts = frame(&mut world);
+        assert!(
+            has(&texts, "local needs occlusion and a selected instance"),
+            "nothing selected: {texts:?}"
+        );
+        let selected = world.spawn(Selected).id();
+        let texts = frame(&mut world);
+        assert!(
+            !has(&texts, "local needs occlusion and a selected instance"),
+            "occlusion on, an instance selected: {texts:?}"
+        );
+        world.despawn(selected);
         world
             .resource_mut::<SettingsRes>()
             .0
