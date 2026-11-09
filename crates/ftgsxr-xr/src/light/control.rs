@@ -85,15 +85,16 @@ fn warmed_up(warmup: Option<(f64, f64, u32)>) -> bool {
 
 /// Q-385, Q-386: the reference's floor, one code value of the thumbnail's gamma-encoded
 /// full-range values.
-const FLOOR: f32 = 1.0 / 255.0;
+// Q-385, Q-386
+const REFERENCE_FLOOR: f32 = 1.0 / 255.0;
 
-/// Q-385: Ȳ, r̄, ḡ and b̄ all finite and at least [`FLOOR`], so Q-382's ratios against
+/// Q-385: Ȳ, r̄, ḡ and b̄ all finite and at least [`REFERENCE_FLOOR`], so Q-382's ratios against
 /// the estimate as a reference stay off the clamps.
 // Q-382, Q-385, Q-386
 fn passes_floor(e: &LightEstimate) -> bool {
     std::iter::once(e.luma)
         .chain(e.rgb)
-        .all(|v| v.is_finite() && v >= FLOOR)
+        .all(|v| v.is_finite() && v >= REFERENCE_FLOOR)
 }
 
 /// What one frame of the control reads.
@@ -389,17 +390,17 @@ impl Control {
             })
             .filter(passes_floor);
         let estimate = self.smoother.current();
+        let usable = estimate.filter(passes_floor);
         if auto
             && reference.is_none()
             && new
             && warm
-            && let Some(e) = estimate.filter(passes_floor)
+            && let Some(e) = usable
         {
             reference = Some(e);
             out.write_reference = Some([e.luma, e.rgb[0], e.rgb[1], e.rgb[2]]);
         }
-        out.too_dark =
-            auto && reference.is_none() && warm && !estimate.is_some_and(|e| passes_floor(&e));
+        out.too_dark = auto && reference.is_none() && warm && usable.is_none();
         if auto {
             let t = match (i.env_mode, estimate, reference) {
                 (EnvironmentMode::Passthrough, Some(e), Some(r)) if warm => {
