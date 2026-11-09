@@ -180,17 +180,6 @@ impl SplatDevice {
         adapter_info: wgpu::AdapterInfo,
         budget: MemoryBudget,
     ) -> SplatDevice {
-        // Q-377: the limits the SH ranges and the binding refusals are sized against, as
-        // wgpu reports them (the `device` lane checks them against the driver's).
-        let limits = device.limits();
-        info!(
-            "GPU limits: max_storage_buffer_binding_size {}, max_buffer_size {}, \
-             min_storage_buffer_offset_alignment {}, max_storage_buffers_per_shader_stage {}",
-            limits.max_storage_buffer_binding_size,
-            limits.max_buffer_size,
-            limits.min_storage_buffer_offset_alignment,
-            limits.max_storage_buffers_per_shader_stage
-        );
         let messages = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&messages);
         device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
@@ -210,8 +199,20 @@ impl SplatDevice {
         budget: MemoryBudget,
         messages: Arc<Mutex<Vec<String>>>,
     ) -> SplatDevice {
+        // Q-377: the limits the SH ranges and the binding refusals are sized against, as
+        // wgpu reports them (the `device` lane checks them against the driver's), logged by
+        // every constructor, `from_bevy` included (#653).
+        let limits = device.limits();
+        info!(
+            "GPU limits: max_storage_buffer_binding_size {}, max_buffer_size {}, \
+             min_storage_buffer_offset_alignment {}, max_storage_buffers_per_shader_stage {}",
+            limits.max_storage_buffer_binding_size,
+            limits.max_buffer_size,
+            limits.min_storage_buffer_offset_alignment,
+            limits.max_storage_buffers_per_shader_stage
+        );
         SplatDevice {
-            limits: device.limits(),
+            limits,
             features: device.features(),
             device,
             queue,
