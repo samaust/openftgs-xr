@@ -437,10 +437,6 @@ impl Default for Lighting {
     }
 }
 
-/// `SplatTransform`'s one writer: each instance's own E14 manual transform (the identity
-/// without `InstanceLighting`) times the environment's per channel, the environment's
-/// factor going to every instance, or only to the `Selected` one while "per instance" is
-/// set (to none when nothing is selected). Writes only what changed.
 /// An instance as `compose_transforms` reads it.
 type ComposeItem = (
     Entity,
@@ -449,6 +445,10 @@ type ComposeItem = (
     Option<&'static mut SplatTransform>,
 );
 
+/// `SplatTransform`'s one writer: each instance's own E14 manual transform (the identity
+/// without `InstanceLighting`) times the environment's per channel, the environment's
+/// factor going to every instance, or only to the `Selected` one while "per instance" is
+/// set (to none when nothing is selected). Writes only what changed.
 // Q-383
 fn compose_transforms(
     lighting: Res<Lighting>,

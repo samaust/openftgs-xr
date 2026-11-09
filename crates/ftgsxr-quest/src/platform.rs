@@ -88,6 +88,7 @@ impl QuestPlatform {
 
     /// The head's stage pose this frame (`XrHands.head`), under which `latest` places the
     /// next thumbnail's lens (Q-387).
+    // Q-387
     pub(crate) fn set_head(&self, position: Vec3, rotation: Quat) {
         *lock(&self.inner.head) = (position, rotation);
     }

@@ -214,6 +214,7 @@ pub(crate) fn poll_camera_thumb() -> Result<Option<Vec<f32>>, String> {
 }
 
 /// `Shim.stopCamera()`.
+// Q-386
 pub(crate) fn stop_camera() -> Result<(), String> {
     with_shim(|env, class| {
         env.call_static_method(class, "stopCamera", "()V", &[])?;
