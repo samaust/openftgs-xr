@@ -296,11 +296,12 @@ fn u20_exposure_match_counts_only_the_cells_in_the_rectangle() {
         set(matched_exposure_ev(0.0, 0.4, &model, Some(inside))).0,
         1.0,
     );
-    // Over all cells: (400·0.2 + 2672·0.8) / 3072, the rectangle 20 × 20 cells.
-    let all = (400.0 * 0.2 + 2672.0 * 0.8) / 3072.0_f32;
+    // Over all cells, the rectangle 20 × 20 = 400 of 3072: L_model = (400 · 0.2 +
+    // 2672 · 0.8) / 3072 = (80 + 2137.6) / 3072 = 0.721875, and
+    // EV = log₂(0.4 / 0.721875) = log₂(0.554113…) = −0.851749.
     close(
         set(matched_exposure_ev(0.0, 0.4, &model, None)).0,
-        (0.4 / all).log2(),
+        -0.851_749,
     );
 }
 
