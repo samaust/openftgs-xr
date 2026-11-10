@@ -5,11 +5,13 @@
 
 mod band;
 mod control;
+mod exposure;
 // Dv-11's device side (Q-390, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 mod dv11;
 
 pub(crate) use control::LightPlugin;
+pub use exposure::{ExposureMatch, linear_luma, matched_exposure_ev};
 
 use bevy::math::Vec3;
 use ftgsxr_app::{CameraThumb, FeatureState};

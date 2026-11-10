@@ -32,10 +32,11 @@ pub use ftgsxr_render::Foveation;
 pub use error::XrError;
 // §2.1 `LightingMode`, `LightEstimate`, `light_gains`, `manual_gains`, `grey_world_gains`
 // (E14, D-38, #666); Q-382: `LightEstimate::from_thumb`, `band_mask`, `LightSmoother`,
-// `LightingMode::from_settings`.
+// `LightingMode::from_settings`. §2.1 `linear_luma`, `ExposureMatch`, `matched_exposure_ev`
+// (E14's exposure match, #711).
 pub use light::{
-    LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains, light_gains,
-    manual_gains,
+    ExposureMatch, LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains,
+    light_gains, linear_luma, manual_gains, matched_exposure_ev,
 };
 // §2.1 `MainPanel`, `PanelFollow` (#462); Q-265, Q-305: the placement functions.
 pub use panel::{MainPanel, PanelFollow, summon_pose, wrist_menu_pose, wrist_menu_visible};
