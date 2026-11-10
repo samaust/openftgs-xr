@@ -50,7 +50,8 @@ pub(crate) struct ProbeTarget(pub(crate) Option<Handle<ShaderBuffer>>);
 pub(crate) fn request(
     probe: Option<Res<LayerProbe>>,
     mut rb: ResMut<ProbeReadback>,
-    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    // Absent without Bevy's render plugin (a headless `App`): no request is answered.
+    buffers: Option<ResMut<Assets<ShaderBuffer>>>,
     mut commands: Commands,
 ) {
     if let Some((entity, _, frames)) = rb.pending.as_mut() {
@@ -65,9 +66,9 @@ pub(crate) fn request(
         }
         return;
     }
-    if !probe.is_some_and(|p| p.request) {
+    let (true, Some(mut buffers)) = (probe.is_some_and(|p| p.request), buffers) else {
         return;
-    }
+    };
     // Zeros: without the probe's mark, a copy the probe did not write is told apart.
     let buffer = buffers.add(ShaderBuffer::new(
         &[0; PROBE_BYTES as usize],
