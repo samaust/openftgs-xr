@@ -35,12 +35,14 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use bevy::app::{App, Plugin, Update};
+use bevy::camera::Projection;
 use bevy::ecs::message::MessageReader;
 use bevy::log::{info, warn};
-use bevy::math::Vec3;
+use bevy::math::{URect, Vec3};
 use bevy::prelude::{
     Commands, Entity, GlobalTransform, Has, IntoScheduleConfigs, Query, Res, ResMut, Resource,
 };
+use bevy_mod_xr::camera::XrCamera;
 use bevy_mod_xr::session::{XrPreDestroySession, XrSessionCreated, XrState};
 use ftgsxr_app::{
     AskPermissionAgain, CameraFrames, DeniedPermissions, FeatureState, HudData, Lighting,
@@ -48,10 +50,15 @@ use ftgsxr_app::{
 };
 use ftgsxr_io::EnvironmentSettings;
 use ftgsxr_render::ColorTransform;
-use ftgsxr_render::SplatBounds;
+use ftgsxr_render::{LayerProbe, LayerSums, SplatBounds};
+
+use super::exposure::box_cells;
 
 use super::band::{DepthReadback, DepthSnapshot, band_instance, thumb_depths};
-use super::{LightEstimate, LightSmoother, LightingMode, band_mask, light_gains, manual_gains};
+use super::{
+    ExposureMatch, LightEstimate, LightSmoother, LightingMode, band_mask, light_gains, linear_luma,
+    manual_gains, matched_exposure_ev,
+};
 use crate::error::{XrError, log_warning};
 use crate::passthrough::{Environment, EnvironmentMode};
 use crate::tracking::XrHands;
@@ -116,6 +123,19 @@ pub(crate) struct Inputs<'a> {
     pub(crate) now: Instant,
     /// Auto local's band: the depth while the provider runs and an instance is selected.
     pub(crate) band: Option<Band<'a>>,
+    /// E14's exposure match (Q-396).
+    pub(crate) exposure: Exposure<'a>,
+}
+
+/// What the exposure match reads in a frame (E14, Q-396).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Exposure<'a> {
+    /// `Lighting.match_exposure`: the Environment tab's press.
+    pub(crate) pressed: bool,
+    /// `LayerProbe.result`, arrived this frame.
+    pub(crate) probe: Option<&'a LayerSums>,
+    /// The measured cells: "per instance"'s target's projected B_m, or all when `None`.
+    pub(crate) cells: Option<URect>,
 }
 
 /// Auto local's depth and the selected instance's distance d_m from the head (Q-388).
@@ -147,6 +167,18 @@ pub(crate) struct Outputs {
     pub(crate) listed: Option<bool>,
     /// `Lighting.denied_auto`: the auto mode the last denial wrote back (Q-395).
     pub(crate) denied_auto: Option<&'static str>,
+    /// `Lighting.can_match` (Q-396).
+    pub(crate) can_match: bool,
+    /// `Lighting.match_exposure` cleared (Q-396).
+    pub(crate) consume_match: bool,
+    /// `LayerProbe.request` set (Q-396).
+    pub(crate) request_probe: bool,
+    /// `LayerProbe.request` cleared: the awaited probe given up (Q-397).
+    pub(crate) cancel_probe: bool,
+    /// `lighting_manual.exposure_ev` written by the match (Q-396).
+    pub(crate) write_exposure: Option<f32>,
+    /// Information toasts raised (the match's, Q-396).
+    pub(crate) notes: Vec<String>,
 }
 
 /// The control's state, kept across sessions (the permission flow) and within one (the
@@ -183,6 +215,11 @@ pub(crate) struct Control {
     pub(crate) thumbs: u64,
     /// A thumbnail carried the camera (Dv-11).
     pub(crate) pose_seen: bool,
+    /// E14's L_room of the newest thumbnail since the start, over the mode's Ω.
+    room: Option<f32>,
+    /// A layer probe was requested for the match and its result is awaited: the frames
+    /// since the request (Q-396, Q-397).
+    awaiting: Option<u32>,
 }
 
 impl Default for Control {
@@ -203,6 +240,8 @@ impl Default for Control {
             raw: None,
             thumbs: 0,
             pose_seen: false,
+            room: None,
+            awaiting: None,
         }
     }
 }
@@ -337,6 +376,7 @@ impl Control {
                     self.smoother.reset();
                     self.warmup = None;
                     self.last_at_s = None;
+                    self.room = None;
                 }
                 Err(e) if e.starts_with(XrError::Unsupported("").code()) => {
                     self.unsupported = true;
@@ -384,6 +424,8 @@ impl Control {
                 }
                 _ => None,
             };
+            // E14's exposure match: L_room over the same Ω.
+            self.room = linear_luma(&thumb, mask.as_deref());
             if let Some(e) = LightEstimate::from_thumb(&thumb, mask.as_deref()) {
                 self.raw = Some(e);
                 self.smoother.push(e, thumb.at_s);
@@ -446,7 +488,56 @@ impl Control {
             self.denied_auto = None;
         }
         out.denied_auto = self.denied_auto;
+        self.exposure_match(&mut out, i, auto && warm);
         out
+    }
+
+    /// E14's exposure match (Q-396): `can_match` while an auto mode runs the camera past
+    /// its warm-up with a thumbnail; a press consumed at once, requesting one probe when
+    /// matching is available; the awaited result written into the manual exposure alone.
+    // Q-396, Q-397
+    fn exposure_match(&mut self, out: &mut Outputs, i: &Inputs, warm_auto: bool) {
+        out.can_match = warm_auto && self.room.is_some();
+        if let Some(frames) = self.awaiting {
+            if !out.can_match {
+                // Matching no longer offered: the result, if any, is dropped (Q-397).
+                self.awaiting = None;
+                out.cancel_probe = true;
+            } else if let Some(sums) = i.exposure.probe {
+                self.awaiting = None;
+                let room = self.room.unwrap_or(f32::NAN);
+                let current = i.env.lighting_manual.exposure_ev;
+                let note = match matched_exposure_ev(current, room, sums, i.exposure.cells) {
+                    ExposureMatch::Set { ev, clamped } => {
+                        out.write_exposure = Some(ev);
+                        // `+0.0`, never `-0.0`.
+                        let shown = (ev * 10.0).round() / 10.0 + 0.0;
+                        let clamp = if clamped { " (clamped)" } else { "" };
+                        format!(
+                            "Exposure set to {shown:+.1} EV from the room; refine it with the slider{clamp}"
+                        )
+                    }
+                    ExposureMatch::NotInView => NOT_IN_VIEW.to_owned(),
+                };
+                info!("light: {note}");
+                out.notes.push(note);
+            } else if frames + 1 >= PROBE_FRAMES_MAX {
+                // No left-eye layer drawn: given up (Q-397).
+                self.awaiting = None;
+                out.cancel_probe = true;
+                info!("light: {NOT_IN_VIEW} (no layer probed in {PROBE_FRAMES_MAX} frames)");
+                out.notes.push(NOT_IN_VIEW.to_owned());
+            } else {
+                self.awaiting = Some(frames + 1);
+            }
+        }
+        if i.exposure.pressed {
+            out.consume_match = true;
+            if out.can_match && self.awaiting.is_none() {
+                self.awaiting = Some(0);
+                out.request_probe = true;
+            }
+        }
     }
 
     fn mode_of(&self, env: &EnvironmentSettings, setting: &str) -> LightingMode {
@@ -455,6 +546,9 @@ impl Control {
         LightingMode::from_settings(&e, self.feature())
     }
 }
+
+/// E14's "the UI says the model is not in view" (Q-396).
+const NOT_IN_VIEW: &str = "The model is not in view";
 
 /// The plugin, added by `plugin` with `XrPlugin.passthrough`.
 pub(crate) struct LightPlugin;
@@ -502,6 +596,21 @@ type BandItem = (
     Has<Selected>,
 );
 
+/// The left eye's pose and projection (Q-125: `XrCamera(0)`).
+type Eye = (
+    &'static XrCamera,
+    &'static GlobalTransform,
+    &'static Projection,
+);
+
+/// Frames after which an awaited probe with no result is given up (Q-397): no left-eye
+/// `LinearOver` layer was drawn, so the model is not in view. Several of the render side's
+/// readback retries (8 frames each) fit in it.
+pub(crate) const PROBE_FRAMES_MAX: u32 = 30;
+
+/// E14's grid over the layer.
+const CELLS: bevy::math::UVec2 = bevy::math::UVec2::new(64, 48);
+
 /// The frame's control: `Control::step` over the world's resources.
 #[allow(clippy::too_many_arguments)]
 fn control(
@@ -518,6 +627,7 @@ fn control(
     readback: Res<DepthReadback>,
     hands: Option<Res<XrHands>>,
     instances: Query<BandItem>,
+    (eyes, mut probe): (Query<Eye>, Option<ResMut<LayerProbe>>),
     mut commands: Commands,
 ) {
     let Some(mut settings) = settings else {
@@ -542,6 +652,19 @@ fn control(
                     .distance(hands.head.translation),
             });
     let asked_again = again.read().any(|a| a.0 == Permission::Camera);
+    // E14's exposure match (Q-396): the probe's result taken as it arrives; the measured
+    // cells, while "per instance" has a target, its posed B_m through the left view.
+    let result = probe.as_mut().and_then(|p| p.result.take());
+    let cells = lighting
+        .per_instance
+        .and_then(|t| instances.get(t).ok())
+        .zip(eyes.iter().find(|(eye, ..)| eye.0 == 0))
+        .map(|((_, at, bounds, _), (_, view, projection))| {
+            let clip_from_model =
+                projection.get_clip_from_view() * view.to_matrix().inverse() * at.to_matrix();
+            // Q-396, Q-397
+            box_cells(clip_from_model, bounds.aabb.min, bounds.aabb.max, CELLS)
+        });
     let out = control.step(
         platform.as_deref().map(|p| &*p.0),
         &Inputs {
@@ -551,11 +674,38 @@ fn control(
             asked_again,
             now: Instant::now(),
             band,
+            exposure: Exposure {
+                pressed: lighting.match_exposure,
+                probe: result.as_ref(),
+                cells,
+            },
         },
     );
     // Only a write touches the settings (persist's debounced save follows a change).
     if let Some(m) = out.write_mode {
         settings.0.environment.lighting_mode = m.to_owned();
+    }
+    if let Some(ev) = out.write_exposure {
+        settings.0.environment.lighting_manual.exposure_ev = ev;
+    }
+    if out.consume_match {
+        lighting.match_exposure = false;
+    }
+    if let Some(p) = probe.as_mut() {
+        if out.request_probe {
+            p.request = true;
+        } else if out.cancel_probe {
+            p.request = false;
+        }
+    }
+    if lighting.can_match != out.can_match {
+        lighting.can_match = out.can_match;
+    }
+    for text in out.notes {
+        commands.trigger(Toast {
+            text,
+            level: ToastLevel::Info,
+        });
     }
     if let Some(r) = out.write_reference {
         info!("light: the reference captured {r:?}");
@@ -739,6 +889,18 @@ mod tests {
         env_mode: EnvironmentMode,
         asked_again: bool,
     ) -> Outputs {
+        frame_exposure(c, p, e, now, env_mode, asked_again, Exposure::default())
+    }
+
+    fn frame_exposure(
+        c: &mut Control,
+        p: &Fake,
+        e: &mut EnvironmentSettings,
+        now: Instant,
+        env_mode: EnvironmentMode,
+        asked_again: bool,
+        exposure: Exposure,
+    ) -> Outputs {
         let out = c.step(
             Some(p),
             &Inputs {
@@ -748,8 +910,12 @@ mod tests {
                 asked_again,
                 now,
                 band: None,
+                exposure,
             },
         );
+        if let Some(ev) = out.write_exposure {
+            e.lighting_manual.exposure_ev = ev;
+        }
         if let Some(m) = out.write_mode {
             e.lighting_mode = m.into();
         }
@@ -1396,6 +1562,7 @@ mod tests {
                         asked_again: false,
                         now: t0 + Duration::from_secs_f64(at),
                         band,
+                        exposure: Exposure::default(),
                     },
                 )
             };
@@ -1410,6 +1577,282 @@ mod tests {
                     band.is_some(),
                     raw.rgb
                 );
+            }
+        }
+    }
+
+    /// The probe's sums over a 64 × 48 layer, one pixel per cell, linear grey `c` at α = 1.
+    fn sums(c: f32) -> LayerSums {
+        LayerSums {
+            cells: vec![[c, c, c, 1.0]; 64 * 48],
+            width: 64,
+            height: 48,
+            layer: bevy::math::UVec2::new(64, 48),
+        }
+    }
+
+    /// The sRGB decode of code 0.5, the room's L_room under a flat thumbnail of 0.5.
+    const HALF_CODE_LINEAR: f32 = 0.214_041_14;
+
+    /// Auto global past the warm-up with a flat thumbnail of code 0.5.
+    fn warm_auto(
+        c: &mut Control,
+        p: &Fake,
+        cam: &FakeCamera,
+        e: &mut EnvironmentSettings,
+        t0: Instant,
+    ) {
+        frame(c, p, e, t0);
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 10.0));
+        frame(c, p, e, t0 + Duration::from_millis(10));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 11.5));
+        frame(c, p, e, t0 + Duration::from_millis(20));
+    }
+
+    fn press() -> Exposure<'static> {
+        Exposure {
+            pressed: true,
+            ..Exposure::default()
+        }
+    }
+
+    /// Q-396: `can_match` false before the warm-up is over, true after it, false outside
+    /// an auto mode, in VR mode and after a camera stop.
+    #[test]
+    fn step_can_match_needs_the_camera_past_its_warm_up() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        let mut c = session();
+        assert!(!frame(&mut c, &p, &mut e, at(0)).can_match, "no thumbnail");
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 10.0));
+        assert!(
+            !frame(&mut c, &p, &mut e, at(10)).can_match,
+            "one thumbnail"
+        );
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 11.0));
+        assert!(!frame(&mut c, &p, &mut e, at(20)).can_match, "1 s of at_s");
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 11.5));
+        assert!(frame(&mut c, &p, &mut e, at(30)).can_match, "warmed up");
+        assert!(
+            frame(&mut c, &p, &mut e, at(40)).can_match,
+            "same thumbnail"
+        );
+        let out = frame_with(&mut c, &p, &mut e, at(50), EnvironmentMode::Vr, false);
+        assert!(!out.can_match, "VR mode");
+        e.lighting_mode = "manual".into();
+        assert!(!frame(&mut c, &p, &mut e, at(60)).can_match, "manual");
+        e.lighting_mode = "off".into();
+        assert!(!frame(&mut c, &p, &mut e, at(70)).can_match, "off");
+        // Back in auto global: a new start, the warm-up again; then the camera goes stale.
+        e.lighting_mode = "auto-global".into();
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 20.0));
+        assert!(!frame(&mut c, &p, &mut e, at(80)).can_match, "restarted");
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 21.5));
+        assert!(frame(&mut c, &p, &mut e, at(90)).can_match);
+        let out = frame(&mut c, &p, &mut e, at(90) + STALE);
+        assert!(!out.can_match, "the camera stopped");
+    }
+
+    /// Q-396: the press consumed once with one probe request; the result writes the
+    /// exposure and toasts; temperature, tint and the reference stay.
+    #[test]
+    fn step_match_writes_the_exposure_once() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        e.lighting_manual.exposure_ev = 0.5;
+        e.lighting_manual.temperature = 0.3;
+        e.lighting_manual.tint = -0.2;
+        let mut c = session();
+        warm_auto(&mut c, &p, &cam, &mut e, t0);
+        let reference = e.lighting_reference;
+        assert!(reference.is_some());
+        let out = frame_exposure(
+            &mut c,
+            &p,
+            &mut e,
+            at(100),
+            EnvironmentMode::Passthrough,
+            false,
+            press(),
+        );
+        assert!(out.consume_match && out.request_probe);
+        assert_eq!(out.write_exposure, None);
+        // The tab's flag cleared: no second request while the result is awaited.
+        let out = frame(&mut c, &p, &mut e, at(110));
+        assert!(!out.consume_match && !out.request_probe);
+        // The model at half the room's linear luma: +1 EV from 0.5.
+        let model = sums(HALF_CODE_LINEAR / 2.0);
+        let out = frame_exposure(
+            &mut c,
+            &p,
+            &mut e,
+            at(120),
+            EnvironmentMode::Passthrough,
+            false,
+            Exposure {
+                probe: Some(&model),
+                ..Exposure::default()
+            },
+        );
+        let ev = out.write_exposure.expect("written");
+        assert!((ev - 1.5).abs() < 1e-5, "{ev}");
+        assert_eq!(
+            out.notes,
+            ["Exposure set to +1.5 EV from the room; refine it with the slider"]
+        );
+        assert!(out.toasts.is_empty());
+        assert_eq!(e.lighting_manual.temperature, 0.3);
+        assert_eq!(e.lighting_manual.tint, -0.2);
+        assert_eq!(e.lighting_reference, reference);
+        assert_eq!(out.write_reference, None);
+        // A second result, not asked for, writes nothing.
+        let out = frame_exposure(
+            &mut c,
+            &p,
+            &mut e,
+            at(130),
+            EnvironmentMode::Passthrough,
+            false,
+            Exposure {
+                probe: Some(&model),
+                ..Exposure::default()
+            },
+        );
+        assert_eq!(out.write_exposure, None);
+        assert!(out.notes.is_empty());
+    }
+
+    /// Q-397: an awaited result is dropped, and the wait ended, once matching stops being
+    /// offered (a camera stop, a mode change); a later result writes nothing.
+    #[test]
+    fn step_match_result_after_a_stop_is_dropped() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        e.lighting_manual.exposure_ev = 0.5;
+        let mut c = session();
+        warm_auto(&mut c, &p, &cam, &mut e, t0);
+        let pass = EnvironmentMode::Passthrough;
+        let out = frame_exposure(&mut c, &p, &mut e, at(100), pass, false, press());
+        assert!(out.request_probe);
+        e.lighting_mode = "manual".into();
+        let out = frame(&mut c, &p, &mut e, at(110));
+        assert!(!out.can_match && out.cancel_probe, "the wait ended");
+        let model = sums(HALF_CODE_LINEAR / 2.0);
+        let late = Exposure {
+            probe: Some(&model),
+            ..Exposure::default()
+        };
+        let out = frame_exposure(&mut c, &p, &mut e, at(120), pass, false, late);
+        assert_eq!(out.write_exposure, None);
+        assert!(out.notes.is_empty());
+        // Back in auto global and warmed up: the late result is still not taken, and a
+        // press requests again.
+        e.lighting_mode = "auto-global".into();
+        frame(&mut c, &p, &mut e, at(200));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 20.0));
+        frame(&mut c, &p, &mut e, at(210));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 21.5));
+        assert!(frame(&mut c, &p, &mut e, at(220)).can_match);
+        let out = frame_exposure(&mut c, &p, &mut e, at(300), pass, false, late);
+        assert_eq!(out.write_exposure, None);
+        let out = frame_exposure(&mut c, &p, &mut e, at(310), pass, false, press());
+        assert!(out.request_probe);
+        assert_eq!(e.lighting_manual.exposure_ev, 0.5);
+    }
+
+    /// Q-397: a probe with no result after `PROBE_FRAMES_MAX` frames is given up: the
+    /// request cancelled, "The model is not in view" toasted, a later press requests again.
+    #[test]
+    fn step_match_gives_up_without_a_result() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        let mut c = session();
+        warm_auto(&mut c, &p, &cam, &mut e, t0);
+        let pass = EnvironmentMode::Passthrough;
+        let out = frame_exposure(&mut c, &p, &mut e, at(100), pass, false, press());
+        assert!(out.request_probe);
+        for k in 1..PROBE_FRAMES_MAX {
+            let out = frame(&mut c, &p, &mut e, at(100 + k as u64));
+            assert!(!out.cancel_probe && out.notes.is_empty(), "frame {k}");
+        }
+        let out = frame(&mut c, &p, &mut e, at(100 + PROBE_FRAMES_MAX as u64));
+        assert!(out.cancel_probe);
+        assert_eq!(out.notes, ["The model is not in view"]);
+        let out = frame_exposure(&mut c, &p, &mut e, at(200), pass, false, press());
+        assert!(out.request_probe);
+    }
+
+    /// Q-396: " (clamped)" when E14's clamp was hit; `NotInView` writes nothing and
+    /// toasts that the model is not in view; a press while matching is unavailable is
+    /// consumed without a request.
+    #[test]
+    fn step_match_clamped_and_not_in_view() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        let mut c = session();
+        let out = frame_exposure(
+            &mut c,
+            &p,
+            &mut e,
+            at(0),
+            EnvironmentMode::Passthrough,
+            false,
+            press(),
+        );
+        assert!(out.consume_match && !out.request_probe, "not available yet");
+        warm_auto(&mut c, &p, &cam, &mut e, at(1));
+        let cases = [
+            (
+                sums(HALF_CODE_LINEAR / 64.0),
+                Some(4.0),
+                "Exposure set to +4.0 EV from the room; refine it with the slider (clamped)",
+            ),
+            (sums(0.0), None, "The model is not in view"),
+        ];
+        for (k, (model, want, note)) in cases.iter().enumerate() {
+            let t = at(100 + 20 * k as u64);
+            let before = e.lighting_manual.exposure_ev;
+            let out = frame_exposure(
+                &mut c,
+                &p,
+                &mut e,
+                t,
+                EnvironmentMode::Passthrough,
+                false,
+                press(),
+            );
+            assert!(out.request_probe);
+            let out = frame_exposure(
+                &mut c,
+                &p,
+                &mut e,
+                t + Duration::from_millis(10),
+                EnvironmentMode::Passthrough,
+                false,
+                Exposure {
+                    probe: Some(model),
+                    ..Exposure::default()
+                },
+            );
+            assert_eq!(out.write_exposure, *want);
+            assert_eq!(out.notes, [*note]);
+            if want.is_none() {
+                assert_eq!(e.lighting_manual.exposure_ev, before);
             }
         }
     }

@@ -427,7 +427,9 @@ pub(crate) struct InstanceLighting(pub(crate) ManualLighting);
 /// reference the room is too dark to give (Q-385).
 /// `denied_auto` is the auto mode a camera denial was denied for, which the
 /// Environment tab's "Ask again" writes back (Q-384, Q-395).
-// Q-383, Q-385, Q-395
+/// `match_exposure` and `can_match` carry E14's exposure match between the Environment
+/// tab's "Match room exposure" and the XR crate's `light` (§1.9, Q-396).
+// Q-383, Q-385, Q-395, Q-396
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Lighting {
     /// The environment's gains, the identity by default.
@@ -444,6 +446,16 @@ pub struct Lighting {
     /// saved nowhere.
     // Q-395
     pub denied_auto: Option<&'static str>,
+    /// Set by the Environment tab's "Match room exposure" on a press, cleared by the XR
+    /// crate's `light` every frame it sees it, requesting the layer probe only while
+    /// `can_match` holds and no result is awaited; false by default. Session state.
+    // Q-396, Q-397
+    pub match_exposure: bool,
+    /// Written by the XR crate's `light` each frame: an auto mode runs the camera past
+    /// its warm-up with a thumbnail; false by default and without the XR crate, so the
+    /// button stays disabled on the desktop. Session state.
+    // Q-396
+    pub can_match: bool,
 }
 
 impl Default for Lighting {
@@ -453,6 +465,8 @@ impl Default for Lighting {
             per_instance: None,
             too_dark: false,
             denied_auto: None,
+            match_exposure: false,
+            can_match: false,
         }
     }
 }

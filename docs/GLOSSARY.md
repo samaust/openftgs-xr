@@ -768,6 +768,10 @@ _Avoid_: color mode, light mode, matching mode, lighting (unqualified)
 The smoothed light estimate captured when an auto mode is enabled or re-captured by the user, against which E14's gains are taken. E14, §1.9, D-38
 _Avoid_: baseline, calibration, white point
 
+**Exposure match**:
+The one-shot setting of the manual exposure offset from the ratio of the room's mean linear luma to the model's as displayed, which the Environment tab's "Match room exposure" button performs; a starting point the user refines, not a measurement of the model's lighting. §1.9, E14, D-38
+_Avoid_: auto exposure (the camera's own exposure control), exposure calibration, brightness match, exposure sync
+
 **Camera thumbnail**:
 The 64 × 48 RGB reduction of one passthrough camera frame the shim hands the player, with its timestamp and, when known, the camera's pose and field of view. §1.9, §2.5, D-15
 _Avoid_: camera frame (the full image), preview, snapshot

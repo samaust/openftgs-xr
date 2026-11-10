@@ -9,14 +9,15 @@ pub mod bevy;
 pub mod gpu;
 
 pub use crate::bevy::{
-    DepthFrame, OutputSpace, SplatAsset, SplatBounds, SplatCamera, SplatEvent, SplatGpu, SplatLoad,
-    SplatMode, SplatModel, SplatOcclusion, SplatOverlays, SplatPlugin, SplatShLimit, SplatStats,
-    SplatTierState, SplatTime, SplatTransform, SplatTrim, load_splat_asset,
+    DepthFrame, LayerProbe, OutputSpace, SplatAsset, SplatBounds, SplatCamera, SplatEvent,
+    SplatGpu, SplatLoad, SplatMode, SplatModel, SplatOcclusion, SplatOverlays, SplatPlugin,
+    SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform, SplatTrim,
+    load_splat_asset,
 };
 pub use gpu::import_vulkan_texture; // Q-339
 pub use gpu::{
     BudgetSource, Capacity, ColorTransform, Colormap, Foveation, FrameBuffers, FrameContents,
-    FrameStats, GpuModel, GpuTimes, HeadlessRenderer, MemoryBudget, ModelDraw, ModelId,
+    FrameStats, GpuModel, GpuTimes, HeadlessRenderer, LayerSums, MemoryBudget, ModelDraw, ModelId,
     OcclusionInput, Overlays, QualityTier, RecordView, RenderError, RenderMode, SortKey, SortMode,
     SortPose, SplatDevice, SplatPasses, ViewParams,
 }; // Q-339

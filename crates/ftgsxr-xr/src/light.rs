@@ -5,11 +5,13 @@
 
 mod band;
 mod control;
+mod exposure;
 // Dv-11's device side (Q-390, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 mod dv11;
 
 pub(crate) use control::LightPlugin;
+pub use exposure::{ExposureMatch, linear_luma, matched_exposure_ev};
 
 use bevy::math::Vec3;
 use ftgsxr_app::{CameraThumb, FeatureState};
@@ -97,7 +99,9 @@ impl LightEstimate {
             return None;
         }
         let rgb = sum.map(|s| (s / count as f64) as f32);
-        let luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+        // The f64 weights round to the f32 literals 0.299, 0.587 and 0.114.
+        let w = exposure::LUMA.map(|k| k as f32);
+        let luma = w[0] * rgb[0] + w[1] * rgb[1] + w[2] * rgb[2];
         Some(LightEstimate { luma, rgb })
     }
 }

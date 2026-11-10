@@ -6,11 +6,13 @@
 //! `step_manual_offset_composes_with_the_auto_gains`: the product is formed only inside
 //! the light control, and no public item composes the two gains (#696).
 
+use bevy::math::{URect, UVec2};
 use ftgsxr_app::{CameraThumb, FeatureState};
 use ftgsxr_io::{EnvironmentSettings, ManualLighting};
+use ftgsxr_render::LayerSums;
 use ftgsxr_xr::{
-    LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains, light_gains,
-    manual_gains,
+    ExposureMatch, LightEstimate, LightSmoother, LightingMode, band_mask, grey_world_gains,
+    light_gains, linear_luma, manual_gains, matched_exposure_ev,
 };
 
 const TOL: f32 = 1e-6;
@@ -187,4 +189,136 @@ fn lighting_mode_from_settings_and_the_camera_gate() {
     env.lighting_mode = "auto-local".into();
     assert_eq!(m(&env, FeatureState::Available), LightingMode::AutoLocal);
     assert_eq!(m(&env, FeatureState::Absent), LightingMode::Manual(manual));
+}
+
+/// The 64 × 48 grid's sums over a layer of `layer` pixels, each cell's from `cell(i, j)`.
+fn sums(layer: UVec2, cell: impl Fn(u32, u32) -> [f32; 4]) -> LayerSums {
+    let cells = (0..48)
+        .flat_map(|j| (0..64).map(move |i| (i, j)))
+        .map(|(i, j)| cell(i, j))
+        .collect();
+    LayerSums {
+        cells,
+        width: 64,
+        height: 48,
+        layer,
+    }
+}
+
+/// A cell of `px` pixels of linear grey `c` at coverage α: (Σ α c, Σ α c, Σ α c, Σ α).
+fn grey(c: f32, alpha: f32, px: f32) -> [f32; 4] {
+    let a = alpha * px;
+    [c * a, c * a, c * a, a]
+}
+
+fn set(m: ExposureMatch) -> (f32, bool) {
+    match m {
+        ExposureMatch::Set { ev, clamped } => (ev, clamped),
+        ExposureMatch::NotInView => panic!("NotInView"),
+    }
+}
+
+#[test]
+fn u20_exposure_match_half_the_room_moves_ev_by_one() {
+    // One pixel per cell, linear grey 0.2 at α = 1: L_model = 0.2; L_room = 0.4.
+    let model = sums(UVec2::new(64, 48), |_, _| grey(0.2, 1.0, 1.0));
+    for (old, new) in [(0.0, 1.0), (1.5, 2.5)] {
+        let (ev, clamped) = set(matched_exposure_ev(old, 0.4, &model, None));
+        close(ev, new);
+        assert!(!clamped);
+    }
+}
+
+#[test]
+fn u20_exposure_match_clamps_to_four() {
+    let model = sums(UVec2::new(64, 48), |_, _| grey(0.4, 1.0, 1.0));
+    // log2(64) = 6 and log2(1/64) = −6, beyond the range.
+    assert_eq!(
+        set(matched_exposure_ev(0.0, 0.4 * 64.0, &model, None)),
+        (4.0, true)
+    );
+    assert_eq!(
+        set(matched_exposure_ev(0.0, 0.4 / 64.0, &model, None)),
+        (-4.0, true)
+    );
+    // 3 + log2(4) = 5.
+    assert_eq!(
+        set(matched_exposure_ev(3.0, 1.6, &model, None)),
+        (4.0, true)
+    );
+}
+
+#[test]
+fn u20_exposure_match_under_one_percent_alpha_is_not_in_view() {
+    // 640 × 480: 100 pixels per cell. α = 0.009 everywhere is 0.9 % of the pixels.
+    let layer = UVec2::new(640, 480);
+    let faint = sums(layer, |_, _| grey(0.2, 0.009, 100.0));
+    assert_eq!(
+        matched_exposure_ev(0.0, 0.4, &faint, None),
+        ExposureMatch::NotInView
+    );
+    let enough = sums(layer, |_, _| grey(0.2, 0.011, 100.0));
+    close(set(matched_exposure_ev(0.0, 0.4, &enough, None)).0, 1.0);
+    // Zero or non-finite lumas, and no cell, change nothing.
+    let model = sums(UVec2::new(64, 48), |_, _| grey(0.2, 1.0, 1.0));
+    for room in [0.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(
+            matched_exposure_ev(0.0, room, &model, None),
+            ExposureMatch::NotInView,
+            "{room}"
+        );
+    }
+    let black = sums(UVec2::new(64, 48), |_, _| grey(0.0, 1.0, 1.0));
+    assert_eq!(
+        matched_exposure_ev(0.0, 0.4, &black, None),
+        ExposureMatch::NotInView
+    );
+    let none = URect::new(5, 5, 5, 9);
+    assert_eq!(
+        matched_exposure_ev(0.0, 0.4, &model, Some(none)),
+        ExposureMatch::NotInView
+    );
+}
+
+#[test]
+fn u20_exposure_match_counts_only_the_cells_in_the_rectangle() {
+    let inside = URect::new(10, 20, 30, 40);
+    // Grey 0.2 inside the rectangle, 0.8 outside: only 0.2 counts.
+    let model = sums(UVec2::new(64, 48), |i, j| {
+        let c = if (10..30).contains(&i) && (20..40).contains(&j) {
+            0.2
+        } else {
+            0.8
+        };
+        grey(c, 1.0, 1.0)
+    });
+    close(
+        set(matched_exposure_ev(0.0, 0.4, &model, Some(inside))).0,
+        1.0,
+    );
+    // Over all cells, the rectangle 20 × 20 = 400 of 3072: L_model = (400 · 0.2 +
+    // 2672 · 0.8) / 3072 = (80 + 2137.6) / 3072 = 0.721875, and
+    // EV = log₂(0.4 / 0.721875) = log₂(0.554113…) = −0.851749.
+    close(
+        set(matched_exposure_ev(0.0, 0.4, &model, None)).0,
+        -0.851_749,
+    );
+}
+
+#[test]
+fn u20_linear_luma_of_a_flat_half_code_thumbnail() {
+    // The sRGB decode of 0.5: ((0.5 + 0.055) / 1.055)^2.4.
+    let th = thumb(&[[0.5; 3]; 8], 4);
+    close(linear_luma(&th, None).unwrap(), 0.214_041_14);
+    let mask = [true, false, true, false, true, false, true, false];
+    close(linear_luma(&th, Some(&mask)).unwrap(), 0.214_041_14);
+    // The linear segment: 0.02 / 12.92, and pixels the mask leaves out don't count.
+    let th = thumb(&[[0.02; 3], [1.0; 3]], 2);
+    close(
+        linear_luma(&th, Some(&[true, false])).unwrap(),
+        0.02 / 12.92,
+    );
+    assert!(linear_luma(&thumb(&[], 1), None).is_none());
+    assert!(linear_luma(&th, Some(&[true])).is_none());
+    assert!(linear_luma(&th, Some(&[false, false])).is_none());
 }

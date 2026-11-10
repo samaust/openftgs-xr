@@ -23,6 +23,7 @@ use ::bevy::render::camera::ExtractedCamera;
 use ::bevy::render::render_asset::RenderAssets;
 use ::bevy::render::render_resource::{StoreOp, TextureFormat};
 use ::bevy::render::renderer::{RenderContext, ViewQuery};
+use ::bevy::render::storage::GpuShaderBuffer;
 use ::bevy::render::sync_world::RenderEntity;
 use ::bevy::render::texture::GpuImage;
 use ::bevy::render::view::{ExtractedView, Msaa, ViewDepthTexture, ViewTarget};
@@ -33,12 +34,14 @@ use ftgsxr_core::{Pose, Trim};
 use super::camera::view_camera;
 use super::depth_copy::DepthCopy;
 use super::load::{GpuModels, SplatGpu};
+use super::probe::{ProbeTarget, extract_target};
 use super::{
     DepthFrame, OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOcclusion,
     SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform, SplatTrim,
 };
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::sort_pose;
+use crate::gpu::probe::ProbePass;
 // The view target the resolve is compiled for (Q-91).
 use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
 use crate::gpu::{
@@ -196,6 +199,8 @@ struct Views {
     warming: Warming,
     /// Whether this device's and tier's warm-up has started (Q-325).
     warm_started: bool,
+    /// The layer probe's pass (E14's exposure match), compiled with the device's views.
+    probe: Option<ProbePass>,
     /// The depth copy's pipeline (Q-164), made on first use.
     depth_copy: Option<Arc<DepthCopy>>,
     states: HashMap<Entity, ViewState>,
@@ -218,7 +223,8 @@ pub(crate) fn build(render_app: &mut SubApp, tier: QualityTier, inbox: StatsInbo
         .insert_resource(inbox)
         .init_resource::<Extracted>()
         .init_resource::<Views>()
-        .add_systems(ExtractSchedule, extract)
+        .init_resource::<ProbeTarget>()
+        .add_systems(ExtractSchedule, (extract, extract_target))
         .add_systems(
             Render,
             (
@@ -349,8 +355,13 @@ fn prepare_views(
     };
     if new_tier || views.dev.as_ref().is_none_or(|d| !Arc::ptr_eq(d, &dev)) {
         // A new device: everything made on the old one goes.
+        // The layer probe is compiled on every device, requested or not (E14).
+        let probe = ProbePass::new(dev.device())
+            .inspect_err(|e| error!("the layer probe does not compile: {e}"))
+            .ok();
         *views = Views {
             dev: Some(Arc::clone(&dev)),
+            probe,
             ..Views::default()
         };
     }
@@ -718,12 +729,15 @@ fn prepare_node(view: ViewQuery<&ExtractedView>, views: Res<Views>, mut ctx: Ren
 
 /// The draw node (§2.4 Frame loop hooks): stages 5 and 6 after the opaque pass, tested
 /// against its depth, then the resolve (`LinearOver`) or none (`FileEncoded`), then stage 8.
+#[allow(clippy::too_many_arguments)]
 fn draw_node(
     view: ViewQuery<(&ExtractedCamera, &ViewTarget, &ViewDepthTexture)>,
     views: Res<Views>,
     tier: Res<RenderTier>,
     occlusion: Option<Res<SplatOcclusion>>,
     images: Res<RenderAssets<GpuImage>>,
+    probe_target: Res<ProbeTarget>,
+    buffers: Res<RenderAssets<GpuShaderBuffer>>,
     mut ctx: RenderContext,
 ) {
     let Some(state) = views.states.get(&view.entity()) else {
@@ -815,6 +829,15 @@ fn draw_node(
                 state
                     .passes
                     .encode_draw(pass.wgpu_pass(), frame, &state.view, occlusion.as_ref());
+            }
+            // E14's exposure match: the first splat camera's layer (the left eye, Q-125),
+            // probed once, into the buffer the main world reads back.
+            if state.index == 0
+                && let (Some(handle), Some(probe), Some(dev)) =
+                    (&probe_target.0, &views.probe, &views.dev)
+                && let Some(cells) = buffers.get(handle)
+            {
+                probe.encode(dev.device(), ctx.command_encoder(), layer, &cells.buffer);
             }
             let color = [Some(target.get_color_attachment())];
             let mut pass = ctx.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
