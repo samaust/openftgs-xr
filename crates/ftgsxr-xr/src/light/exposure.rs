@@ -3,7 +3,7 @@
 //! E14's exposure match, pure (§1.9, D-38, §2.1): the room's mean linear luma L_room,
 //! the model's L_model from the layer probe's sums, and EV_new with the 1 % rule.
 
-use bevy::math::URect;
+use bevy::math::{Mat4, URect, UVec2, Vec2, Vec3};
 use ftgsxr_app::CameraThumb;
 use ftgsxr_render::LayerSums;
 
@@ -109,5 +109,100 @@ pub fn matched_exposure_ev(
     ExposureMatch::Set {
         ev: ev as f32,
         clamped: ev != raw,
+    }
+}
+
+/// The cells of a `grid` over the left view that a box overlaps once projected (E14's
+/// measured cells while "per instance" has a target): the box's corners `min`..`max` in
+/// model space through `clip_from_model`, the cells of their screen bounding rectangle,
+/// half-open; all cells when a corner is at or behind the eye while another is in front
+/// (the box straddles the eye plane); an empty rectangle when no corner is in front or
+/// the rectangle misses the view.
+// Q-T711.1
+pub(crate) fn box_cells(clip_from_model: Mat4, min: Vec3, max: Vec3, grid: UVec2) -> URect {
+    let empty = URect::new(0, 0, 0, 0);
+    let mut lo = Vec2::splat(f32::INFINITY);
+    let mut hi = Vec2::splat(f32::NEG_INFINITY);
+    let mut behind = false;
+    for k in 0..8 {
+        let pick = |bit: u32, a: f32, b: f32| if k & bit == 0 { a } else { b };
+        let corner = Vec3::new(
+            pick(1, min.x, max.x),
+            pick(2, min.y, max.y),
+            pick(4, min.z, max.z),
+        );
+        let clip = clip_from_model * corner.extend(1.0);
+        if clip.w.is_nan() || clip.w <= 0.0 {
+            behind = true;
+            continue;
+        }
+        // NDC to the layer's [0, 1]², x right and y down from the top-left.
+        let ndc = clip.truncate().truncate() / clip.w;
+        let uv = Vec2::new((ndc.x + 1.0) / 2.0, (1.0 - ndc.y) / 2.0);
+        lo = lo.min(uv);
+        hi = hi.max(uv);
+    }
+    if !lo.is_finite() || !hi.is_finite() {
+        return empty;
+    }
+    if behind {
+        return URect::new(0, 0, grid.x, grid.y);
+    }
+    let size = grid.as_vec2();
+    let a = (lo * size).floor().clamp(Vec2::ZERO, size);
+    let b = (hi * size).ceil().clamp(Vec2::ZERO, size);
+    if a.x >= b.x || a.y >= b.y {
+        return empty;
+    }
+    URect::new(a.x as u32, a.y as u32, b.x as u32, b.y as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 90° vertical field of view, 4 : 3, Bevy's reversed infinite projection, the
+    /// eye at the origin looking down −z.
+    fn view() -> Mat4 {
+        Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_2, 4.0 / 3.0, 0.1)
+    }
+
+    const GRID: UVec2 = UVec2::new(64, 48);
+
+    /// A box ±0.45 m about (0, 0, −2): its nearest face at 1.55 m spans
+    /// tan = 0.45 / 1.55 = 0.290323, so x ∈ ±0.290323 · 3/4 and y ∈ ±0.290323 in NDC,
+    /// u ∈ [0.391129, 0.608871] → cells 25.03…38.97, v ∈ [0.354839, 0.645161] →
+    /// rows 17.03…30.97.
+    #[test]
+    fn box_cells_of_a_box_ahead() {
+        let c = Vec3::new(0.0, 0.0, -2.0);
+        let r = box_cells(view(), c - 0.45, c + 0.45, GRID);
+        assert_eq!(r, URect::new(25, 17, 39, 31));
+        // Moved to the right by its pose: the cells move right.
+        let posed = view() * Mat4::from_translation(Vec3::new(0.5, 0.0, 0.0));
+        let r2 = box_cells(posed, c - 0.45, c + 0.45, GRID);
+        assert!(r2.min.x > r.min.x && r2.min.y == r.min.y, "{r2:?}");
+    }
+
+    /// An empty projection (the box behind the eye, or beside the view) measures no
+    /// cell, so the match gives `NotInView`; a box around the eye measures them all.
+    #[test]
+    fn box_cells_empty_projection_is_not_in_view() {
+        let model = LayerSums {
+            cells: vec![[0.2, 0.2, 0.2, 1.0]; 64 * 48],
+            width: 64,
+            height: 48,
+            layer: GRID,
+        };
+        for c in [Vec3::new(0.0, 0.0, 2.0), Vec3::new(20.0, 0.0, -2.0)] {
+            let r = box_cells(view(), c - 0.45, c + 0.45, GRID);
+            assert!(r.is_empty(), "{c}: {r:?}");
+            assert_eq!(
+                matched_exposure_ev(0.0, 0.4, &model, Some(r)),
+                ExposureMatch::NotInView
+            );
+        }
+        let r = box_cells(view(), Vec3::splat(-1.0), Vec3::splat(1.0), GRID);
+        assert_eq!(r, URect::new(0, 0, 64, 48));
     }
 }
