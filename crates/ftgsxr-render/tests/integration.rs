@@ -50,6 +50,7 @@ mod r13_centers_mode;
 mod r14_light_transform;
 mod r19_transmittance_bound;
 mod r20_trim_cull;
+mod r21_layer_probe;
 mod sh_ranges;
 mod shared_center_records;
 mod stereo_stats;

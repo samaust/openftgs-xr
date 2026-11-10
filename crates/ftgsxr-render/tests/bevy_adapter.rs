@@ -40,11 +40,12 @@ use bevy::render::{RenderApp, RenderPlugin};
 use bevy::transform::TransformPlugin;
 use bevy::transform::components::Transform;
 use bevy::window::{ExitCondition, WindowPlugin};
-use ftgsxr_core::{Camera as FtgsCamera, DMat3, RenderImage};
+use ftgsxr_core::{Camera as FtgsCamera, DMat3, Pose, RenderImage};
 use ftgsxr_io::ModelBytes;
 use ftgsxr_render::{
-    FrameStats, OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatLoad, SplatMode,
-    SplatModel, SplatOverlays, SplatPlugin, SplatStats, SplatTime, SplatTransform,
+    FrameStats, HeadlessRenderer, LayerProbe, LayerSums, OutputSpace, QualityTier, SortMode,
+    SplatCamera, SplatEvent, SplatLoad, SplatMode, SplatModel, SplatOverlays, SplatPlugin,
+    SplatStats, SplatTime, SplatTransform,
 };
 use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe, reference_render};
 
@@ -744,4 +745,52 @@ fn gpu_bevy_adapter_reruns_stages_1_to_4_after_the_instance_moves() {
             .expect("the instance's transform")
             .translation += Vec3::new(0.2, 0.0, 0.1);
     });
+}
+
+/// `LayerProbe` (§2.1, E14's exposure match, D-34): a request on a `LinearOver` view is
+/// answered within a few frames without waiting, clears itself, and holds the probe of
+/// the layer drawn: its size and its sums those of `HeadlessRenderer::probe` of P1's first
+/// item (the same E6 camera), Σα and Σα·c_lin over the grid within 1 % (the Bevy camera's
+/// float32 matrices against the request's float64 ones).
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_layer_probe_answers_a_request_without_waiting() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let mut scene = P1Scene::settled(
+        OutputSpace::LinearOver { background: None },
+        TextureFormat::Rgba8UnormSrgb,
+    );
+    assert!(
+        scene.app.world().resource::<LayerProbe>().result.is_none(),
+        "no result without a request"
+    );
+    scene.app.world_mut().resource_mut::<LayerProbe>().request = true;
+    let mut frames = 0;
+    while scene.app.world().resource::<LayerProbe>().result.is_none() {
+        assert!(frames < 8, "the probe answered within 8 frames");
+        scene.frames(1);
+        frames += 1;
+    }
+    let probe_res = scene.app.world().resource::<LayerProbe>();
+    assert!(!probe_res.request, "the result clears the request");
+    let ours = probe_res.result.clone().expect("a result");
+
+    let (model, request) = probe("P1");
+    let item = &request.items[0];
+    let mut renderer = HeadlessRenderer::new(QualityTier::conformance()).expect("an adapter");
+    let id = renderer.load(&model, request.sh_degree).expect("loads");
+    let theirs = renderer
+        .probe(&[(id, Pose::IDENTITY)], &item.camera, item.timestamp)
+        .expect("probes");
+    assert_eq!(ours.layer, theirs.layer);
+    assert_eq!((ours.width, ours.height), (64, 48));
+    let total = |s: &LayerSums, k: usize| s.cells.iter().map(|c| f64::from(c[k])).sum::<f64>();
+    for k in 0..4 {
+        let (a, b) = (total(&ours, k), total(&theirs, k));
+        assert!(b > 1.0, "P1 covers the layer ({b})");
+        assert!(
+            (a - b).abs() <= 0.01 * b,
+            "channel {k}: Bevy {a}, headless {b}"
+        );
+    }
 }
