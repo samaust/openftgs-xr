@@ -1152,9 +1152,10 @@ mod tests {
         assert!((r[0] - 0.4).abs() < 1e-5, "{r:?}");
     }
 
-    /// Q-385: a saved reference that passes the floor is kept, the transform the identity
-    /// during the warm-up and E14's gains after it; a saved reference below the floor or
-    /// not finite reads as `None` and is captured again after the warm-up.
+    /// Q-385: a saved reference that passes the floor is kept, the transform the manual
+    /// form (the identity at the default sliders) during the warm-up and E14's gains after
+    /// it; a saved reference below the floor or not finite reads as `None` and is captured
+    /// again after the warm-up.
     #[test]
     fn step_saved_reference_after_the_warm_up() {
         let t0 = Instant::now();
