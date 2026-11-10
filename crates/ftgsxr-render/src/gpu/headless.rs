@@ -20,7 +20,7 @@ use super::frame::FrameBuffers;
 use super::inputs::{ColorTransform, ModelDraw, Overlays, RenderMode, SortPose, ViewParams};
 use super::model::GpuModel;
 use super::passes::SplatPasses;
-use super::probe::{CELLS_BYTES, LayerSums, ProbePass};
+use super::probe::{LayerSums, PROBE_BYTES, ProbePass};
 use super::readback::half_to_f32;
 use super::tier::{Capacity, DESKTOP_FALLBACK_BUDGET, QualityTier, SortMode};
 
@@ -293,24 +293,22 @@ impl HeadlessRenderer {
         let device = gpu.dev.device();
         let cells = device.create_buffer(&BufferDescriptor {
             label: Some("ftgsxr headless probe"),
-            size: CELLS_BYTES,
+            size: PROBE_BYTES,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let staging = device.create_buffer(&BufferDescriptor {
             label: Some("ftgsxr headless probe read back"),
-            size: CELLS_BYTES,
+            size: PROBE_BYTES,
             usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let view = layer.create_view(&wgpu::TextureViewDescriptor::default());
         gpu.probe.encode(device, &mut enc, &view, &cells);
-        enc.copy_buffer_to_buffer(&cells, 0, &staging, 0, CELLS_BYTES);
+        enc.copy_buffer_to_buffer(&cells, 0, &staging, 0, PROBE_BYTES);
         let bytes = gpu.submit_and_read(enc, &staging)?;
-        Ok(LayerSums::from_bytes(
-            &bytes,
-            UVec2::new(camera.width, camera.height),
-        ))
+        Ok(LayerSums::from_bytes(&bytes)
+            .expect("invariant: the probe was encoded before the read back"))
     }
 
     /// §1.4 stages 1–5 for `models` into a new layer cleared to (0, 0, 0, 0), encoded on

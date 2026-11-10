@@ -13,7 +13,9 @@ pub(crate) const PROBE_WGSL: &str = include_str!("shaders/probe.wgsl");
 /// The grid's columns and rows (E14).
 pub(crate) const GRID: UVec2 = UVec2::new(64, 48);
 /// The grid's bytes: one `vec4<f32>` per cell.
-pub(crate) const CELLS_BYTES: u64 = (GRID.x * GRID.y * 16) as u64;
+const CELLS_BYTES: usize = (GRID.x * GRID.y * 16) as usize;
+/// The probe's output: the cells, then the mark (1, W, H, 0) that says they were written.
+pub(crate) const PROBE_BYTES: u64 = CELLS_BYTES as u64 + 16;
 
 /// E14's exposure match, the layer probe's result: per cell of the 64 × 48 grid over the
 /// layer, row-major from the top-left, (Σ α r_lin, Σ α g_lin, Σ α b_lin, Σ α) over its
@@ -31,25 +33,27 @@ pub struct LayerSums {
 }
 
 impl LayerSums {
-    /// The grid read back as little-endian floats (`CELLS_BYTES` of them), of a layer of
-    /// `layer` pixels.
-    pub(crate) fn from_bytes(bytes: &[u8], layer: UVec2) -> LayerSums {
-        let cells = bytes[..CELLS_BYTES as usize]
-            .as_chunks::<16>()
-            .0
-            .iter()
-            .map(|c| {
-                std::array::from_fn(|k| {
-                    f32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]])
-                })
+    /// The probe's output read back (`PROBE_BYTES` of little-endian floats): the cells and
+    /// the layer's size from the mark, or `None` when the mark is missing (the probe did not
+    /// run before the read back) or the bytes are short.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<LayerSums> {
+        let vec4 = |c: &[u8; 16]| -> [f32; 4] {
+            std::array::from_fn(|k| {
+                f32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]])
             })
-            .collect();
-        LayerSums {
-            cells,
+        };
+        let all = bytes.get(..PROBE_BYTES as usize)?.as_chunks::<16>().0;
+        let (cells, mark) = all.split_at(all.len() - 1);
+        let [one, w, h, _] = vec4(&mark[0]);
+        if one != 1.0 {
+            return None;
+        }
+        Some(LayerSums {
+            cells: cells.iter().map(vec4).collect(),
             width: GRID.x,
             height: GRID.y,
-            layer,
-        }
+            layer: UVec2::new(w as u32, h as u32),
+        })
     }
 }
 
@@ -112,7 +116,7 @@ impl ProbePass {
     }
 
     /// The probe of `layer` (a 16-bit float layer with texture-binding usage) into `cells`
-    /// (storage usage, at least `CELLS_BYTES`), every cell written.
+    /// (storage usage, at least `PROBE_BYTES`), every cell and the mark written.
     pub(crate) fn encode(
         &self,
         device: &wgpu::Device,
@@ -148,15 +152,20 @@ impl ProbePass {
 mod tests {
     use super::*;
 
-    #[test]
-    fn from_bytes_reads_the_cells_row_major() {
-        let mut bytes = vec![0u8; CELLS_BYTES as usize];
-        // Cell (1, 0) and the last cell.
-        for (k, v) in [1.0f32, 2.0, 3.0, 4.0].iter().enumerate() {
-            bytes[16 + 4 * k..][..4].copy_from_slice(&v.to_le_bytes());
-            bytes[CELLS_BYTES as usize - 16 + 4 * k..][..4].copy_from_slice(&(-v).to_le_bytes());
+    fn put(bytes: &mut [u8], at: usize, v: [f32; 4]) {
+        for (k, x) in v.iter().enumerate() {
+            bytes[at + 4 * k..][..4].copy_from_slice(&x.to_le_bytes());
         }
-        let sums = LayerSums::from_bytes(&bytes, UVec2::new(200, 150));
+    }
+
+    #[test]
+    fn from_bytes_reads_the_cells_row_major_and_the_layer_from_the_mark() {
+        let mut bytes = vec![0u8; PROBE_BYTES as usize];
+        // Cell (1, 0), the last cell and the mark.
+        put(&mut bytes, 16, [1.0, 2.0, 3.0, 4.0]);
+        put(&mut bytes, CELLS_BYTES - 16, [-1.0, -2.0, -3.0, -4.0]);
+        put(&mut bytes, CELLS_BYTES, [1.0, 200.0, 150.0, 0.0]);
+        let sums = LayerSums::from_bytes(&bytes).expect("marked");
         assert_eq!(sums.cells.len(), 64 * 48);
         assert_eq!(sums.cells[1], [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(sums.cells[64 * 48 - 1], [-1.0, -2.0, -3.0, -4.0]);
@@ -164,5 +173,13 @@ mod tests {
             (sums.width, sums.height, sums.layer),
             (64, 48, UVec2::new(200, 150))
         );
+    }
+
+    #[test]
+    fn from_bytes_is_none_without_the_mark_or_when_short() {
+        let mut bytes = vec![0u8; PROBE_BYTES as usize];
+        assert_eq!(LayerSums::from_bytes(&bytes), None);
+        put(&mut bytes, CELLS_BYTES, [1.0, 200.0, 150.0, 0.0]);
+        assert_eq!(LayerSums::from_bytes(&bytes[..CELLS_BYTES]), None);
     }
 }

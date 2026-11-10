@@ -8,7 +8,9 @@
 // partial sums are reduced in workgroup memory and the cell written row-major from the
 // top-left. A pixel with α > 0 adds (α lin(C/α), α): the layer's premultiplied
 // file-encoded color un-premultiplied and decoded by the resolve's sRGB curve (D-6,
-// `resolve.wgsl`'s passthrough form), weighted by α.
+// `resolve.wgsl`'s passthrough form), weighted by α. After the cells, workgroup (0, 0)
+// writes the mark (1, W, H, 0): a read back without it was not probed (the Bevy adapter's
+// one-shot readback, `bevy/probe.rs`).
 
 @group(0) @binding(0) var layer: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read_write> cells: array<vec4<f32>>;
@@ -60,5 +62,8 @@ fn cs_probe(@builtin(workgroup_id) cell: vec3<u32>, @builtin(local_invocation_in
     }
     if t == 0u {
         cells[cell.y * GRID.x + cell.x] = partial[0];
+        if cell.x == 0u && cell.y == 0u {
+            cells[GRID.x * GRID.y] = vec4<f32>(1.0, f32(size.x), f32(size.y), 0.0);
+        }
     }
 }

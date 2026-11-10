@@ -15,6 +15,7 @@ mod bounds;
 mod camera;
 mod depth_copy;
 mod load;
+mod probe;
 mod render;
 
 use ::bevy::app::{App, First, Plugin, PostUpdate, Update};
@@ -29,6 +30,7 @@ use ftgsxr_core::{Camera, GpuLayoutOptions};
 pub use asset::{SplatAsset, load_splat_asset};
 pub use bounds::{SplatBounds, SplatTrim};
 pub use load::{SplatGpu, SplatLoad}; // Q-99; Q-172
+pub use probe::LayerProbe;
 
 use crate::gpu::{
     ColorTransform, Foveation, FrameStats, Overlays, QualityTier, RenderMode, SortMode,
@@ -224,6 +226,8 @@ impl Plugin for SplatPlugin {
             .init_resource::<SplatShLimit>()
             .init_resource::<load::GpuModels>()
             .init_resource::<render::StatsInbox>()
+            .init_resource::<LayerProbe>()
+            .init_resource::<probe::ProbeReadback>()
             .add_observer(load::make_camera_follow_d6)
             .add_observer(load::clear_late_splat_camera)
             .add_observer(load::sample_late_view_depth)
@@ -232,6 +236,7 @@ impl Plugin for SplatPlugin {
                 Update,
                 (load::start_loads, load::finish_loads, bounds::update_bounds).chain(),
             )
+            .add_systems(Update, probe::request)
             .add_systems(PostUpdate, load::upload_models);
         let inbox = app.world().resource::<render::StatsInbox>().clone();
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
