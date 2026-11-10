@@ -447,8 +447,9 @@ pub struct Lighting {
     // Q-395
     pub denied_auto: Option<&'static str>,
     /// Set by the Environment tab's "Match room exposure" on a press, cleared by the XR
-    /// crate's `light` when it requests the layer probe; false by default. Session state.
-    // Q-396
+    /// crate's `light` every frame it sees it, requesting the layer probe only while
+    /// `can_match` holds and no result is awaited; false by default. Session state.
+    // Q-396, Q-397
     pub match_exposure: bool,
     /// Written by the XR crate's `light` each frame: an auto mode runs the camera past
     /// its warm-up with a thumbnail; false by default and without the XR crate, so the
