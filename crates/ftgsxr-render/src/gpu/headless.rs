@@ -20,6 +20,7 @@ use super::frame::FrameBuffers;
 use super::inputs::{ColorTransform, ModelDraw, Overlays, RenderMode, SortPose, ViewParams};
 use super::model::GpuModel;
 use super::passes::SplatPasses;
+use super::probe::{CELLS_BYTES, LayerSums, ProbePass};
 use super::readback::half_to_f32;
 use super::tier::{Capacity, DESKTOP_FALLBACK_BUDGET, QualityTier, SortMode};
 
@@ -44,6 +45,7 @@ struct Packed {
 struct Gpu {
     dev: SplatDevice,
     passes: SplatPasses,
+    probe: ProbePass,
     models: Vec<GpuModel>,
     frame: Option<FrameBuffers>,
     lost: Arc<AtomicBool>,
@@ -69,6 +71,7 @@ impl Gpu {
                 flag.store(true, Ordering::Release);
             });
         let passes = SplatPasses::new(&dev, LAYER_FORMAT, None, tier)?;
+        let probe = ProbePass::new(dev.device())?;
         let models = packed
             .iter()
             .map(|p| GpuModel::upload(&dev, &p.arrays, p.index.clone(), &p.conventions))
@@ -76,6 +79,7 @@ impl Gpu {
         Ok(Gpu {
             dev,
             passes,
+            probe,
             models,
             frame: None,
             lost,
@@ -174,6 +178,34 @@ impl HeadlessRenderer {
         tau: f64,
         background: [f32; 3],
     ) -> Result<RenderImage, RenderError> {
+        self.with_recovery(models, |r| r.render_once(models, camera, tau, background))
+    }
+
+    /// The layer probe of the same render's layer (E14's exposure match, R-21); it blocks,
+    /// outside any frame loop.
+    ///
+    /// The layer is drawn as `render` draws it, then `probe.wgsl` sums each cell of the
+    /// 64 × 48 grid over it, (Σ α r_lin, Σ α g_lin, Σ α b_lin, Σ α), and the grid is read
+    /// back. A lost device is recovered once, as in `render`.
+    ///
+    /// # Panics
+    ///
+    /// When an id was not returned by this renderer's `load`.
+    pub fn probe(
+        &mut self,
+        models: &[(ModelId, Pose)],
+        camera: &Camera,
+        tau: f64,
+    ) -> Result<LayerSums, RenderError> {
+        self.with_recovery(models, |r| r.probe_once(models, camera, tau))
+    }
+
+    /// `run` with E-GPU-LOST's single recovery, after checking the ids.
+    fn with_recovery<T>(
+        &mut self,
+        models: &[(ModelId, Pose)],
+        mut run: impl FnMut(&mut HeadlessRenderer) -> Result<T, RenderError>,
+    ) -> Result<T, RenderError> {
         for (id, _) in models {
             assert!(
                 (id.0 as usize) < self.packed.len(),
@@ -185,7 +217,7 @@ impl HeadlessRenderer {
             let result = if self.gpu.is_lost() {
                 Err(RenderError::DeviceLost)
             } else {
-                self.render_once(models, camera, tau, background)
+                run(self)
             };
             match result {
                 Err(RenderError::DeviceLost) if !self.recovered => {
@@ -214,6 +246,81 @@ impl HeadlessRenderer {
         tau: f64,
         background: [f32; 3],
     ) -> Result<RenderImage, RenderError> {
+        let (w, h) = (camera.width, camera.height);
+        let (layer, mut enc) = self.draw_layer(models, camera, tau);
+        let gpu = &self.gpu;
+        let device = gpu.dev.device();
+        let row_bytes = (w * TEXEL_BYTES).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("ftgsxr headless read back"),
+            size: u64::from(row_bytes) * u64::from(h),
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &layer,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let bytes = gpu.submit_and_read(enc, &staging)?;
+        composite(&bytes, w, h, row_bytes, background)
+    }
+
+    fn probe_once(
+        &mut self,
+        models: &[(ModelId, Pose)],
+        camera: &Camera,
+        tau: f64,
+    ) -> Result<LayerSums, RenderError> {
+        let (layer, mut enc) = self.draw_layer(models, camera, tau);
+        let gpu = &self.gpu;
+        let device = gpu.dev.device();
+        let cells = device.create_buffer(&BufferDescriptor {
+            label: Some("ftgsxr headless probe"),
+            size: CELLS_BYTES,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&BufferDescriptor {
+            label: Some("ftgsxr headless probe read back"),
+            size: CELLS_BYTES,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let view = layer.create_view(&wgpu::TextureViewDescriptor::default());
+        gpu.probe.encode(device, &mut enc, &view, &cells);
+        enc.copy_buffer_to_buffer(&cells, 0, &staging, 0, CELLS_BYTES);
+        let bytes = gpu.submit_and_read(enc, &staging)?;
+        Ok(LayerSums::from_bytes(
+            &bytes,
+            UVec2::new(camera.width, camera.height),
+        ))
+    }
+
+    /// §1.4 stages 1–5 for `models` into a new layer cleared to (0, 0, 0, 0), encoded on
+    /// the returned encoder, not yet submitted.
+    fn draw_layer(
+        &mut self,
+        models: &[(ModelId, Pose)],
+        camera: &Camera,
+        tau: f64,
+    ) -> (wgpu::Texture, wgpu::CommandEncoder) {
         let capacity = match self.tier.capacity {
             Capacity::Fixed(c) => c,
             // Q-86: the instances' total N.
@@ -264,18 +371,13 @@ impl HeadlessRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: LAYER_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            // The probe reads the layer as a texture (R-21).
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let layer_view = layer.create_view(&wgpu::TextureViewDescriptor::default());
-        let row_bytes = (w * TEXEL_BYTES).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let staging = device.create_buffer(&BufferDescriptor {
-            label: Some("ftgsxr headless read back"),
-            size: u64::from(row_bytes) * u64::from(h),
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("ftgsxr headless render"),
         });
@@ -302,43 +404,30 @@ impl HeadlessRenderer {
             });
             gpu.passes.encode_draw(&mut pass, frame, &view, None);
         }
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &layer,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row_bytes),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        gpu.dev.queue().submit([enc.finish()]);
+        (layer, enc)
+    }
+}
+
+impl Gpu {
+    /// Submits `enc` and reads `staging` back, blocking; E-GPU-LOST when the device is lost.
+    fn submit_and_read(
+        &self,
+        enc: wgpu::CommandEncoder,
+        staging: &wgpu::Buffer,
+    ) -> Result<Vec<u8>, RenderError> {
+        self.dev.queue().submit([enc.finish()]);
         let mapped = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&mapped);
         staging.map_async(wgpu::MapMode::Read, .., move |r| {
             flag.store(r.is_ok(), Ordering::Release);
         });
-        let polled = device.poll(wgpu::PollType::wait_indefinitely());
-        if polled.is_err() || gpu.is_lost() || !mapped.load(Ordering::Acquire) {
+        let polled = self.dev.device().poll(wgpu::PollType::wait_indefinitely());
+        if polled.is_err() || self.is_lost() || !mapped.load(Ordering::Acquire) {
             return Err(RenderError::DeviceLost);
         }
-        let image = {
-            let bytes = staging.get_mapped_range(..);
-            composite(&bytes, w, h, row_bytes, background)
-        };
+        let bytes = staging.get_mapped_range(..).to_vec();
         staging.unmap();
-        image
+        Ok(bytes)
     }
 }
 

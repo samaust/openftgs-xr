@@ -4,7 +4,7 @@
 //! device, `GpuModel`, frame buffers, the frame inputs, the passes (`SplatPasses`: the cull
 //! and size passes of stages 1–3, the radix sort of stage 4, the splat and centers draws
 //! of stages 5 and 6, the resolve of stage 7 and the statistics of stage 8), the frame
-//! buffers' read back, the headless renderer and the import of a Vulkan image (Q-339).
+//! buffers' read back, the layer probe, the headless renderer and the import of a Vulkan image (Q-339).
 
 pub(crate) mod device;
 mod error;
@@ -14,6 +14,7 @@ mod import;
 mod inputs;
 pub(crate) mod model;
 pub(crate) mod passes;
+pub(crate) mod probe;
 mod readback;
 mod sort;
 mod stats;
@@ -29,6 +30,7 @@ pub use inputs::{
 };
 pub use model::GpuModel;
 pub use passes::SplatPasses;
+pub use probe::LayerSums;
 pub use readback::{FrameContents, RecordView}; // Q-69
 pub use stats::{FrameStats, GpuTimes};
 pub use tier::{Capacity, Foveation, QualityTier, SortKey, SortMode};
