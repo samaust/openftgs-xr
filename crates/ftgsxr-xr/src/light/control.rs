@@ -173,6 +173,8 @@ pub(crate) struct Outputs {
     pub(crate) consume_match: bool,
     /// `LayerProbe.request` set (Q-396).
     pub(crate) request_probe: bool,
+    /// `LayerProbe.request` cleared: the awaited probe given up (Q-397).
+    pub(crate) cancel_probe: bool,
     /// `lighting_manual.exposure_ev` written by the match (Q-396).
     pub(crate) write_exposure: Option<f32>,
     /// Information toasts raised (the match's, Q-396).
@@ -215,8 +217,9 @@ pub(crate) struct Control {
     pub(crate) pose_seen: bool,
     /// E14's L_room of the newest thumbnail since the start, over the mode's Ω.
     room: Option<f32>,
-    /// A layer probe was requested for the match and its result is awaited (Q-396).
-    awaiting: bool,
+    /// A layer probe was requested for the match and its result is awaited: the frames
+    /// since the request (Q-396, Q-397).
+    awaiting: Option<u32>,
 }
 
 impl Default for Control {
@@ -238,7 +241,7 @@ impl Default for Control {
             thumbs: 0,
             pose_seen: false,
             room: None,
-            awaiting: false,
+            awaiting: None,
         }
     }
 }
@@ -495,31 +498,43 @@ impl Control {
     // Q-396, Q-397
     fn exposure_match(&mut self, out: &mut Outputs, i: &Inputs, warm_auto: bool) {
         out.can_match = warm_auto && self.room.is_some();
-        if self.awaiting
-            && let Some(sums) = i.exposure.probe
-        {
-            self.awaiting = false;
-            let room = self.room.unwrap_or(f32::NAN);
-            let current = i.env.lighting_manual.exposure_ev;
-            let note = match matched_exposure_ev(current, room, sums, i.exposure.cells) {
-                ExposureMatch::Set { ev, clamped } => {
-                    out.write_exposure = Some(ev);
-                    // `+0.0`, never `-0.0`.
-                    let shown = (ev * 10.0).round() / 10.0 + 0.0;
-                    let clamp = if clamped { " (clamped)" } else { "" };
-                    format!(
-                        "Exposure set to {shown:+.1} EV from the room; refine it with the slider{clamp}"
-                    )
-                }
-                ExposureMatch::NotInView => "The model is not in view".to_owned(),
-            };
-            info!("light: {note}");
-            out.notes.push(note);
+        if let Some(frames) = self.awaiting {
+            if !out.can_match {
+                // Matching no longer offered: the result, if any, is dropped (Q-397).
+                self.awaiting = None;
+                out.cancel_probe = true;
+            } else if let Some(sums) = i.exposure.probe {
+                self.awaiting = None;
+                let room = self.room.unwrap_or(f32::NAN);
+                let current = i.env.lighting_manual.exposure_ev;
+                let note = match matched_exposure_ev(current, room, sums, i.exposure.cells) {
+                    ExposureMatch::Set { ev, clamped } => {
+                        out.write_exposure = Some(ev);
+                        // `+0.0`, never `-0.0`.
+                        let shown = (ev * 10.0).round() / 10.0 + 0.0;
+                        let clamp = if clamped { " (clamped)" } else { "" };
+                        format!(
+                            "Exposure set to {shown:+.1} EV from the room; refine it with the slider{clamp}"
+                        )
+                    }
+                    ExposureMatch::NotInView => NOT_IN_VIEW.to_owned(),
+                };
+                info!("light: {note}");
+                out.notes.push(note);
+            } else if frames + 1 >= PROBE_FRAMES_MAX {
+                // No left-eye layer drawn: given up (Q-397).
+                self.awaiting = None;
+                out.cancel_probe = true;
+                info!("light: {NOT_IN_VIEW} (no layer probed in {PROBE_FRAMES_MAX} frames)");
+                out.notes.push(NOT_IN_VIEW.to_owned());
+            } else {
+                self.awaiting = Some(frames + 1);
+            }
         }
         if i.exposure.pressed {
             out.consume_match = true;
-            if out.can_match && !self.awaiting {
-                self.awaiting = true;
+            if out.can_match && self.awaiting.is_none() {
+                self.awaiting = Some(0);
                 out.request_probe = true;
             }
         }
@@ -531,6 +546,9 @@ impl Control {
         LightingMode::from_settings(&e, self.feature())
     }
 }
+
+/// E14's "the UI says the model is not in view" (Q-396).
+const NOT_IN_VIEW: &str = "The model is not in view";
 
 /// The plugin, added by `plugin` with `XrPlugin.passthrough`.
 pub(crate) struct LightPlugin;
@@ -584,6 +602,11 @@ type Eye = (
     &'static GlobalTransform,
     &'static Projection,
 );
+
+/// Frames after which an awaited probe with no result is given up (Q-397): no left-eye
+/// `LinearOver` layer was drawn, so the model is not in view. Several of the render side's
+/// readback retries (8 frames each) fit in it.
+pub(crate) const PROBE_FRAMES_MAX: u32 = 30;
 
 /// E14's grid over the layer.
 const CELLS: bevy::math::UVec2 = bevy::math::UVec2::new(64, 48);
@@ -639,6 +662,7 @@ fn control(
         .map(|((_, at, bounds, _), (_, view, projection))| {
             let clip_from_model =
                 projection.get_clip_from_view() * view.to_matrix().inverse() * at.to_matrix();
+            // Q-396, Q-397
             box_cells(clip_from_model, bounds.aabb.min, bounds.aabb.max, CELLS)
         });
     let out = control.step(
@@ -667,10 +691,12 @@ fn control(
     if out.consume_match {
         lighting.match_exposure = false;
     }
-    if out.request_probe
-        && let Some(p) = probe.as_mut()
-    {
-        p.request = true;
+    if let Some(p) = probe.as_mut() {
+        if out.request_probe {
+            p.request = true;
+        } else if out.cancel_probe {
+            p.request = false;
+        }
     }
     if lighting.can_match != out.can_match {
         lighting.can_match = out.can_match;
@@ -1700,6 +1726,72 @@ mod tests {
         );
         assert_eq!(out.write_exposure, None);
         assert!(out.notes.is_empty());
+    }
+
+    /// Q-397: an awaited result is dropped, and the wait ended, once matching stops being
+    /// offered (a camera stop, a mode change); a later result writes nothing.
+    #[test]
+    fn step_match_result_after_a_stop_is_dropped() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        e.lighting_manual.exposure_ev = 0.5;
+        let mut c = session();
+        warm_auto(&mut c, &p, &cam, &mut e, t0);
+        let pass = EnvironmentMode::Passthrough;
+        let out = frame_exposure(&mut c, &p, &mut e, at(100), pass, false, press());
+        assert!(out.request_probe);
+        e.lighting_mode = "manual".into();
+        let out = frame(&mut c, &p, &mut e, at(110));
+        assert!(!out.can_match && out.cancel_probe, "the wait ended");
+        let model = sums(HALF_CODE_LINEAR / 2.0);
+        let late = Exposure {
+            probe: Some(&model),
+            ..Exposure::default()
+        };
+        let out = frame_exposure(&mut c, &p, &mut e, at(120), pass, false, late);
+        assert_eq!(out.write_exposure, None);
+        assert!(out.notes.is_empty());
+        // Back in auto global and warmed up: the late result is still not taken, and a
+        // press requests again.
+        e.lighting_mode = "auto-global".into();
+        frame(&mut c, &p, &mut e, at(200));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 20.0));
+        frame(&mut c, &p, &mut e, at(210));
+        *cam.thumb.lock().unwrap() = Some(thumb([0.5; 3], 21.5));
+        assert!(frame(&mut c, &p, &mut e, at(220)).can_match);
+        let out = frame_exposure(&mut c, &p, &mut e, at(300), pass, false, late);
+        assert_eq!(out.write_exposure, None);
+        let out = frame_exposure(&mut c, &p, &mut e, at(310), pass, false, press());
+        assert!(out.request_probe);
+        assert_eq!(e.lighting_manual.exposure_ev, 0.5);
+    }
+
+    /// Q-397: a probe with no result after `PROBE_FRAMES_MAX` frames is given up: the
+    /// request cancelled, "The model is not in view" toasted, a later press requests again.
+    #[test]
+    fn step_match_gives_up_without_a_result() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let (p, cam) = fake(true, true);
+        let cam = cam.unwrap();
+        let mut e = env("auto-global");
+        let mut c = session();
+        warm_auto(&mut c, &p, &cam, &mut e, t0);
+        let pass = EnvironmentMode::Passthrough;
+        let out = frame_exposure(&mut c, &p, &mut e, at(100), pass, false, press());
+        assert!(out.request_probe);
+        for k in 1..PROBE_FRAMES_MAX {
+            let out = frame(&mut c, &p, &mut e, at(100 + k as u64));
+            assert!(!out.cancel_probe && out.notes.is_empty(), "frame {k}");
+        }
+        let out = frame(&mut c, &p, &mut e, at(100 + PROBE_FRAMES_MAX as u64));
+        assert!(out.cancel_probe);
+        assert_eq!(out.notes, ["The model is not in view"]);
+        let out = frame_exposure(&mut c, &p, &mut e, at(200), pass, false, press());
+        assert!(out.request_probe);
     }
 
     /// Q-396: " (clamped)" when E14's clamp was hit; `NotInView` writes nothing and
