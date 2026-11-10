@@ -304,8 +304,9 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// without the manual offset the sliders show (Q-394); otherwise `Lighting.transform`'s.
 /// True when "Ask again" was pressed for a denied camera (Q-322), which also writes
 /// back the auto mode the denial wrote to `manual`, `Lighting.denied_auto` (auto
-/// global when none was kept), so the XR crate asks once and a grant runs that mode
-/// (Q-384, Q-395).
+/// global when none was kept) and, as enabling an auto mode, `lighting_reference =
+/// None`, so the XR crate asks once and a grant runs that mode and captures a new
+/// reference (Q-384, Q-395).
 // Q-322, Q-383, Q-384, Q-385, Q-388, Q-394, Q-395
 fn lighting_controls(
     ui: &mut egui::Ui,
@@ -345,10 +346,11 @@ fn lighting_controls(
                 ui.label("permission denied");
                 ask = ui.button("Ask again").clicked();
             });
-            // Q-395: write the denied auto mode back; keep `lighting_reference`, as
-            // for a mode that arrives (Q-385).
+            // Q-395: write the denied auto mode back; the restore enables it (§1.9),
+            // so it clears `lighting_reference`, as an auto pick does.
             if ask {
                 e.lighting_mode = denied_auto.unwrap_or("auto-global").into();
+                e.lighting_reference = None;
             }
         }
         FeatureState::Absent => {
@@ -1284,8 +1286,9 @@ mod tests {
 
     /// Q-384, Q-395 (#691, `cpu`): under a denied camera with the setting written back to
     /// `manual`, "Ask again" writes `Lighting.denied_auto` back into `lighting_mode`
-    /// (auto global when none was kept, or without `Lighting`), keeps
-    /// `lighting_reference`, and asks for the camera once.
+    /// (auto global when none was kept, or without `Lighting`), writes
+    /// `lighting_reference = None` from a saved reference, as enabling an auto mode does
+    /// (§1.9), and asks for the camera once.
     #[test]
     fn the_environment_tabs_ask_again_writes_the_denied_auto_mode_back() {
         let ctx = egui::Context::default();
@@ -1324,7 +1327,7 @@ mod tests {
             }
             let env = world.resource::<SettingsRes>().0.environment.clone();
             assert_eq!(env.lighting_mode, expected, "{kept:?}");
-            assert_eq!(env.lighting_reference, reference, "{kept:?}");
+            assert_eq!(env.lighting_reference, None, "{kept:?}");
             let asked: Vec<AskPermissionAgain> = world
                 .resource_mut::<Messages<AskPermissionAgain>>()
                 .drain()
