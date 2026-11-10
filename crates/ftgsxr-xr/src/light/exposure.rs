@@ -13,7 +13,7 @@ const EV_MAX: f32 = 4.0;
 /// E14's 1 % rule: the summed α over the measured cells against their pixels.
 const ALPHA_MIN_FRACTION: f64 = 0.01;
 /// BT.601's luma weights (E14).
-const LUMA: [f64; 3] = [0.299, 0.587, 0.114];
+pub(crate) const LUMA: [f64; 3] = [0.299, 0.587, 0.114];
 
 /// The piecewise sRGB decode.
 fn srgb_decode(c: f64) -> f64 {

@@ -389,10 +389,11 @@ fn lighting_controls(
     ui.add(egui::Slider::new(&mut m.tint, -1.0..=1.0).text("tint"));
     // Q-396: the press only sets the flag; `light` writes `exposure_ev` (E14).
     let can_match = light.as_ref().is_some_and(|l| l.can_match);
+    const TIP: &str = "A starting point: a model's colors need not match the room's.";
     let pressed = ui
         .add_enabled(can_match, egui::Button::new("Match room exposure"))
-        .on_hover_text("A starting point: a model's colors need not match the room's.")
-        .on_disabled_hover_text("A starting point: a model's colors need not match the room's.")
+        .on_hover_text(TIP)
+        .on_disabled_hover_text(TIP)
         .clicked();
     if !can_match {
         ui.label("needs an auto lighting mode in passthrough");
