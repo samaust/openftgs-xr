@@ -74,13 +74,18 @@ fn gpu_shared_center_records_keep_rows_visible_in_either_eye() {
 }
 
 /// R-5's tolerances (§3.2): positions and depths 10⁻⁵, covariances 10⁻⁴ relative, with a
-/// floor of 10⁻⁴ of the largest component as R-5's conics (Q-112).
+/// floor of 10⁻⁴ of the largest component as R-5's conics (Q-112, Q-T721.2).
 const POSITION: f32 = 1e-5;
 const DEPTH: f32 = 1e-5;
+// Q-T721.2
 const COV_REL: f32 = 1e-4;
-/// D-12's (§1.12) half-precision bound, 2⁻¹¹ relative: Σ^S under `half_records`, and the
-/// color and σ_eff, which every shared-center record holds as half floats (§1.4 stage 2).
+/// D-12's (§1.12) half-precision bound, 2⁻¹¹ relative: Σ^S under `half_records`, added to
+/// `COV_REL`, and the color and σ_eff, which every shared-center record holds as half
+/// floats (§1.4 stage 2), with 10⁻⁵ for float32's evaluation (Q-T721.2).
+// Q-T721.2
 const HALF_REL: f32 = 1.0 / 2048.0;
+// Q-T721.2
+const COLOR_ABS: f32 = 1e-5;
 
 /// One visible row's oracle values (float64, rounded once): μ^S and Σ^S (E1, E5), the
 /// color at the sort pose's origin (E4, D-4) and σ_eff (E2), and its forward depth along
@@ -205,7 +210,7 @@ fn gpu_frame_contents_shared_holds_the_shared_records_against_the_oracle() {
             }
             for (i, (&g, &w)) in r.color.iter().zip(&want.color).enumerate() {
                 assert!(
-                    (g - w).abs() <= HALF_REL * w.abs() + 1e-5,
+                    (g - w).abs() <= HALF_REL * w.abs() + COLOR_ABS,
                     "row {row} color[{i}]: {g} against {w}"
                 );
             }

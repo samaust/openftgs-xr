@@ -257,7 +257,7 @@ fn gpu_r13_time_center_colormap_spans_tau0_to_tau1() {
     assert!(covered >= 3 * 9, "three discs drawn ({covered} pixels)");
 }
 
-/// The probe camera moved by `dx` along x: an eye of a pair 64 mm apart.
+/// The probe camera moved by `dx` along x: an eye of a pair.
 fn eye(dx: f64) -> Camera {
     let mut c = probe_camera();
     // t_w = −R_w c with R_w's first row (1, 0, 0).
@@ -265,7 +265,8 @@ fn eye(dx: f64) -> Camera {
     c
 }
 
-/// R-13 in shared-center mode (D-4, #721, Q-400): two eyes 64 mm apart share one prepare
+/// R-13 in shared-center mode (D-4, #721, Q-400): two eyes 16 cm apart, so that every
+/// disc's μ′ differs by more than 2 px between them, beyond the 1 px criterion, share one prepare
 /// at their midpoint; in each eye the discs lie at the moved positions' μ′ in that eye
 /// (within 1 px: the pixels within ρ − 1 px of it show its DC color within 1/255, opaque,
 /// and none beyond ρ + 1 px is covered), in both shared-center record layouts and in
@@ -279,15 +280,19 @@ fn gpu_r13_shared_center_centers_lie_at_each_eyes_mu_prime() {
     let rows = rows();
     let model = model(&rows);
     let gpu_model = upload(&dev, &model);
-    let eyes = [eye(-0.032), eye(0.032)];
+    const HALF_BASE: f32 = 0.08;
+    let eyes = [eye(-f64::from(HALF_BASE)), eye(f64::from(HALF_BASE))];
     let centers = |dx: f32| -> Vec<(Vec2, [f32; 3])> {
         rows.iter()
             .map(|r| (projected_from(r, dx).0, r.color))
             .collect()
     };
-    let expected = [centers(-0.032), centers(0.032)];
-    // The eyes see the discs at different μ′, so a disc drawn at the other eye's μ′ fails.
-    assert!(expected[0][0].0.distance(expected[1][0].0) > 0.5);
+    let expected = [centers(-HALF_BASE), centers(HALF_BASE)];
+    // Every disc's μ′ differs by more than 2 px between the eyes, so a disc drawn at the
+    // other eye's μ′ (or view 0's) fails the 1 px criterion.
+    for (l, r) in expected[0].iter().zip(&expected[1]) {
+        assert!(l.0.distance(r.0) > 2.0, "disparity {}", l.0.distance(r.0));
+    }
     let modes = [
         RenderMode::Centers {
             pixel_radius: RHO,
@@ -321,7 +326,7 @@ fn gpu_r13_shared_center_centers_lie_at_each_eyes_mu_prime() {
             );
             let depth = frame.depth.as_ref().expect("depth-tested");
             for r in &rows {
-                let (mean, z) = projected_from(r, if k == 0 { -0.032 } else { 0.032 });
+                let (mean, z) = projected_from(r, if k == 0 { -HALF_BASE } else { HALF_BASE });
                 let i = mean.y.floor() as usize * 64 + mean.x.floor() as usize;
                 let want = 0.01 / z;
                 assert!(
