@@ -214,6 +214,11 @@ impl P1Scene {
     /// The scene, run until the model uploaded and a few frames more, so the next frames
     /// draw it.
     fn settled(output: OutputSpace, format: TextureFormat) -> P1Scene {
+        P1Scene::settled_sorted(output, format, SortMode::PerView)
+    }
+
+    /// `settled` with the camera's sort mode `sort`.
+    fn settled_sorted(output: OutputSpace, format: TextureFormat, sort: SortMode) -> P1Scene {
         let (_, request) = probe("P1");
         let item = &request.items[0];
         let (w, h) = (item.camera.width, item.camera.height);
@@ -277,10 +282,7 @@ impl P1Scene {
                 RenderTarget::Image(target.clone().into()),
                 bevy_projection(&item.camera),
                 bevy_transform(&item.camera),
-                SplatCamera {
-                    sort: SortMode::PerView,
-                    output,
-                },
+                SplatCamera { sort, output },
             ))
             .id();
         let model = app
@@ -430,6 +432,35 @@ fn gpu_bevy_adapter_renders_p1_like_the_headless_renderer() {
         "E15's tier: {m:?}"
     );
     // A blank image would pass against a blank reference: P1's first item covers pixels.
+    assert!(ours.alpha.iter().any(|&a| a > 0.1), "the model was drawn");
+    assert_stats(stats);
+}
+
+/// #722 (§2.4, Q-399): a shared-center camera alone is a group of one, prepared at its own
+/// pose, so it renders as the camera does per view: P1's first item meets E15's tier
+/// against the reference render, as `gpu_bevy_adapter_renders_p1_like_the_headless_renderer`.
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_renders_p1_from_a_shared_center_group_of_one() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let mut scene = P1Scene::settled_sorted(
+        OutputSpace::FileEncoded,
+        TextureFormat::Rgba16Float,
+        SortMode::SharedCenter,
+    );
+    let data = scene.readback(0);
+    let stats = *scene.app.world().resource::<SplatStats>();
+    let (reference, background) = p1_reference();
+    let ours = composite(&data, reference.width, reference.height, background);
+    let m = metrics(&reference, &ours);
+    eprintln!(
+        "P1 from a shared-center group of one: PSNR {:.2} dB, s {:.4}, s_alpha {:.4}",
+        m.psnr, m.share, m.alpha
+    );
+    assert!(
+        m.psnr >= MIN_PSNR && m.share <= MAX_SHARE && m.alpha <= MAX_SHARE,
+        "E15's tier: {m:?}"
+    );
     assert!(ours.alpha.iter().any(|&a| a > 0.1), "the model was drawn");
     assert_stats(stats);
 }
