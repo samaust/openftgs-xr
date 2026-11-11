@@ -7,14 +7,16 @@
 //! fragment's own ray depth (D-45). The tier is the conformance tier with
 //! `occlusion: true` (Q-347); the images are written as an OpenXR projection writes them
 //! (Q-340, `stored_depth`), and each occluded frame is compared with the same frame drawn
-//! without an input, so the weight is the ratio of the two layers' alphas.
+//! without an input, so the weight is the ratio of the two layers' alphas. The wall's
+//! visibility clause is also checked in shared-center mode for two eyes (D-4, #721), each
+//! eye's fragments weighed at that eye's z\_c (Q-400).
 
 use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, UVec2, occlusion_weight};
 use ftgsxr_render::{ColorTransform, RenderMode, SplatDevice};
 use ftgsxr_testkit::{gpu_context, layer_messages};
 
 use crate::display_support::{
-    Occlusion, Row, Run, draw, model, render_occluded, stored_depth, upload,
+    Occlusion, Row, Run, draw, model, render_occluded, render_shared_stereo, stored_depth, upload,
 };
 
 const W: u32 = 64;
@@ -278,4 +280,70 @@ fn gpu_r12_a_45_degree_wall_gives_the_edge_of_each_fragments_own_ray() {
         hidden > 100 && kept > 100,
         "both sides covered: {hidden} hidden, {kept} kept"
     );
+}
+
+/// R-12's visibility clause in shared-center mode (D-4, #721, Q-400): two eyes 64 mm apart
+/// share one prepare, each with a synthetic depth image of a wall at 2 m over its whole
+/// image (its own camera, nearZ 0.25, farZ 20, soft with δ = 5 cm). In both eyes the
+/// primitive at 3 m (left half of the image) is hidden and the one at 1 m (right half) is
+/// drawn exactly as the same shared-center frame without occlusion, in both record layouts.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r12_shared_center_a_wall_at_2_m_hides_3_m_and_keeps_1_m_in_both_eyes() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let (near, far) = (0.25, 20.0);
+    let wall = stored_depth(2.0, near, far);
+    let eyes =
+        [-0.032, 0.032].map(|x| camera(W, H, 60.0, DMat3::IDENTITY, DVec3::new(x, 0.0, 0.0)));
+    let occlusion = eyes.map(|eye| Occlusion {
+        depth: vec![wall; (W * H) as usize],
+        size: UVec2::new(W, H),
+        format: wgpu::TextureFormat::R32Float,
+        camera: eye,
+        near: near as f32,
+        far: far as f32,
+        soft: true,
+        delta_m: 0.05,
+    });
+    // u = 32 + 60 (x − x_eye) / z: about 11 for the row at 3 m, 55 for the row at 1 m.
+    let rows = [
+        row([-1.0, -0.2, 3.0], 0.05, 0.9),
+        row([0.4, 0.1, 1.0], 0.02, 0.9),
+    ];
+    let m = upload(&dev, &model(&rows));
+    let draws = [draw(&m, 0.95, RenderMode::Splats, ColorTransform::IDENTITY)];
+    for half_records in [false, true] {
+        let alphas = |occ: [Option<&Occlusion>; 2]| {
+            render_shared_stereo(&dev, &draws, &eyes, &RUN, occ, half_records)
+                .0
+                .map(|f| f.layer.iter().map(|p| p[3]).collect::<Vec<f32>>())
+        };
+        let reference = alphas([None, None]);
+        let occluded = alphas([Some(&occlusion[0]), Some(&occlusion[1])]);
+        for k in 0..2 {
+            let (mut behind, mut front) = (0, 0);
+            for i in 0..(W * H) as usize {
+                let u = i as u32 % W;
+                if reference[k][i] > 0.1 {
+                    if u < W / 2 {
+                        behind += 1;
+                    } else {
+                        front += 1;
+                    }
+                }
+                let expected = if u < W / 2 { 0.0 } else { reference[k][i] };
+                assert_eq!(
+                    occluded[k][i],
+                    expected,
+                    "eye {k}, pixel ({u}, {}), half Σ^S: {half_records}",
+                    i as u32 / W
+                );
+            }
+            assert!(
+                behind > 0 && front > 0,
+                "eye {k}: both primitives drawn without occlusion ({behind}, {front})"
+            );
+        }
+    }
 }
