@@ -11,7 +11,7 @@ use ftgsxr_render::{Foveation, SortMode, SplatStats, SplatTierState};
 
 use crate::library::TierReload;
 use crate::persist::{SettingsRes, TierPick};
-use crate::ui::{DockHooks, Tab};
+use crate::ui::{DockHooks, Tab, XrDisplay};
 
 /// The governor's switch and thresholds (§2.1, E16): it steps a knob down after
 /// `down_frames` consecutive frames over budget and up after `up_frames` under;
@@ -64,6 +64,10 @@ pub const HEADSET_LADDER: [Knob; 4] = [
     Knob::ShCap,
     Knob::SortMode,
 ]; // Q-178
+
+/// `HEADSET_LADDER` without the foveation, while `[xr] foveation` pins it or the runtime
+/// has none (Q-404).
+const HEADSET_LADDER_NO_FOVEATION: [Knob; 3] = [Knob::RenderScale, Knob::ShCap, Knob::SortMode];
 
 /// The two streaks E16 counts (Q-153).
 // Q-178
@@ -214,10 +218,9 @@ fn budget_ms(refresh_hz: f32) -> f32 {
 /// The refresh rate f_budget uses without an override (Q-153).
 const FALLBACK_HZ: f32 = 60.0;
 
-/// The build's ladder and the streaks (private state of the system).
-#[derive(Resource)]
+/// The streaks (private state of the system).
+#[derive(Resource, Default)]
 struct GovernorState {
-    ladder: &'static [Knob],
     counters: GovernorCounters,
 }
 
@@ -232,11 +235,7 @@ impl Plugin for GovernorPlugin {
             .resource_mut::<DockHooks>()
             .add(Tab::Display, display_section);
         app.init_resource::<Governor>()
-            .insert_resource(GovernorState {
-                // The headset's ladder joins with M-8 (Q-153).
-                ladder: &DESKTOP_LADDER,
-                counters: GovernorCounters::default(),
-            })
+            .init_resource::<GovernorState>()
             .add_message::<TierPick>()
             .add_systems(Update, (follow_settings, run_governor).chain())
             // Q-238, Q-240: the switch lands before `Update` and before the library's
@@ -327,12 +326,15 @@ fn display_section(world: &mut World, ui: &mut bevy_egui::egui::Ui) {
 }
 
 /// Each new statistics block's e into `govern` (E16); a frame without a new block counts
-/// to neither streak (Q-153, Q-178).
+/// to neither streak (Q-153, Q-178). While `XrDisplay` exists, the headset's ladder and
+/// f_budget from its refresh rate, no frame counting while it has none; otherwise the
+/// desktop's ladder and the monitor's rate (Q-404, Q-T723.1).
 fn run_governor(
     stats: Res<SplatStats>,
     gov: Res<Governor>,
     mut st: ResMut<GovernorState>,
     mut tier: ResMut<SplatTierState>,
+    (display, settings): (Option<Res<XrDisplay>>, Option<Res<SettingsRes>>),
     primary: Query<Option<&OnMonitor>, With<PrimaryWindow>>,
     monitors: Query<&Monitor>,
 ) {
@@ -340,19 +342,37 @@ fn run_governor(
         return;
     }
     let Some(frame) = stats.0 else { return };
-    let budget = gov.budget_override_ms.unwrap_or_else(|| {
-        let hz = primary
-            .iter()
-            .flatten()
-            .next()
-            .and_then(|m| monitors.get(m.0).ok())
-            .and_then(|m| m.refresh_rate_millihertz)
-            .map(|mhz| mhz as f32 / 1000.0)
-            .unwrap_or(FALLBACK_HZ);
-        budget_ms(hz)
-    });
+    // Q-153, Q-404: the ladder follows `XrDisplay`'s presence, read each frame, so the XR
+    // crate's plugin may be added after `AppPlugin`. An explicit `[xr] foveation`, which
+    // `display` applies, or a runtime without foveation takes that knob off the ladder.
+    let pinned = settings.is_some_and(|s| s.0.xr.foveation.is_some());
+    let ladder: &[Knob] = match &display {
+        None => &DESKTOP_LADDER,
+        Some(d) if pinned || !d.foveation => &HEADSET_LADDER_NO_FOVEATION,
+        Some(_) => &HEADSET_LADDER,
+    };
+    let budget = match (gov.budget_override_ms, display) {
+        // Q-T723.1: the override (R-17) is the budget, with or without a rate.
+        (Some(ms), _) => ms,
+        // Q-404: the headset's rate.
+        (None, Some(d)) => match d.refresh_hz {
+            Some(hz) => budget_ms(hz),
+            None => return,
+        },
+        (None, None) => {
+            let hz = primary
+                .iter()
+                .flatten()
+                .next()
+                .and_then(|m| monitors.get(m.0).ok())
+                .and_then(|m| m.refresh_rate_millihertz)
+                .map(|mhz| mhz as f32 / 1000.0)
+                .unwrap_or(FALLBACK_HZ);
+            budget_ms(hz)
+        }
+    };
     let e = frame.gpu_times_ms.total / budget;
-    let GovernorState { ladder, counters } = &mut *st;
+    let counters = &mut st.counters;
     // Write `SplatTierState` only on a step, so its change detection means a change.
     let mut copy = tier.clone();
     if let Some((knob, down)) = govern(&gov, counters, &mut copy, ladder, e) {
