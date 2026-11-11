@@ -4,7 +4,7 @@
 //! frame loop never calls (§2.4 rule 1, P-5).
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
-use ftgsxr_core::Vec2;
+use ftgsxr_core::{Vec2, Vec3};
 
 use super::device::SplatDevice;
 use super::frame::{COUNTER_WORDS, FrameBuffers, RecordMode};
@@ -24,6 +24,20 @@ pub struct RecordView {
     pub color: [f32; 4],
 }
 
+/// One shared-center record as the cull pass wrote it (§1.4 stage 2, D-4), decoded from
+/// the 64-byte layout or the 48-byte one with half-precision Σ^S (Q-400).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SharedRecordView {
+    /// μ^S, the stage-space position (E1, E5).
+    pub mean_stage: Vec3,
+    /// Σ^S as (xx, xy, xz, yy, yz, zz) (E5), from its half floats under `half_records`.
+    pub cov_stage: [f32; 6],
+    /// The color c at the midpoint's eye (E4, D-4) and σ_eff, from their half floats.
+    pub color: [f32; 4],
+    /// The sort key k̄ of the forward depth at the sort pose (E8, D-4).
+    pub key: u32,
+}
+
 /// What a frame's buffers hold after `encode_prepare` (Q-69).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameContents {
@@ -36,8 +50,10 @@ pub struct FrameContents {
     /// The rows that passed E3's exact test σ_eff ≥ α_skip in the cull, counted once per
     /// row and instance (Q-79).
     pub active_rows: u32,
-    /// The per-view records in slot order; empty in shared-center mode (decoded from M-8).
+    /// The per-view records in slot order; empty in shared-center mode.
     pub records: Vec<RecordView>,
+    /// The shared-center records in slot order; empty in per-view mode (Q-400).
+    pub shared: Vec<SharedRecordView>,
     /// The payloads in draw order (the slots, once the sort has run).
     pub sorted: Vec<u32>,
     /// The sort passes' dispatch arguments from stage 3.
@@ -83,6 +99,36 @@ fn decode_view_record(w: &[u32]) -> RecordView {
         depth: f(5),
         half_extent: Vec2::new(f(6), f(7)),
         color: [r, g, b, a],
+    }
+}
+
+/// Two half floats of one word, the first in the low bits.
+fn halves(w: u32) -> [f32; 2] {
+    [
+        half_to_f32((w & 0xffff) as u16),
+        half_to_f32((w >> 16) as u16),
+    ]
+}
+
+/// A shared-center record (`cull.wgsl`): 16 words, or 12 with Σ^S as half floats when
+/// `half` (Q-400).
+fn decode_shared_record(w: &[u32], half: bool) -> SharedRecordView {
+    let f = |i: usize| f32::from_bits(w[i]);
+    let (cov_stage, color_at) = if half {
+        let [a, b] = halves(w[4]);
+        let [c, d] = halves(w[5]);
+        let [e, g] = halves(w[6]);
+        ([a, b, c, d, e, g], 7)
+    } else {
+        ([f(4), f(5), f(6), f(7), f(8), f(9)], 10)
+    };
+    let [r, g] = halves(w[color_at]);
+    let [b, a] = halves(w[color_at + 1]);
+    SharedRecordView {
+        mean_stage: Vec3::new(f(0), f(1), f(2)),
+        cov_stage,
+        color: [r, g, b, a],
+        key: w[3],
     }
 }
 
@@ -133,7 +179,8 @@ pub(crate) fn read_buffers(dev: &SplatDevice, sources: &[(&wgpu::Buffer, u64)]) 
 }
 
 impl FrameBuffers {
-    /// The frame's counts, overflow flag, records and payloads, decoded (Q-69). It maps
+    /// The frame's counts, overflow flag, records and payloads, decoded (Q-69): the
+    /// per-view records into `records`, the shared-center ones into `shared` (Q-400). It maps
     /// and waits: a test and diagnostics hook, never called in the frame loop (P-5).
     /// Submit the frame's encoder first.
     ///
@@ -158,14 +205,36 @@ impl FrameBuffers {
                 (&set.payloads[0], u64::from(splats) * 4),
             ],
         );
-        let records = match self.mode {
-            RecordMode::PerView => words(&body[0])
-                .as_chunks::<12>()
-                .0
-                .iter()
-                .map(|w| decode_view_record(w))
-                .collect(),
-            RecordMode::Shared | RecordMode::SharedHalf => Vec::new(),
+        let body_words = words(&body[0]);
+        let (records, shared) = match self.mode {
+            RecordMode::PerView => (
+                body_words
+                    .as_chunks::<12>()
+                    .0
+                    .iter()
+                    .map(|w| decode_view_record(w))
+                    .collect(),
+                Vec::new(),
+            ),
+            // Q-400
+            RecordMode::Shared => (
+                Vec::new(),
+                body_words
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
+                    .map(|w| decode_shared_record(w, false))
+                    .collect(),
+            ),
+            RecordMode::SharedHalf => (
+                Vec::new(),
+                body_words
+                    .as_chunks::<12>()
+                    .0
+                    .iter()
+                    .map(|w| decode_shared_record(w, true))
+                    .collect(),
+            ),
         };
         FrameContents {
             visible_splats: splats,
@@ -173,6 +242,7 @@ impl FrameBuffers {
             overflow: counters[8] != 0,
             active_rows: counters[9],
             records,
+            shared,
             sorted: words(&body[1]),
             sort_dispatch: [dispatch[0], dispatch[1], dispatch[2]],
         }
@@ -213,5 +283,50 @@ mod tests {
         assert_eq!(r.depth, 4.0);
         assert_eq!(r.half_extent, Vec2::new(7.0, 9.0));
         assert_eq!(r.color, [0.5, 1.0, 2.0, 0.25]);
+    }
+
+    /// The 64-byte shared-center record of `cull.wgsl`: μ^S, the key, Σ^S as six f32
+    /// (xx, xy, xz, yy, yz, zz), the color and σ_eff as four half floats, the instance.
+    #[test]
+    fn decode_shared_record_reads_the_64_byte_layout_of_cull_wgsl() {
+        let mut w = [0u32; 16];
+        for (i, v) in [1.5f32, -2.0, 0.75].iter().enumerate() {
+            w[i] = v.to_bits();
+        }
+        w[3] = 0xdead_beef;
+        for (i, v) in [0.5f32, 0.125, -0.25, 2.0, 0.0625, 4.0].iter().enumerate() {
+            w[4 + i] = v.to_bits();
+        }
+        w[10] = 0x3800 | (0x3c00 << 16);
+        w[11] = 0x4000 | (0x3400 << 16);
+        w[12] = 3;
+        let r = decode_shared_record(&w, false);
+        assert_eq!(r.mean_stage, Vec3::new(1.5, -2.0, 0.75));
+        assert_eq!(r.key, 0xdead_beef);
+        assert_eq!(r.cov_stage, [0.5, 0.125, -0.25, 2.0, 0.0625, 4.0]);
+        assert_eq!(r.color, [0.5, 1.0, 2.0, 0.25]);
+    }
+
+    /// The 48-byte record with half-precision Σ^S: μ^S, the key, Σ^S as six half floats
+    /// in three words (the first of each pair in the low bits), the color, the instance.
+    #[test]
+    fn decode_shared_record_reads_the_48_byte_half_layout_of_cull_wgsl() {
+        let mut w = [0u32; 12];
+        for (i, v) in [1.5f32, -2.0, 0.75].iter().enumerate() {
+            w[i] = v.to_bits();
+        }
+        w[3] = 7;
+        // (0.5, 1.0), (−2.0, 0.25), (0.0, 65504) as half pairs.
+        w[4] = 0x3800 | (0x3c00 << 16);
+        w[5] = 0xc000 | (0x3400 << 16);
+        w[6] = 0x7bff << 16;
+        w[7] = 0x3c00 | (0x3800 << 16);
+        w[8] = 0x3400 | (0x3c00 << 16);
+        w[9] = 1;
+        let r = decode_shared_record(&w, true);
+        assert_eq!(r.mean_stage, Vec3::new(1.5, -2.0, 0.75));
+        assert_eq!(r.key, 7);
+        assert_eq!(r.cov_stage, [0.5, 1.0, -2.0, 0.25, 0.0, 65504.0]);
+        assert_eq!(r.color, [1.0, 0.5, 0.25, 1.0]);
     }
 }
