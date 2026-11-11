@@ -2,9 +2,10 @@
 
 //! Dv-12 on the device (§3.4, #228): selects 72 Hz and then 90 Hz (so the change event to
 //! 90 Hz fires even when the headset starts at 90), steps through every foveation
-//! level, then sets the render scale to 0.8 and waits for the session to run again. The
-//! verdict is PASS once the sequence completes; the host driver judges the rest from
-//! `display`'s log lines (the rate's change event, each level applied, the new size).
+//! level, then sets the render scale to 0.8 and waits for the session to run again, then
+//! to 1.0 and waits again (#729, Q-412: both re-created sizes logged). The verdict is PASS
+//! once the sequence completes; the host driver judges the rest from `display`'s log lines
+//! (the rate's change event, each level applied, the new sizes).
 
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ use crate::device_test::verdict;
 
 /// The test's name in the intent extra.
 pub(crate) const NAME: &str = "dv12";
-const TIMEOUT: Duration = Duration::from_secs(60);
+const TIMEOUT: Duration = Duration::from_secs(90);
 /// How long each step is left to take effect.
 const STEP: Duration = Duration::from_secs(2);
 const LEVELS: [Foveation; 5] = [
@@ -33,7 +34,11 @@ enum Step {
     Rate72,
     Rate,
     Level(usize),
-    Scale { left_running: bool },
+    /// The session re-created at `scale`: `left_running` once it stopped.
+    Scale {
+        scale: f32,
+        left_running: bool,
+    },
     Done,
 }
 
@@ -97,14 +102,36 @@ fn run(
         Step::Level(_) if waited => {
             ds.render_scale = 0.8;
             Some(Step::Scale {
+                scale: 0.8,
                 left_running: false,
             })
         }
-        Step::Scale { left_running } if !running && !left_running => {
-            Some(Step::Scale { left_running: true })
+        Step::Scale {
+            scale,
+            left_running: false,
+        } if !running => Some(Step::Scale {
+            scale,
+            left_running: true,
+        }),
+        Step::Scale {
+            scale,
+            left_running: true,
+        } if running && scale < 1.0 && waited => {
+            info!("dv12: render scale 0.8 applied, requesting 1.0");
+            ds.render_scale = 1.0;
+            Some(Step::Scale {
+                scale: 1.0,
+                left_running: false,
+            })
         }
-        Step::Scale { left_running: true } if running => {
-            verdict(NAME, true, "90 Hz, every level, render scale 0.8 requested");
+        Step::Scale {
+            left_running: true, ..
+        } if running && waited => {
+            verdict(
+                NAME,
+                true,
+                "90 Hz, every level, render scale 0.8 then 1.0 requested",
+            );
             Some(Step::Done)
         }
         _ => None,

@@ -17,7 +17,7 @@ use ::bevy::core_pipeline::core_3d::{
 };
 use ::bevy::core_pipeline::{Core3d, Core3dSystems};
 use ::bevy::ecs::prelude::*;
-use ::bevy::log::{error, warn};
+use ::bevy::log::{error, info, warn};
 use ::bevy::math::UVec2;
 use ::bevy::render::camera::ExtractedCamera;
 use ::bevy::render::render_asset::RenderAssets;
@@ -637,6 +637,12 @@ fn prepare_view(
     if matches!(camera.output, OutputSpace::LinearOver { .. })
         && state.layer.as_ref().is_none_or(|(_, s)| *s != draw_size)
     {
+        // Q-412, spike S3 (#729): the layer's size is logged when it changes, so the
+        // device run reads it beside the swapchain's.
+        info!(
+            "splat layer {}x{} for a {}x{} view at render scale {render_scale}",
+            draw_size.x, draw_size.y, size.x, size.y
+        );
         let texture = dev.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("ftgsxr splat layer"),
             size: wgpu::Extent3d {
