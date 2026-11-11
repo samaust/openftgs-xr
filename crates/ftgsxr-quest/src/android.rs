@@ -21,7 +21,7 @@ use ftgsxr_xr::{XrHands, XrPlugin, add_xr};
 
 use crate::exit::{EXIT_ENVIRONMENT, exit_code, exit_without_session};
 use crate::platform::QuestPlatform;
-use crate::{device_test, jni_calls};
+use crate::{bench_runner, device_test, jni_calls};
 
 /// The logcat tag (§1.13).
 const TAG: &str = "ftgsxr";
@@ -79,14 +79,20 @@ pub(crate) fn splat_load(bytes: Vec<u8>) -> SplatLoad {
 #[bevy_main]
 fn main() {
     let test = jni_calls::intent_extra(device_test::EXTRA);
+    // Q-406
+    let bench = jni_calls::intent_extra(bench_runner::EXTRA);
     let (paths, external) = paths();
     let (settings, warnings) = match load_settings(&paths.config.join("settings.toml")) {
         Ok(s) => s,
         Err(e) => (Default::default(), vec![format!("{}: {e}", e.code())]),
     };
-    // The verdict lines are info; a device test keeps them whatever the settings' level.
-    let level = match (&test, settings.general.log_level.as_str()) {
-        (Some(_), "error" | "warn") => "info",
+    // The verdict lines are info; a device test or a benchmark keeps them whatever the
+    // settings' level.
+    let level = match (
+        test.is_some() || bench.is_some(),
+        settings.general.log_level.as_str(),
+    ) {
+        (true, "error" | "warn") => "info",
         (_, l) => l,
     };
     init_log(level);
@@ -100,6 +106,18 @@ fn main() {
         "openftgs-xr {} on the Quest: {paths:?}",
         env!("CARGO_PKG_VERSION")
     );
+
+    if let Some(name) = &bench {
+        // Q-406: B-3, B-5 and B-6 before the XR session, as Dv-3 (Q-122), then the process
+        // exits.
+        let headset = jni_calls::intent_extra(bench_runner::HEADSET_EXTRA);
+        let result = match device_test::dv_dir() {
+            Some(dv) => bench_runner::run(name, &dv, headset.as_deref()),
+            None => Err("E-IO: no app-external files directory for dv/".to_owned()),
+        };
+        info!("{}", bench_runner::line(name, &result));
+        std::process::exit(0);
+    }
 
     if let Some(name) = &test {
         // Dv-3, Dv-4 (Q-122): before the XR session, then the process exits.

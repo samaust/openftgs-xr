@@ -116,6 +116,77 @@ pub fn launch(test: &str) -> Instant {
     start
 }
 
+/// The device's system property `key` (`adb shell getprop`), trimmed.
+pub fn getprop(key: &str) -> String {
+    adb(&["shell", "getprop", key]).trim().to_owned()
+}
+
+/// Clears logcat, force-stops the app and launches it with the benchmark `name` in the
+/// extra `ftgsxr-bench` and `headset` in `ftgsxr-bench-headset` (Q-406, Q-418); the
+/// instant of the launch. The device's shell reads the command line, so `headset` is
+/// quoted.
+pub fn launch_bench(name: &str, headset: &str) -> Instant {
+    assert!(
+        !headset.contains('\''),
+        "a fingerprint without quotes: {headset}"
+    );
+    adb(&["logcat", "-c"]);
+    let start = Instant::now();
+    adb(&[
+        "shell",
+        "am",
+        "start",
+        "-S",
+        "-n",
+        ACTIVITY,
+        "--es",
+        "ftgsxr-bench",
+        name,
+        "--es",
+        "ftgsxr-bench-headset",
+        &format!("'{headset}'"),
+    ]);
+    start
+}
+
+/// The runner's line for the benchmark `name` (Q-406): `(done, detail)`, or `None` when
+/// no line arrives within `timeout` or the app's process ends without one (killed for
+/// its memory, say: not a size the device refused, Q-413).
+pub fn bench_line(name: &str, start: Instant, timeout: Duration) -> Option<(bool, String)> {
+    let prefix = format!("ftgsxr-bench: {name} ");
+    let find = || {
+        log().iter().find_map(|line| {
+            let rest = line.split_once(&prefix)?.1;
+            let (word, detail) = rest.split_once(' ').unwrap_or((rest, ""));
+            Some((word == "DONE", detail.to_owned()))
+        })
+    };
+    while start.elapsed() < timeout {
+        if let Some(found) = find() {
+            return Some(found);
+        }
+        if start.elapsed() > Duration::from_secs(15) && !running() {
+            return find();
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    None
+}
+
+/// Whether the app's process is running.
+pub fn running() -> bool {
+    !adb_ok(&["shell", "pidof", PACKAGE]).trim().is_empty()
+}
+
+/// `adb` with `args`, its standard output whatever its exit status.
+fn adb_ok(args: &[&str]) -> String {
+    Command::new(adb_path())
+        .args(args)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
 /// Stops the app.
 pub fn stop() {
     adb(&["shell", "am", "force-stop", PACKAGE]);
