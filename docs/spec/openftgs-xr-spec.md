@@ -547,7 +547,7 @@ Position, the rebased time center and the duration are always float32 (a half-pr
 
 **Bounded deviations from openftgs's reference** \[D-7, D-35\]: the transmittance stop at 10⁻⁴ is not applied (E7 states the bound: up to the pixel's remaining transmittance, at most 0.1, where a near-opaque primitive arrives at a nearly covered pixel; below 10⁻⁴ elsewhere); accumulation in 16-bit floats (up to one half-float step, 2⁻¹¹ to 2⁻¹⁰ relative, since blending may round toward zero rather than to nearest); the order of primitives at equal depth keys; float32 operation order. The rules that match exactly by construction: the pixel box with the opacity-aware extent and its cap, the Jacobian clamp, Σ′ + ε I, the determinant guard, the negative-form guard, the α skip, α\_max, the pixel centers, the near and far culls and the σ\_eff cull.
 
-**Headset display** \[X: XR\_FB\_display\_refresh\_rate, XR\_FB\_foveation, XR\_META\_recommended\_layer\_resolution; A: Quest 3 rates 72, 80, 90, 96, 100, 120 Hz, default 72; default eye buffer 1680 × 1760; D-27\]. The refresh rate is selectable among the runtime's list (default: the runtime's); the swapchain size is the runtime's recommended size times the render scale, re-created when the scale changes by 0.1 or more; fixed foveation uses the runtime's levels (off, low, medium, high, dynamic allowed); Application SpaceWarp is not used (it needs motion vectors the splats do not produce).
+**Headset display** \[X: XR\_FB\_display\_refresh\_rate, XR\_FB\_foveation, XR\_META\_recommended\_layer\_resolution; A: Quest 3 rates 72, 80, 90, 96, 100, 120 Hz, default 72; default eye buffer 1680 × 1760; D-27\]. The refresh rate is selectable among the runtime's list (default: the runtime's); the swapchain size is the runtime's recommended size times `[xr] render_scale` (1.0 when unset), re-created when that setting changes by 0.1 or more; the tier's render scale, which the governor steps (E16), sizes the splat layer within the eye buffer, as in the desktop's window, so the two multiply; fixed foveation uses the runtime's levels (off, low, medium, high, dynamic allowed); Application SpaceWarp is not used (it needs motion vectors the splats do not produce).
 
 ### 1.13 Diagnostics
 
@@ -1565,7 +1565,7 @@ The `dv` lane runs on the desktop and drives the headset over adb: it installs t
 | Dv-9 | anchors (§1.9) | create, persist, restart the app, locate | within 5 cm |
 | Dv-10 | storage (§1.5, D-49) | `adb push` of a probe into the models directory lists it; the shim's `listTree` and `openDocument` on a granted tree read a model | exact |
 | Dv-11 | the camera thumbnail (§1.9) | with the permissions granted, thumbnails arrive at 30 Hz or more; covering the cameras lowers the luma estimate by half or more within 1 s | exact |
-| Dv-12 | display settings (§1.12) | 90 Hz selected takes effect; every foveation level is accepted; a render scale of 0.8 re-creates the swapchain | exact |
+| Dv-12 | display settings (§1.12) | 90 Hz selected takes effect; every foveation level is accepted; an `[xr] render_scale` of 0.8 re-creates the swapchain | exact |
 | Dv-13 | suspend and resume | the headset sleeps and wakes; the session goes idle and returns to running | exact |
 
 ### 3.5 Benchmarks
