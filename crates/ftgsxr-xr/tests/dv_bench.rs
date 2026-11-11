@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! B-3, B-5 and B-6 on the headset (§3.5, `dv` lane, Q-406, Q-413): the driver reads the
+//! B-3, B-4, B-5 and B-6 on the headset (§3.5, `dv` lane, Q-406, Q-413): the driver reads the
 //! headset's build fingerprint with `adb shell getprop ro.build.fingerprint`, launches the
 //! app with the benchmark's name in the extra `ftgsxr-bench` and the fingerprint in
 //! `ftgsxr-bench-headset`, waits for `ftgsxr-bench: <NAME> DONE|FAIL <detail>`, pulls
@@ -139,6 +139,44 @@ fn dv_b3_writes_the_sort_times_with_p4_on_the_quest() {
     assert_eq!(p4["rule"], "at_most");
     // §1.12 P-4: ≤ 2.5 ms for C = 1 M on the Quest.
     assert_eq!(p4["limit"], 2.5);
+}
+
+#[test]
+#[ignore = "dv"]
+fn dv_b4_writes_the_cull_times_with_and_without_the_index_on_the_quest() {
+    // §3.5 B-4 (Q-408, Q-T733.1): for each size, the cull time and the rows visited with
+    // the temporal index and with every row, in Q-413's tier; a size the device refuses
+    // is skipped in both setups. The B-4 checks are printed with the other budgets and
+    // must hold: the index never visits more rows and is never slower beyond the spread.
+    let file = run("B-4", Duration::from_secs(30 * 60));
+    print_budgets(&file);
+    for index in ["temporal", "every row"] {
+        let sizes: Vec<f64> = results(&file, "cull_ms")
+            .iter()
+            .filter(|r| r["setup"]["index"] == index)
+            .map(|r| {
+                assert_eq!(r["setup"]["tier"], "quest-balanced", "{r}");
+                r["setup"]["n"].as_f64().expect("n")
+            })
+            .collect();
+        assert_eq!(
+            sizes,
+            [1e5, 2.5e5, 5e5, 1e6, 2e6, 3e6],
+            "one cull_ms for each N, index {index}"
+        );
+    }
+    for r in results(&file, "rows_visited") {
+        if r["setup"]["index"] == "every row" && r["value"].is_number() {
+            assert_eq!(r["value"], r["setup"]["n"], "{r}");
+        }
+    }
+    let budgets = file["budgets"].as_array().expect("budgets");
+    assert!(!budgets.is_empty(), "the B-4 checks of every size run");
+    for b in budgets {
+        assert_eq!(b["id"], "B-4", "{b}");
+        assert_eq!(b["setup"]["index"], "temporal", "{b}");
+        assert_eq!(b["pass"], true, "{b}");
+    }
 }
 
 #[test]
