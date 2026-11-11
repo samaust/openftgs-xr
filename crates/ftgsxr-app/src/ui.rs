@@ -323,7 +323,7 @@ pub struct XrFeatures {
 /// `refresh_hz` (Q-404), and the Display tab offers `available_rates` (Q-405). Only
 /// `XrPlugin` inserts it; the desktop has none.
 // Q-404
-#[derive(Resource, Clone, Debug, Default, PartialEq)]
+#[derive(Resource, Default)]
 pub struct XrDisplay {
     /// The runtime's current refresh rate in Hz (or the reciprocal of the predicted
     /// display period without XR_FB_display_refresh_rate); `None` while no session runs.
