@@ -30,6 +30,7 @@ mod audio_spatial;
 mod b_benchmarks;
 mod dock_sections;
 mod environment_mode;
+mod governor_headset;
 mod gpu_exit_wait;
 mod gpu_teardown;
 mod i01_load_unload;
