@@ -29,6 +29,7 @@ mod fixtures_dir;
 mod layer_guard;
 mod one_test_binary;
 mod probes;
+mod r9_references;
 mod random_model;
 mod safetensors_builder;
 mod scratch_dir;
