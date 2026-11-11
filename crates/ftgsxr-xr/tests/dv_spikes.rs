@@ -16,9 +16,17 @@ use std::time::Duration;
 use dv_support::{apk, clear, device, install, launch, log, push, stop, verdict};
 use ftgsxr_core::{Model, write_exchange};
 
-/// The model's rows (Q-T725.1): `quest-balanced`'s capacity C, so no frame overflows on
-/// account of the count alone.
-const ROWS: usize = 1_000_000;
+/// The model's rows by default (Q-T725.1). The draw cost was linear in N on the device,
+/// about 0.77 µs a row (760 ms a frame at the Quest's capacity C = 10⁶, 80 ms at 10⁵,
+/// where the statistics blocks came about once a second); 10⁴ puts the first eye's GPU
+/// time near P-1's 12.4 ms and gives 120 blocks a level in seconds. `FTGSXR_SPIKES_ROWS`
+/// sets another count.
+const ROWS: usize = 10_000;
+/// The variable naming another row count.
+const ROWS_VAR: &str = "FTGSXR_SPIKES_ROWS";
+/// The main log buffer for the run: the runtime's own lines overran the default 256 KiB
+/// before the host read the runner's.
+const LOG_BUFFER: &str = "16M";
 
 /// B-1's every-row-persistent kind (Q-102, Q-T725.1): `random_model(1, ROWS, 0)` with each
 /// transient row made persistent as E3's persistent rows are drawn, opacity in
@@ -55,10 +63,15 @@ fn dv_spikes_s1_timestamps_and_counters_s2_foveation_gpu_times() {
     let dir = std::env::temp_dir().join(format!("ftgsxr-spikes-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a temporary directory");
     let file = dir.join("spike.safetensors");
-    write_exchange(&file, &every_row_persistent(1, ROWS)).expect("the model is written");
+    let rows = std::env::var(ROWS_VAR)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(ROWS);
+    write_exchange(&file, &every_row_persistent(1, rows)).expect("the model is written");
     clear();
     push(&file, "spike.safetensors");
     std::fs::remove_dir_all(&dir).ok();
+    dv_support::adb(&["logcat", "-G", LOG_BUFFER]);
     let start = launch("spikes");
     let result = verdict("spikes", start, Duration::from_secs(300));
     let lines = log();
@@ -75,7 +88,7 @@ fn dv_spikes_s1_timestamps_and_counters_s2_foveation_gpu_times() {
                 || l.contains("E-XR-")
         })
         .collect();
-    println!("--- spikes report ({ROWS} rows, degree 0, every row persistent) ---");
+    println!("--- spikes report ({rows} rows, degree 0, every row persistent) ---");
     for l in &report {
         println!("{l}");
     }
