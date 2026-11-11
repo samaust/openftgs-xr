@@ -68,6 +68,9 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.fb_swapchain_update_state = true;
     raw.fb_swapchain_update_state_vulkan = true;
     raw.meta_recommended_layer_resolution = true;
+    // §1.13 HUD, Appendix E.1: the runtime's metrics; only the device spikes read them
+    // yet (#725, `display`'s metrics, Q-124's raw tables).
+    raw.meta_performance_metrics = true;
     // §1.9's anchors (D-26, #571): the entity, its query by UUID and its persistence.
     raw.fb_spatial_entity = true;
     raw.fb_spatial_entity_query = true;
@@ -343,5 +346,13 @@ mod tests {
         );
         enabled.raw_mut().fb_hand_tracking_aim = true;
         assert!(missing_hand_extensions(enabled.raw()).is_empty());
+    }
+
+    /// Appendix E.1, §1.13 HUD (#725): XR\_META\_performance\_metrics is asked for with or
+    /// without hands; the runtime drops it where absent.
+    #[test]
+    fn extensions_ask_for_the_performance_metrics() {
+        assert!(extensions(true).raw().meta_performance_metrics);
+        assert!(extensions(false).raw().meta_performance_metrics);
     }
 }

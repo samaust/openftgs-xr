@@ -64,6 +64,8 @@ use crate::XrError;
 use crate::error::log_error;
 use crate::session::Recreate;
 
+mod metrics;
+
 /// The scale change that re-creates the swapchain (§1.12).
 const SCALE_STEP: f32 = 0.1;
 
@@ -385,6 +387,8 @@ impl Plugin for DisplayPlugin {
             .add_systems(XrPreDestroySession, drop_profile)
             .add_systems(Update, (follow, apply_changes, publish).chain())
             .add_oxr_event_handler(log_rate_change);
+        // #725: the runtime's counters for the device spikes (Q-420).
+        metrics::add(app);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(XrPreDestroySession, drop_profile);
             render_app.add_systems(
