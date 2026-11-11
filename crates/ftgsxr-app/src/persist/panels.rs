@@ -19,7 +19,7 @@ use crate::intent::{Feature, Intent};
 use crate::library::LoadedModel;
 use crate::manipulate::Selected;
 use crate::platform::{AskPermissionAgain, DeniedPermissions, Headset, Permission};
-use crate::ui::{FeatureState, HudData, Lighting, UiCue, XrFeatures};
+use crate::ui::{FeatureState, HudData, Lighting, UiCue, XrDisplay, XrFeatures};
 
 /// The values `ftgsxr-io` accepts for the string keys (§1.11).
 const TIERS: &[&str] = &[
@@ -123,11 +123,13 @@ fn background(ui: &mut egui::Ui, c: &mut [f32; 3], training: Option<[f32; 3]>) {
     }
 }
 
-/// The Display tab: the quality tier, the centers' radius and colormap (on every instance
-/// drawn with centers), new instances' mode, the overlays and the background. The tier
-/// picker shows the running tier (`SplatTierState`), which a `--tier` override may make
-/// differ from the saved one; a pick switches to it and saves it (Q-240).
-// Q-240
+/// The Display tab: the quality tier, the headset's refresh rate, the centers' radius and
+/// colormap (on every instance drawn with centers), new instances' mode, the overlays and
+/// the background. The tier picker shows the running tier (`SplatTierState`), which a
+/// `--tier` override may make differ from the saved one; a pick switches to it and saves
+/// it (Q-240). The refresh-rate picker writes `[xr] refresh_rate`, which the XR crate's
+/// `display` follows; it is absent while `XrDisplay` lists no rate (Q-405).
+// Q-240, Q-405
 pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
     let training = training_background(world);
     if let Some(running) = world
@@ -142,7 +144,15 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
             pick_tier(world, picked);
         }
     }
+    // Q-405: the headset's refresh rate, among the runtime's list (§1.12).
+    let rates = world
+        .get_resource::<XrDisplay>()
+        .map(|d| d.available_rates.clone())
+        .unwrap_or_default();
     edit(world, ui, |s, ui| {
+        if !rates.is_empty() {
+            refresh_rate(ui, &mut s.xr.refresh_rate, &rates);
+        }
         let d = &mut s.display;
         choice(ui, "mode of new instances", &mut d.mode, RENDER_MODES);
         num(
@@ -156,6 +166,25 @@ pub(crate) fn display_section(world: &mut World, ui: &mut egui::Ui) {
         choice(ui, "colormap", &mut d.colormap, COLORMAPS);
         background(ui, &mut s.environment.background, training);
     });
+}
+
+/// A rate as the refresh-rate picker names it.
+fn hz_name(hz: f32) -> String {
+    format!("{hz} Hz")
+}
+
+/// `[xr] refresh_rate`'s picker (§1.12 Headset display, Q-405): "runtime" (`None`, the
+/// runtime's default) or one of `rates`.
+// Q-405
+fn refresh_rate(ui: &mut egui::Ui, v: &mut Option<f32>, rates: &[f32]) {
+    egui::ComboBox::from_label("refresh rate")
+        .selected_text(v.map_or("runtime".into(), hz_name))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(v, None, "runtime");
+            for r in rates {
+                ui.selectable_value(v, Some(*r), hz_name(*r));
+            }
+        });
 }
 
 /// The Environment tab (§1.7 Panels, §1.9): the VR-mode controls, background and grid,
@@ -923,6 +952,57 @@ mod tests {
             !on.iter().any(|(t, _)| t.starts_with("off in the")),
             "{on:?}"
         );
+    }
+
+    /// Q-405 (`cpu`, #723): the Display tab's refresh-rate picker lists "runtime" and each
+    /// of `XrDisplay.available_rates`, a choice writes `[xr] refresh_rate` (`None` for
+    /// "runtime"), and the control is absent without `XrDisplay` or with an empty list.
+    #[test]
+    fn the_refresh_rate_picker_lists_the_runtimes_rates_and_writes_xr_refresh_rate() {
+        let label = "refresh rate";
+        let mut world = World::new();
+        world.insert_resource(SettingsRes::default());
+        let ctx = egui::Context::default();
+        let has = |t: &[(String, egui::Pos2)], l: &str| t.iter().any(|(s, _)| s == l);
+        frame_of(&ctx, &mut world, Vec::new(), display_section);
+        let desktop = frame_of(&ctx, &mut world, Vec::new(), display_section);
+        assert!(!has(&desktop, label), "{desktop:?}");
+        world.insert_resource(XrDisplay {
+            refresh_hz: Some(72.0),
+            ..XrDisplay::default()
+        });
+        let empty = frame_of(&ctx, &mut world, Vec::new(), display_section);
+        assert!(!has(&empty, label), "{empty:?}");
+        world.insert_resource(XrDisplay {
+            refresh_hz: Some(72.0),
+            available_rates: vec![72.0, 90.0, 120.0],
+            ..XrDisplay::default()
+        });
+        world.clear_trackers();
+        let closed = frame_of(&ctx, &mut world, Vec::new(), display_section);
+        assert!(has(&closed, label), "{closed:?}");
+        // Drawing alone writes nothing.
+        assert!(!world.resource_ref::<SettingsRes>().is_changed());
+        let choose = |world: &mut World, current: &str, option: &str| {
+            let closed = frame_of(&ctx, world, Vec::new(), display_section);
+            for events in click(at(&closed, current)) {
+                frame_of(&ctx, world, events, display_section);
+            }
+            let open = frame_of(&ctx, world, Vec::new(), display_section);
+            for o in ["runtime", "72 Hz", "90 Hz", "120 Hz"] {
+                assert!(has(&open, o), "{o}: {open:?}");
+            }
+            for events in click(at(&open, option)) {
+                frame_of(&ctx, world, events, display_section);
+            }
+        };
+        choose(&mut world, "runtime", "90 Hz");
+        assert_eq!(
+            world.resource::<SettingsRes>().0.xr.refresh_rate,
+            Some(90.0)
+        );
+        choose(&mut world, "90 Hz", "runtime");
+        assert_eq!(world.resource::<SettingsRes>().0.xr.refresh_rate, None);
     }
 
     // Q-240 (#402): the picker's selected text is the running tier, not the saved one.

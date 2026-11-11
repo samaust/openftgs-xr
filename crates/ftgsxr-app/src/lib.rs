@@ -60,10 +60,10 @@ pub use rig::{
 };
 // §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`; Q-274:
 // `HudHandSource`; Q-336: `XrFeatures`, `FeatureState`; Q-345: `HudAnchor`; Q-383:
-// `Lighting`.
+// `Lighting`; Q-404: `XrDisplay`.
 pub use ui::{
     FeatureState, HudAnchor, HudData, HudHandSource, HudInstance, Lighting, PanelPointer, Toast,
-    ToastLevel, UiSurface, WorldPanel, WristMenu, XrFeatures, panel_hit,
+    ToastLevel, UiSurface, WorldPanel, WristMenu, XrDisplay, XrFeatures, panel_hit,
 };
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;
