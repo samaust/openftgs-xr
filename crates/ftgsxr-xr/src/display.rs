@@ -70,13 +70,15 @@ pub struct DisplaySettings {
     pub available_rates: Vec<f32>,
     /// The fixed-foveation level.
     pub foveation: Foveation,
-    /// The swapchain's size over the recommended size.
+    /// The swapchain's size over the recommended size: `[xr] render_scale`, 1.0 when
+    /// unset; the tier's render scale sizes the splat layer instead (§1.12).
     pub render_scale: f32,
 }
 
 impl DisplaySettings {
-    /// From `XrSettings` (Q-49): `None` is the runtime's rate and the tier's foveation and
-    /// render scale.
+    /// From `XrSettings` (Q-49): `None` is the runtime's rate, the tier's foveation and a
+    /// render scale of 1.0 (§1.12 at revision 56: the tier's render scale never reaches the
+    /// swapchain).
     pub(crate) fn from_settings(settings: &Settings) -> Self {
         let tier = QualityTier::by_name(&settings.general.tier).unwrap_or_else(|| {
             if cfg!(target_os = "android") {
@@ -95,7 +97,7 @@ impl DisplaySettings {
             refresh_rate: settings.xr.refresh_rate,
             available_rates: Vec::new(),
             foveation,
-            render_scale: settings.xr.render_scale.unwrap_or(tier.render_scale),
+            render_scale: settings.xr.render_scale.unwrap_or(1.0),
         }
     }
 }
@@ -768,14 +770,17 @@ mod tests {
         );
     }
 
+    /// §1.12 at revision 56 (#729, #717): an unset `[xr] render_scale` is 1.0 on the
+    /// swapchain whatever the tier (`quest-low`'s render scale is 0.8, and sizes the splat
+    /// layer); an unset foveation is the tier's.
     #[test]
-    fn from_settings_takes_the_tier_for_none() {
+    fn from_settings_takes_the_tiers_foveation_and_a_scale_of_one_for_none() {
         let mut s = Settings::default();
         s.general.tier = "quest-low".into();
         let d = DisplaySettings::from_settings(&s);
         assert_eq!(
             (d.foveation, d.render_scale, d.refresh_rate),
-            (Foveation::High, 0.8, None)
+            (Foveation::High, 1.0, None)
         );
         s.xr.foveation = Some("low".into());
         s.xr.render_scale = Some(0.9);
