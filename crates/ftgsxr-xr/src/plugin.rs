@@ -198,6 +198,9 @@ impl Plugin for XrPlugin {
             passthrough_available,
             style: PassthroughStyle::default(),
         });
+        // Q-404: the headset's display, which `display` writes while a session runs; its
+        // presence puts the governor on the headset's ladder.
+        app.init_resource::<ftgsxr_app::XrDisplay>();
     }
 }
 
