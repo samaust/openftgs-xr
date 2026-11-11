@@ -302,15 +302,19 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// band takes it for the depth band's instance). The gains are, in the auto modes,
 /// E14's part `e14_gains` (`HudData.light_gains`), 1 per channel where it is `None`,
 /// without the manual offset the sliders show (Q-394); otherwise `Lighting.transform`'s.
-/// Under the manual sliders, "Match room exposure", disabled with the note "needs an auto
-/// lighting mode in passthrough" while `Lighting.can_match` is false, sets
-/// `Lighting.match_exposure` on a press and writes no setting (§1.9, E14, Q-396).
+/// Under the manual sliders, "Match room exposure" sets `Lighting.match_exposure` on a
+/// press and writes no setting (§1.9, E14, Q-396). While `Lighting.can_match` is false
+/// it is disabled, with a note that says why: none where the camera is not `Available`,
+/// whose line already says why; "needs an auto lighting mode in passthrough" while the
+/// effective lighting mode is not auto or the effective environment mode is not
+/// passthrough (the setting's under the `Headset` marker with `XrFeatures.passthrough`
+/// `Available`, Q-335); "waiting for the camera…" while both hold (Q-385).
 /// True when "Ask again" was pressed for a denied camera (Q-322), which also writes
 /// back the auto mode the denial wrote to `manual`, `Lighting.denied_auto` (auto
 /// global when none was kept) and, as enabling an auto mode, `lighting_reference =
 /// None`, so the XR crate asks once and a grant runs that mode and captures a new
 /// reference (Q-384, Q-395).
-// Q-322, Q-383, Q-384, Q-385, Q-388, Q-394, Q-395, Q-396
+// Q-322, Q-335, Q-383, Q-384, Q-385, Q-388, Q-394, Q-395, Q-396
 fn lighting_controls(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -321,6 +325,9 @@ fn lighting_controls(
     e14_gains: Option<Vec3>,
 ) -> bool {
     let camera = features.lighting;
+    // Q-335: the effective environment mode, as far as this crate can see it.
+    let in_passthrough =
+        super::passthrough_mode(s, headset) && features.passthrough == FeatureState::Available;
     let occlusion_on = s.environment.occlusion && features.occlusion == FeatureState::Available;
     let e = &mut s.environment;
     let shown = super::effective_lighting_mode_of(&e.lighting_mode, camera).to_owned();
@@ -395,8 +402,13 @@ fn lighting_controls(
         .on_hover_text(TIP)
         .on_disabled_hover_text(TIP)
         .clicked();
-    if !can_match {
-        ui.label("needs an auto lighting mode in passthrough");
+    // Q-396: why it is disabled; where the camera is not available, its line says why.
+    if !can_match && camera == FeatureState::Available {
+        ui.label(if auto && in_passthrough {
+            "waiting for the camera…"
+        } else {
+            "needs an auto lighting mode in passthrough"
+        });
     }
     ui.add(egui::Slider::new(&mut e.lighting_gamma, 0.0..=1.0).text("strength γ"));
     if let Some(l) = light {
@@ -1353,48 +1365,156 @@ mod tests {
         }
     }
 
-    /// Q-396 (#710, `cpu`): "Match room exposure" is drawn under the manual sliders;
-    /// while `Lighting.can_match` is false it is disabled, with the note "needs an auto
-    /// lighting mode in passthrough", and a press changes nothing; while it is true the
-    /// note is gone and a press sets `Lighting.match_exposure` and changes no setting.
+    /// Q-396 (#716, `cpu`): "Match room exposure" is drawn under the manual sliders.
+    /// While `Lighting.can_match` is false it is disabled, a press changes nothing, and
+    /// its note says why: none where the camera is not `Available` (the desktop, an
+    /// older OS, a denied permission), whose line already says why (§1.9); "needs an
+    /// auto lighting mode in passthrough" while the effective lighting mode is not auto
+    /// or the effective environment mode is not passthrough; "waiting for the camera…"
+    /// while both hold (Q-385). While it is true there is no note and a press sets
+    /// `Lighting.match_exposure` and changes no setting.
     #[test]
     fn the_environment_tabs_match_room_exposure_sets_the_flag_only_while_offered() {
-        for can_match in [false, true] {
+        const NEEDS: &str = "needs an auto lighting mode in passthrough";
+        const WAITING: &str = "waiting for the camera…";
+        use FeatureState::{Absent, Available, Denied};
+        // (headset, camera, passthrough feature, mode, lighting mode, can_match, note)
+        let cases = [
+            (
+                false,
+                Absent,
+                Absent,
+                "passthrough",
+                "auto-global",
+                false,
+                None,
+            ),
+            (
+                true,
+                Absent,
+                Available,
+                "passthrough",
+                "auto-global",
+                false,
+                None,
+            ),
+            (
+                true,
+                Denied,
+                Available,
+                "passthrough",
+                "auto-local",
+                false,
+                None,
+            ),
+            (
+                true,
+                Available,
+                Available,
+                "passthrough",
+                "off",
+                false,
+                Some(NEEDS),
+            ),
+            (
+                true,
+                Available,
+                Available,
+                "passthrough",
+                "manual",
+                false,
+                Some(NEEDS),
+            ),
+            (
+                true,
+                Available,
+                Available,
+                "vr",
+                "auto-global",
+                false,
+                Some(NEEDS),
+            ),
+            (
+                true,
+                Available,
+                Available,
+                "vr",
+                "auto-local",
+                false,
+                Some(NEEDS),
+            ),
+            (
+                true,
+                Available,
+                Available,
+                "passthrough",
+                "auto-global",
+                false,
+                Some(WAITING),
+            ),
+            (
+                true,
+                Available,
+                Available,
+                "passthrough",
+                "auto-local",
+                false,
+                Some(WAITING),
+            ),
+            (
+                true,
+                Available,
+                Available,
+                "passthrough",
+                "auto-global",
+                true,
+                None,
+            ),
+        ];
+        for case @ (headset, camera, passthrough, mode, lighting, can_match, note) in cases {
             let ctx = egui::Context::default();
             let mut world = World::new();
             world.insert_resource(SettingsRes::default());
             world.init_resource::<Messages<Intent>>();
             world.init_resource::<Messages<UiCue>>();
             world.init_resource::<Messages<AskPermissionAgain>>();
-            world.insert_resource(Headset);
+            if headset {
+                world.insert_resource(Headset);
+            }
             world.insert_resource(XrFeatures {
-                lighting: FeatureState::Available,
+                lighting: camera,
+                passthrough,
                 ..XrFeatures::default()
             });
             world.insert_resource(Lighting {
                 can_match,
                 ..Lighting::default()
             });
-            world
-                .resource_mut::<SettingsRes>()
-                .0
-                .environment
-                .lighting_mode = "auto-global".into();
+            {
+                let e = &mut world.resource_mut::<SettingsRes>().0.environment;
+                e.mode = mode.into();
+                e.lighting_mode = lighting.into();
+            }
             let before = world.resource::<SettingsRes>().0.clone();
             frame_of(&ctx, &mut world, Vec::new(), environment_section);
             let texts = frame_of(&ctx, &mut world, Vec::new(), environment_section);
-            let note = "needs an auto lighting mode in passthrough";
-            assert_eq!(
-                texts.iter().any(|(t, _)| t == note),
-                !can_match,
-                "{texts:?}"
-            );
+            for n in [NEEDS, WAITING] {
+                assert_eq!(
+                    texts.iter().any(|(t, _)| t == n),
+                    note == Some(n),
+                    "{case:?}: {n}: {texts:?}"
+                );
+            }
             assert!(at(&texts, "Match room exposure").y > at(&texts, "tint").y);
             for events in click(at(&texts, "Match room exposure")) {
                 frame_of(&ctx, &mut world, events, environment_section);
             }
-            assert_eq!(world.resource::<Lighting>().match_exposure, can_match);
-            assert_eq!(world.resource::<SettingsRes>().0, before, "{can_match}");
+            assert_eq!(
+                world.resource::<Lighting>().match_exposure,
+                can_match,
+                "{case:?}"
+            );
+            assert_eq!(world.resource::<SettingsRes>().0, before, "{case:?}");
         }
     }
 
