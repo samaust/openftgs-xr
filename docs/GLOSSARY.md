@@ -488,6 +488,18 @@ _Avoid_: budget (the memory budget), max splats, limit
 One of a fixed number of consecutive pieces of a model's GPU SH array, each bound to the GPU on its own, so the array can exceed the device's largest storage binding; every other field is bound whole. §1.12 Memory, D-13, #642
 _Avoid_: binding chunk, SH split, SH band (a coefficient band of the SH basis), shard
 
+**Shared-center mode**:
+The stereo mode in which the cull and the sort run once at the midpoint of the eyes and only the draw runs for each eye, so the depth order and the view-dependent color are the midpoint's. §1.4 Stereo, D-4
+_Avoid_: single-pass stereo, shared sort, mono sort
+
+**Per-view mode**:
+The stereo mode in which every pipeline stage runs for each view with that view's camera; exact, and the only mode of the desktop and of headless renders. §1.4 Stereo, D-4
+_Avoid_: per-eye mode, multi-pass stereo
+
+**Sort pose**:
+The eye position and forward axis that the cull and the sort use in shared-center mode in place of a view's camera: the midpoint of the eyes. §1.4 Stereo, §2.1 `SortPose`, D-4
+_Avoid_: center eye, cyclopean eye, head pose (the tracked head, which the player rig follows)
+
 ### Data
 
 **Scene manifest**:
@@ -636,8 +648,12 @@ _Avoid_: wrapper, bridge, Java layer, plugin
 The OpenXR frame the session locates views and spaces in, chosen at session creation by the chain STAGE, LOCAL_FLOOR, LOCAL; stage space is the chosen one, raised 1.5 m under the LOCAL fallback. §1.8, D-24
 _Avoid_: tracking origin, play area, world origin
 
+**Render scale**:
+The quality tier's factor, stepped by the quality governor, by which the splat layer is smaller than the view it is drawn for; not `[xr] render_scale`, which sizes the headset's swapchain. §1.12, E16
+_Avoid_: resolution scale, dynamic resolution, supersampling
+
 **Swapchain**:
-The runtime's array of eye images the projection layer is submitted from, sized at the runtime's recommended size times the render scale and re-created when the scale changes by 0.1 or more; the desktop window's images are the window swapchain. §1.12, D-27
+The runtime's array of eye images the projection layer is submitted from, sized at the runtime's recommended size times `[xr] render_scale` and re-created when that setting changes by 0.1 or more; the desktop window's images are the window swapchain. §1.12, D-27
 _Avoid_: framebuffer, eye buffer (the runtime's recommended size, not the images), render target
 
 **Window swapchain**:
@@ -879,6 +895,10 @@ _Avoid_: bad pixel, outlier, masked pixel (masks are the dynamic-region masks)
 **Kept-pixel PSNR**:
 PSNR over the pixels of a test image left after removing the flagged pixels, with no crop and no fill; unlike a dynamic-region metric, SSIM and ꟻLIP have no kept-pixel form. openftgs E16, #318
 _Avoid_: masked PSNR, masked metric, clean PSNR
+
+**Budget model**:
+The trained `kitchen` model of 1,000,000 primitives at SH degree 2 on which the budgets P-1 and P-2, B-2 and Dv-5 are measured; not #622's 3,000,000-primitive `kitchen` file. §1.12, §2.7
+_Avoid_: kitchen (unqualified), benchmark scene, test model
 
 ### Differential harness
 
