@@ -12,17 +12,25 @@
 //!   result is logged as `foveation <level> applied to the swapchain` or an error.
 //!   bevy\_mod\_openxr creates the swapchain without a `next` chain, so the profile is
 //!   applied by xrUpdateSwapchainFB only (Q-124).
-//! - Render scale: a change of 0.1 or more from the scale the live swapchain was made with
-//!   ends and destroys the session and creates it again (through `session`'s re-creation)
-//!   with the swapchain sized at the recommended size times the scale; the crate leaks the
-//!   old images. The recommended size is XR\_META\_recommended\_layer\_resolution's when the
-//!   runtime gives a valid one, else the view configuration's (Q-132).
+//! - Render scale: `[xr] render_scale` alone, 1.0 when unset (§1.12 at revision 56; the
+//!   tier's render scale sizes the splat layer). A change of 0.1 or more from the scale the
+//!   live swapchain was made with ends and destroys the session and creates it again
+//!   (through `session`'s re-creation) with the swapchain sized at the recommended size
+//!   times the scale; the crate leaks the old images. The recommended size is
+//!   XR\_META\_recommended\_layer\_resolution's when the runtime gives a valid one, else
+//!   the view configuration's (Q-132); the size is logged at every session (Q-412).
+//! - `DisplaySettings` follows `[xr]` and, with `[xr] foveation` unset, the running tier's
+//!   foveation, so a governor step and a live tier switch reach the swapchain (Q-404,
+//!   Q-T729.1).
+//! - `XrDisplay` (`ftgsxr_app`, inserted by `XrPlugin`) carries the current refresh rate,
+//!   the runtime's rates, the foveation support and the swapchain's size while a session
+//!   runs; the rate is mirrored into `HudData.refresh_hz` (Q-404).
 //!
 //! Where an extension is absent, `available_rates` is empty, a request logs
 //! E-XR-UNSUPPORTED (a warning) and the setting is kept for a later runtime (Q-124). A
 //! refresh rate or a foveation asked for explicitly (a settings value, a change while the
 //! session runs) also triggers a `Toast`, which ui puts on the line, at most once per
-//! session per extension; the tier's default never does (Q-161).
+//! session per extension; the running tier's value never does (Q-161, Q-T729.1).
 
 use std::collections::HashSet;
 
@@ -418,7 +426,7 @@ fn unsupported(e: &XrError) {
 
 /// An E-XR-UNSUPPORTED for a feature asked for explicitly: the warning each time and a
 /// `Toast` triggered for ui the first time in the session for its extension (Q-161; every
-/// caller's request is explicit, the tier's default foveation and an unset refresh rate
+/// caller's request is explicit, the running tier's foveation and an unset refresh rate
 /// never reach it).
 // Q-161
 fn unsupported_requested(e: &XrError, applied: &mut Applied, commands: &mut Commands) {

@@ -9,6 +9,7 @@
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
+use bevy_mod_xr::camera::XrCamera;
 use bevy_mod_xr::session::XrState;
 use ftgsxr_app::SplatCamera;
 
@@ -40,7 +41,11 @@ pub(super) fn add(app: &mut App) {
     .add_systems(Update, run);
 }
 
-fn run(mut test: ResMut<S3>, state: Option<Res<XrState>>, eyes: Query<(), With<SplatCamera>>) {
+fn run(
+    mut test: ResMut<S3>,
+    state: Option<Res<XrState>>,
+    eyes: Query<(), (With<XrCamera>, With<SplatCamera>)>,
+) {
     if test.done {
         return;
     }
