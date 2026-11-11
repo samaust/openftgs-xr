@@ -519,9 +519,10 @@ impl SplatPasses {
     /// eye gets a degenerate quad; the color and the order are the midpoint's, and the depth
     /// test and E13 take this eye's z_c (Q-400). The draw writes no timestamps: the pass is the caller's (Q-87).
     ///
-    /// Stage 6's centers (`centers.wgsl`), after the splats (Q-96), per view only until the
-    /// shared-center centers (#721): one indirect
-    /// instanced draw of discs of radius ρ camera pixels at the records' μ′ (Q-78), opaque,
+    /// Stage 6's centers (`centers.wgsl`), after the splats (Q-96): one indirect
+    /// instanced draw of discs of radius ρ camera pixels at the records' μ′ (Q-78), or in
+    /// shared-center mode at μ^S projected for `view`, with this eye's z_c, a center this
+    /// eye's near or far cull rejects drawing nothing (Q-400, Q-T721.1), opaque,
     /// colored by the instance's colormap (Q-92); with the passes' depth format they
     /// test `GreaterEqual` and write the depth (reverse Z, Q-87).
     ///
@@ -586,12 +587,8 @@ impl SplatPasses {
         // is off on Android (on both devices); the fallback held 40.9 Hz.
         pass.draw_indirect(&set.indirect, 0);
 
-        if self.mode != RecordMode::PerView {
-            // Stage 6 in shared-center mode, the centers projected per eye, is #721's: a
-            // center record holds view 0's μ′ only.
-            return;
-        }
-        // Stage 6, the same bindings with the counters in place of the payloads.
+        // Stage 6, the same bindings with the counters in place of the payloads; in
+        // shared-center mode the vertex stage projects each center's μ^S for `view` (Q-400).
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ftgsxr centers"),
             layout: &self.draw_layout,

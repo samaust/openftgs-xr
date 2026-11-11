@@ -16,6 +16,13 @@
 // A center record (`cull.wgsl`, Q-78), at the record layout's stride: μ^S (0–2), the depth
 // (3), μ′ in view 0 (4–5), time_center − τ₀ (6), ‖velocity‖ (7), the DC color and σ_eff as
 // four half floats (8–9), the instance (10).
+//
+// Shared-center mode (D-4, Q-400): the record's μ′ and depth are view 0's and the forward
+// depth, so the vertex stage projects μ^S for this eye instead (E6's camera space and
+// pinhole, as the cull computes a center's μ′), with this eye's z_c for the depth. A center
+// this eye's near or far cull rejects, or whose μ′ is not finite, gets a degenerate quad
+// outside the clip volume (Q-T721.1); the box needs no test, a disc off the image covers
+// no pixel.
 
 // One instance's draw constants (`splat.wgsl`'s `InstanceConstants`, Q-87, Q-92).
 struct InstanceConstants {
@@ -42,7 +49,8 @@ struct InstanceConstants {
     pad3: f32,
 }
 
-// The view (`splat.wgsl`'s `DrawView`).
+// The view (`splat.wgsl`'s `DrawView`, the same block): the shared-center vertex stage
+// reads the view's intrinsics and its world-to-camera transform (Q-400).
 struct DrawView {
     camera_size: vec2<f32>,
     target_size: vec2<f32>,
@@ -50,6 +58,15 @@ struct DrawView {
     occlusion: u32,
     soft: u32,
     delta_m: f32,
+    // The view camera's f_x, f_y, c_x, c_y (E6).
+    view_k: vec4<f32>,
+    env_k: vec4<f32>,
+    env_size: vec2<f32>,
+    env_near: f32,
+    env_far: f32,
+    env_from_view: mat4x4<f32>,
+    // The view's world-to-camera transform [R_w t_w; 0 1] (E6).
+    world_to_camera: mat4x4<f32>,
 }
 
 // 0 per view (12-word records), 1 shared center (16), 2 shared center with half Σ^S (12).
@@ -60,6 +77,10 @@ override RECORD_MODE: u32 = 0u;
 @group(0) @binding(1) var<storage, read> counters: array<u32, 12>;
 @group(0) @binding(2) var<storage, read> instances: array<InstanceConstants>;
 @group(0) @binding(3) var<uniform> view: DrawView;
+
+fn finite(x: f32) -> bool {
+    return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u;
+}
 
 fn record_words() -> u32 {
     if RECORD_MODE == 1u {
@@ -114,13 +135,27 @@ struct VertexOut {
 @vertex
 fn vs_center(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VertexOut {
     let b = (counters[1] + iid) * record_words();
-    let depth = bitcast<f32>(records[b + 3u]);
-    let mean = vec2<f32>(bitcast<f32>(records[b + 4u]), bitcast<f32>(records[b + 5u]));
+    var depth = bitcast<f32>(records[b + 3u]);
+    var mean = vec2<f32>(bitcast<f32>(records[b + 4u]), bitcast<f32>(records[b + 5u]));
     let time_center = bitcast<f32>(records[b + 6u]);
     let speed = bitcast<f32>(records[b + 7u]);
     let dc_rg = unpack2x16float(records[b + 8u]);
     let dc_b_sigma = unpack2x16float(records[b + 9u]);
     let k = instances[records[b + 10u]];
+    if RECORD_MODE != 0u {
+        // Q-400: μ^S projected for this eye.
+        let mu_s = vec3<f32>(bitcast<f32>(records[b]), bitcast<f32>(records[b + 1u]), bitcast<f32>(records[b + 2u]));
+        let m = view.world_to_camera;
+        let xc = mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz) * mu_s + m[3].xyz;
+        depth = xc.z;
+        mean = view.view_k.xy * xc.xy / depth + view.view_k.zw;
+        // Q-T721.1
+        if !(depth >= k.near && depth <= k.far) || !finite(mean.x) || !finite(mean.y) {
+            var out: VertexOut;
+            out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+            return out;
+        }
+    }
 
     var color = vec3<f32>(dc_rg, dc_b_sigma.x);
     if k.colormap == 1u {
