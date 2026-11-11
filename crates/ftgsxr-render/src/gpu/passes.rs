@@ -25,6 +25,9 @@ use super::tier::QualityTier;
 
 /// `cull.wgsl`: stages 2 and 3 (§1.4).
 pub(crate) const CULL_WGSL: &str = include_str!("shaders/cull.wgsl");
+/// `projection.wgsl`: E6's projection for one view, prepended to `cull.wgsl` and
+/// `splat.wgsl` (Q-400).
+pub(crate) const PROJECTION_WGSL: &str = include_str!("shaders/projection.wgsl");
 /// `splat.wgsl`: stage 5's splat draw (§1.4).
 pub(crate) const SPLAT_WGSL: &str = include_str!("shaders/splat.wgsl");
 /// `occlusion.wgsl`: E13's depth decode and weight, prepended to `splat.wgsl` (Q-340).
@@ -38,13 +41,15 @@ pub(crate) const RESOLVE_WGSL: &str = include_str!("shaders/resolve.wgsl");
 pub(crate) const RESOLVE_TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// One instance's draw constants (`splat.wgsl`'s and `centers.wgsl`'s
 /// `InstanceConstants`): E7's, then the centers' colormap, ρ and scales.
-const DRAW_CONSTANTS_BYTES: usize = 32;
+const DRAW_CONSTANTS_BYTES: usize = 64;
 /// The resolve's block (`resolve.wgsl`'s `Resolve`).
 const RESOLVE_BYTES: usize = 16;
 /// The byte offset of the centers draw's indirect arguments (`frame.rs`'s counters).
 const CENTERS_INDIRECT_OFFSET: u64 = 16;
 /// The draw's view block (`splat.wgsl`'s `DrawView`).
-const DRAW_VIEW_BYTES: usize = 144;
+const DRAW_VIEW_BYTES: usize = 208;
+/// Where the view block's world-to-camera transform starts (Q-400).
+const DRAW_VIEW_WORLD_TO_CAMERA: usize = 144;
 /// The engine's near plane for the other geometry (§1.7: 0.01 m), which the splats' reverse-Z
 /// depth test maps their depth with. // Q-87
 pub(crate) const ENGINE_NEAR: f32 = 0.01;
@@ -162,7 +167,7 @@ impl SplatPasses {
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ftgsxr cull.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(CULL_WGSL.into()),
+            source: wgpu::ShaderSource::Wgsl(cull_source().into()),
         });
         // The uniform, the seven whole fields and the SH array's ranges.
         // Q-377
@@ -232,7 +237,7 @@ impl SplatPasses {
         let cull_centers = pipeline("ftgsxr cull centers", &cull_layout, "cull_centers");
         let size = pipeline("ftgsxr size", &size_pipeline_layout, "size");
         let sort = RadixSort::new(&device, tier.sort_key);
-        let (draw_layout, splat) = splat_pipeline(&device, layer_format, depth_format);
+        let (draw_layout, splat) = splat_pipeline(&device, layer_format, depth_format, mode);
         let centers = centers_pipeline(&device, &draw_layout, layer_format, depth_format, mode);
         let (resolve_layout, resolve, resolve_mesh) =
             resolve_pipelines(&device, RESOLVE_TARGET_FORMAT, depth_format);
@@ -507,10 +512,15 @@ impl SplatPasses {
     /// flag says: the caller gates it, Q-338) w_occ is 1, a 1 × 1 placeholder bound in
     /// the depth's place. `occlusion.depth` is any single-sample 2D view whose format
     /// samples as an unfilterable float (a depth format, `R16Unorm`, `R32Float`), its first
-    /// channel the stored depth. In shared-center mode nothing is drawn until the per-eye projection of M-8 (R-9,
-    /// Q-87). The draw writes no timestamps: the pass is the caller's (Q-87).
+    /// channel the stored depth. In shared-center mode (D-4) the vertex stage projects
+    /// each record's μ^S and Σ^S for `view` with E6 in full (the Jacobian clamp, Σ′ + εI, the
+    /// determinant guard, the opacity-aware extent and its cap, the near, far and box culls),
+    /// for the 64-byte and the half-Σ^S 48-byte records alike, and a record E6 culls in this
+    /// eye gets a degenerate quad; the color and the order are the midpoint's, and the depth
+    /// test and E13 take this eye's z_c (Q-400). The draw writes no timestamps: the pass is the caller's (Q-87).
     ///
-    /// Stage 6's centers (`centers.wgsl`), after the splats (Q-96): one indirect
+    /// Stage 6's centers (`centers.wgsl`), after the splats (Q-96), per view only until the
+    /// shared-center centers (#721): one indirect
     /// instanced draw of discs of radius ρ camera pixels at the records' μ′ (Q-78), opaque,
     /// colored by the instance's colormap (Q-92); with the passes' depth format they
     /// test `GreaterEqual` and write the depth (reverse Z, Q-87).
@@ -530,10 +540,6 @@ impl SplatPasses {
             frame.mode, self.mode,
             "the frame buffers' record layout is the passes' tier's"
         );
-        if self.mode != RecordMode::PerView {
-            // Q-87: the shared-center vertex projection is M-8's (R-9).
-            return;
-        }
         let set = &frame.set;
         let constants = frame
             .draw_constants
@@ -580,6 +586,11 @@ impl SplatPasses {
         // is off on Android (on both devices); the fallback held 40.9 Hz.
         pass.draw_indirect(&set.indirect, 0);
 
+        if self.mode != RecordMode::PerView {
+            // Stage 6 in shared-center mode, the centers projected per eye, is #721's: a
+            // center record holds view 0's μ′ only.
+            return;
+        }
         // Stage 6, the same bindings with the counters in place of the payloads.
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ftgsxr centers"),
@@ -723,9 +734,15 @@ impl SplatPasses {
     }
 }
 
-/// The splat draw's WGSL: `occlusion.wgsl`'s E13 functions, then `splat.wgsl`.
+/// The cull's WGSL: `projection.wgsl`'s E6, then `cull.wgsl`.
+fn cull_source() -> String {
+    format!("{PROJECTION_WGSL}\n{CULL_WGSL}")
+}
+
+/// The splat draw's WGSL: `occlusion.wgsl`'s E13 functions, `projection.wgsl`'s E6 (the
+/// shared-center vertex stage's, Q-400), then `splat.wgsl`.
 fn splat_source() -> String {
-    format!("{OCCLUSION_WGSL}\n{SPLAT_WGSL}")
+    format!("{OCCLUSION_WGSL}\n{PROJECTION_WGSL}\n{SPLAT_WGSL}")
 }
 
 /// Stage 5's splat pipeline and its bind group layout (`splat.wgsl`): the records, the
@@ -735,6 +752,7 @@ fn splat_pipeline(
     device: &wgpu::Device,
     layer_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
+    mode: RecordMode,
 ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ftgsxr splat.wgsl"),
@@ -804,7 +822,11 @@ fn splat_pipeline(
         vertex: wgpu::VertexState {
             module: &module,
             entry_point: Some("vs_splat"),
-            compilation_options: Default::default(),
+            // Q-400: the record layout the vertex stage reads.
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[("RECORD_MODE", f64::from(mode.shader_value()))],
+                ..Default::default()
+            },
             buffers: &[],
         },
         primitive: wgpu::PrimitiveState {
@@ -1022,7 +1044,9 @@ fn resolve_uniform(background: Option<[f32; 3]>) -> [u8; RESOLVE_BYTES] {
 /// One instance's draw constants (`InstanceConstants` of `splat.wgsl` and `centers.wgsl`):
 /// α_max, α_skip and the pixel center offset of its model (D-39), then the colormap
 /// (0 DC, 1 time center, 2 speed, 3 opacity), ρ, 1 / (τ₁ − τ₀), 0 for a single timestamp
-/// (Q-97), and 1 / the speeds' 99th percentile, 0 when that is 0 (Q-92, Q-93).
+/// (Q-97), and 1 / the speeds' 99th percentile, 0 when that is 0 (Q-92, Q-93); from byte
+/// 32, E6's near, far, ε, Jacobian clamp margin and extent cap of its model for the
+/// shared-center vertex stage (D-39, Q-400).
 fn draw_constants(draw: &ModelDraw) -> [u8; DRAW_CONSTANTS_BYTES] {
     let c = &draw.model.conventions;
     let (colormap, pixel_radius) = match draw.mode {
@@ -1058,6 +1082,13 @@ fn draw_constants(draw: &ModelDraw) -> [u8; DRAW_CONSTANTS_BYTES] {
     let span = draw.model.tau1 - draw.model.tau0;
     b.f32(if span > 0.0 { (1.0 / span) as f32 } else { 0.0 });
     b.f32(if p99 > 0.0 { 1.0 / p99 } else { 0.0 });
+    // E6's constants for the shared-center vertex stage (D-39, Q-400).
+    b.at = 32;
+    b.f32(c.near);
+    b.f32(c.far);
+    b.f32(c.eps2d);
+    b.f32(c.jacobian_clamp_margin);
+    b.f32(c.screen_extent_max);
     out
 }
 
@@ -1071,9 +1102,10 @@ struct EnvParams {
 }
 
 /// The draw's view block (`splat.wgsl`'s `DrawView`): the camera's W × H, the target's
-/// size, the engine's near plane when depth-tested (else 0), E13's switches, and with
-/// `occlusion` the view's and the depth camera's intrinsics, the depth image's W × H and
-/// planes, and the view's camera space to the depth camera's, composed in float64.
+/// size, the engine's near plane when depth-tested (else 0), E13's switches, the view's
+/// intrinsics, with `occlusion` the depth camera's intrinsics, the depth image's W × H and
+/// planes, and the view's camera space to the depth camera's, composed in float64, then
+/// the view's world-to-camera transform in float32 (Q-400).
 fn draw_view_uniform(
     view: &ViewParams,
     depth_test: bool,
@@ -1089,18 +1121,33 @@ fn draw_view_uniform(
     b.f32(view.target_size.x as f32);
     b.f32(view.target_size.y as f32);
     b.f32(if depth_test { ENGINE_NEAR } else { 0.0 });
-    let Some(o) = occlusion else {
-        return out;
-    };
-    b.u32(1);
-    b.u32(u32::from(o.soft));
-    b.f32(o.delta_m);
     let intrinsics = |b: &mut Block, k: &DMat3| {
         for v in [k.x_axis.x, k.y_axis.y, k.z_axis.x, k.z_axis.y] {
             b.f32(v as f32);
         }
     };
+    // The view's intrinsics and its world-to-camera transform, as `frame_uniform` rounds
+    // them: the shared-center vertex stage's E6 (Q-400) and E13's view ray.
+    b.at = 32;
     intrinsics(&mut b, &view.camera.k);
+    b.at = DRAW_VIEW_WORLD_TO_CAMERA;
+    let r = DMat3::from_mat4(view.camera.world_to_camera).as_mat3();
+    let t = view.camera.world_to_camera.w_axis.truncate().as_vec3();
+    for col in [r.x_axis, r.y_axis, r.z_axis] {
+        b.vec3(col);
+        b.f32(0.0);
+    }
+    b.vec3(t);
+    b.f32(1.0);
+    debug_assert_eq!(b.at, DRAW_VIEW_BYTES);
+    let Some(o) = occlusion else {
+        return out;
+    };
+    b.at = 20;
+    b.u32(1);
+    b.u32(u32::from(o.soft));
+    b.f32(o.delta_m);
+    b.at = 48;
     intrinsics(&mut b, &o.camera.k);
     b.f32(o.camera.width as f32);
     b.f32(o.camera.height as f32);
@@ -1110,7 +1157,7 @@ fn draw_view_uniform(
     for v in m.to_cols_array() {
         b.f32(v as f32);
     }
-    debug_assert_eq!(b.at, DRAW_VIEW_BYTES);
+    debug_assert_eq!(b.at, DRAW_VIEW_WORLD_TO_CAMERA);
     out
 }
 
@@ -1298,7 +1345,9 @@ mod tests {
     /// backend may offer (the device check is `SplatPasses::new`'s).
     #[test]
     fn cull_wgsl_is_valid_wgsl() {
-        let module = naga::front::wgsl::parse_str(CULL_WGSL).expect("cull.wgsl parses");
+        let source = cull_source();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("cull.wgsl parses: {}", e.emit_to_string(&source)));
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -1507,9 +1556,48 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
             [f(&b, 0), f(&b, 4), f(&b, 8), f(&b, 12), f(&b, 16)],
             [64.0, 48.0, 128.0, 96.0, ENGINE_NEAR]
         );
-        // Without an occlusion input E13's flag and the rest of the block are 0.
-        assert!(b[20..].iter().all(|&x| x == 0));
+        // Without an occlusion input E13's flag, mode and δ, and its depth camera's fields
+        // are 0.
+        assert!(b[20..32].iter().all(|&x| x == 0));
+        assert!(b[48..DRAW_VIEW_WORLD_TO_CAMERA].iter().all(|&x| x == 0));
         assert_eq!(f(&draw_view_uniform(&view, false, None), 16), 0.0);
+    }
+
+    // Q-400: the view's f_x, f_y, c_x, c_y and its world-to-camera transform, column-major
+    // with the translation last, are in every block, for the shared-center vertex stage.
+    #[test]
+    fn draw_view_uniform_carries_the_views_camera() {
+        let mut w2c = DMat4::from_mat3(DMat3::from_cols(
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, -1.0),
+            DVec3::new(0.0, 1.0, 0.0),
+        ));
+        w2c.w_axis = DVec3::new(0.25, -0.5, 4.0).extend(1.0);
+        let view = ViewParams {
+            camera: Camera {
+                width: 64,
+                height: 48,
+                k: DMat3::from_cols(
+                    DVec3::new(70.0, 0.0, 0.0),
+                    DVec3::new(0.0, 71.0, 0.0),
+                    DVec3::new(31.5, 23.5, 1.0),
+                ),
+                world_to_camera: w2c,
+            },
+            target_size: ftgsxr_core::UVec2::new(64, 48),
+        };
+        let b = draw_view_uniform(&view, false, None);
+        let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        assert_eq!([f(32), f(36), f(40), f(44)], [70.0, 71.0, 31.5, 23.5]);
+        let m: Vec<f32> = (0..16)
+            .map(|i| f(DRAW_VIEW_WORLD_TO_CAMERA + 4 * i))
+            .collect();
+        assert_eq!(
+            m,
+            [
+                1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.25, -0.5, 4.0, 1.0
+            ]
+        );
     }
 
     // E13's part of the block: the flag, the mode and δ, both cameras' f_x, f_y, c_x, c_y,

@@ -11,7 +11,8 @@
 // extent and its cap, whole-pixel radii, the box cull, the conic as (a, b, c), Q-21, and
 // the non-finite cull), E8 (the key k̄ = 2³² − 1 − bits(z)), E14 (the gains in linear
 // light) and E17 (the trim's closed test on μx(τ) in model space, after E3's, Q-373).
-// Every E6 and E7 constant comes from the model's uniform block (D-39).
+// Every E6 and E7 constant comes from the model's uniform block (D-39). E6's projection is
+// `projection.wgsl`'s, prepended to this file (`passes.rs`'s `cull_source`).
 //
 // Records (§1.4 stage 2, words of 32 bits, little-endian):
 // - per view (12 words): μ′ (2 f32), the conic (3 f32), z_c (f32), the radii (2 f32),
@@ -228,13 +229,6 @@ fn sh_at(m: u32) -> f32 {
     return unpack_value(sh_word(field_index(m, half)), m, half);
 }
 
-// The largest finite float32.
-const F32_MAX: f32 = 3.40282347e38;
-
-fn finite(x: f32) -> bool {
-    return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u;
-}
-
 // The row this invocation visits: the persistent rows 0..P, then the transient run (E3).
 fn row_of(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
     let k = (wid.y * nwg.x + wid.x) * WORKGROUP + lid;
@@ -298,16 +292,6 @@ fn stage_covariance(row: u32) -> mat3x3<f32> {
     return cov * (inst.scale * inst.scale);
 }
 
-// A view's fields by name.
-struct View {
-    rotation: mat3x3<f32>,
-    translation: vec3<f32>,
-    width: f32,
-    focal: vec2<f32>,
-    principal: vec2<f32>,
-    height: f32,
-}
-
 fn view_fields(c: ViewCam) -> View {
     var v: View;
     v.rotation = c.rotation;
@@ -319,107 +303,21 @@ fn view_fields(c: ViewCam) -> View {
     return v;
 }
 
-struct Proj {
-    visible: bool,
-    // Culled for a non-finite value in the projection (E6).
-    non_finite: bool,
-    mean: vec2<f32>,
-    conic: vec3<f32>,
-    radii: vec2<f32>,
-    depth: f32,
+// The model's E6 constants (D-39).
+fn model_e6() -> E6Constants {
+    var k: E6Constants;
+    k.near = model.near;
+    k.far = model.far;
+    k.eps2d = model.eps2d;
+    k.jacobian_clamp_margin = model.jacobian_clamp_margin;
+    k.screen_extent_max = model.screen_extent_max;
+    k.alpha_skip = model.alpha_skip;
+    return k;
 }
 
-// The bound L on |u| beyond which f·u + c leaves float32's range, for f and L taken as
-// at least 1 (Q-118).
-fn mean_bound(f: f32, c: f32) -> f32 {
-    return max((F32_MAX - abs(c)) / max(f, 1.0), 1.0);
-}
-
-// E6 for view v, in the order of `ftgsxr_core::project`, plus the float32 bound on μ′
-// before it is computed, which the float64 `project` has no need of (Q-118).
+// E6 for cull view `view` (`projection.wgsl`, prepended to this file).
 fn project(view: ViewCam, mu_s: vec3<f32>, cov_s: mat3x3<f32>, sigma_eff: f32) -> Proj {
-    let v = view_fields(view);
-    var p: Proj;
-    p.visible = false;
-    p.non_finite = false;
-    let xc = v.rotation * mu_s + v.translation;
-    let z = xc.z;
-    if !finite(z) {
-        p.non_finite = true;
-        return p;
-    }
-    if z < model.near || z > model.far {
-        return p;
-    }
-    let fx = v.focal.x;
-    let fy = v.focal.y;
-    let cx = v.principal.x;
-    let cy = v.principal.y;
-    // Q-118: a μ′ beyond float32's range is non-finite, decided on x_c before μ′ is
-    // computed, since a float32 overflow on the GPU need not give ∞: |f·x/z + c| fits
-    // when |x| / L ≤ z with L = (F32_MAX − |c|) / f. f is taken as at least 1, where u
-    // itself is the bound, and L as at least 1, so neither quotient overflows.
-    if abs(xc.x) / mean_bound(fx, cx) > z || abs(xc.y) / mean_bound(fy, cy) > z {
-        p.non_finite = true;
-        return p;
-    }
-    let u = xc.x / z;
-    let w = xc.y / z;
-    let mean = vec2<f32>(fx * u + cx, fy * w + cy);
-    // The Jacobian at x_c, its ratios clamped m·W/f_x (m·H/f_y) beyond the image; μ′ is not.
-    let mx = model.jacobian_clamp_margin * v.width / fx;
-    let my = model.jacobian_clamp_margin * v.height / fy;
-    let tx = clamp(u, -(cx / fx + mx), (v.width - cx) / fx + mx);
-    let ty = clamp(w, -(cy / fy + my), (v.height - cy) / fy + my);
-    let j0 = vec3<f32>(fx / z, 0.0, -fx * tx / z);
-    let j1 = vec3<f32>(0.0, fy / z, -fy * ty / z);
-    let sc = v.rotation * cov_s * transpose(v.rotation);
-    let s00 = dot(j0, sc * j0) + model.eps2d;
-    let s01 = dot(j0, sc * j1);
-    let s11 = dot(j1, sc * j1) + model.eps2d;
-    let det = s00 * s11 - s01 * s01;
-    if !finite(det) {
-        p.non_finite = true;
-        return p;
-    }
-    if det <= 0.0 {
-        return p;
-    }
-    // The opacity-aware extent, capped; σ_eff < α_skip has none.
-    let e2 = 2.0 * log(sigma_eff / model.alpha_skip);
-    if !finite(e2) {
-        p.non_finite = true;
-        return p;
-    }
-    if e2 < 0.0 {
-        return p;
-    }
-    let extent = min(sqrt(e2), model.screen_extent_max);
-    let rx = ceil(extent * sqrt(s00));
-    let ry = ceil(extent * sqrt(s11));
-    // Q-118: the mean's finiteness before the box test, so an infinite μ′ is counted
-    // rather than culled as off the image.
-    if !finite(rx) || !finite(ry) || !finite(mean.x) || !finite(mean.y) {
-        p.non_finite = true;
-        return p;
-    }
-    if rx <= 0.0 || ry <= 0.0 {
-        return p;
-    }
-    if mean.x + rx <= 0.0 || mean.x - rx >= v.width || mean.y + ry <= 0.0 || mean.y - ry >= v.height {
-        return p;
-    }
-    let conic = vec3<f32>(s11 / det, -s01 / det, s00 / det);
-    if !finite(conic.x) || !finite(conic.y) || !finite(conic.z) {
-        p.non_finite = true;
-        return p;
-    }
-    p.visible = true;
-    p.mean = mean;
-    p.conic = conic;
-    p.radii = vec2<f32>(rx, ry);
-    p.depth = z;
-    return p;
+    return project_view(view_fields(view), model_e6(), mu_s, cov_s, sigma_eff);
 }
 
 // Coefficient k, channel ch of `row` in the loaded layout (L′, Q-22).

@@ -2,7 +2,8 @@
 
 //! `HeadlessRenderer` (§2.1, §1.7 `render`): its own wgpu instance, adapter and device; the
 //! per-view pipeline of §1.4 stages 1–5 into a 16-bit float layer, read back and composited
-//! over the request's background on the CPU, unclamped (E7); E-GPU-LOST's single recovery.
+//! over the request's background on the CPU, unclamped (E7); the two-eye render of R-9 per
+//! view or shared-center (D-4, Q-401); E-GPU-LOST's single recovery.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +42,13 @@ struct Packed {
     conventions: RenderConventions,
 }
 
+/// The shared-center passes and frame buffers of `render_stereo` (Q-401), made at its
+/// first shared-center call.
+struct Shared {
+    passes: SplatPasses,
+    frame: Option<FrameBuffers>,
+}
+
 /// One device with its passes, the uploaded models and the frame buffers.
 struct Gpu {
     dev: SplatDevice,
@@ -48,6 +56,7 @@ struct Gpu {
     probe: ProbePass,
     models: Vec<GpuModel>,
     frame: Option<FrameBuffers>,
+    shared: Option<Shared>,
     lost: Arc<AtomicBool>,
 }
 
@@ -82,6 +91,7 @@ impl Gpu {
             probe,
             models,
             frame: None,
+            shared: None,
             lost,
         })
     }
@@ -93,7 +103,8 @@ impl Gpu {
 
 /// The headless adapter (§1.7 `render`): its own wgpu instance, adapter and device.
 ///
-/// It renders one view per call (per-view sort, §1.4 Stereo) into a 16-bit float layer
+/// `render` draws one view per call (per-view sort, §1.4 Stereo), `render_stereo` two
+/// (per view or shared-center, Q-401), each into a 16-bit float layer
 /// cleared to (0, 0, 0, 0), reads the layer back and composites it over the background on
 /// the CPU (E7). A lost device is re-created once, with every loaded model re-uploaded,
 /// and the render retried; a second loss is `RenderError::DeviceLost` (E-GPU-LOST).
@@ -109,10 +120,12 @@ impl HeadlessRenderer {
     /// A renderer for `tier` on the high-performance Vulkan adapter (Q-74); E-GPU-ADAPTER
     /// when there is none, E-GPU-SHADER when a pass does not compile.
     ///
-    /// A headless render has one view (§1.4 Stereo) and sorts per view whatever the tier
-    /// (D-4, Q-109): a shared-center tier keeps its storage, SH cap, key width, capacity
-    /// and budget but not its stereo mode, and the render is at the camera's own size, so
-    /// the tier's `render_scale` and foveation (the swapchain's) do not apply.
+    /// `render` has one view (§1.4 Stereo) and sorts per view whatever the tier (D-4,
+    /// Q-109): a shared-center tier keeps its storage, SH cap, key width, capacity and
+    /// budget but not its stereo mode, and the render is at the camera's own size, so the
+    /// tier's `render_scale` and foveation (the swapchain's) do not apply. `render_stereo`
+    /// takes its sort mode per call, and in shared-center mode the tier's `half_records`
+    /// picks the record layout (Q-401).
     pub fn new(tier: QualityTier) -> Result<HeadlessRenderer, RenderError> {
         // Q-109, D-4: "per-view sort on the desktop and in headless renders".
         let mut tier = tier;
@@ -200,6 +213,38 @@ impl HeadlessRenderer {
         self.with_recovery(models, |r| r.probe_once(models, camera, tau))
     }
 
+    /// E6 and E7 for two eyes at `tau` over `background`, one image per eye in `eyes`'
+    /// order, each as `render` makes it (Q-401).
+    ///
+    /// With `SortMode::PerView` each eye runs §1.4 stages 1–5 with its own camera, as
+    /// `render` does. With `SortMode::SharedCenter` (D-4) stages 1–4 run once at the sort
+    /// pose, whose origin is the mean of the eyes' centers and whose forward axis the
+    /// normalized sum of their forward axes (Q-399), with both eyes as cull views, and
+    /// stage 5 runs for each eye, projecting each stage-space record for it (Q-400); the
+    /// records are the tier's, the 48-byte half-precision Σ^S layout when it sets
+    /// `half_records`. `render`'s per-view rule (Q-109) is unchanged.
+    ///
+    /// # Panics
+    ///
+    /// When an id was not returned by this renderer's `load`.
+    // Q-401
+    pub fn render_stereo(
+        &mut self,
+        models: &[(ModelId, Pose)],
+        eyes: &[Camera; 2],
+        tau: f64,
+        background: [f32; 3],
+        sort: SortMode,
+    ) -> Result<[RenderImage; 2], RenderError> {
+        self.with_recovery(models, |r| match sort {
+            SortMode::PerView => Ok([
+                r.render_once(models, &eyes[0], tau, background)?,
+                r.render_once(models, &eyes[1], tau, background)?,
+            ]),
+            SortMode::SharedCenter => r.render_shared_once(models, eyes, tau, background),
+        })
+    }
+
     /// `run` with E-GPU-LOST's single recovery, after checking the ids.
     fn with_recovery<T>(
         &mut self,
@@ -246,40 +291,129 @@ impl HeadlessRenderer {
         tau: f64,
         background: [f32; 3],
     ) -> Result<RenderImage, RenderError> {
-        let (w, h) = (camera.width, camera.height);
         let (layer, mut enc) = self.draw_layer(models, camera, tau);
         let gpu = &self.gpu;
+        let (staging, row_bytes) = copy_layer(gpu.dev.device(), &mut enc, &layer, camera);
+        let bytes = gpu.submit_and_read(enc, &[&staging])?;
+        composite(
+            &bytes[0],
+            camera.width,
+            camera.height,
+            row_bytes,
+            background,
+        )
+    }
+
+    /// `render_stereo`'s shared-center render (Q-401): one prepare, two draws, both layers
+    /// read back by one submission.
+    fn render_shared_once(
+        &mut self,
+        models: &[(ModelId, Pose)],
+        eyes: &[Camera; 2],
+        tau: f64,
+        background: [f32; 3],
+    ) -> Result<[RenderImage; 2], RenderError> {
+        let (layers, mut enc) = self.draw_shared_layers(models, eyes, tau)?;
+        let gpu = &self.gpu;
         let device = gpu.dev.device();
-        let row_bytes = (w * TEXEL_BYTES).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let staging = device.create_buffer(&BufferDescriptor {
-            label: Some("ftgsxr headless read back"),
-            size: u64::from(row_bytes) * u64::from(h),
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &layer,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row_bytes),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+        let copies: Vec<(wgpu::Buffer, u32)> = layers
+            .iter()
+            .zip(eyes)
+            .map(|(layer, camera)| copy_layer(device, &mut enc, layer, camera))
+            .collect();
+        let staging: Vec<&wgpu::Buffer> = copies.iter().map(|(b, _)| b).collect();
         let bytes = gpu.submit_and_read(enc, &staging)?;
-        composite(&bytes, w, h, row_bytes, background)
+        let image = |k: usize| {
+            composite(
+                &bytes[k],
+                eyes[k].width,
+                eyes[k].height,
+                copies[k].1,
+                background,
+            )
+        };
+        Ok([image(0)?, image(1)?])
+    }
+
+    /// §1.4 stages 1–4 once at the eyes' sort pose (Q-399) with both eyes as cull views,
+    /// then stage 5 into a new layer per eye, cleared to (0, 0, 0, 0): the first eye's pass
+    /// writes the draw's begin timestamp and the last eye's its end (Q-403). Encoded on the
+    /// returned encoder, not yet submitted. E-GPU-SHADER when the shared-center passes,
+    /// made at the first call, do not compile.
+    pub(crate) fn draw_shared_layers(
+        &mut self,
+        models: &[(ModelId, Pose)],
+        eyes: &[Camera; 2],
+        tau: f64,
+    ) -> Result<(Vec<wgpu::Texture>, wgpu::CommandEncoder), RenderError> {
+        let capacity = self.capacity(models);
+        let tier = QualityTier {
+            sort_mode: SortMode::SharedCenter,
+            ..self.tier.clone()
+        };
+        let gpu = &mut self.gpu;
+        if gpu.shared.is_none() {
+            let passes = SplatPasses::new(&gpu.dev, LAYER_FORMAT, None, &tier)?;
+            gpu.shared = Some(Shared {
+                passes,
+                frame: None,
+            });
+        }
+        let shared = gpu
+            .shared
+            .as_mut()
+            .expect("invariant: the shared-center passes were made above");
+        if shared
+            .frame
+            .as_ref()
+            .is_none_or(|f| f.capacity() != capacity)
+        {
+            shared.frame = Some(FrameBuffers::new(&gpu.dev, &tier, capacity));
+        }
+        let frame = shared
+            .frame
+            .as_ref()
+            .expect("invariant: the frame buffers were made above");
+        let draws = model_draws(&gpu.models, models, tau);
+        let views: Vec<ViewParams> = eyes.iter().map(view_of).collect();
+        let device = gpu.dev.device();
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ftgsxr headless stereo render"),
+        });
+        // Q-399, D-4
+        shared
+            .passes
+            .encode_prepare(&mut enc, frame, &draws, &stereo_sort_pose(eyes), &views);
+        let layers = views
+            .iter()
+            .enumerate()
+            .map(|(k, view)| {
+                let layer = new_layer(device, &eyes[k]);
+                // Q-403
+                let timestamp_writes = frame.eye_draw_timestamp_writes(k, views.len());
+                draw_pass(
+                    &mut enc,
+                    &shared.passes,
+                    frame,
+                    &layer,
+                    view,
+                    timestamp_writes,
+                );
+                layer
+            })
+            .collect();
+        Ok((layers, enc))
+    }
+
+    /// The frame's capacity C for `models` (Q-86: `SumOfModels` is the instances' total N).
+    fn capacity(&self, models: &[(ModelId, Pose)]) -> u32 {
+        match self.tier.capacity {
+            Capacity::Fixed(c) => c,
+            Capacity::SumOfModels => models
+                .iter()
+                .map(|(id, _)| self.gpu.models[id.0 as usize].n())
+                .fold(0u32, u32::saturating_add),
+        }
     }
 
     fn probe_once(
@@ -306,8 +440,8 @@ impl HeadlessRenderer {
         let view = layer.create_view(&wgpu::TextureViewDescriptor::default());
         gpu.probe.encode(device, &mut enc, &view, &cells);
         enc.copy_buffer_to_buffer(&cells, 0, &staging, 0, PROBE_BYTES);
-        let bytes = gpu.submit_and_read(enc, &staging)?;
-        Ok(LayerSums::from_bytes(&bytes)
+        let bytes = gpu.submit_and_read(enc, &[&staging])?;
+        Ok(LayerSums::from_bytes(&bytes[0])
             .expect("invariant: the probe was encoded before the read back"))
     }
 
@@ -319,14 +453,7 @@ impl HeadlessRenderer {
         camera: &Camera,
         tau: f64,
     ) -> (wgpu::Texture, wgpu::CommandEncoder) {
-        let capacity = match self.tier.capacity {
-            Capacity::Fixed(c) => c,
-            // Q-86: the instances' total N.
-            Capacity::SumOfModels => models
-                .iter()
-                .map(|(id, _)| self.gpu.models[id.0 as usize].n())
-                .fold(0u32, u32::saturating_add),
-        };
+        let capacity = self.capacity(models);
         let gpu = &mut self.gpu;
         if gpu.frame.as_ref().is_none_or(|f| f.capacity() != capacity) {
             gpu.frame = Some(FrameBuffers::new(&gpu.dev, &self.tier, capacity));
@@ -335,97 +462,185 @@ impl HeadlessRenderer {
             .frame
             .as_ref()
             .expect("invariant: the frame buffers were made above");
-        let draws: Vec<ModelDraw> = models
-            .iter()
-            .map(|&(id, pose)| {
-                let model = &gpu.models[id.0 as usize];
-                ModelDraw {
-                    model,
-                    pose,
-                    tau,
-                    mode: RenderMode::Splats,
-                    transform: ColorTransform::IDENTITY,
-                    sh_degree: model.sh_degree,
-                    overlays: Overlays::default(),
-                    // §2.1: the headless render draws untrimmed (E17).
-                    trim: ftgsxr_core::Trim::default(),
-                }
-            })
-            .collect();
-        let (w, h) = (camera.width, camera.height);
-        let view = ViewParams {
-            camera: *camera,
-            target_size: UVec2::new(w, h),
-        };
+        let draws = model_draws(&gpu.models, models, tau);
+        let view = view_of(camera);
         let device = gpu.dev.device();
-        let layer = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("ftgsxr headless layer"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: LAYER_FORMAT,
-            // The probe reads the layer as a texture (R-21).
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let layer_view = layer.create_view(&wgpu::TextureViewDescriptor::default());
+        let layer = new_layer(device, camera);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("ftgsxr headless render"),
         });
         gpu.passes
             .encode_prepare(&mut enc, frame, &draws, &sort_pose(camera), &[view]);
-        {
-            // The draw's timestamps (Q-81, Q-114): this renderer owns the pass.
-            let timestamp_writes = frame.draw_timestamp_writes();
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ftgsxr headless splats"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &layer_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            gpu.passes.encode_draw(&mut pass, frame, &view, None);
-        }
+        // The draw's timestamps (Q-81, Q-114): this renderer owns the pass.
+        let timestamp_writes = frame.draw_timestamp_writes();
+        draw_pass(
+            &mut enc,
+            &gpu.passes,
+            frame,
+            &layer,
+            &view,
+            timestamp_writes,
+        );
         (layer, enc)
     }
 }
 
+/// Each `(id, pose)` as a splat instance at `tau`, at its loaded degree, untrimmed.
+fn model_draws<'a>(
+    gpu_models: &'a [GpuModel],
+    models: &[(ModelId, Pose)],
+    tau: f64,
+) -> Vec<ModelDraw<'a>> {
+    models
+        .iter()
+        .map(|&(id, pose)| {
+            let model = &gpu_models[id.0 as usize];
+            ModelDraw {
+                model,
+                pose,
+                tau,
+                mode: RenderMode::Splats,
+                transform: ColorTransform::IDENTITY,
+                sh_degree: model.sh_degree,
+                overlays: Overlays::default(),
+                // §2.1: the headless render draws untrimmed (E17).
+                trim: ftgsxr_core::Trim::default(),
+            }
+        })
+        .collect()
+}
+
+/// `camera`'s view at its own size.
+fn view_of(camera: &Camera) -> ViewParams {
+    ViewParams {
+        camera: *camera,
+        target_size: UVec2::new(camera.width, camera.height),
+    }
+}
+
+/// A new layer of `camera`'s size.
+fn new_layer(device: &wgpu::Device, camera: &Camera) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("ftgsxr headless layer"),
+        size: wgpu::Extent3d {
+            width: camera.width,
+            height: camera.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: LAYER_FORMAT,
+        // The probe reads the layer as a texture (R-21).
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
+}
+
+/// Stage 5 of `view` into `layer`, cleared to (0, 0, 0, 0), in a pass of its own with
+/// `timestamp_writes`.
+fn draw_pass(
+    enc: &mut wgpu::CommandEncoder,
+    passes: &SplatPasses,
+    frame: &FrameBuffers,
+    layer: &wgpu::Texture,
+    view: &ViewParams,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) {
+    let layer_view = layer.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("ftgsxr headless splats"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &layer_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    passes.encode_draw(&mut pass, frame, view, None);
+}
+
+/// A copy of `layer` (of `camera`'s size) into a new mappable buffer, encoded on `enc`;
+/// the buffer and its row pitch.
+fn copy_layer(
+    device: &wgpu::Device,
+    enc: &mut wgpu::CommandEncoder,
+    layer: &wgpu::Texture,
+    camera: &Camera,
+) -> (wgpu::Buffer, u32) {
+    let (w, h) = (camera.width, camera.height);
+    let row_bytes = (w * TEXEL_BYTES).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let staging = device.create_buffer(&BufferDescriptor {
+        label: Some("ftgsxr headless read back"),
+        size: u64::from(row_bytes) * u64::from(h),
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: layer,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row_bytes),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    (staging, row_bytes)
+}
+
 impl Gpu {
-    /// Submits `enc` and reads `staging` back, blocking; E-GPU-LOST when the device is lost.
+    /// Submits `enc` and reads each of `staging` back, blocking; E-GPU-LOST when the
+    /// device is lost.
     fn submit_and_read(
         &self,
         enc: wgpu::CommandEncoder,
-        staging: &wgpu::Buffer,
-    ) -> Result<Vec<u8>, RenderError> {
+        staging: &[&wgpu::Buffer],
+    ) -> Result<Vec<Vec<u8>>, RenderError> {
         self.dev.queue().submit([enc.finish()]);
-        let mapped = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&mapped);
-        staging.map_async(wgpu::MapMode::Read, .., move |r| {
-            flag.store(r.is_ok(), Ordering::Release);
-        });
+        let mapped: Vec<Arc<AtomicBool>> = staging
+            .iter()
+            .map(|buffer| {
+                let mapped = Arc::new(AtomicBool::new(false));
+                let flag = Arc::clone(&mapped);
+                buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+                    flag.store(r.is_ok(), Ordering::Release);
+                });
+                mapped
+            })
+            .collect();
         let polled = self.dev.device().poll(wgpu::PollType::wait_indefinitely());
-        if polled.is_err() || self.is_lost() || !mapped.load(Ordering::Acquire) {
+        if polled.is_err() || self.is_lost() || mapped.iter().any(|m| !m.load(Ordering::Acquire)) {
             return Err(RenderError::DeviceLost);
         }
-        let bytes = staging.get_mapped_range(..).to_vec();
-        staging.unmap();
-        Ok(bytes)
+        Ok(staging
+            .iter()
+            .map(|buffer| {
+                let bytes = buffer.get_mapped_range(..).to_vec();
+                buffer.unmap();
+                bytes
+            })
+            .collect())
     }
 }
 
@@ -437,6 +652,24 @@ pub(crate) fn sort_pose(camera: &Camera) -> SortPose {
     SortPose {
         origin: (-(r.transpose() * t)).as_vec3(),
         forward: (r.transpose() * DVec3::Z).as_vec3(),
+    }
+}
+
+/// The sort pose of several eyes (Q-399): its origin the mean of the eyes' centers, its
+/// forward axis the normalized sum of their forward axes (E4's eye and E8's depth axis in
+/// shared-center mode, D-4); one eye's is `sort_pose`'s.
+// Q-399
+pub(crate) fn stereo_sort_pose(eyes: &[Camera]) -> SortPose {
+    let (mut origin, mut forward) = (DVec3::ZERO, DVec3::ZERO);
+    for camera in eyes {
+        let r = DMat3::from_mat4(camera.world_to_camera);
+        let t = camera.world_to_camera.w_axis.truncate();
+        origin -= r.transpose() * t;
+        forward += r.transpose() * DVec3::Z;
+    }
+    SortPose {
+        origin: (origin / eyes.len() as f64).as_vec3(),
+        forward: forward.normalize().as_vec3(),
     }
 }
 
@@ -477,10 +710,114 @@ fn composite(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftgsxr_core::Vec3;
 
     /// One texel of halves (r, g, b, a) as little-endian bytes.
     fn texel(h: [u16; 4]) -> Vec<u8> {
         h.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    /// A camera at `center` whose OpenCV axes are the rows `right`, `down`, `forward`.
+    fn camera_at(center: DVec3, right: DVec3, down: DVec3, forward: DVec3) -> Camera {
+        let r = DMat3::from_cols(right, down, forward).transpose();
+        let mut w2c = ftgsxr_core::DMat4::from_mat3(r);
+        w2c.w_axis = (-(r * center)).extend(1.0);
+        Camera {
+            width: 4,
+            height: 4,
+            k: DMat3::IDENTITY,
+            world_to_camera: w2c,
+        }
+    }
+
+    // Q-399: the sort pose of two eyes is at the mean of their positions, along the
+    // normalized sum of their forward axes: R-9's parallel eyes at (∓0.032, −1, 0) looking
+    // along +y give (0, −1, 0) and +y; eyes toed in by ±45° about y, looking along
+    // (±1, 0, 1)/√2, give +z.
+    #[test]
+    fn stereo_sort_pose_is_the_mean_position_and_the_normalized_sum_of_the_forward_axes() {
+        let (x, y, z) = (DVec3::X, DVec3::Y, DVec3::Z);
+        let parallel = [
+            camera_at(DVec3::new(-0.032, -1.0, 0.0), x, -z, y),
+            camera_at(DVec3::new(0.032, -1.0, 0.0), x, -z, y),
+        ];
+        let pose = stereo_sort_pose(&parallel);
+        assert!((pose.origin - Vec3::new(0.0, -1.0, 0.0)).length() < 1e-7);
+        assert!((pose.forward - Vec3::Y).length() < 1e-7);
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let toed = [
+            camera_at(
+                DVec3::new(-0.5, 0.0, 0.0),
+                DVec3::new(s, 0.0, -s),
+                -y,
+                DVec3::new(s, 0.0, s),
+            ),
+            camera_at(
+                DVec3::new(0.5, 0.0, 0.0),
+                DVec3::new(s, 0.0, s),
+                -y,
+                DVec3::new(-s, 0.0, s),
+            ),
+        ];
+        let pose = stereo_sort_pose(&toed);
+        assert!(pose.origin.length() < 1e-7);
+        assert!((pose.forward - Vec3::Z).length() < 1e-7);
+    }
+
+    /// Q-403, Q-114's check across two eyes: a two-eye shared-center render times its
+    /// draw from the first eye's pass's begin to the last eye's end, so on a device with
+    /// timestamp queries `GpuTimes.draw` > 0 and `total` ≥ `sort` + `draw`. R9_P1's first
+    /// eye pair against P1, three frames, the third reading the first's block (Q-81).
+    #[test]
+    #[ignore = "gpu"]
+    fn gpu_shared_center_draw_times_span_both_eyes() {
+        let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+        let (model, _) = ftgsxr_testkit::probe("P1");
+        let path = ftgsxr_testkit::fixtures_dir().join("probes/R9_P1.request.json");
+        let request = ftgsxr_core::read_request(&std::fs::read(path).unwrap()).unwrap();
+        let mut renderer = HeadlessRenderer::new(QualityTier::conformance()).unwrap();
+        let id = renderer.load(&model, request.sh_degree).unwrap();
+        let instances = [(id, Pose::IDENTITY)];
+        let eyes = [request.items[0].camera, request.items[1].camera];
+        let tau = request.items[0].timestamp;
+        let mut stats = None;
+        for k in 0..3 {
+            let (_layers, mut enc) = renderer.draw_shared_layers(&instances, &eyes, tau).unwrap();
+            let gpu = &renderer.gpu;
+            let shared = gpu.shared.as_ref().unwrap();
+            let frame = shared.frame.as_ref().unwrap();
+            shared.passes.encode_stats(&mut enc, frame);
+            gpu.dev.queue().submit([enc.finish()]);
+            gpu.dev
+                .device()
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            stats = super::super::stats::FrameStats::poll(frame, &gpu.dev);
+            assert_eq!(stats.is_some(), k == 2, "frame {k}");
+        }
+        let stats = stats.unwrap();
+        assert!(stats.visible_splats > 0);
+        let t = stats.gpu_times_ms;
+        eprintln!("two-eye shared-center GPU times: {t:?}");
+        if renderer
+            .gpu
+            .dev
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+        {
+            assert!(t.draw > 0.0, "{t:?}");
+            assert!(t.total >= t.sort + t.draw, "{t:?}");
+            // The split itself: the first eye of two writes the begin only, the last the
+            // end only.
+            let shared = renderer.gpu.shared.as_ref().unwrap();
+            let frame = shared.frame.as_ref().unwrap();
+            let indices = |eye| {
+                let w = frame.eye_draw_timestamp_writes(eye, 2).unwrap();
+                (w.beginning_of_pass_write_index, w.end_of_pass_write_index)
+            };
+            assert_eq!(indices(0), (Some(4), None));
+            assert_eq!(indices(1), (None, Some(5)));
+        }
     }
 
     #[test]

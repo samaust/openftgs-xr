@@ -43,6 +43,7 @@ mod r05_cull_against_project;
 mod r06_count_and_overflow;
 mod r07_several_models;
 mod r08_pose;
+mod r09_shared_center_stereo;
 mod r10_tier_bounds;
 mod r11_color_space;
 mod r12_occlusion;
