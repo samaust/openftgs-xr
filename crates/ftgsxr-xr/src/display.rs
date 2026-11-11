@@ -438,7 +438,7 @@ fn unsupported_requested(e: &XrError, applied: &mut Applied, commands: &mut Comm
 /// new) and the swapchain's size; a failed render scale is forgotten (Q-147).
 fn on_session_created(
     session: Option<Res<OxrSession>>,
-    instance: Option<Res<OxrInstance>>,
+    (instance, system): (Option<Res<OxrInstance>>, Option<Res<OxrSystemId>>),
     current: Option<Res<OxrCurrentSessionConfig>>,
     settings: Res<DisplaySettings>,
     mut applied: ResMut<Applied>,
@@ -448,9 +448,13 @@ fn on_session_created(
     let Some(session) = session else { return };
     // Q-147
     applied.session_created();
+    // Q-412: the size at every creation and re-creation, with the view configuration's
+    // recommendation beside it.
     if let Some(c) = current {
+        let view = recommended(instance.as_deref(), system.as_deref())
+            .map_or_else(|| "none".to_owned(), |(r, _)| format!("{}x{}", r.x, r.y));
         info!(
-            "swapchain {}x{} at render scale {} (§1.12)",
+            "swapchain {}x{} at render scale {} (§1.12); the view configuration recommends {view}",
             c.resolution.x, c.resolution.y, applied.scale
         );
     }
