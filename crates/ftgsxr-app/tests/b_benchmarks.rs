@@ -69,6 +69,12 @@ fn run(name: &str, model: Option<&Path>, dir_name: &str) -> Value {
     assert_eq!(file["format"], "ftgsxr-bench");
     assert_eq!(file["version"], 1);
     assert_eq!(file["bench"], name);
+    // Q-406 (#724): `cmd_bench`'s file has no `machine.headset`.
+    assert!(
+        file["machine"].get("headset").is_none(),
+        "{}",
+        file["machine"]
+    );
     for key in ["gpu", "driver", "os", "cpu"] {
         assert!(
             file["machine"][key].as_str().is_some_and(|s| !s.is_empty()),

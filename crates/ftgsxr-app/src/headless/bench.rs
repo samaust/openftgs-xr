@@ -976,10 +976,11 @@ fn records_refusal(
     })
 }
 
-/// Whether `e` is a refusal of the device's (E-MEM-BUDGET, Q-377's binding limits), which
-/// a size records as skipped (Q-413).
-fn refused(e: &HeadlessError) -> bool {
-    e.code() == "E-MEM-BUDGET"
+/// Whether `e` is the headset's refusal of a size (E-MEM-BUDGET, Q-377's binding limits),
+/// which the size records as skipped (Q-413); on the desktop it stays the run's error
+/// (Q-117).
+fn refused(on: &On, e: &HeadlessError) -> bool {
+    matches!(on, On::Headset(_)) && e.code() == "E-MEM-BUDGET"
 }
 
 /// B-1's synthetic sizes (§3.5).
@@ -1107,20 +1108,22 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
         let setup = b3_setup(label, c, &gpu.tier);
         // Q-413: a size the device refuses is a result without a value.
         let limits = gpu.dev.device().limits();
-        let refusal = records_refusal(
-            u32::try_from(model.len()).unwrap_or(u32::MAX),
-            &gpu.tier,
-            limits.max_storage_buffer_binding_size,
-            limits.max_buffer_size,
-        );
-        if let Some(reason) = refusal {
+        let refusal = matches!(gpu.on, On::Headset(_)).then(|| {
+            records_refusal(
+                u32::try_from(model.len()).unwrap_or(u32::MAX),
+                &gpu.tier,
+                limits.max_storage_buffer_binding_size,
+                limits.max_buffer_size,
+            )
+        });
+        if let Some(Some(reason)) = refusal {
             m.skip(&setup, "sort_ms", "ms", reason);
             continue;
         }
         let (gpu_model, loaded) =
             match gpu.upload(model, &gpu.tier, given.map(|g| g.path.as_path())) {
                 Ok(uploaded) => uploaded,
-                Err(e) if refused(&e) => {
+                Err(e) if refused(&gpu.on, &e) => {
                     m.skip(&setup, "sort_ms", "ms", e.to_string());
                     continue;
                 }
@@ -1194,7 +1197,7 @@ fn bench_b5(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
             let uploaded = match gpu.upload(&model, &gpu.tier, Some(path)) {
                 Ok(uploaded) => uploaded,
                 // Q-413: a size the device refuses is a result without a value.
-                Err(e) if refused(&e) => {
+                Err(e) if refused(&gpu.on, &e) => {
                     m.skip(&setup, "load_s", "s", e.to_string());
                     m.skip(&setup, "s_per_100mb", "s", e.to_string());
                     return Ok(());
