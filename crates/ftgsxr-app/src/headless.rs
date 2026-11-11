@@ -15,8 +15,8 @@ use ftgsxr_core::{
 use ftgsxr_render::{HeadlessRenderer, QualityTier, RenderError};
 
 mod bench;
-// Q-67
-pub use bench::{BenchReport, cmd_bench};
+// Q-67, Q-406
+pub use bench::{BenchReport, cmd_bench, cmd_bench_on};
 mod json;
 mod sort_check;
 // Q-146
