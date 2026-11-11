@@ -8,7 +8,8 @@
 //! The main world loads (on the async compute task pool, one task per load, §2.4
 //! Threads), uploads (at most 64 MB per frame, §1.5, §2.4 rule 1) and reports
 //! (`SplatEvent`, `SplatStats`); the render world extracts the instances and cameras,
-//! keeps one `FrameBuffers` per view and encodes the passes (`render`).
+//! keeps one `FrameBuffers` per prepare unit (a per-view camera, or the shared-center group
+//! of D-4, Q-399) and encodes the passes (`render`).
 
 mod asset;
 mod bounds;

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The render world's part of the adapter: extraction of the instances and splat
-//! cameras, one `FrameBuffers` per view, the two render nodes inside each splat camera's
-//! 3D pass (§2.4 Frame loop hooks), the skip of stages 1–4 when nothing changed (§1.4,
-//! §2.4 rule 2) and the statistics two frames late (§1.4 stage 8).
+//! cameras, one `FrameBuffers` per prepare unit (a per-view camera, or the shared-center
+//! group, D-4), the two render nodes inside each splat camera's 3D pass (§2.4 Frame loop
+//! hooks), the skip of stages 1–4 when nothing changed (§1.4, §2.4 rule 2) and the
+//! statistics two frames late (§1.4 stage 8).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -40,7 +41,7 @@ use super::{
     SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform, SplatTrim,
 };
 use crate::gpu::device::SplatDevice;
-use crate::gpu::headless::sort_pose;
+use crate::gpu::headless::{sort_pose, stereo_sort_pose};
 use crate::gpu::probe::ProbePass;
 // The view target the resolve is compiled for (Q-91).
 use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
@@ -52,42 +53,47 @@ use crate::gpu::{
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
 const LAYER_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
-/// Statistics on their way from the render world to `SplatStats`, in arrival order, each
-/// with whether it is the first splat camera's.
+/// What the render world sends the main world's `SplatStats` and observers.
+#[derive(Clone, Copy, Debug)]
+enum StatsMessage {
+    /// The statistics to publish (`published_stats`).
+    Publish(FrameStats),
+    /// A unit's frame dropped records (D-34).
+    Overflow { visible: u32, capacity: u32 },
+}
+
+/// Statistics on their way from the render world to `SplatStats`, in arrival order.
 #[derive(Resource, Clone, Default)]
-pub(crate) struct StatsInbox(Arc<Mutex<Vec<(bool, FrameStats)>>>);
+pub(crate) struct StatsInbox(Arc<Mutex<Vec<StatsMessage>>>);
 
 impl StatsInbox {
-    fn push(&self, first: bool, stats: FrameStats) {
+    fn push(&self, message: StatsMessage) {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((first, stats));
+            .push(message);
     }
 
-    fn drain(&self) -> Vec<(bool, FrameStats)> {
+    fn drain(&self) -> Vec<StatsMessage> {
         std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 
-/// Main world: the first splat camera's statistics into `SplatStats` (in per-view stereo
-/// each eye has its own block, and a stereo pair counts once, Q-125), and
-/// `SplatEvent::Overflow` for each view's frame that dropped records (D-34).
+/// Main world: the published statistics into `SplatStats` (the first unit's counts, a
+/// stereo pair counting once, Q-125; the units' GPU times summed, Q-403), and
+/// `SplatEvent::Overflow` for each unit's frame that dropped records (D-34).
 pub(crate) fn publish_stats(
     inbox: Res<StatsInbox>,
     mut stats: ResMut<SplatStats>,
     mut commands: Commands,
 ) {
-    for (first, s) in inbox.drain() {
-        if first {
-            // Q-125
-            stats.0 = Some(s);
-        }
-        if s.overflow {
-            commands.trigger(SplatEvent::Overflow {
-                visible: s.visible_splats + s.visible_centers,
-                capacity: s.capacity,
-            });
+    for message in inbox.drain() {
+        match message {
+            // Q-125, Q-403
+            StatsMessage::Publish(s) => stats.0 = Some(s),
+            StatsMessage::Overflow { visible, capacity } => {
+                commands.trigger(SplatEvent::Overflow { visible, capacity });
+            }
         }
     }
 }
@@ -162,30 +168,96 @@ struct Extracted {
 }
 
 /// What stages 1–4 depend on (§1.4): when it equals the previous frame's, they are
-/// skipped and the previous frame's buffers are drawn again.
+/// skipped and the previous frame's buffers are drawn again. A unit's key holds every
+/// member's view, so the skip applies to a shared-center group as a whole (Q-100).
 #[derive(Clone, PartialEq)]
 struct PrepareKey {
-    view: ViewParams,
+    views: Vec<ViewParams>,
     instances: Vec<(usize, Pose, u64, RenderMode, ColorTransform, u8, Trim)>,
 }
 
-/// One splat camera's state: its passes and frame buffers, the layer (`LinearOver`),
-/// this frame's inputs and whether stages 1–4 run.
+/// One splat camera's state: its passes, the layer (`LinearOver`), its view and its place
+/// in the frame's prepare units.
 struct ViewState {
     camera: SplatCamera,
     passes: Arc<SplatPasses>,
-    frame: FrameBuffers,
     layer: Option<(wgpu::TextureView, UVec2)>,
     /// The view's depth copied at the layer's size, below render scale 1 (Q-164).
     layer_depth: Option<(wgpu::TextureView, UVec2)>,
     view: ViewParams,
-    sort_pose: SortPose,
-    instances: Vec<Instance>,
-    key: Option<PrepareKey>,
-    prepare: bool,
+    /// The view's E6 camera, for the unit's sort pose.
+    core_camera: ftgsxr_core::Camera,
     /// The view's place among the live splat cameras in camera order (Q-125): the index
     /// of its frame in `SplatOcclusion.frames`.
     index: usize,
+    /// The view's unit in `Views.units`.
+    unit: usize,
+}
+
+/// One prepare unit (Q-399): a per-view camera, or the shared-center group, whose first
+/// prepare node to run in the frame runs stages 1–4 for every member, at the members'
+/// sort pose with each member a cull view, into the unit's one set of frame buffers, which
+/// every member then draws. Its statistics are one block.
+struct Unit {
+    /// The members' render entities, in camera order.
+    members: Vec<Entity>,
+    /// The passes of stages 1–4: the first member's.
+    passes: Arc<SplatPasses>,
+    frame: FrameBuffers,
+    /// The members' views, in camera order: the cull views.
+    views: Vec<ViewParams>,
+    sort_pose: SortPose,
+    instances: Vec<Instance>,
+    key: Option<PrepareKey>,
+    /// Whether stages 1–4 run this frame.
+    prepare: bool,
+    /// The newest statistics block polled (Q-T722.2).
+    last_stats: Option<FrameStats>,
+}
+
+/// The render-world resource of §2.4 Frame loop hooks: the frame's number, advanced at
+/// extraction, and per unit the frame whose shared prepare ran and the frame and count of
+/// its members' draws so far, so the members after the first only draw, the first draw
+/// writes the draw's begin timestamp and the last its end (Q-403) and copies the unit's
+/// statistics block once. A value recorded for an earlier frame number counts as unset,
+/// which resets it at extraction.
+#[derive(Resource, Default)]
+struct SharedFrame {
+    frame: u64,
+    prepared: Vec<u64>,
+    drawn: Vec<(u64, usize)>,
+}
+
+impl SharedFrame {
+    /// Whether unit `u` is still to prepare this frame; marks it prepared.
+    fn take_prepare(&mut self, u: usize) -> bool {
+        let frame = self.frame;
+        let Some(prepared) = self.prepared.get_mut(u) else {
+            return false;
+        };
+        let first = *prepared != frame;
+        *prepared = frame;
+        first
+    }
+
+    /// How many of unit `u`'s members drew before this one this frame; counts this one.
+    fn take_draw(&mut self, u: usize) -> usize {
+        let frame = self.frame;
+        let Some(drawn) = self.drawn.get_mut(u) else {
+            return 0;
+        };
+        if drawn.0 != frame {
+            *drawn = (frame, 0);
+        }
+        drawn.1 += 1;
+        drawn.1 - 1
+    }
+
+    /// Room for `units` units, keeping this frame's marks.
+    fn resize(&mut self, units: usize) {
+        self.prepared.resize(units, u64::MAX);
+        self.drawn.resize(units, (u64::MAX, 0));
+    }
 }
 
 /// The splat cameras' states by render entity, and the passes by (layer format, shared
@@ -204,6 +276,8 @@ struct Views {
     /// The depth copy's pipeline (Q-164), made on first use.
     depth_copy: Option<Arc<DepthCopy>>,
     states: HashMap<Entity, ViewState>,
+    /// The frame's prepare units, in their first members' camera order (Q-399).
+    units: Vec<Unit>,
     /// What was warned about once: (render entity, reason).
     warned: HashSet<(Entity, &'static str)>,
 }
@@ -223,6 +297,7 @@ pub(crate) fn build(render_app: &mut SubApp, tier: QualityTier, inbox: StatsInbo
         .insert_resource(inbox)
         .init_resource::<Extracted>()
         .init_resource::<Views>()
+        .init_resource::<SharedFrame>()
         .init_resource::<ProbeTarget>()
         .add_systems(ExtractSchedule, (extract, extract_target))
         .add_systems(
@@ -286,8 +361,10 @@ type InstanceQuery<'w, 's> = Query<
     ),
 >;
 
+#[allow(clippy::too_many_arguments)]
 fn extract(
     mut out: ResMut<Extracted>,
+    mut shared: ResMut<SharedFrame>,
     gpu: Extract<Option<Res<SplatGpu>>>,
     models: Extract<Res<GpuModels>>,
     instances: Extract<InstanceQuery>,
@@ -295,6 +372,8 @@ fn extract(
     sh_limit: Extract<Option<Res<SplatShLimit>>>,
     cameras: Extract<Query<(&RenderEntity, &SplatCamera, Option<&::bevy::camera::Camera>)>>,
 ) {
+    // §2.4 Frame loop hooks: a new frame, so no unit has prepared or drawn in it yet.
+    shared.frame = shared.frame.wrapping_add(1);
     out.dev = gpu.as_ref().map(|g| Arc::clone(&g.0));
     // Q-239: the running tier; the device made for it resets the views.
     out.tier = Some(tier_state.tier.clone());
@@ -340,6 +419,7 @@ fn prepare_views(
     extracted: Res<Extracted>,
     mut tier: ResMut<RenderTier>,
     mut views: ResMut<Views>,
+    mut shared: ResMut<SharedFrame>,
     cameras: Query<(&ExtractedView, &ExtractedCamera, Option<&Msaa>)>,
 ) {
     let Some(dev) = extracted.dev.clone() else {
@@ -381,7 +461,6 @@ fn prepare_views(
             &dev,
             &tier.0,
             extracted.render_scale,
-            &extracted.instances,
             entity,
             camera,
             view,
@@ -396,11 +475,124 @@ fn prepare_views(
         }
     }
     let ordered = camera_order(views.states.keys().copied(), &extracted.orders);
-    for (index, entity) in ordered.into_iter().enumerate() {
-        if let Some(state) = views.states.get_mut(&entity) {
+    for (index, entity) in ordered.iter().enumerate() {
+        if let Some(state) = views.states.get_mut(entity) {
             state.index = index;
         }
     }
+    let sorts: Vec<(Entity, SortMode)> = ordered
+        .iter()
+        .map(|e| (*e, views.states[e].camera.sort))
+        .collect();
+    let units = prepare_units(&sorts);
+    for members in units.iter().filter(|m| m.len() == 1) {
+        if views.states[&members[0]].camera.sort == SortMode::SharedCenter
+            && units.iter().any(|m| m.len() == 2)
+        {
+            // Q-T722.1
+            views.warn_once(
+                members[0],
+                "a third shared-center camera prepares alone; a group holds two (§1.4 Stereo)",
+            );
+        }
+    }
+    let mut old = std::mem::take(&mut views.units);
+    let mut made = Vec::with_capacity(units.len());
+    for (u, members) in units.into_iter().enumerate() {
+        made.push(prepare_unit(
+            &mut views,
+            &mut old,
+            &dev,
+            &tier.0,
+            &extracted.instances,
+            members,
+            u,
+        ));
+    }
+    views.units = made;
+    shared.resize(views.units.len());
+}
+
+/// Unit `u`'s frame buffers, cull views, sort pose and inputs, and whether stages 1–4
+/// run: the frame buffers are those of the previous frame's unit of the same members while
+/// its first member's passes and the capacity hold (§2.4 rule 4), and stages 1–4 run when
+/// any member's view or any instance changed (§1.4, Q-100).
+fn prepare_unit(
+    views: &mut Views,
+    old: &mut Vec<Unit>,
+    dev: &Arc<SplatDevice>,
+    tier: &QualityTier,
+    instances: &[Instance],
+    members: Vec<Entity>,
+    u: usize,
+) -> Unit {
+    for m in &members {
+        if let Some(state) = views.states.get_mut(m) {
+            state.unit = u;
+        }
+    }
+    let first = &views.states[&members[0]];
+    let passes = Arc::clone(&first.passes);
+    let mut unit_tier = tier.clone();
+    unit_tier.sort_mode = first.camera.sort;
+    let c = capacity(&unit_tier, instances);
+    let member_views: Vec<ViewParams> = members.iter().map(|m| views.states[m].view).collect();
+    let cameras: Vec<ftgsxr_core::Camera> = members
+        .iter()
+        .map(|m| views.states[m].core_camera)
+        .collect();
+    // Q-399: a group's sort pose is the mean of the eyes' centers along the normalized sum
+    // of their forward axes; a unit of one prepares at its own pose.
+    let sort_pose = match cameras.as_slice() {
+        [one] => sort_pose(one),
+        eyes => stereo_sort_pose(eyes),
+    };
+    let new_key = PrepareKey {
+        views: member_views.clone(),
+        instances: instances
+            .iter()
+            .map(|i| {
+                (
+                    Arc::as_ptr(&i.model) as usize,
+                    i.pose,
+                    i.tau.to_bits(),
+                    i.mode,
+                    i.transform,
+                    i.sh_degree,
+                    i.trim,
+                )
+            })
+            .collect(),
+    };
+    // §2.4 rule 4: the frame buffers are sized once per passes (layer format and sort
+    // mode) and capacity, so a change of the output alone (a `LinearOver` background)
+    // keeps them, and the key below decides stages 1–4 (#201).
+    let reused = old
+        .iter()
+        .position(|o| {
+            o.members == members && Arc::ptr_eq(&o.passes, &passes) && o.frame.capacity() == c
+        })
+        .map(|i| old.swap_remove(i));
+    let mut unit = reused.unwrap_or_else(|| Unit {
+        members: members.clone(),
+        passes: Arc::clone(&passes),
+        frame: FrameBuffers::new(dev, &unit_tier, c),
+        views: Vec::new(),
+        sort_pose,
+        instances: Vec::new(),
+        key: None,
+        prepare: true,
+        last_stats: None,
+    });
+    // §1.4, §2.4 rule 2, Q-100: stages 1–4 only when an input changed.
+    // The key names GPU models by address: safe because `unit.instances` still holds
+    // the previous frame's `Arc`s here, so no address can have been reused yet.
+    unit.prepare = unit.key.as_ref() != Some(&new_key);
+    unit.key = Some(new_key);
+    unit.views = member_views;
+    unit.sort_pose = sort_pose;
+    unit.instances = instances.to_vec();
+    unit
 }
 
 /// The live splat cameras in camera order: by `Camera.order`, ties to the lower render
@@ -412,6 +604,44 @@ fn camera_order(
     let mut entities: Vec<Entity> = entities.collect();
     entities.sort_by_key(|e| (orders.get(e).copied().unwrap_or(0), *e));
     entities
+}
+
+/// The frame's prepare units, from the live splat cameras in camera order with their sort
+/// modes: each per-view camera is a unit of its own, and the shared-center cameras form
+/// one group (Q-399), at most two, since a prepare culls for one or two views (§1.4
+/// Stereo); each further shared-center camera prepares alone at its own pose (Q-T722.1).
+// Q-399, Q-T722.1
+fn prepare_units(ordered: &[(Entity, SortMode)]) -> Vec<Vec<Entity>> {
+    let mut units: Vec<Vec<Entity>> = Vec::new();
+    let mut group: Option<usize> = None;
+    for &(entity, sort) in ordered {
+        match (sort, group) {
+            (SortMode::SharedCenter, Some(g)) if units[g].len() < 2 => units[g].push(entity),
+            (SortMode::SharedCenter, None) => {
+                group = Some(units.len());
+                units.push(vec![entity]);
+            }
+            _ => units.push(vec![entity]),
+        }
+    }
+    units
+}
+
+/// What `SplatStats` publishes from the first unit's block `first` and the latest block
+/// of each other unit of the frame, `others` (Q-403, Q-T722.2): the first unit's counts,
+/// C and flags (Q-125: a primitive counts once), and the GPU times summed over the units,
+/// a shared-center group's one block counted once.
+// Q-125, Q-403, Q-T722.2
+fn published_stats(first: FrameStats, others: &[FrameStats]) -> FrameStats {
+    let mut published = first;
+    for other in others {
+        let (t, o) = (&mut published.gpu_times_ms, &other.gpu_times_ms);
+        t.cull += o.cull;
+        t.sort += o.sort;
+        t.draw += o.draw;
+        t.total += o.total;
+    }
+    published
 }
 
 /// The depth frame the view at `index` in camera order draws against (PRD #565, "Which
@@ -515,7 +745,6 @@ fn prepare_view(
     dev: &Arc<SplatDevice>,
     tier: &QualityTier,
     render_scale: f32,
-    instances: &[Instance],
     entity: Entity,
     camera: SplatCamera,
     view: &ExtractedView,
@@ -558,8 +787,6 @@ fn prepare_view(
             LAYER_FORMAT
         }
     };
-    let mut view_tier = tier.clone();
-    view_tier.sort_mode = camera.sort;
     let key = pass_key(layer_format, camera.sort);
     let passes = match views.passes.get(&key) {
         Some(p) => Arc::clone(p),
@@ -577,63 +804,24 @@ fn prepare_view(
             p
         }
     };
-    let c = capacity(&view_tier, instances);
     let params = ViewParams {
         camera: core_camera,
         target_size: draw_size,
     };
-    let new_key = PrepareKey {
+    let mut state = views.states.remove(&entity).unwrap_or_else(|| ViewState {
+        camera,
+        passes: Arc::clone(&passes),
+        layer: None,
+        layer_depth: None,
         view: params,
-        instances: instances
-            .iter()
-            .map(|i| {
-                (
-                    Arc::as_ptr(&i.model) as usize,
-                    i.pose,
-                    i.tau.to_bits(),
-                    i.mode,
-                    i.transform,
-                    i.sh_degree,
-                    i.trim,
-                )
-            })
-            .collect(),
-    };
-    // §2.4 rule 4: the frame buffers are sized once per passes (layer format and sort
-    // mode) and capacity, so a change of the output alone (a `LinearOver` background)
-    // keeps them, and the key below decides stages 1–4 (#201).
-    let state = match views.states.remove(&entity) {
-        Some(s)
-            if Arc::ptr_eq(&s.passes, &passes)
-                && s.camera.sort == camera.sort
-                && s.frame.capacity() == c =>
-        {
-            s
-        }
-        _ => ViewState {
-            camera,
-            passes: Arc::clone(&passes),
-            frame: FrameBuffers::new(dev, &view_tier, c),
-            layer: None,
-            layer_depth: None,
-            view: params,
-            sort_pose: sort_pose(&core_camera),
-            instances: Vec::new(),
-            key: None,
-            prepare: true,
-            index: 0,
-        },
-    };
-    let mut state = state;
+        core_camera,
+        index: 0,
+        unit: 0,
+    });
     state.camera = camera;
-    // §1.4, §2.4 rule 2, Q-100: stages 1–4 only when an input changed.
-    // The key names GPU models by address: safe because `state.instances` still holds
-    // the previous frame's `Arc`s here, so no address can have been reused yet.
-    state.prepare = state.key.as_ref() != Some(&new_key);
-    state.key = Some(new_key);
+    state.passes = passes;
     state.view = params;
-    state.sort_pose = sort_pose(&core_camera);
-    state.instances = instances.to_vec();
+    state.core_camera = core_camera;
     if matches!(camera.output, OutputSpace::LinearOver { .. })
         && state.layer.as_ref().is_none_or(|(_, s)| *s != draw_size)
     {
@@ -708,22 +896,34 @@ fn draws(instances: &[Instance]) -> Vec<ModelDraw<'_>> {
         .collect()
 }
 
-/// The prepare node (§2.4 Frame loop hooks): stages 1–4 for the view, before the opaque
-/// pass, unless nothing changed since the last frame.
-fn prepare_node(view: ViewQuery<&ExtractedView>, views: Res<Views>, mut ctx: RenderContext) {
+/// The prepare node (§2.4 Frame loop hooks): stages 1–4 for the view's unit, before the
+/// opaque pass, unless nothing changed since the last frame or another member of its
+/// shared-center group prepared it this frame (Q-399): every member is a cull view, at the
+/// group's sort pose. Bevy runs the cameras one after another and submits their commands
+/// in that order, so the first member to run prepares before every member draws.
+fn prepare_node(
+    view: ViewQuery<&ExtractedView>,
+    views: Res<Views>,
+    mut shared: ResMut<SharedFrame>,
+    mut ctx: RenderContext,
+) {
     let Some(state) = views.states.get(&view.entity()) else {
         return;
     };
-    if !state.prepare {
+    let Some(unit) = views.units.get(state.unit) else {
+        return;
+    };
+    // §2.4 Frame loop hooks, Q-399: once per unit and frame.
+    if !shared.take_prepare(state.unit) || !unit.prepare {
         return;
     }
-    let draws = draws(&state.instances);
-    state.passes.encode_prepare(
+    let draws = draws(&unit.instances);
+    unit.passes.encode_prepare(
         ctx.command_encoder(),
-        &state.frame,
+        &unit.frame,
         &draws,
-        &state.sort_pose,
-        &[state.view],
+        &unit.sort_pose,
+        &unit.views,
     );
 }
 
@@ -733,6 +933,7 @@ fn prepare_node(view: ViewQuery<&ExtractedView>, views: Res<Views>, mut ctx: Ren
 fn draw_node(
     view: ViewQuery<(&ExtractedCamera, &ViewTarget, &ViewDepthTexture)>,
     views: Res<Views>,
+    mut shared: ResMut<SharedFrame>,
     tier: Res<RenderTier>,
     occlusion: Option<Res<SplatOcclusion>>,
     images: Res<RenderAssets<GpuImage>>,
@@ -743,6 +944,12 @@ fn draw_node(
     let Some(state) = views.states.get(&view.entity()) else {
         return;
     };
+    let Some(unit) = views.units.get(state.unit) else {
+        return;
+    };
+    // Q-403: the unit's k-th draw of n this frame; the last copies its statistics.
+    let (k, n) = (shared.take_draw(state.unit), unit.members.len());
+    let last = k + 1 == n;
     // E13's input of this view (Q-339: `SplatOcclusion` lives in the render world): its
     // frame's image as prepared by Bevy, with the frame's camera and planes.
     let occlusion = occlusion.as_deref().and_then(|o| {
@@ -757,14 +964,18 @@ fn draw_node(
             delta_m: o.delta_m,
         })
     });
+    let frame = &unit.frame;
     if matches!(state.camera.output, OutputSpace::LinearOver { .. }) && state.layer.is_none() {
         // No pass, so no draw's timestamps marked for a later `encode_stats` (Q-81).
+        if last {
+            state.passes.encode_stats(ctx.command_encoder(), frame);
+        }
         return;
     }
     let (camera, target, depth) = view.into_inner();
-    let frame = &state.frame;
-    // The draw's timestamps (Q-81, Q-87, Q-114): this node owns the pass.
-    let timestamp_writes = frame.draw_timestamp_writes();
+    // The draw's timestamps (Q-81, Q-87, Q-114): this node owns the pass; in a group, the
+    // first member's draw writes the begin and the last's the end (Q-403).
+    let timestamp_writes = frame.eye_draw_timestamp_writes(k, n);
     let depth_attachment = Some(depth.get_attachment(StoreOp::Store));
     match (state.camera.output, &state.layer) {
         (OutputSpace::FileEncoded, _) => {
@@ -858,25 +1069,46 @@ fn draw_node(
         }
         (OutputSpace::LinearOver { .. }, None) => unreachable!("returned above"),
     }
-    state.passes.encode_stats(ctx.command_encoder(), frame);
+    // §1.4 stage 8: one block per unit and frame, after its last draw.
+    if last {
+        state.passes.encode_stats(ctx.command_encoder(), frame);
+    }
 }
 
-/// Stage 8's read back, never blocking (Q-81): each view's newest mapped statistics of two
-/// or more frames ago, to the main world.
-/// The first splat camera is the live one of lowest order, ties to the lower render
-/// entity (Q-125; `ftgsxr_xr` orders the eyes by index, so it is the left eye).
-fn poll_stats(views: Res<Views>, extracted: Res<Extracted>, inbox: Res<StatsInbox>) {
-    let Some(dev) = &views.dev else {
+/// Stage 8's read back, never blocking (Q-81): each unit's newest mapped statistics of two
+/// or more frames ago, to the main world. When the first unit's block arrives (the unit of
+/// the first splat camera, the live one of lowest order, ties to the lower render entity:
+/// Q-125, `ftgsxr_xr` orders the eyes by index, so the left eye), it is published with the
+/// GPU times summed over the units' newest blocks (Q-403, Q-T722.2).
+fn poll_stats(mut views: ResMut<Views>, inbox: Res<StatsInbox>) {
+    let Some(dev) = views.dev.clone() else {
         return;
     };
-    let entities = camera_order(views.states.keys().copied(), &extracted.orders);
-    let first = entities.first().copied();
-    for entity in entities {
-        if let Some(stats) = FrameStats::poll(&views.states[&entity].frame, dev) {
-            inbox.push(Some(entity) == first, stats);
+    let mut first_arrived = false;
+    for (u, unit) in views.units.iter_mut().enumerate() {
+        let Some(stats) = FrameStats::poll(&unit.frame, &dev) else {
+            continue;
+        };
+        unit.last_stats = Some(stats);
+        first_arrived |= u == 0;
+        if stats.overflow {
+            inbox.push(StatsMessage::Overflow {
+                visible: stats.visible_splats + stats.visible_centers,
+                capacity: stats.capacity,
+            });
+        }
+    }
+    if first_arrived && let Some((first, others)) = views.units.split_first() {
+        let others: Vec<FrameStats> = others.iter().filter_map(|o| o.last_stats).collect();
+        if let Some(stats) = first.last_stats {
+            // Q-125, Q-403, Q-T722.2
+            inbox.push(StatsMessage::Publish(published_stats(stats, &others)));
         }
     }
 }
+
+#[cfg(test)]
+mod gpu_tests;
 
 #[cfg(test)]
 mod tests {
@@ -943,6 +1175,68 @@ mod tests {
         assert_eq!(sorted, vec![e(4), lo, hi, e(1)]);
         let sorted = camera_order([e(1), e(5)].into_iter(), &orders);
         assert_eq!(sorted, vec![e(5), e(1)], "no order is order 0");
+    }
+
+    // Q-399, Q-T722.1: per-view cameras prepare alone; the first two shared-center
+    // cameras in camera order are one group, wherever they stand among the others, and a
+    // third shared-center camera is a group of one.
+    #[test]
+    fn prepare_units_group_the_first_two_shared_center_cameras() {
+        let e = |i: u32| Entity::from_raw_u32(i).expect("a valid index");
+        let (p, s) = (SortMode::PerView, SortMode::SharedCenter);
+        assert_eq!(prepare_units(&[]), Vec::<Vec<Entity>>::new());
+        assert_eq!(prepare_units(&[(e(1), s)]), vec![vec![e(1)]]);
+        assert_eq!(
+            prepare_units(&[(e(1), p), (e(2), p)]),
+            vec![vec![e(1)], vec![e(2)]]
+        );
+        assert_eq!(
+            prepare_units(&[(e(5), s), (e(3), s)]),
+            vec![vec![e(5), e(3)]],
+            "camera order, not entity order"
+        );
+        assert_eq!(
+            prepare_units(&[(e(1), p), (e(2), s), (e(3), p), (e(4), s), (e(6), s)]),
+            vec![vec![e(1)], vec![e(2), e(4)], vec![e(3)], vec![e(6)]],
+            "the group stands at its first member's place"
+        );
+    }
+
+    // Q-125, Q-403, Q-T722.2: the first unit's counts; each time the sum over the units.
+    #[test]
+    fn published_stats_keep_the_first_counts_and_sum_the_times() {
+        use crate::gpu::GpuTimes;
+        let block = |visible: u32, non_finite: u32, t: [f32; 4]| FrameStats {
+            visible_splats: visible,
+            visible_centers: visible / 10,
+            capacity: 1000,
+            overflow: visible > 500,
+            non_finite,
+            trimmed: visible / 2,
+            gpu_times_ms: GpuTimes {
+                cull: t[0],
+                sort: t[1],
+                draw: t[2],
+                total: t[3],
+            },
+        };
+        let first = block(400, 12, [0.25, 0.5, 2.0, 3.0]);
+        assert_eq!(published_stats(first, &[]), first, "one unit: its block");
+        let second = block(600, 6, [0.125, 0.25, 1.0, 1.5]);
+        let third = block(10, 0, [0.0, 0.0, 0.5, 0.5]);
+        let published = published_stats(first, &[second, third]);
+        assert_eq!(
+            published,
+            FrameStats {
+                gpu_times_ms: GpuTimes {
+                    cull: 0.375,
+                    sort: 0.75,
+                    draw: 3.5,
+                    total: 5.0,
+                },
+                ..first
+            }
+        );
     }
 
     #[test]
