@@ -6,7 +6,7 @@
 //! cannot (no model, a load failure, a timeout).
 //!
 //! The model the driver pushed as `dv/spike.safetensors` (Q-T725.1: B-1's every-row-
-//! persistent kind) loads and is kept 2 m ahead of the left eye each frame; the governor
+//! persistent kind) loads at τ_m 0.95 s, held (nothing plays it), and is kept 2 m ahead of the left eye each frame; the governor
 //! is held off throughout so no knob moves under the measurement.
 //!
 //! - S1: whether the XR device has timestamp queries, then a 5 s window in which the
@@ -28,7 +28,7 @@ use bevy::render::renderer::RenderDevice;
 use bevy::render::settings::WgpuFeatures;
 use bevy_mod_xr::camera::XrCamera;
 use bevy_mod_xr::session::XrState;
-use ftgsxr_app::{Governor, SplatCamera, SplatEvent, SplatStats};
+use ftgsxr_app::{Governor, SplatCamera, SplatEvent, SplatStats, SplatTime};
 use ftgsxr_xr::{DisplaySettings, Foveation};
 
 use crate::android::splat_load;
@@ -58,6 +58,10 @@ const LEVELS: [Foveation; 4] = [
     Foveation::Medium,
     Foveation::High,
 ];
+/// How long the last counters window is left to log before the verdict.
+const CLOSING: Duration = Duration::from_millis(500);
+/// τ_m, held: the span's midpoint (Q-102's B-3 time; the model's span is \[0, 1.9\]).
+const TAU: f64 = 0.95;
 /// The window entities' prefix `ftgsxr_xr`'s counters wait for (Q-308's pattern).
 const METRICS: &str = "ftgsxr-test: metrics ";
 
@@ -68,6 +72,8 @@ enum Step {
     S1,
     Settle(usize),
     Measure(usize),
+    /// The last window's counters are logged a frame after its marker goes.
+    Closing,
     Done,
 }
 
@@ -108,7 +114,14 @@ pub(super) fn add(app: &mut App) {
     info!("spikes: model {} bytes", bytes.len());
     let model = app
         .world_mut()
-        .spawn((splat_load(bytes), Transform::IDENTITY))
+        .spawn((
+            splat_load(bytes),
+            Transform::IDENTITY,
+            SplatTime {
+                tau: TAU,
+                extrapolating: false,
+            },
+        ))
         .id();
     let now = Instant::now();
     app.insert_resource(Spikes {
@@ -277,13 +290,16 @@ fn run(
                     Some(Step::Settle(i + 1))
                 } else {
                     test.done_levels.push(format!("{:?}", LEVELS[i]));
-                    let detail = format!("s1 and s2 at {}", test.done_levels.join(", "));
-                    verdict(NAME, true, &detail);
-                    Some(Step::Done)
+                    Some(Step::Closing)
                 }
             } else {
                 None
             }
+        }
+        Step::Closing if elapsed >= CLOSING => {
+            let detail = format!("s1 and s2 at {}", test.done_levels.join(", "));
+            verdict(NAME, true, &detail);
+            Some(Step::Done)
         }
         _ => None,
     };

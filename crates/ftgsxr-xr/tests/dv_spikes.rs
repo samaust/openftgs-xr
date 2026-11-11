@@ -88,24 +88,41 @@ fn dv_spikes_s1_timestamps_and_counters_s2_foveation_gpu_times() {
         "S1's timestamp-query line"
     );
     assert_eq!(after(&lines, "spikes: s1 ").len(), 1, "S1's blocks line");
-    assert!(
-        !after(&lines, "perf metrics s1: ").is_empty(),
-        "S1's counters window (or the extension's absence)"
-    );
+    // Each window's summary header (logged after its marker goes), not its start line.
+    let summary = |label: &str| {
+        after(&lines, &format!("perf metrics {label}: "))
+            .iter()
+            .any(|r| r.contains(" frames over "))
+    };
+    assert!(summary("s1"), "S1's counters window summary");
     for level in ["Off", "Low", "Medium", "High"] {
         let s2 = after(&lines, &format!("spikes: s2 {level} median total "));
         assert_eq!(s2.len(), 1, "S2's line at {level}");
         let ms = s2[0].split_whitespace().next().unwrap_or("");
         assert!(ms.parse::<f32>().is_ok(), "S2 at {level}: a median, {ms:?}");
         assert!(
-            !after(&lines, &format!("perf metrics s2 {level}: ")).is_empty(),
-            "S2's counters window at {level}"
+            summary(&format!("s2 {level}")),
+            "S2's counters window summary at {level}"
+        );
+        // As Dv-12: the level reached the swapchain, so the medians are of four levels.
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(&format!("foveation {level} applied to the swapchain"))),
+            "foveation {level} applied"
         );
     }
-    assert!(
-        !after(&lines, "swapchain ").is_empty(),
-        "display's swapchain size"
-    );
+    let swapchain = lines.iter().find_map(|l| size_after(l, "swapchain "));
+    println!("swapchain {swapchain:?}");
+    assert!(swapchain.is_some(), "display's swapchain size");
+}
+
+/// `(w, h)` from the `WxH` after `prefix` in `line` (Dv-12's reading).
+fn size_after(line: &str, prefix: &str) -> Option<(u32, u32)> {
+    let rest = line.split_once(prefix)?.1;
+    let word = rest.split_whitespace().next()?;
+    let (w, h) = word.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 /// The model generator (private to the driver, so a `cpu` test of its own): every row
