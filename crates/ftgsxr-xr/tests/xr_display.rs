@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use bevy_mod_openxr::resources::OxrInstance;
 use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_xr::session::XrState;
+use ftgsxr_app::{HudData, XrDisplay};
 use ftgsxr_render::{Foveation, SortMode};
 use ftgsxr_xr::{DisplaySettings, XrPlugin};
 use tracing::Level;
@@ -171,4 +172,70 @@ fn xr_display_a_render_scale_set_before_the_session_runs_is_applied_once_it_runs
     let (first, second) = run_until_recreated(&mut app);
     let scaled = |v: u32| (v as f32 * 0.8).round() as u32;
     assert_eq!(second, (scaled(first.0), scaled(first.1)));
+}
+
+// Q-404 (#729): `XrPlugin` inserts `XrDisplay`, whose rate is `None` until the session
+// runs; while it runs `display` writes the runtime's current rate (the reciprocal of the
+// predicted display period without XR_FB_display_refresh_rate), the runtime's list, the
+// foveation support and the swapchain's size, and mirrors the rate into `HudData`.
+#[test]
+#[ignore = "xr"]
+fn xr_display_xr_display_carries_the_runtimes_rate_and_list_and_the_hud_mirrors_it() {
+    capture_log();
+    let _monado = Monado::start();
+    let mut app = xr_app(
+        XrPlugin {
+            passthrough: false,
+            hands: false,
+            sort: SortMode::PerView,
+        },
+        |app| {
+            app.init_resource::<HudData>();
+        },
+    );
+    assert_eq!(
+        app.world().resource::<XrDisplay>().refresh_hz,
+        None,
+        "no rate before a session runs"
+    );
+    run_until_running(&mut app);
+    for _ in 0..5 {
+        app.update();
+    }
+    let has_ext = app
+        .world()
+        .resource::<OxrInstance>()
+        .exts()
+        .fb_display_refresh_rate
+        .is_some();
+    let (reported, current) = if has_ext {
+        let session = app.world().resource::<OxrSession>();
+        (
+            session
+                .enumerate_display_refresh_rates()
+                .expect("the runtime's rates"),
+            Some(
+                session
+                    .get_display_refresh_rate()
+                    .expect("the current rate"),
+            ),
+        )
+    } else {
+        (Vec::new(), None)
+    };
+    let d = app.world().resource::<XrDisplay>();
+    let rate = d.refresh_hz.expect("a rate while the session runs");
+    assert!(rate.is_finite() && rate > 0.0, "{rate} Hz");
+    if let Some(c) = current {
+        assert_eq!(rate, c, "the runtime's current rate");
+    }
+    assert_eq!(d.available_rates, reported, "the runtime's list");
+    assert!(!d.foveation, "Monado offers no XR_FB_foveation");
+    let first = swapchain_sizes()[0];
+    assert_eq!(
+        (d.swapchain.x, d.swapchain.y),
+        first,
+        "the swapchain's size"
+    );
+    assert_eq!(app.world().resource::<HudData>().refresh_hz, Some(rate));
 }

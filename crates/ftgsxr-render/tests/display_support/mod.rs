@@ -2,7 +2,8 @@
 
 //! Shared helpers of the display tests (R-11, R-12, R-13, R-14): hand-built models, one
 //! frame of §1.4 stages 1–6 into a 16-bit float layer, with an environment depth image
-//! written by the test for E13 when asked (R-12), and, when asked, stage 7's resolve onto
+//! written by the test for E13 when asked (R-12), for one view or two eyes sharing one
+//! shared-center prepare (D-4, #721), and, when asked, stage 7's resolve onto
 //! an sRGB view target, with the layer, the target and the depth read back.
 
 #![allow(dead_code, reason = "each test file uses a part of the helpers")]
@@ -12,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ftgsxr_core::{Camera, Model, ModelKind, RenderConventions, TimeSpan, UVec2};
 use ftgsxr_render::{
-    FrameBuffers, FrameContents, ModelDraw, OcclusionInput, QualityTier, SplatDevice, SplatPasses,
-    ViewParams,
+    FrameBuffers, FrameContents, ModelDraw, OcclusionInput, QualityTier, SortMode, SplatDevice,
+    SplatPasses, ViewParams,
 };
 
 /// E4's C₀.
@@ -214,8 +215,126 @@ fn render_frame(
     occlusion: Option<&Occlusion>,
     capacity: Option<u32>,
 ) -> (Frame, FrameContents) {
+    let (mut frames, contents) = render_views(
+        dev,
+        draws,
+        &[*camera],
+        (SortMode::PerView, false),
+        run,
+        &[occlusion],
+        capacity,
+    );
+    (frames.remove(0), contents)
+}
+
+/// One shared-center frame (D-4) of `draws` for two eyes: stages 1–4 once, at the sort
+/// pose of the eyes' midpoint (the mean of their centers along the normalized sum of their
+/// forward axes, Q-399) with both eyes as cull views, then stages 5 and 6 into one layer
+/// per eye, each eye with its own `occlusion` (R-12, the tier's `occlusion` set when either
+/// has one, Q-347), and, per `run`, stage 7 onto one target per eye. C is twice the draws'
+/// total N, and `half_records` picks the 48-byte records with half-precision Σ^S (§1.12);
+/// the frame buffers' contents are returned with the eyes' frames.
+pub fn render_shared_stereo(
+    dev: &SplatDevice,
+    draws: &[ModelDraw],
+    eyes: &[Camera; 2],
+    run: &Run,
+    occlusion: [Option<&Occlusion>; 2],
+    half_records: bool,
+) -> ([Frame; 2], FrameContents) {
+    let (frames, contents) = render_views(
+        dev,
+        draws,
+        eyes,
+        (SortMode::SharedCenter, half_records),
+        run,
+        &occlusion,
+        None,
+    );
+    let [left, right]: [Frame; 2] = frames.try_into().ok().expect("two eyes");
+    ([left, right], contents)
+}
+
+/// The sort pose of `eyes`: their centers' mean, along their forward axes' normalized sum
+/// (Q-399).
+fn midpoint_pose(eyes: &[Camera]) -> ftgsxr_render::SortPose {
+    let poses: Vec<_> = eyes.iter().map(sort_pose).collect();
+    let n = poses.len() as f32;
+    ftgsxr_render::SortPose {
+        origin: poses.iter().map(|p| p.origin).sum::<ftgsxr_core::Vec3>() / n,
+        forward: poses
+            .iter()
+            .map(|p| p.forward)
+            .sum::<ftgsxr_core::Vec3>()
+            .normalize(),
+    }
+}
+
+/// The environment depth texture of `o`, written from its stored depths.
+fn env_texture(dev: &SplatDevice, o: &Occlusion) -> wgpu::TextureView {
+    assert_eq!(
+        o.depth.len(),
+        (o.size.x * o.size.y) as usize,
+        "one value per texel"
+    );
+    let t = texture(
+        dev,
+        o.format,
+        o.size,
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+    );
+    let (bytes, texel): (Vec<u8>, u32) = match o.format {
+        wgpu::TextureFormat::R32Float => {
+            (o.depth.iter().flat_map(|d| d.to_le_bytes()).collect(), 4)
+        }
+        wgpu::TextureFormat::Depth16Unorm => (
+            o.depth
+                .iter()
+                .flat_map(|d| ((d.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes())
+                .collect(),
+            2,
+        ),
+        f => panic!("no synthetic depth image in {f:?}"),
+    };
+    dev.queue().write_texture(
+        t.as_image_copy(),
+        &bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(texel * o.size.x),
+            rows_per_image: Some(o.size.y),
+        },
+        wgpu::Extent3d {
+            width: o.size.x,
+            height: o.size.y,
+            depth_or_array_layers: 1,
+        },
+    );
+    t.create_view(&Default::default())
+}
+
+/// One frame of `draws` for `cameras` in `sort_mode` (with its `half_records`): per view, one camera, prepared at its
+/// own pose; shared center, every camera a cull view, prepared once at their midpoint
+/// (Q-399). Each camera then gets its own layer, depth and target, drawn with its own entry
+/// of `occlusion`.
+fn render_views(
+    dev: &SplatDevice,
+    draws: &[ModelDraw],
+    cameras: &[Camera],
+    (sort_mode, half_records): (SortMode, bool),
+    run: &Run,
+    occlusion: &[Option<&Occlusion>],
+    capacity: Option<u32>,
+) -> (Vec<Frame>, FrameContents) {
+    assert_eq!(
+        cameras.len(),
+        occlusion.len(),
+        "one occlusion entry per view"
+    );
     let tier = QualityTier {
-        occlusion: occlusion.is_some(), // Q-347
+        occlusion: occlusion.iter().any(Option::is_some), // Q-347
+        sort_mode,
+        half_records,
         ..QualityTier::conformance()
     };
     let passes = SplatPasses::new(dev, LAYER, run.depth.then_some(DEPTH), &tier)
@@ -224,140 +343,107 @@ fn render_frame(
     let capacity: u32 =
         capacity.unwrap_or_else(|| 2 * draws.iter().map(|d| d.model.n()).sum::<u32>());
     let frame = FrameBuffers::new(dev, &tier, capacity);
-    let size = UVec2::new(camera.width, camera.height);
-    let view = ViewParams {
-        camera: *camera,
-        target_size: size,
-    };
+    let views: Vec<ViewParams> = cameras
+        .iter()
+        .map(|c| ViewParams {
+            camera: *c,
+            target_size: UVec2::new(c.width, c.height),
+        })
+        .collect();
     let attach = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
-    let layer = texture(
-        dev,
-        LAYER,
-        size,
-        attach | wgpu::TextureUsages::TEXTURE_BINDING,
-    );
-    let layer_view = layer.create_view(&Default::default());
-    let depth = run.depth.then(|| texture(dev, DEPTH, size, attach));
-    let depth_view = depth.as_ref().map(|t| t.create_view(&Default::default()));
-    let target = run.resolve.map(|_| texture(dev, TARGET, size, attach));
-    let target_view = target.as_ref().map(|t| t.create_view(&Default::default()));
-    let env = occlusion.map(|o| {
-        assert_eq!(
-            o.depth.len(),
-            (o.size.x * o.size.y) as usize,
-            "one value per texel"
-        );
-        let t = texture(
-            dev,
-            o.format,
-            o.size,
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        );
-        let (bytes, texel): (Vec<u8>, u32) = match o.format {
-            wgpu::TextureFormat::R32Float => {
-                (o.depth.iter().flat_map(|d| d.to_le_bytes()).collect(), 4)
-            }
-            wgpu::TextureFormat::Depth16Unorm => (
-                o.depth
-                    .iter()
-                    .flat_map(|d| ((d.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes())
-                    .collect(),
-                2,
-            ),
-            f => panic!("no synthetic depth image in {f:?}"),
-        };
-        dev.queue().write_texture(
-            t.as_image_copy(),
-            &bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(texel * o.size.x),
-                rows_per_image: Some(o.size.y),
-            },
-            wgpu::Extent3d {
-                width: o.size.x,
-                height: o.size.y,
-                depth_or_array_layers: 1,
-            },
-        );
-        t.create_view(&Default::default())
-    });
-    let input = occlusion
-        .zip(env.as_ref())
-        .map(|(o, depth)| OcclusionInput {
-            depth,
-            camera: o.camera,
-            near: o.near,
-            far: o.far,
-            soft: o.soft,
-            delta_m: o.delta_m,
-        });
 
     let mut enc = dev.device().create_command_encoder(&Default::default());
-    passes.encode_prepare(&mut enc, &frame, draws, &sort_pose(camera), &[view]);
-    {
-        let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("test draw"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &layer_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: depth_view.as_ref().map(|v| {
-                wgpu::RenderPassDepthStencilAttachment {
-                    view: v,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
+    passes.encode_prepare(&mut enc, &frame, draws, &midpoint_pose(cameras), &views);
+    let mut copies = Vec::new();
+    for (view, occlusion) in views.iter().zip(occlusion) {
+        let size = view.target_size;
+        let layer = texture(
+            dev,
+            LAYER,
+            size,
+            attach | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let layer_view = layer.create_view(&Default::default());
+        let depth = run.depth.then(|| texture(dev, DEPTH, size, attach));
+        let depth_view = depth.as_ref().map(|t| t.create_view(&Default::default()));
+        let target = run.resolve.map(|_| texture(dev, TARGET, size, attach));
+        let target_view = target.as_ref().map(|t| t.create_view(&Default::default()));
+        let env = occlusion.map(|o| env_texture(dev, o));
+        let input = occlusion
+            .zip(env.as_ref())
+            .map(|(o, depth)| OcclusionInput {
+                depth,
+                camera: o.camera,
+                near: o.near,
+                far: o.far,
+                soft: o.soft,
+                delta_m: o.delta_m,
+            });
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("test draw"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &layer_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        passes.encode_draw(&mut pass, &frame, &view, input.as_ref());
-    }
-    if let (Some(background), Some(target_view)) = (run.resolve, target_view.as_ref()) {
-        let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("test resolve"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            // The passes' depth, when they have one, gates the resolve (Q-101).
-            depth_stencil_attachment: depth_view.as_ref().map(|v| {
-                wgpu::RenderPassDepthStencilAttachment {
-                    view: v,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                    },
+                })],
+                depth_stencil_attachment: depth_view.as_ref().map(|v| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view: v,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            passes.encode_draw(&mut pass, &frame, view, input.as_ref());
+        }
+        if let (Some(background), Some(target_view)) = (run.resolve, target_view.as_ref()) {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("test resolve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        passes.encode_resolve(&mut pass, &layer_view, background);
+                    },
+                })],
+                // The passes' depth, when they have one, gates the resolve (Q-101).
+                depth_stencil_attachment: depth_view.as_ref().map(|v| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view: v,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            passes.encode_resolve(&mut pass, &layer_view, background);
+        }
+        let layer_bytes = copy_out(dev, &mut enc, &layer, 8, size);
+        let target_bytes = target.as_ref().map(|t| copy_out(dev, &mut enc, t, 4, size));
+        let depth_bytes = depth.as_ref().map(|t| copy_out(dev, &mut enc, t, 4, size));
+        copies.push((size, layer_bytes, target_bytes, depth_bytes));
     }
-    let layer_bytes = copy_out(dev, &mut enc, &layer, 8, size);
-    let target_bytes = target.as_ref().map(|t| copy_out(dev, &mut enc, t, 4, size));
-    let depth_bytes = depth.as_ref().map(|t| copy_out(dev, &mut enc, t, 4, size));
     dev.queue().submit([enc.finish()]);
 
-    let read = |(buffer, row): (wgpu::Buffer, u32)| -> Vec<u8> {
+    let read = |(buffer, row): (wgpu::Buffer, u32), size: UVec2| -> Vec<u8> {
         let done = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&done);
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
@@ -375,32 +461,34 @@ fn render_frame(
         }
         out
     };
-    let layer = read(layer_bytes)
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|t| [0, 1, 2, 3].map(|i| half(u16::from_le_bytes([t[2 * i], t[2 * i + 1]]))))
+    let frames = copies
+        .into_iter()
+        .map(|(size, layer_bytes, target_bytes, depth_bytes)| {
+            let layer = read(layer_bytes, size)
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|t| [0, 1, 2, 3].map(|i| half(u16::from_le_bytes([t[2 * i], t[2 * i + 1]]))))
+                .collect();
+            let target = target_bytes.map(|b| read(b, size).as_chunks::<4>().0.to_vec());
+            let depth = depth_bytes.map(|b| {
+                read(b, size)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|w| f32::from_le_bytes(*w))
+                    .collect()
+            });
+            Frame {
+                layer,
+                target,
+                depth,
+            }
+        })
         .collect();
-    let target = target_bytes.map(|b| read(b).as_chunks::<4>().0.to_vec());
-    let depth = depth_bytes.map(|b| {
-        read(b)
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|w| f32::from_le_bytes(*w))
-            .collect()
-    });
     let messages = dev.take_validation_messages();
     assert!(messages.is_empty(), "validation messages: {messages:?}");
-    let contents = frame.read_back(dev);
-    (
-        Frame {
-            layer,
-            target,
-            depth,
-        },
-        contents,
-    )
+    (frames, frame.read_back(dev))
 }
 
 /// The camera's center and forward axis (the frame block's sort pose; per-view mode reads
