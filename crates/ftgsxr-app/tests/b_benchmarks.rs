@@ -12,9 +12,9 @@ use serde_json::Value;
 
 #[test]
 fn bench_refuses_a_benchmark_the_desktop_does_not_run() {
-    // §3.5: B-2, B-4, B-7 and B-8 are the Quest's or reported elsewhere (Q-103); B-9's
-    // desktop half runs here (Q-155, #289).
-    for name in ["B-2", "B-4", "B-7", "B-8", "B-10", "b-1", ""] {
+    // §3.5: B-2, B-7 and B-8 are the Quest's or reported elsewhere (Q-103); B-9's
+    // desktop half runs here (Q-155, #289), and B-4 on both machines (Q-406, #733).
+    for name in ["B-2", "B-7", "B-8", "B-10", "b-1", ""] {
         let e = cmd_bench(name, None, None).expect_err(name);
         assert!(matches!(e, HeadlessError::Input(_)), "{name}: {e:?}");
         assert_eq!(exit_code(&e), 2);
@@ -182,6 +182,60 @@ fn gpu_b3_with_a_model_reports_sort_times() {
     assert!(keys > 0.0 && keys <= 5000.0, "{keys}");
     // P-4 is defined at C = 10⁶ only (Q-102).
     assert!(file["budgets"].as_array().unwrap().is_empty());
+}
+
+/// The value of `measure` in the setup whose `index` is `index` (B-4, Q-T733.1).
+fn b4_result(file: &Value, index: &str, measure: &str) -> f64 {
+    file["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["measure"] == measure && r["setup"]["index"] == index)
+        .unwrap_or_else(|| panic!("no {measure} with index {index}"))["value"]
+        .as_f64()
+        .unwrap()
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_b4_with_a_model_reports_the_cull_with_and_without_the_index() {
+    // §3.5 B-4 (Q-408, Q-T733.1): for the size, the cull time and the rows visited with the
+    // temporal index and with every row; the index visits no more rows than N and is not
+    // slower than the every-row cull by more than the run's spread. `random_model`'s rows
+    // are mostly transient, so at mid-span the index visits fewer than N (E3).
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+    let n = 100_000;
+    let (path, _) = tiny_model("b4", n, 0);
+    let file = run("B-4", Some(&path), "b4-out");
+    let (indexed, every) = ("temporal", "every row");
+    assert_eq!(b4_result(&file, every, "rows_visited"), n as f64);
+    let rows = b4_result(&file, indexed, "rows_visited");
+    assert!(rows > 0.0 && rows < n as f64, "{rows}");
+    for index in [indexed, every] {
+        assert!(b4_result(&file, index, "cull_ms") > 0.0, "{index}");
+        assert!(b4_result(&file, index, "cull_ms_spread") >= 0.0, "{index}");
+        assert_eq!(b4_result(&file, index, "overflow"), 0.0, "{index}");
+    }
+    // D-10: the index restricts the rows visited, never the image.
+    assert_eq!(
+        b4_result(&file, indexed, "visible_splats"),
+        b4_result(&file, every, "visible_splats")
+    );
+    let spread =
+        b4_result(&file, indexed, "cull_ms_spread").max(b4_result(&file, every, "cull_ms_spread"));
+    assert!(
+        b4_result(&file, indexed, "cull_ms") <= b4_result(&file, every, "cull_ms") + spread,
+        "{}",
+        file["results"]
+    );
+    let budgets = file["budgets"].as_array().unwrap();
+    assert_eq!(budgets.len(), 2, "{budgets:?}");
+    for b in budgets {
+        assert_eq!(b["id"], "B-4");
+        assert_eq!(b["setup"]["index"], indexed);
+        assert_eq!(b["rule"], "at_most");
+        assert_eq!(b["pass"], true, "{b}");
+    }
 }
 
 #[test]
