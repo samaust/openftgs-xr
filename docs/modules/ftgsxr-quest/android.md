@@ -57,10 +57,10 @@ Debug builds sign with Gradle's default debug keystore, outside the repository; 
 
 The `#[bevy_main]` entry point, in order:
 
-1. reads the launch intent's extra `ftgsxr-test` (the device test, if any);
+1. reads the launch intent's extras `ftgsxr-test` (the device test, if any) and `ftgsxr-bench` (the benchmark, if any, Q-406);
 2. makes the Quest's `AppPaths` from the internal and external files directories and the cache directory (Q-15) and loads `settings.toml`;
-3. logs to logcat under the tag `ftgsxr` at the settings' level, raised to info for a device test so its verdict line shows (§1.13); tracing's events reach android\_logger through tracing's `log` feature, with Bevy's `LogPlugin` disabled;
-4. runs Dv-3 or Dv-4 at once if named, before any XR session, on the headless renderer's own device, and exits (Q-122, Q-146);
+3. logs to logcat under the tag `ftgsxr` at the settings' level, raised to info for a device test or a benchmark so its verdict line shows (§1.13); tracing's events reach android\_logger through tracing's `log` feature, with Bevy's `LogPlugin` disabled;
+4. runs the named benchmark at once (below), or Dv-3 or Dv-4 if named, before any XR session, on the headless renderer's own device, and exits (Q-122, Q-146);
 5. builds the app: Bevy's default plugins with no window (§2.5: the XR session drives the frames), winit's runner set to poll so xrWaitFrame alone paces it, and `XrPlugin` through `add_xr` with `SortMode::PerView`, `hands` on and `passthrough` on, so the passthrough layer, the environment depth and the anchors run where the runtime offers them (Q-120, Q-121, `ftgsxr-xr/passthrough.md`);
 6. exits 2 at once when the OpenXR instance could not be created (E-XR-RUNTIME, §1.15, logged once by the XR crate), before the app's first frame, so no warm-up runs yet (Q-325). When the session cannot be created later (a session-created message with no primary reference space), the app ends instead through an `AppExit` with code 2, so Q-236's hold and the settings' save at exit see it, and the runner drops the app, which joins the adapter's warm-up threads (Q-381), before the process exits (#660);
 7. inserts the `Headset` marker, so panel mode, spatial audio and D-11's automatic fit apply (Q-266), then adds `AppPlugin` over `QuestPlatform` at the settings' tier, `quest-balanced` when the name is unknown, with no initial models and no scene: the library lists the models directory and the user's sources (§1.5, D-49). The `SettingsRes` loaded above is left as it is (Q-163). Q-129's provisional harness, which spawned every model file at the identity pose, is retired;
@@ -90,6 +90,19 @@ An unknown name prints FAIL at once. What each test does on the device and what 
 - **dv13**: logs `dv13: running` once the session runs, the host's cue to put the headset to sleep, and PASS once the session has left Running and returned to it, with the states it saw (`ftgsxr-xr/session.md`).
 
 Files the host pushes and the device writes live in `dv/` under the app's external files directory.
+
+## The benchmark runner
+
+The launch intent's string extra `ftgsxr-bench` names a benchmark of §3.5 that needs no XR session, B-3, B-5 or B-6, and the extra `ftgsxr-bench-headset` the headset's build fingerprint, which the host reads with `adb shell getprop ro.build.fingerprint` (Q-406, Q-418; `unknown` without it). `bench_runner` runs it before the session, on the headless device as Dv-3 does (Q-122): it makes `dv/`, calls `ftgsxr_app::cmd_bench_on` with `dv/<NAME>.json` as the file and the fingerprint as `machine.headset` (in `quest-balanced`, Q-413; `ftgsxr-app/headless.md`, "On the headset"), prints one logcat line under `ftgsxr` and exits 0:
+
+```
+ftgsxr-bench: <NAME> DONE dv/<NAME>.json
+ftgsxr-bench: <NAME> FAIL <code>: <text>
+```
+
+A DONE line adds `; <n> regressions: …` when a stored baseline lists any. Any other NAME is FAIL with `cmd_bench_on`'s `Input` text. B-5 writes its synthetic files, up to 500 MB, under `dv/` and removes them.
+
+The host tests are `crates/ftgsxr-xr/tests/dv_bench.rs` (`dv_b3_…`, `dv_b5_…`, `dv_b6_…`): each installs the APK, reads the fingerprint, launches with both extras, waits for the line (failing as "none" when the process ends without one, killed for its memory, say, which is not Q-413's refused size), pulls the file, checks it well formed with serde\_json (a dev-dependency, Q-419), the fingerprint in `machine.headset` and the tier in the setups, and prints its budgets. A P-3 or P-4 budget the Quest misses is printed, not failed (spike S4 on #123); B-6's 1 % against §1.12's table, recomputed in the test, is the criterion. Android's GPU debug layers stay off for these runs, since they time the GPU; the `dv` APK's debug assertions keep wgpu's own validation, so the file's `profile` is `debug` (Q-418).
 
 ## The host-side driver and adb paths
 

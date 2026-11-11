@@ -18,6 +18,7 @@ mod dv6_passthrough;
 mod dv7_depth;
 mod dv8_hands;
 mod dv9_anchors;
+mod dv_bench;
 mod dv_spikes;
 mod i13_xr_unsupported_toast;
 mod i15_xr_session;

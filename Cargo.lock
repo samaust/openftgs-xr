@@ -2628,6 +2628,7 @@ dependencies = [
  "ftgsxr-testkit",
  "image",
  "openxr",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

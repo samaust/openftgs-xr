@@ -31,6 +31,15 @@ struct InstanceConstants {
     // 1 / the speeds' 99th percentile, 0 when it is 0.
     inv_speed: f32,
     pad: f32,
+    // E6's constants (`splat.wgsl`'s shared-center vertex stage, Q-400).
+    near: f32,
+    far: f32,
+    eps2d: f32,
+    jacobian_clamp_margin: f32,
+    screen_extent_max: f32,
+    pad1: f32,
+    pad2: f32,
+    pad3: f32,
 }
 
 // The view (`splat.wgsl`'s `DrawView`).
