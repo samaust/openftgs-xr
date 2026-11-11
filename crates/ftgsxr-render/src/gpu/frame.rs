@@ -309,6 +309,32 @@ impl FrameBuffers {
         })
     }
 
+    /// The splat pass's timestamp writes for eye `eye` of the `eyes` that draw one
+    /// shared-center prepare (Q-403): the first eye's pass writes the draw's begin (index
+    /// 4) and the last eye's its end (index 5), so `GpuTimes::draw` spans every eye's pass
+    /// and `total` runs to the last eye's end; a middle eye writes none. `None` when the
+    /// device has no timestamp queries or the eye writes neither; each index given is
+    /// marked written. One eye of one is `draw_timestamp_writes`.
+    // Q-403
+    pub(crate) fn eye_draw_timestamp_writes(
+        &self,
+        eye: usize,
+        eyes: usize,
+    ) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        let (queries, _) = self.set.queries.as_ref()?;
+        let (first, last) = (eye == 0, eye + 1 == eyes);
+        if !(first || last) {
+            return None;
+        }
+        let mask = if first { 1 << 4 } else { 0 } | if last { 1 << 5 } else { 0 };
+        self.ring.written.fetch_or(mask, Ordering::AcqRel);
+        Some(wgpu::RenderPassTimestampWrites {
+            query_set: queries,
+            beginning_of_pass_write_index: first.then_some(4),
+            end_of_pass_write_index: last.then_some(5),
+        })
+    }
+
     /// The set's bytes on the GPU.
     #[cfg(test)]
     fn bytes(&self) -> u64 {
