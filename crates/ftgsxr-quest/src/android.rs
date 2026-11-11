@@ -120,7 +120,8 @@ fn main() {
     }
 
     if let Some(name) = &test {
-        // Dv-3, Dv-4 (Q-122): before the XR session, then the process exits.
+        // Dv-3, Dv-4, R-9 and R-10 (Q-122, Q-T728.2): before the XR session, then the
+        // process exits.
         if let Some(dv) = device_test::dv_dir()
             && device_test::run_headless(name, &dv)
         {
