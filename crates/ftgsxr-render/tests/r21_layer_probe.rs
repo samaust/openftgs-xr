@@ -6,7 +6,7 @@
 //! The cells' Σα and Σα·c_lin equal the values computed by hand, independently of the
 //! draw: α at each pixel from E6 and E7 in f64 (the primitive's known σ, μ′ and Σ′, worked
 //! below), c_lin the grey decoded, within 10⁻³ relative (D-35; Σα within one half-float
-//! ulp more, Q-398); the cells of the right half, which the primitive does not reach,
+//! step more, R-21 at revision 55); the cells of the right half, which the primitive does not reach,
 //! are zero.
 
 use crate::display_support;
@@ -80,10 +80,11 @@ fn gpu_r21_layer_probe_sums_the_decoded_colors_by_alpha_per_cell() {
     // α·c_lin = α·0.04/12.92 = C/12.92: the layer's half-float rounding of C and A, 2⁻¹¹
     // relative each (D-35), stays within the row's 10⁻³ in Σα·c_lin.
     //
-    // Q-398: Σα gets one half-float ulp of A, 2⁻¹⁰ relative, plus 2·10⁻⁴ for E6 and
-    // E7 evaluated in f32 against this f64: the layer's A comes out up to one ulp below α,
-    // not rounded to nearest (0.79785156 where α = 0.798207 rounds to 0.79833984), so a
-    // cell of a few pixels in the low part of their binade misses the row's 10⁻³.
+    // R-21 (revision 55, Q-398 in spec): Σα gets one half-float ulp of A, 2⁻¹⁰ relative,
+    // plus 2·10⁻⁴ for E6 and E7 evaluated in f32 against this f64: the layer's A comes out
+    // up to one ulp below α, not rounded to nearest (0.79785156 where α = 0.798207 rounds
+    // to 0.79833984), so a cell of a few pixels in the low part of their binade misses
+    // 10⁻³.
     const TOL_ALPHA: f64 = 1.0 / 1024.0 + 2e-4;
     let lin = f64::from(grey) / 12.92;
     let mut hand = vec![[0.0f64; 4]; 64 * 48];
@@ -130,7 +131,7 @@ fn gpu_r21_layer_probe_sums_the_decoded_colors_by_alpha_per_cell() {
     // The decode's linear segment cannot tell lin(C/α)·α from lin(C): the same primitive
     // in grey 0.4, whose decode ((0.4 + 0.055)/1.055)^2.4 = 0.132868 is curved there, has
     // the same Σα, and each well-covered cell's Σα·c_lin / Σα is 0.132868 (lin(C) would
-    // give lin(0.4α)/α, 0.11 or less). Q-398: within the layer's half-float rounding of
+    // give lin(0.4α)/α, 0.11 or less). R-21 (revision 55): within the layer's half-float rounding of
     // C and A, 2⁻¹⁰ relative in C/A, times the decode's slope there, d ln lin / d ln c =
     // 2.4 · 0.4/0.455 ≈ 2.1: 2.5·10⁻³.
     let id = renderer
