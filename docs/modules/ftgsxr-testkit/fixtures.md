@@ -50,8 +50,28 @@ scripts above in order with openftgs as a program on the CPU, writes the README 
 deterministic in content but not byte for byte, so the script keeps the previous bytes of every
 file whose content did not change and names any checksum that still changed; on the README's
 openftgs commit and package versions a rerun changes nothing. Trained models are never committed:
-the `ds` lane's models are written under `$OPENFTGS_DATASETS/xr-fixtures/` by M-2's tooling
-(D-29).
+the `ds` lane's models are written under `$OPENFTGS_DATASETS/xr-fixtures/` by
+`tools/fixtures/train_tiny.sh` (D-29, below).
+
+## The trained models
+
+`tools/fixtures/train_tiny.sh` runs openftgs as a program from its venv on openftgs-synth and
+writes into `$OPENFTGS_DATASETS/xr-fixtures/`, with a provenance `README.md` there. Each argument
+names a part to make, and a run rewrites only its own files and its own README part:
+
+- `tiny`, the default (Q-84): `tiny` and `tiny_unsync`, each as its export, R-3's request and
+  openftgs's reference renders of it. R-3 reads them.
+- `kitchen_1m`, the budget model (Q-410, Q-T726.1): openftgs-synth's `kitchen`, all 300 frames
+  at 1352 × 1014, trained at SH degree 2 with `growth.n_max` 1,000,000 and the tiny runs'
+  deterministic kernels, seed 0, as `kitchen_1m.safetensors`: P-1's "1 M primitives at degree
+  2". It has no request and no reference renders. B-1 with `--model` (P-2), B-2 and Dv-5 load
+  it; `ds_kitchen_1m` checks that it opens at degree 2 within the cap. The training holds the
+  GPU for about an hour (openftgs §2.4), so the script makes it only when asked. Its provenance,
+  configuration, final primitive count and checksum are a section of the README between two
+  marker comments; a `kitchen_1m` run replaces that section alone, and a `tiny` run keeps it.
+
+`kitchen.safetensors` beside them is #622's model (openftgs-m17's `kitchen` at 3,000,000
+primitives), which `ds_kitchen_boxes` measures; the script never writes it.
 
 ## Made at test time, not committed
 
