@@ -248,7 +248,7 @@ def r9_midpoint(world_to_camera: np.ndarray, at_camera: bool) -> np.ndarray:
     disc = b * b - float(c @ c) + R9_DISTANCE**2
     if disc < 0:
         raise SystemExit(f"the optical axis misses the sphere of radius {R9_DISTANCE} m")
-    s = -b - math.sqrt(disc)
+    s = -b - math.sqrt(disc)  # Q-T719.1: the point nearer the camera
     if s < 0:
         raise SystemExit("the axis point at R9_DISTANCE lies behind the camera")
     return c + s * f
@@ -264,14 +264,12 @@ def r9_items(probe: str, items: list) -> list:
         w2c = np.asarray(it.world_to_camera, dtype=np.float64)
         r = w2c[:3, :3]
         mid = r9_midpoint(w2c, probe in R9_AT_CAMERA)
-        for suffix, sign in (("L", -1.0), ("R", 1.0)):
+        for suffix, sign in (("L", -1.0), ("R", 1.0)):  # Q-T719.1: <id>L, then <id>R
             eye = mid + sign * R9_HALF_BASELINE * r[0]  # along the camera's own x axis
             m = np.eye(4)
             m[:3, :3] = r
             m[:3, 3] = -r @ eye
-            out.append(
-                RequestItem(f"{it.id}{suffix}", it.timestamp, it.K, m, it.width, it.height)
-            )
+            out.append(RequestItem(f"{it.id}{suffix}", it.timestamp, it.K, m, it.width, it.height))
     return out
 
 

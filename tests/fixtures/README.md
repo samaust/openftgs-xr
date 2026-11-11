@@ -163,7 +163,7 @@ package versions, a rerun changes none.
   (no model of their own). Each item `<id>` of P becomes the left eye's `<id>L` followed by the
   right eye's `<id>R`, at the item's τ, with its K, image size and rotation (parallel axes); the
   eyes are ± 32 mm along the camera's x axis about a midpoint on the item's optical axis 1 m
-  from the origin, P6's at its camera's own position (Q-402, Q-T719.1).
+  from the origin, P6's at its camera's own position (Q-402).
 - `probes/R2_overlap_deg3.tau1.3.ply`: openftgs's `write_ply` of that probe's per-time arrays at
   τ = 1.3 (U-6).
 - `merged/R7_instance_a.safetensors`, `merged/R7_instance_b.safetensors`: P7's two rows as two

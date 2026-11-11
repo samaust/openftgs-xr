@@ -18,7 +18,7 @@ import torch
 
 # The fixed intra-op thread count of every run, so reruns match bit for bit; FIXTURES_THREADS
 # overrides it to fit a smaller budget (the README records the count a file was made with).
-THREADS = int(os.environ.get("FIXTURES_THREADS", "6"))
+THREADS = int(os.environ.get("FIXTURES_THREADS", "6"))  # Q-T719.1
 
 ROOT = Path(__file__).resolve().parents[2]  # the workspace root
 FIXTURES = ROOT / "tests" / "fixtures"
