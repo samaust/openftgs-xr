@@ -46,7 +46,7 @@ use bevy_mod_xr::session::{
     XrSessionCreated, XrState,
 };
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
-use ftgsxr_app::{SettingsRes, Toast, ToastLevel};
+use ftgsxr_app::{HudData, SettingsRes, Toast, ToastLevel, XrDisplay};
 use ftgsxr_io::Settings;
 use ftgsxr_render::{Foveation, QualityTier, SplatTierState};
 use openxr::sys;
@@ -282,6 +282,9 @@ struct Applied {
     foveation_requested: bool,
     /// The absent extensions toasted in this session (Q-161).
     toasted: HashSet<&'static str>,
+    /// The runtime's current refresh rate (XR\_FB\_display\_refresh\_rate): read once
+    /// the session has begun and at each change event; `None` without the extension.
+    rate: Option<f32>,
 }
 
 impl Applied {
@@ -294,6 +297,7 @@ impl Applied {
             failed_scale: None,
             foveation_requested,
             toasted: HashSet::new(),
+            rate: None,
         }
     }
 
@@ -328,6 +332,7 @@ impl Applied {
     fn session_created(&mut self) {
         self.failed_scale = None;
         self.toasted.clear();
+        self.rate = None;
     }
 }
 
@@ -370,7 +375,7 @@ impl Plugin for DisplayPlugin {
             .add_systems(XrSessionCreated, on_session_created)
             .add_systems(XrPostSessionBegin, on_session_begun)
             .add_systems(XrPreDestroySession, drop_profile)
-            .add_systems(Update, (follow, apply_changes).chain())
+            .add_systems(Update, (follow, apply_changes, publish).chain())
             .add_oxr_event_handler(log_rate_change);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(XrPreDestroySession, drop_profile);
@@ -467,14 +472,77 @@ fn on_session_begun(
     mut commands: Commands,
 ) {
     let Some(session) = session else { return };
-    apply_rate(
-        Caps::of(instance.as_deref()),
-        &session,
-        &mut settings,
-        &mut applied,
-        &mut commands,
-    );
+    let caps = Caps::of(instance.as_deref());
+    if caps.refresh_rate {
+        // The wrapper panics without the extension; `caps` checked it is loaded.
+        applied.rate = session
+            .get_display_refresh_rate()
+            .inspect_err(|e| log_error(&XrError::Runtime(format!("refresh rate: {e}"))))
+            .ok();
+    }
+    apply_rate(caps, &session, &mut settings, &mut applied, &mut commands);
     applied.refresh_rate = settings.refresh_rate;
+}
+
+/// The refresh rate `XrDisplay` reports: the runtime's current rate, else the reciprocal
+/// of the predicted display period in nanoseconds, `None` for a period that is not
+/// positive (Q-404).
+// Q-404
+fn reported_rate(current: Option<f32>, period_ns: Option<i64>) -> Option<f32> {
+    current.or_else(|| {
+        period_ns
+            .filter(|&p| p > 0)
+            .map(|p| (1e9 / p as f64) as f32)
+    })
+}
+
+/// Writes `XrDisplay` while a session runs (Q-404): the rate, the runtime's rates, the
+/// foveation support and the swapchain's size; the rate is `None` while no session runs
+/// (a re-creation included). The rate is mirrored into `HudData.refresh_hz` (Q-159).
+// Q-404
+#[allow(clippy::too_many_arguments)]
+fn publish(
+    state: Option<Res<XrState>>,
+    instance: Option<Res<OxrInstance>>,
+    frame: Option<Res<OxrFrameState>>,
+    current: Option<Res<OxrCurrentSessionConfig>>,
+    settings: Res<DisplaySettings>,
+    applied: Res<Applied>,
+    xr: Option<ResMut<XrDisplay>>,
+    hud: Option<ResMut<HudData>>,
+) {
+    let Some(mut xr) = xr else { return };
+    let running = state.as_deref() == Some(&XrState::Running);
+    let rate = if running {
+        reported_rate(
+            applied.rate,
+            frame.map(|f| f.0.predicted_display_period.as_nanos()),
+        )
+    } else {
+        None
+    };
+    if xr.refresh_hz != rate {
+        xr.refresh_hz = rate;
+    }
+    if running {
+        if xr.available_rates != settings.available_rates {
+            xr.available_rates.clone_from(&settings.available_rates);
+        }
+        let foveation = Caps::of(instance.as_deref()).foveation;
+        if xr.foveation != foveation {
+            xr.foveation = foveation;
+        }
+        if let Some(c) = current
+            && xr.swapchain != c.resolution
+        {
+            xr.swapchain = c.resolution;
+        }
+    }
+    if let Some(mut hud) = hud
+        && hud.refresh_hz != rate
+    {
+        hud.refresh_hz = rate;
+    }
 }
 
 /// Drops the foveation profile with its session (it is a child of the session).
@@ -730,14 +798,18 @@ fn apply_foveation(
     }
 }
 
-/// Logs the runtime's refresh-rate change (the rate took effect).
-fn log_rate_change(event: OxrEventIn) {
+/// Logs the runtime's refresh-rate change (the rate took effect) and keeps the new rate
+/// for `XrDisplay` (Q-404).
+fn log_rate_change(event: OxrEventIn, applied: Option<ResMut<Applied>>) {
     if let openxr::Event::DisplayRefreshRateChangedFB(e) = *event {
         info!(
             "display refresh rate {} -> {} Hz",
             e.from_display_refresh_rate(),
             e.to_display_refresh_rate()
         );
+        if let Some(mut a) = applied {
+            a.rate = Some(e.to_display_refresh_rate());
+        }
     }
 }
 
@@ -904,6 +976,17 @@ mod tests {
         app.update();
         assert_eq!(display(&app).foveation, Foveation::High);
         assert_eq!(display(&app).render_scale, 0.8);
+    }
+
+    /// Q-404: the runtime's current rate when it gives one, else the reciprocal of the
+    /// predicted display period (13.888… ms is 72 Hz), and no rate without a positive period.
+    #[test]
+    fn reported_rate_is_the_current_rate_else_the_periods_reciprocal() {
+        assert_eq!(reported_rate(Some(90.0), Some(13_888_889)), Some(90.0));
+        let r = reported_rate(None, Some(13_888_889)).unwrap();
+        assert!((r - 72.0).abs() < 1e-3, "{r}");
+        assert_eq!(reported_rate(None, Some(0)), None);
+        assert_eq!(reported_rate(None, None), None);
     }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {
