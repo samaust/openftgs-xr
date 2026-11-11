@@ -307,7 +307,7 @@ pub(crate) fn environment_section(world: &mut World, ui: &mut egui::Ui) {
 /// it is disabled, with a note that says why: none where the camera is not `Available`,
 /// whose line already says why; "needs an auto lighting mode in passthrough" while the
 /// effective lighting mode is not auto or the effective environment mode is not
-/// passthrough (the setting's under the `Headset` marker with `XrFeatures.passthrough`
+/// passthrough (the setting under the `Headset` marker with `XrFeatures.passthrough`
 /// `Available`, Q-335); "waiting for the camera…" while both hold (Q-385).
 /// True when "Ask again" was pressed for a denied camera (Q-322), which also writes
 /// back the auto mode the denial wrote to `manual`, `Lighting.denied_auto` (auto
@@ -1378,100 +1378,72 @@ mod tests {
         const NEEDS: &str = "needs an auto lighting mode in passthrough";
         const WAITING: &str = "waiting for the camera…";
         use FeatureState::{Absent, Available, Denied};
-        // (headset, camera, passthrough feature, mode, lighting mode, can_match, note)
+        #[derive(Debug)]
+        struct Case {
+            headset: bool,
+            camera: FeatureState,
+            passthrough: FeatureState,
+            mode: &'static str,
+            lighting: &'static str,
+            can_match: bool,
+            note: Option<&'static str>,
+        }
+        // The headset in passthrough mode with the camera and passthrough available.
+        let on = |lighting, can_match, note| Case {
+            headset: true,
+            camera: Available,
+            passthrough: Available,
+            mode: "passthrough",
+            lighting,
+            can_match,
+            note,
+        };
         let cases = [
-            (
-                false,
-                Absent,
-                Absent,
-                "passthrough",
-                "auto-global",
-                false,
-                None,
-            ),
-            (
-                true,
-                Absent,
-                Available,
-                "passthrough",
-                "auto-global",
-                false,
-                None,
-            ),
-            (
-                true,
-                Denied,
-                Available,
-                "passthrough",
-                "auto-local",
-                false,
-                None,
-            ),
-            (
-                true,
-                Available,
-                Available,
-                "passthrough",
-                "off",
-                false,
-                Some(NEEDS),
-            ),
-            (
-                true,
-                Available,
-                Available,
-                "passthrough",
-                "manual",
-                false,
-                Some(NEEDS),
-            ),
-            (
-                true,
-                Available,
-                Available,
-                "vr",
-                "auto-global",
-                false,
-                Some(NEEDS),
-            ),
-            (
-                true,
-                Available,
-                Available,
-                "vr",
-                "auto-local",
-                false,
-                Some(NEEDS),
-            ),
-            (
-                true,
-                Available,
-                Available,
-                "passthrough",
-                "auto-global",
-                false,
-                Some(WAITING),
-            ),
-            (
-                true,
-                Available,
-                Available,
-                "passthrough",
-                "auto-local",
-                false,
-                Some(WAITING),
-            ),
-            (
-                true,
-                Available,
-                Available,
-                "passthrough",
-                "auto-global",
-                true,
-                None,
-            ),
+            // The camera not available: its line says why.
+            Case {
+                headset: false,
+                camera: Absent,
+                passthrough: Absent,
+                ..on("auto-global", false, None)
+            },
+            Case {
+                camera: Absent,
+                ..on("auto-global", false, None)
+            },
+            Case {
+                camera: Denied,
+                ..on("auto-local", false, None)
+            },
+            // Not an auto mode, or not in passthrough.
+            on("off", false, Some(NEEDS)),
+            on("manual", false, Some(NEEDS)),
+            Case {
+                mode: "vr",
+                ..on("auto-global", false, Some(NEEDS))
+            },
+            Case {
+                mode: "vr",
+                ..on("auto-local", false, Some(NEEDS))
+            },
+            Case {
+                passthrough: Absent,
+                ..on("auto-global", false, Some(NEEDS))
+            },
+            // Both hold: the camera's start and warm-up.
+            on("auto-global", false, Some(WAITING)),
+            on("auto-local", false, Some(WAITING)),
+            on("auto-global", true, None),
         ];
-        for case @ (headset, camera, passthrough, mode, lighting, can_match, note) in cases {
+        for case in cases {
+            let Case {
+                headset,
+                camera,
+                passthrough,
+                mode,
+                lighting,
+                can_match,
+                note,
+            } = case;
             let ctx = egui::Context::default();
             let mut world = World::new();
             world.insert_resource(SettingsRes::default());
