@@ -120,10 +120,12 @@ impl HeadlessRenderer {
     /// A renderer for `tier` on the high-performance Vulkan adapter (Q-74); E-GPU-ADAPTER
     /// when there is none, E-GPU-SHADER when a pass does not compile.
     ///
-    /// A headless render has one view (§1.4 Stereo) and sorts per view whatever the tier
-    /// (D-4, Q-109): a shared-center tier keeps its storage, SH cap, key width, capacity
-    /// and budget but not its stereo mode, and the render is at the camera's own size, so
-    /// the tier's `render_scale` and foveation (the swapchain's) do not apply.
+    /// `render` has one view (§1.4 Stereo) and sorts per view whatever the tier (D-4,
+    /// Q-109): a shared-center tier keeps its storage, SH cap, key width, capacity and
+    /// budget but not its stereo mode, and the render is at the camera's own size, so the
+    /// tier's `render_scale` and foveation (the swapchain's) do not apply. `render_stereo`
+    /// takes its sort mode per call, and in shared-center mode the tier's `half_records`
+    /// picks the record layout (Q-401).
     pub fn new(tier: QualityTier) -> Result<HeadlessRenderer, RenderError> {
         // Q-109, D-4: "per-view sort on the desktop and in headless renders".
         let mut tier = tier;
@@ -311,7 +313,7 @@ impl HeadlessRenderer {
         tau: f64,
         background: [f32; 3],
     ) -> Result<[RenderImage; 2], RenderError> {
-        let (layers, mut enc) = self.draw_shared_layers(models, eyes, tau);
+        let (layers, mut enc) = self.draw_shared_layers(models, eyes, tau)?;
         let gpu = &self.gpu;
         let device = gpu.dev.device();
         let copies: Vec<(wgpu::Buffer, u32)> = layers
@@ -336,13 +338,14 @@ impl HeadlessRenderer {
     /// §1.4 stages 1–4 once at the eyes' sort pose (Q-399) with both eyes as cull views,
     /// then stage 5 into a new layer per eye, cleared to (0, 0, 0, 0): the first eye's pass
     /// writes the draw's begin timestamp and the last eye's its end (Q-403). Encoded on the
-    /// returned encoder, not yet submitted.
+    /// returned encoder, not yet submitted. E-GPU-SHADER when the shared-center passes,
+    /// made at the first call, do not compile.
     pub(crate) fn draw_shared_layers(
         &mut self,
         models: &[(ModelId, Pose)],
         eyes: &[Camera; 2],
         tau: f64,
-    ) -> (Vec<wgpu::Texture>, wgpu::CommandEncoder) {
+    ) -> Result<(Vec<wgpu::Texture>, wgpu::CommandEncoder), RenderError> {
         let capacity = self.capacity(models);
         let tier = QualityTier {
             sort_mode: SortMode::SharedCenter,
@@ -350,8 +353,7 @@ impl HeadlessRenderer {
         };
         let gpu = &mut self.gpu;
         if gpu.shared.is_none() {
-            let passes = SplatPasses::new(&gpu.dev, LAYER_FORMAT, None, &tier)
-                .expect("invariant: the shared-center passes compile as the per-view ones did");
+            let passes = SplatPasses::new(&gpu.dev, LAYER_FORMAT, None, &tier)?;
             gpu.shared = Some(Shared {
                 passes,
                 frame: None,
@@ -400,7 +402,7 @@ impl HeadlessRenderer {
                 layer
             })
             .collect();
-        (layers, enc)
+        Ok((layers, enc))
     }
 
     /// The frame's capacity C for `models` (Q-86: `SumOfModels` is the instances' total N).
@@ -780,7 +782,7 @@ mod tests {
         let tau = request.items[0].timestamp;
         let mut stats = None;
         for k in 0..3 {
-            let (_layers, mut enc) = renderer.draw_shared_layers(&instances, &eyes, tau);
+            let (_layers, mut enc) = renderer.draw_shared_layers(&instances, &eyes, tau).unwrap();
             let gpu = &renderer.gpu;
             let shared = gpu.shared.as_ref().unwrap();
             let frame = shared.frame.as_ref().unwrap();
@@ -805,6 +807,16 @@ mod tests {
         {
             assert!(t.draw > 0.0, "{t:?}");
             assert!(t.total >= t.sort + t.draw, "{t:?}");
+            // The split itself: the first eye of two writes the begin only, the last the
+            // end only.
+            let shared = renderer.gpu.shared.as_ref().unwrap();
+            let frame = shared.frame.as_ref().unwrap();
+            let indices = |eye| {
+                let w = frame.eye_draw_timestamp_writes(eye, 2).unwrap();
+                (w.beginning_of_pass_write_index, w.end_of_pass_write_index)
+            };
+            assert_eq!(indices(0), (Some(4), None));
+            assert_eq!(indices(1), (None, Some(5)));
         }
     }
 
