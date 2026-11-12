@@ -42,6 +42,17 @@ The first session's swapchain, made before any frame state exists, uses the view
 
 The rate is mirrored into `HudData.refresh_hz`, the HUD's field on both builds (Q-159), which decides nothing.
 
+## The runtime's counters and A-10's record
+
+`display`'s private `metrics` reads XR\_META\_performance\_metrics through the openxr crate's raw tables (Q-124): the runtime's own list of counter paths, enumerated once per session when the metrics system is enabled for it (spike S1 found 18 on the Quest 3, most updating about once a second). It reads them for the device spikes' windows (Q-420), and each frame into `HudData.runtime_counters` while a `SessionBench` runs (Q-433), where the benchmark files take their medians, reported beside f\_gpu and never judged.
+
+A-10 is judged from a record in the log, since the HUD's drawing is M-9's (§3.6 A-10, §1.13 Logs, Q-411, Q-442). The private `record`:
+
+- enables XR\_EXT\_performance\_settings for its notifications only (no performance level is ever requested). Each session logs `perf settings: XR_EXT_performance_settings enabled` or `absent`, and each notification is a line `perf settings: <domain> <sub-domain> <from> -> <to>`, for example `perf settings: gpu thermal normal -> warning`, a warning when it enters a level above normal;
+- logs once a second (§1.13's rate limit) `perf record: second <i> frames <n> worst <ms> ms tier <name> scale <s> sh <c> sort <mode> foveation <level> loaded <n> dropped <d>`. A second is a bin of the frames' predicted display times, counted from the first frame on one clock across sessions, so a second in which no frame was presented has no line and its index is missing. `frames` counts the frames the runtime asked to render, `worst` is the longest step between consecutive ones, the knobs are the governor's `SplatTierState`, `loaded` is `HudData.loaded`, and `dropped` is the runtime's cumulative `compositor/dropped_frame_count`, or `-` without it.
+
+The verdict is the host test `a10_twenty_minutes_in_quest_balanced` (`tests/a10_sustained_use.rs`, `#[ignore = "acceptance"]`, outside every lane, run by name since it needs a person): it follows logcat and judges the 1,200 seconds that start two seconds after the first line reporting a model loaded (the line is written at the next second's first frame, and the upload follows the CPU load), and prints the window's frame rates, worst interval, dropped frames, loaded count and notifications. It fails on a second below 71 frames, a missing second, a second in another tier than `quest-balanced`, a thermal notification entering warning or impaired, or a session without the extension; its `cpu` tests judge recorded lines.
+
 ## Without the extensions
 
 On a runtime that lacks an extension (Monado, I-15), `available_rates` stays empty, and a request for that control logs E-XR-UNSUPPORTED once per request, as a warning `<code>: <user text>` under `ftgsxr_xr::display` (Q-134; §1.15: the control is hidden, so not an error), and the setting is kept for a later runtime (Q-124). Foveation is reported only when it was asked for, explicitly in the settings or by a direct change to `DisplaySettings`, not for the running tier's value (its default, a governor step, a live tier switch). An explicit request also triggers a `Toast` for ui, the first time in each session for that extension; later requests in the same session log the warning only (Q-161). The render scale still works without XR\_META\_recommended\_layer\_resolution, from the view configuration's size, with E-XR-UNSUPPORTED logged for that extension.
