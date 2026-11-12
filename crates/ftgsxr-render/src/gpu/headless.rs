@@ -766,8 +766,9 @@ mod tests {
 
     /// Q-403, Q-114's check across two eyes: a two-eye shared-center render times its
     /// draw from the first eye's pass's begin to the last eye's end, so on a device with
-    /// timestamp queries `GpuTimes.draw` > 0 and `total` ≥ `sort` + `draw`. R9_P1's first
-    /// eye pair against P1, three frames, the third reading the first's block (Q-81).
+    /// timestamp queries `GpuTimes.draw` > 0, `total` ≥ `sort` + `draw`, and `draw` is no
+    /// shorter than either eye's own pass (Q-403's detecting test). R9_P1's first eye pair
+    /// against P1, three frames, the third reading the first's block (Q-81).
     #[test]
     #[ignore = "gpu"]
     fn gpu_shared_center_draw_times_span_both_eyes() {
@@ -817,7 +818,102 @@ mod tests {
             };
             assert_eq!(indices(0), (Some(4), None));
             assert_eq!(indices(1), (None, Some(5)));
+
+            // Q-403's detecting test: the two-eye `draw` is no shorter than either eye's
+            // own pass, each eye drawn alone after the same prepare, its pass timed
+            // whole (the first and last eye of one); medians of five frames each.
+            let alone: Vec<f64> = (0..2)
+                .map(|eye| {
+                    median(
+                        (0..5)
+                            .map(|_| one_eye_draw_ms(&renderer, &instances, &eyes, tau, eye))
+                            .collect(),
+                    )
+                })
+                .collect();
+            let both = median(
+                (0..5)
+                    .map(|_| {
+                        let (_layers, enc) =
+                            renderer.draw_shared_layers(&instances, &eyes, tau).unwrap();
+                        stats_after(&renderer, enc)
+                    })
+                    .collect(),
+            );
+            eprintln!("draw: both eyes {both} ms, each alone {alone:?} ms");
+            for (eye, a) in alone.iter().enumerate() {
+                assert!(
+                    both >= *a,
+                    "both eyes' draw {both} ms against eye {eye}'s {a} ms"
+                );
+            }
         }
+    }
+
+    /// The upper median of `v`.
+    fn median(mut v: Vec<f64>) -> f64 {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    }
+
+    /// Submits `enc` with the statistics encoded, then two frames of the statistics
+    /// alone, and returns the draw time of `enc`'s block (Q-81: read two frames late).
+    fn stats_after(renderer: &HeadlessRenderer, enc: wgpu::CommandEncoder) -> f64 {
+        let gpu = &renderer.gpu;
+        let shared = gpu.shared.as_ref().unwrap();
+        let frame = shared.frame.as_ref().unwrap();
+        let mut first = Some(enc);
+        let mut stats = None;
+        for _ in 0..3 {
+            let mut enc = first.take().unwrap_or_else(|| {
+                gpu.dev
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor::default())
+            });
+            shared.passes.encode_stats(&mut enc, frame);
+            gpu.dev.queue().submit([enc.finish()]);
+            gpu.dev
+                .device()
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            stats = super::super::stats::FrameStats::poll(frame, &gpu.dev);
+        }
+        stats
+            .expect("a block two frames late")
+            .gpu_times_ms
+            .draw
+            .into()
+    }
+
+    /// One shared-center frame of the two eyes' prepare with only `eye` drawn, its pass
+    /// writing both draw timestamps; the block's draw time.
+    fn one_eye_draw_ms(
+        renderer: &HeadlessRenderer,
+        instances: &[(ModelId, Pose)],
+        eyes: &[Camera; 2],
+        tau: f64,
+        eye: usize,
+    ) -> f64 {
+        let gpu = &renderer.gpu;
+        let shared = gpu.shared.as_ref().unwrap();
+        let frame = shared.frame.as_ref().unwrap();
+        let draws = model_draws(&gpu.models, instances, tau);
+        let views: Vec<ViewParams> = eyes.iter().map(view_of).collect();
+        let device = gpu.dev.device();
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        shared
+            .passes
+            .encode_prepare(&mut enc, frame, &draws, &stereo_sort_pose(eyes), &views);
+        let layer = new_layer(device, &eyes[eye]);
+        draw_pass(
+            &mut enc,
+            &shared.passes,
+            frame,
+            &layer,
+            &views[eye],
+            frame.eye_draw_timestamp_writes(0, 1),
+        );
+        stats_after(renderer, enc)
     }
 
     #[test]
