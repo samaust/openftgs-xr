@@ -318,6 +318,25 @@ pub struct XrFeatures {
     pub lighting: FeatureState,
 }
 
+/// The headset's display as the XR crate's `display` reports it (§1.12 Headset display,
+/// E16): its presence puts the governor on E16's full ladder with f_budget from
+/// `refresh_hz` (Q-404), and the Display tab offers `available_rates` (Q-405). Only
+/// `XrPlugin` inserts it; the desktop has none.
+// Q-404
+#[derive(Resource, Default)]
+pub struct XrDisplay {
+    /// The runtime's current refresh rate in Hz (or the reciprocal of the predicted
+    /// display period without XR_FB_display_refresh_rate); `None` while no session runs.
+    pub refresh_hz: Option<f32>,
+    /// The rates the runtime offers, in Hz; empty where it lists none.
+    pub available_rates: Vec<f32>,
+    /// Whether the runtime offers fixed foveation (XR_FB_foveation): without it the
+    /// governor skips the foveation knob.
+    pub foveation: bool,
+    /// The swapchain's size per eye, in pixels.
+    pub swapchain: UVec2,
+}
+
 /// Which device a side's HUD line shows (Q-274): the XR crate's `HandSource`, which the
 /// app cannot name, mapped by the XR crate.
 // Q-274

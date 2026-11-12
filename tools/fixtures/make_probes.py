@@ -15,6 +15,9 @@ The probes:
 - R19_transmittance: D-7's bound (R-19, Q-10);
 - R10_deg2: P5's model and items with the request's `sh_degree` at 2, R-10's degree-2 reference
   (Q-70).
+
+And R-9's two-eye requests R9_P1 … R9_P10 (Q-402, Q-415): R9_<P>.request.json and
+R9_<P>.renders.safetensors against the probe's own P.safetensors, no model of their own.
 """
 
 import argparse
@@ -223,6 +226,64 @@ ADDITIONAL = {
 }
 
 
+# Q-402: R-9's eyes, two eyes 64 mm apart (§3.2 R-9) with parallel axes and the item's own
+# intrinsics, their midpoint on the item camera's optical axis 1 m from the origin, except for
+# the probes whose primitive sits in front of the probe camera itself, which keep the camera's
+# position as the midpoint.
+R9_PROBES = tuple(f"P{k}" for k in range(1, 11))
+R9_HALF_BASELINE = 0.032  # m
+R9_DISTANCE = 1.0  # m from the origin
+R9_AT_CAMERA = ("P6",)  # its primitive is 0.1 m in front of the camera, behind one at 1 m
+
+
+def r9_midpoint(world_to_camera: np.ndarray, at_camera: bool) -> np.ndarray:
+    """The eyes' midpoint: the camera centre −Rᵀt, or the point of the optical axis ahead of
+    the camera at R9_DISTANCE from the origin, the one nearer the camera."""
+    r, t = world_to_camera[:3, :3], world_to_camera[:3, 3]
+    c = -(r.T @ t)
+    if at_camera:
+        return c
+    f = r[2]  # the forward axis, OpenCV's +z
+    b = float(c @ f)
+    disc = b * b - float(c @ c) + R9_DISTANCE**2
+    if disc < 0:
+        raise SystemExit(f"the optical axis misses the sphere of radius {R9_DISTANCE} m")
+    s = -b - math.sqrt(disc)  # Q-415: the point nearer the camera
+    if s < 0:
+        raise SystemExit("the axis point at R9_DISTANCE lies behind the camera")
+    return c + s * f
+
+
+def r9_items(probe: str, items: list) -> list:
+    """Each item as its left eye's `<id>L` and its right eye's `<id>R`, in that order, at the
+    item's τ, with its K and image size and its rotation (parallel axes)."""
+    from ftgs_harness.formats import RequestItem
+
+    out = []
+    for it in items:
+        w2c = np.asarray(it.world_to_camera, dtype=np.float64)
+        r = w2c[:3, :3]
+        mid = r9_midpoint(w2c, probe in R9_AT_CAMERA)
+        for suffix, sign in (("L", -1.0), ("R", 1.0)):  # Q-415: <id>L, then <id>R
+            eye = mid + sign * R9_HALF_BASELINE * r[0]  # along the camera's own x axis
+            m = np.eye(4)
+            m[:3, :3] = r
+            m[:3, 3] = -r @ eye
+            out.append(RequestItem(f"{it.id}{suffix}", it.timestamp, it.K, m, it.width, it.height))
+    return out
+
+
+def write_r9(probe: str, model, items: list) -> None:
+    """R9_<probe>'s request and openftgs's reference renders of it, against the probe's model
+    file (written by `write_probe` earlier in a full run)."""
+    from ftgs_harness.formats import write_request
+
+    request = PROBES_DIR / f"R9_{probe}.request.json"
+    renders = PROBES_DIR / f"R9_{probe}.renders.safetensors"
+    write_request(request, r9_items(probe, items), time_unit=model.time_unit)
+    render_reference(PROBES_DIR / f"{probe}.safetensors", request, renders)
+
+
 def l1_probes():
     """openftgs's L1 probes P1–P10, built by the harness itself with 32 items."""
     from ftgs_harness.probes import PROBES
@@ -286,6 +347,12 @@ def main() -> None:
         write_probe(name, model, items, REQUEST_SH_DEGREE.get(name))
     if not args.only or PLY_PROBE in args.only:
         write_probe_ply()
+    for name in R9_PROBES:
+        if args.only and f"R9_{name}" not in args.only:
+            continue
+        model, items = probes[name]
+        print(f"R-9 request R9_{name}: {2 * len(items)} items")
+        write_r9(name, model, items)
     save_commands(WORK / "commands.jsonl")
 
 

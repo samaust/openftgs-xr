@@ -8,7 +8,8 @@ use std::collections::BTreeSet;
 
 use ftgsxr_testkit::{fixtures_dir, metrics, probe, reference_render};
 
-/// The probe names, from the committed request files (README Layout: `NAME.request.json`).
+/// The probe names, from the committed request files (README Layout: `NAME.request.json`),
+/// but R-9's `R9_<P>` requests, which have no model file of their own (`r9_references.rs`).
 fn committed_probes() -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(fixtures_dir().join("probes"))
         .unwrap()
@@ -16,6 +17,7 @@ fn committed_probes() -> Vec<String> {
             let name = e.unwrap().file_name().into_string().unwrap();
             name.strip_suffix(".request.json").map(str::to_owned)
         })
+        .filter(|name| !name.starts_with("R9_"))
         .collect();
     names.sort();
     names

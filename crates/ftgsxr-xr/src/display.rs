@@ -12,17 +12,25 @@
 //!   result is logged as `foveation <level> applied to the swapchain` or an error.
 //!   bevy\_mod\_openxr creates the swapchain without a `next` chain, so the profile is
 //!   applied by xrUpdateSwapchainFB only (Q-124).
-//! - Render scale: a change of 0.1 or more from the scale the live swapchain was made with
-//!   ends and destroys the session and creates it again (through `session`'s re-creation)
-//!   with the swapchain sized at the recommended size times the scale; the crate leaks the
-//!   old images. The recommended size is XR\_META\_recommended\_layer\_resolution's when the
-//!   runtime gives a valid one, else the view configuration's (Q-132).
+//! - Render scale: `[xr] render_scale` alone, 1.0 when unset (§1.12 at revision 56; the
+//!   tier's render scale sizes the splat layer). A change of 0.1 or more from the scale the
+//!   live swapchain was made with ends and destroys the session and creates it again
+//!   (through `session`'s re-creation) with the swapchain sized at the recommended size
+//!   times the scale; the crate leaks the old images. The recommended size is
+//!   XR\_META\_recommended\_layer\_resolution's when the runtime gives a valid one, else
+//!   the view configuration's (Q-132); the size is logged at every session (Q-412).
+//! - `DisplaySettings` follows `[xr]` and, with `[xr] foveation` unset, the running tier's
+//!   foveation, so a governor step and a live tier switch reach the swapchain (Q-404,
+//!   Q-421).
+//! - `XrDisplay` (`ftgsxr_app`, inserted by `XrPlugin`) carries the current refresh rate,
+//!   the runtime's rates, the foveation support and the swapchain's size while a session
+//!   runs; the rate is mirrored into `HudData.refresh_hz` (Q-404).
 //!
 //! Where an extension is absent, `available_rates` is empty, a request logs
 //! E-XR-UNSUPPORTED (a warning) and the setting is kept for a later runtime (Q-124). A
 //! refresh rate or a foveation asked for explicitly (a settings value, a change while the
 //! session runs) also triggers a `Toast`, which ui puts on the line, at most once per
-//! session per extension; the tier's default never does (Q-161).
+//! session per extension; the running tier's value never does (Q-161, Q-421).
 
 use std::collections::HashSet;
 
@@ -46,15 +54,17 @@ use bevy_mod_xr::session::{
     XrSessionCreated, XrState,
 };
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
-use ftgsxr_app::{SettingsRes, Toast, ToastLevel};
+use ftgsxr_app::{HudData, SettingsRes, Toast, ToastLevel, XrDisplay};
 use ftgsxr_io::Settings;
-use ftgsxr_render::{Foveation, QualityTier};
+use ftgsxr_render::{Foveation, QualityTier, SplatTierState};
 use openxr::sys;
 use openxr::sys::Handle as _;
 
 use crate::XrError;
 use crate::error::log_error;
 use crate::session::Recreate;
+
+mod metrics;
 
 /// The scale change that re-creates the swapchain (§1.12).
 const SCALE_STEP: f32 = 0.1;
@@ -70,33 +80,112 @@ pub struct DisplaySettings {
     pub available_rates: Vec<f32>,
     /// The fixed-foveation level.
     pub foveation: Foveation,
-    /// The swapchain's size over the recommended size.
+    /// The swapchain's size over the recommended size: `[xr] render_scale`, 1.0 when
+    /// unset; the tier's render scale sizes the splat layer instead (§1.12).
     pub render_scale: f32,
 }
 
 impl DisplaySettings {
-    /// From `XrSettings` (Q-49): `None` is the runtime's rate and the tier's foveation and
-    /// render scale.
+    /// From `XrSettings` (Q-49): `None` is the runtime's rate, the tier's foveation and a
+    /// render scale of 1.0 (§1.12 at revision 56: the tier's render scale never reaches the
+    /// swapchain).
     pub(crate) fn from_settings(settings: &Settings) -> Self {
-        let tier = QualityTier::by_name(&settings.general.tier).unwrap_or_else(|| {
-            if cfg!(target_os = "android") {
-                QualityTier::quest_balanced()
-            } else {
-                QualityTier::desktop()
-            }
-        });
-        let foveation = settings
-            .xr
-            .foveation
-            .as_deref()
-            .and_then(parse_foveation)
-            .unwrap_or(tier.foveation);
+        let foveation = explicit_foveation(settings).unwrap_or_else(|| tier_of(settings).foveation);
         DisplaySettings {
             refresh_rate: settings.xr.refresh_rate,
             available_rates: Vec::new(),
             foveation,
-            render_scale: settings.xr.render_scale.unwrap_or(tier.render_scale),
+            render_scale: settings.xr.render_scale.unwrap_or(1.0),
         }
+    }
+}
+
+/// The settings' tier, else the build's default (`quest-balanced` on Android, `desktop`
+/// elsewhere) for an unknown name.
+fn tier_of(settings: &Settings) -> QualityTier {
+    QualityTier::by_name(&settings.general.tier).unwrap_or_else(|| {
+        if cfg!(target_os = "android") {
+            QualityTier::quest_balanced()
+        } else {
+            QualityTier::desktop()
+        }
+    })
+}
+
+/// `[xr] foveation` when it is set to a level.
+fn explicit_foveation(settings: &Settings) -> Option<Foveation> {
+    settings.xr.foveation.as_deref().and_then(parse_foveation)
+}
+
+/// The sources `follow` last applied to `DisplaySettings`, so each field is written only
+/// when its source moves and a direct write holds until then (Q-421).
+// Q-421
+#[derive(Resource, Debug, PartialEq)]
+struct Followed {
+    refresh_rate: Option<f32>,
+    render_scale: Option<f32>,
+    /// `[xr] foveation`, when set.
+    foveation: Option<Foveation>,
+    /// The running tier's foveation last applied, while `[xr] foveation` is unset.
+    tier_foveation: Option<Foveation>,
+}
+
+impl Followed {
+    /// What `DisplaySettings::from_settings` took from `settings`.
+    fn new(settings: &Settings) -> Self {
+        let foveation = explicit_foveation(settings);
+        Followed {
+            refresh_rate: settings.xr.refresh_rate,
+            render_scale: settings.xr.render_scale,
+            foveation,
+            tier_foveation: foveation.is_none().then(|| tier_of(settings).foveation),
+        }
+    }
+
+    /// Whether `f` is the running tier's foveation, applied with `[xr] foveation` unset:
+    /// not an explicit request (Q-161, Q-421).
+    fn is_tiers(&self, f: Foveation) -> bool {
+        self.foveation.is_none() && self.tier_foveation == Some(f)
+    }
+}
+
+/// `DisplaySettings` follows `[xr]` and the running tier, whatever the session's state
+/// (Q-404, §1.12 at revision 56): `refresh_rate` and `render_scale` (1.0 when unset)
+/// from the settings, `foveation` from `[xr] foveation` when set, else from
+/// `SplatTierState.foveation`, so a governor step and a live tier switch reach the
+/// swapchain. The tier's render scale never does: it sizes the splat layer.
+// Q-404, Q-421
+fn follow(
+    settings: Option<Res<SettingsRes>>,
+    tier: Option<Res<SplatTierState>>,
+    mut display: ResMut<DisplaySettings>,
+    mut followed: ResMut<Followed>,
+) {
+    if let Some(s) = settings.as_deref() {
+        let xr = &s.0.xr;
+        if xr.refresh_rate != followed.refresh_rate {
+            followed.refresh_rate = xr.refresh_rate;
+            display.refresh_rate = xr.refresh_rate;
+        }
+        if xr.render_scale != followed.render_scale {
+            followed.render_scale = xr.render_scale;
+            display.render_scale = xr.render_scale.unwrap_or(1.0);
+        }
+        let explicit = explicit_foveation(&s.0);
+        if explicit != followed.foveation {
+            followed.foveation = explicit;
+            followed.tier_foveation = None;
+            if let Some(f) = explicit {
+                display.foveation = f;
+            }
+        }
+    }
+    if followed.foveation.is_none()
+        && let Some(t) = tier
+        && followed.tier_foveation != Some(t.foveation)
+    {
+        followed.tier_foveation = Some(t.foveation);
+        display.foveation = t.foveation;
     }
 }
 
@@ -203,6 +292,9 @@ struct Applied {
     foveation_requested: bool,
     /// The absent extensions toasted in this session (Q-161).
     toasted: HashSet<&'static str>,
+    /// The runtime's current refresh rate (XR\_FB\_display\_refresh\_rate): read once
+    /// the session has begun and at each change event; `None` without the extension.
+    rate: Option<f32>,
 }
 
 impl Applied {
@@ -215,6 +307,7 @@ impl Applied {
             failed_scale: None,
             foveation_requested,
             toasted: HashSet::new(),
+            rate: None,
         }
     }
 
@@ -249,6 +342,7 @@ impl Applied {
     fn session_created(&mut self) {
         self.failed_scale = None;
         self.toasted.clear();
+        self.rate = None;
     }
 }
 
@@ -285,13 +379,16 @@ impl Plugin for DisplayPlugin {
             app.insert_resource(display);
         }
         app.insert_resource(Applied::new(scale, explicit_foveation))
+            .insert_resource(Followed::new(&settings))
             .init_resource::<FoveationRequest>()
             .add_plugins(ExtractResourcePlugin::<FoveationRequest>::default())
             .add_systems(XrSessionCreated, on_session_created)
             .add_systems(XrPostSessionBegin, on_session_begun)
             .add_systems(XrPreDestroySession, drop_profile)
-            .add_systems(Update, apply_changes)
+            .add_systems(Update, (follow, apply_changes, publish).chain())
             .add_oxr_event_handler(log_rate_change);
+        // #725: the runtime's counters for the device spikes (Q-420).
+        metrics::add(app);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(XrPreDestroySession, drop_profile);
             render_app.add_systems(
@@ -333,7 +430,7 @@ fn unsupported(e: &XrError) {
 
 /// An E-XR-UNSUPPORTED for a feature asked for explicitly: the warning each time and a
 /// `Toast` triggered for ui the first time in the session for its extension (Q-161; every
-/// caller's request is explicit, the tier's default foveation and an unset refresh rate
+/// caller's request is explicit, the running tier's foveation and an unset refresh rate
 /// never reach it).
 // Q-161
 fn unsupported_requested(e: &XrError, applied: &mut Applied, commands: &mut Commands) {
@@ -353,7 +450,7 @@ fn unsupported_requested(e: &XrError, applied: &mut Applied, commands: &mut Comm
 /// new) and the swapchain's size; a failed render scale is forgotten (Q-147).
 fn on_session_created(
     session: Option<Res<OxrSession>>,
-    instance: Option<Res<OxrInstance>>,
+    (instance, system): (Option<Res<OxrInstance>>, Option<Res<OxrSystemId>>),
     current: Option<Res<OxrCurrentSessionConfig>>,
     settings: Res<DisplaySettings>,
     mut applied: ResMut<Applied>,
@@ -363,9 +460,13 @@ fn on_session_created(
     let Some(session) = session else { return };
     // Q-147
     applied.session_created();
+    // Q-412: the size at every creation and re-creation, with the view configuration's
+    // recommendation beside it.
     if let Some(c) = current {
+        let view = recommended(instance.as_deref(), system.as_deref())
+            .map_or_else(|| "none".to_owned(), |(r, _)| format!("{}x{}", r.x, r.y));
         info!(
-            "swapchain {}x{} at render scale {} (§1.12)",
+            "swapchain {}x{} at render scale {} (§1.12); the view configuration recommends {view}",
             c.resolution.x, c.resolution.y, applied.scale
         );
     }
@@ -387,14 +488,77 @@ fn on_session_begun(
     mut commands: Commands,
 ) {
     let Some(session) = session else { return };
-    apply_rate(
-        Caps::of(instance.as_deref()),
-        &session,
-        &mut settings,
-        &mut applied,
-        &mut commands,
-    );
+    let caps = Caps::of(instance.as_deref());
+    if caps.refresh_rate {
+        // The wrapper panics without the extension; `caps` checked it is loaded.
+        applied.rate = session
+            .get_display_refresh_rate()
+            .inspect_err(|e| log_error(&XrError::Runtime(format!("refresh rate: {e}"))))
+            .ok();
+    }
+    apply_rate(caps, &session, &mut settings, &mut applied, &mut commands);
     applied.refresh_rate = settings.refresh_rate;
+}
+
+/// The refresh rate `XrDisplay` reports: the runtime's current rate, else the reciprocal
+/// of the predicted display period in nanoseconds, `None` for a period that is not
+/// positive (Q-404).
+// Q-404
+fn reported_rate(current: Option<f32>, period_ns: Option<i64>) -> Option<f32> {
+    current.or_else(|| {
+        period_ns
+            .filter(|&p| p > 0)
+            .map(|p| (1e9 / p as f64) as f32)
+    })
+}
+
+/// Writes `XrDisplay` while a session runs (Q-404): the rate, the runtime's rates, the
+/// foveation support and the swapchain's size; the rate is `None` while no session runs
+/// (a re-creation included). The rate is mirrored into `HudData.refresh_hz` (Q-159).
+// Q-404
+#[allow(clippy::too_many_arguments)]
+fn publish(
+    state: Option<Res<XrState>>,
+    instance: Option<Res<OxrInstance>>,
+    frame: Option<Res<OxrFrameState>>,
+    current: Option<Res<OxrCurrentSessionConfig>>,
+    settings: Res<DisplaySettings>,
+    applied: Res<Applied>,
+    xr: Option<ResMut<XrDisplay>>,
+    hud: Option<ResMut<HudData>>,
+) {
+    let Some(mut xr) = xr else { return };
+    let running = state.as_deref() == Some(&XrState::Running);
+    let rate = if running {
+        reported_rate(
+            applied.rate,
+            frame.map(|f| f.0.predicted_display_period.as_nanos()),
+        )
+    } else {
+        None
+    };
+    if xr.refresh_hz != rate {
+        xr.refresh_hz = rate;
+    }
+    if running {
+        if xr.available_rates != settings.available_rates {
+            xr.available_rates.clone_from(&settings.available_rates);
+        }
+        let foveation = Caps::of(instance.as_deref()).foveation;
+        if xr.foveation != foveation {
+            xr.foveation = foveation;
+        }
+        if let Some(c) = current
+            && xr.swapchain != c.resolution
+        {
+            xr.swapchain = c.resolution;
+        }
+    }
+    if let Some(mut hud) = hud
+        && hud.refresh_hz != rate
+    {
+        hud.refresh_hz = rate;
+    }
 }
 
 /// Drops the foveation profile with its session (it is a child of the session).
@@ -475,7 +639,7 @@ fn apply_changes(
     system: Option<Res<OxrSystemId>>,
     state: Option<Res<XrState>>,
     mut settings: ResMut<DisplaySettings>,
-    mut applied: ResMut<Applied>,
+    (mut applied, followed): (ResMut<Applied>, Res<Followed>),
     mut request: ResMut<FoveationRequest>,
     layer: LayerInputs,
     mut config: ResMut<OxrSessionConfig>,
@@ -494,16 +658,15 @@ fn apply_changes(
         apply_rate(caps, &session, s, &mut applied, &mut commands);
     }
     if Some(settings.foveation) != applied.foveation {
-        applied.foveation = Some(settings.foveation);
-        applied.foveation_requested = true;
-        foveation(
-            caps,
-            &session,
-            settings.foveation,
-            &mut request,
-            &mut applied,
-            &mut commands,
-        );
+        let f = settings.foveation;
+        applied.foveation = Some(f);
+        // Q-161, Q-421: the running tier's level (a governor step, a live tier
+        // switch) is not a request, so a runtime without the extension is not told of it.
+        let from_tier = followed.is_tiers(f);
+        applied.foveation_requested = !from_tier;
+        if caps.foveation || !from_tier {
+            foveation(caps, &session, f, &mut request, &mut applied, &mut commands);
+        }
     }
     let scale = settings.render_scale;
     if applied.take_scale_change(scale, recreate.0) {
@@ -651,14 +814,18 @@ fn apply_foveation(
     }
 }
 
-/// Logs the runtime's refresh-rate change (the rate took effect).
-fn log_rate_change(event: OxrEventIn) {
+/// Logs the runtime's refresh-rate change (the rate took effect) and keeps the new rate
+/// for `XrDisplay` (Q-404).
+fn log_rate_change(event: OxrEventIn, applied: Option<ResMut<Applied>>) {
     if let openxr::Event::DisplayRefreshRateChangedFB(e) = *event {
         info!(
             "display refresh rate {} -> {} Hz",
             e.from_display_refresh_rate(),
             e.to_display_refresh_rate()
         );
+        if let Some(mut a) = applied {
+            a.rate = Some(e.to_display_refresh_rate());
+        }
     }
 }
 
@@ -706,6 +873,136 @@ mod tests {
         assert!(applied.toast_once("XR_FB_foveation"));
         assert!(!applied.toast_once("XR_FB_foveation"));
         assert!(applied.toast_once("XR_FB_display_refresh_rate"));
+    }
+
+    /// An app with `follow` alone over `settings` and the running tier `tier`, with
+    /// `DisplaySettings` and what was followed made from `settings` as the plugin makes them.
+    fn following(settings: Settings, tier: QualityTier) -> App {
+        let mut app = App::new();
+        app.insert_resource(DisplaySettings::from_settings(&settings))
+            .insert_resource(Followed::new(&settings))
+            .insert_resource(SettingsRes(settings))
+            .insert_resource(SplatTierState::of(&tier))
+            .add_systems(Update, follow);
+        app.update();
+        app
+    }
+
+    fn display(app: &App) -> &DisplaySettings {
+        app.world().resource::<DisplaySettings>()
+    }
+
+    /// Q-404 (#729): with `[xr] foveation` unset, the running tier's foveation reaches
+    /// `DisplaySettings.foveation` (a governor step, a live tier switch); with it set, the
+    /// setting holds and a tier change does not reach it.
+    #[test]
+    fn follow_applies_the_tiers_foveation_only_while_xr_foveation_is_unset() {
+        let mut s = Settings::default();
+        s.general.tier = "quest-balanced".into();
+        let mut app = following(s, QualityTier::quest_balanced());
+        let start = QualityTier::quest_balanced().foveation;
+        assert_eq!(display(&app).foveation, start);
+        for f in [Foveation::High, Foveation::Low, Foveation::Off] {
+            app.world_mut().resource_mut::<SplatTierState>().foveation = f;
+            app.update();
+            assert_eq!(
+                display(&app).foveation,
+                f,
+                "the tier's {f:?} reaches display"
+            );
+        }
+        app.world_mut().resource_mut::<SettingsRes>().0.xr.foveation = Some("medium".into());
+        app.update();
+        assert_eq!(display(&app).foveation, Foveation::Medium);
+        for f in [Foveation::High, Foveation::Dynamic] {
+            app.world_mut().resource_mut::<SplatTierState>().foveation = f;
+            app.update();
+            assert_eq!(
+                display(&app).foveation,
+                Foveation::Medium,
+                "the set [xr] foveation holds against the tier's {f:?}"
+            );
+        }
+        // Unset again: the running tier's value is applied.
+        app.world_mut().resource_mut::<SettingsRes>().0.xr.foveation = None;
+        app.update();
+        assert_eq!(display(&app).foveation, Foveation::Dynamic);
+    }
+
+    /// §1.12 at revision 56, Q-404 (#729): a change of `[xr] refresh_rate` or
+    /// `render_scale` in the settings reaches `DisplaySettings`, an unset render scale
+    /// being 1.0; the tier's render scale never does.
+    #[test]
+    fn follow_applies_the_xr_refresh_rate_and_render_scale_not_the_tiers_scale() {
+        let mut s = Settings::default();
+        s.general.tier = "quest-low".into();
+        let mut app = following(s, QualityTier::quest_low());
+        assert_eq!(display(&app).render_scale, 1.0);
+        app.world_mut()
+            .resource_mut::<SplatTierState>()
+            .render_scale = 0.5;
+        app.update();
+        assert_eq!(
+            display(&app).render_scale,
+            1.0,
+            "the tier's scale stays off"
+        );
+        {
+            let mut res = app.world_mut().resource_mut::<SettingsRes>();
+            res.0.xr.render_scale = Some(0.8);
+            res.0.xr.refresh_rate = Some(90.0);
+        }
+        app.update();
+        assert_eq!(
+            (display(&app).render_scale, display(&app).refresh_rate),
+            (0.8, Some(90.0))
+        );
+        {
+            let mut res = app.world_mut().resource_mut::<SettingsRes>();
+            res.0.xr.render_scale = None;
+            res.0.xr.refresh_rate = None;
+        }
+        app.update();
+        assert_eq!(
+            (display(&app).render_scale, display(&app).refresh_rate),
+            (1.0, None)
+        );
+    }
+
+    /// A direct write to `DisplaySettings` (Dv-12's runner, the `xr` lane's tests) holds
+    /// until its source in the settings or the tier moves (Q-421).
+    #[test]
+    fn follow_keeps_a_direct_write_until_its_source_moves() {
+        let mut app = following(Settings::default(), QualityTier::desktop());
+        {
+            let mut d = app.world_mut().resource_mut::<DisplaySettings>();
+            d.render_scale = 0.8;
+            d.foveation = Foveation::Low;
+            d.refresh_rate = Some(72.0);
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+        let d = display(&app);
+        assert_eq!(
+            (d.render_scale, d.foveation, d.refresh_rate),
+            (0.8, Foveation::Low, Some(72.0))
+        );
+        app.world_mut().resource_mut::<SplatTierState>().foveation = Foveation::High;
+        app.update();
+        assert_eq!(display(&app).foveation, Foveation::High);
+        assert_eq!(display(&app).render_scale, 0.8);
+    }
+
+    /// Q-404: the runtime's current rate when it gives one, else the reciprocal of the
+    /// predicted display period (13.888… ms is 72 Hz), and no rate without a positive period.
+    #[test]
+    fn reported_rate_is_the_current_rate_else_the_periods_reciprocal() {
+        assert_eq!(reported_rate(Some(90.0), Some(13_888_889)), Some(90.0));
+        let r = reported_rate(None, Some(13_888_889)).unwrap();
+        assert!((r - 72.0).abs() < 1e-3, "{r}");
+        assert_eq!(reported_rate(None, Some(0)), None);
+        assert_eq!(reported_rate(None, None), None);
     }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {
@@ -768,14 +1065,17 @@ mod tests {
         );
     }
 
+    /// §1.12 at revision 56 (#729, #717): an unset `[xr] render_scale` is 1.0 on the
+    /// swapchain whatever the tier (`quest-low`'s render scale is 0.8, and sizes the splat
+    /// layer); an unset foveation is the tier's.
     #[test]
-    fn from_settings_takes_the_tier_for_none() {
+    fn from_settings_takes_the_tiers_foveation_and_a_scale_of_one_for_none() {
         let mut s = Settings::default();
         s.general.tier = "quest-low".into();
         let d = DisplaySettings::from_settings(&s);
         assert_eq!(
             (d.foveation, d.render_scale, d.refresh_rate),
-            (Foveation::High, 0.8, None)
+            (Foveation::High, 1.0, None)
         );
         s.xr.foveation = Some("low".into());
         s.xr.render_scale = Some(0.9);

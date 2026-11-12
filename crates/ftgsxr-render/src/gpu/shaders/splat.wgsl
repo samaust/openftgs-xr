@@ -19,6 +19,17 @@
 //
 // The per-view record (`cull.wgsl`, 12 words): μ′ (0–1), the conic (a, b, c) (2–4), z_c (5),
 // the radii (6–7), c·σ_eff and σ_eff as four half floats (8–9), the instance (10), 0 (11).
+//
+// Shared-center mode (D-4, Q-400): the vertex stage projects the record's μ^S and Σ^S for
+// this eye with E6 in full (`projection.wgsl`, prepended to this file, the cull's own
+// arithmetic): the Jacobian clamp, Σ′ + εI, the determinant guard, the opacity-aware
+// extent and its cap, the near and far culls and the box cull, with the instance's model's
+// constants (D-39). A record E6 culls in this eye gets a degenerate quad, its four corners
+// at one point outside the clip volume. The color and the draw order are the midpoint's,
+// as the cull wrote them; the depth test and E13 use this eye's z_c. The shared-center
+// records (`cull.wgsl`): μ^S (0–2), the key (3), then Σ^S as six f32 (4–9), the color c
+// and σ_eff as four half floats (10–11) and the instance (12) in the 16-word layout, or
+// Σ^S as six half floats (4–6), the color (7–8) and the instance (9) in the 12-word one.
 
 // E7's constants of one instance's model (D-39), then the centers' (`centers.wgsl`, read
 // by stage 6 only).
@@ -31,6 +42,15 @@ struct InstanceConstants {
     inv_span: f32,
     inv_speed: f32,
     pad: f32,
+    // E6's constants (D-39), read by the shared-center vertex stage (Q-400).
+    near: f32,
+    far: f32,
+    eps2d: f32,
+    jacobian_clamp_margin: f32,
+    screen_extent_max: f32,
+    pad1: f32,
+    pad2: f32,
+    pad3: f32,
 }
 
 // The view (E6): the camera's image W × H, the target's size, the depth mapping and E13's
@@ -54,6 +74,9 @@ struct DrawView {
     env_far: f32,
     // The view's camera space to the depth camera's: R_d·R_vᵀ and its translation.
     env_from_view: mat4x4<f32>,
+    // The view's world-to-camera transform [R_w t_w; 0 1] (E6), read by the shared-center
+    // vertex stage (Q-400).
+    world_to_camera: mat4x4<f32>,
 }
 
 @group(0) @binding(0) var<storage, read> records: array<u32>;
@@ -68,6 +91,9 @@ struct DrawView {
 
 const RECORD_WORDS: u32 = 12u;
 
+// 0 per view (12-word records), 1 shared center (16), 2 shared center with half Σ^S (12).
+override RECORD_MODE: u32 = 0u;
+
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) mean: vec2<f32>,
@@ -78,8 +104,93 @@ struct VertexOut {
     @location(3) @interpolate(flat) constants: vec4<f32>,
 }
 
+// The strip's corner (−,−), (+,−), (−,+), (+,+) of vertex `vid`.
+fn strip_corner(vid: u32) -> vec2<f32> {
+    return vec2<f32>(f32(vid & 1u) * 2.0 - 1.0, f32((vid >> 1u) & 1u) * 2.0 - 1.0);
+}
+
+// The quad's corner at μ′ ± r in the camera's pixels, with the depth test's z.
+fn quad_position(vid: u32, mean: vec2<f32>, radii: vec2<f32>, depth: f32) -> vec4<f32> {
+    let px = mean + strip_corner(vid) * radii;
+    let ndc = vec2<f32>(2.0 * px.x / view.camera_size.x - 1.0, 1.0 - 2.0 * px.y / view.camera_size.y);
+    var z = 0.0;
+    if view.depth_near > 0.0 {
+        // Q-87: reverse Z with an infinite far plane, z_ndc = near / z_c.
+        z = min(view.depth_near / depth, 1.0);
+    }
+    return vec4<f32>(ndc, z, 1.0);
+}
+
+// This eye's camera (E6) from the view block.
+fn eye_view() -> View {
+    var v: View;
+    let m = view.world_to_camera;
+    v.rotation = mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz);
+    v.translation = m[3].xyz;
+    v.width = view.camera_size.x;
+    v.height = view.camera_size.y;
+    v.focal = view.view_k.xy;
+    v.principal = view.view_k.zw;
+    return v;
+}
+
+// Shared-center mode (Q-400): the record in slot `slot` projected for this eye.
+fn vs_shared(vid: u32, slot: u32) -> VertexOut {
+    let b = slot * select(12u, 16u, RECORD_MODE == 1u);
+    let mu_s = vec3<f32>(bitcast<f32>(records[b]), bitcast<f32>(records[b + 1u]), bitcast<f32>(records[b + 2u]));
+    // Σ^S as (xx, xy, xz, yy, yz, zz).
+    var s: array<f32, 6>;
+    var color: vec4<f32>;
+    var instance: u32;
+    if RECORD_MODE == 1u {
+        for (var i = 0u; i < 6u; i++) {
+            s[i] = bitcast<f32>(records[b + 4u + i]);
+        }
+        color = vec4<f32>(unpack2x16float(records[b + 10u]), unpack2x16float(records[b + 11u]));
+        instance = records[b + 12u];
+    } else {
+        let s01 = unpack2x16float(records[b + 4u]);
+        let s23 = unpack2x16float(records[b + 5u]);
+        let s45 = unpack2x16float(records[b + 6u]);
+        s = array<f32, 6>(s01.x, s01.y, s23.x, s23.y, s45.x, s45.y);
+        color = vec4<f32>(unpack2x16float(records[b + 7u]), unpack2x16float(records[b + 8u]));
+        instance = records[b + 9u];
+    }
+    let cov_s = mat3x3<f32>(
+        vec3<f32>(s[0], s[1], s[2]),
+        vec3<f32>(s[1], s[3], s[4]),
+        vec3<f32>(s[2], s[4], s[5]),
+    );
+    let k = instances[instance];
+    var e6: E6Constants;
+    e6.near = k.near;
+    e6.far = k.far;
+    e6.eps2d = k.eps2d;
+    e6.jacobian_clamp_margin = k.jacobian_clamp_margin;
+    e6.screen_extent_max = k.screen_extent_max;
+    e6.alpha_skip = k.alpha_skip;
+    let sigma_eff = color.w;
+    let p = project_view(eye_view(), e6, mu_s, cov_s, sigma_eff);
+    var out: VertexOut;
+    if !p.visible {
+        // Culled in this eye: a degenerate quad outside the clip volume.
+        out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return out;
+    }
+    out.position = quad_position(vid, p.mean, p.radii, p.depth);
+    out.mean = p.mean;
+    out.conic = p.conic;
+    // c·σ_eff and σ_eff, as the per-view record holds them.
+    out.color = vec4<f32>(color.xyz * sigma_eff, sigma_eff);
+    out.constants = vec4<f32>(k.alpha_max, k.alpha_skip, k.pixel_center_offset, p.depth);
+    return out;
+}
+
 @vertex
 fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VertexOut {
+    if RECORD_MODE != 0u {
+        return vs_shared(vid, payloads[iid]);
+    }
     let b = payloads[iid] * RECORD_WORDS;
     let mean = vec2<f32>(bitcast<f32>(records[b]), bitcast<f32>(records[b + 1u]));
     let conic = vec3<f32>(bitcast<f32>(records[b + 2u]), bitcast<f32>(records[b + 3u]), bitcast<f32>(records[b + 4u]));
@@ -88,17 +199,8 @@ fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) 
     let color = vec4<f32>(unpack2x16float(records[b + 8u]), unpack2x16float(records[b + 9u]));
     let k = instances[records[b + 10u]];
 
-    // The strip's corners (−,−), (+,−), (−,+), (+,+).
-    let corner = vec2<f32>(f32(vid & 1u) * 2.0 - 1.0, f32((vid >> 1u) & 1u) * 2.0 - 1.0);
-    let px = mean + corner * radii;
-    let ndc = vec2<f32>(2.0 * px.x / view.camera_size.x - 1.0, 1.0 - 2.0 * px.y / view.camera_size.y);
-    var z = 0.0;
-    if view.depth_near > 0.0 {
-        // Q-87: reverse Z with an infinite far plane, z_ndc = near / z_c.
-        z = min(view.depth_near / depth, 1.0);
-    }
     var out: VertexOut;
-    out.position = vec4<f32>(ndc, z, 1.0);
+    out.position = quad_position(vid, mean, radii, depth);
     out.mean = mean;
     out.conic = conic;
     out.color = color;

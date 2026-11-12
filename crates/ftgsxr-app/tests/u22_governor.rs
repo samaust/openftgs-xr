@@ -173,3 +173,47 @@ fn u22_choosing_a_tier_by_hand_disables_the_governor() {
     assert!(enabled("u22-default-tier", "desktop"));
     assert!(!enabled("u22-manual-tier", "quest-low"));
 }
+
+// Q-178 (U-22's extension, #263, #723)
+#[test]
+fn u22_dynamic_foveation_is_left_alone_on_the_headset_ladder() {
+    let mut s = desktop_state();
+    s.foveation = Foveation::Dynamic;
+    let gov = Governor::default();
+    let mut c = GovernorCounters::default();
+    // Down: the render scale (4), then straight to the SH cap (2) and the sort mode (1).
+    let down = feed(&gov, &mut c, &mut s, 2.0, 100);
+    let order = [
+        Knob::RenderScale,
+        Knob::RenderScale,
+        Knob::RenderScale,
+        Knob::RenderScale,
+        Knob::ShCap,
+        Knob::ShCap,
+        Knob::SortMode,
+    ];
+    assert_eq!(
+        down,
+        order
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (10 * (i as u32 + 1), *k, true))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        knobs(&s),
+        (6, Foveation::Dynamic, 1, SortMode::SharedCenter)
+    );
+    // Up: the reverse, `Dynamic` unchanged.
+    let up = feed(&gov, &mut c, &mut s, 0.1, 120 * 10);
+    assert_eq!(
+        up,
+        order
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(i, k)| (120 * (i as u32 + 1), *k, false))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(knobs(&s), (10, Foveation::Dynamic, 3, SortMode::PerView));
+}

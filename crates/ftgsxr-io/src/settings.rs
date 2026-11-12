@@ -261,7 +261,7 @@ pub struct XrSettings {
     pub refresh_rate: Option<f32>,
     /// `off`, `low`, `medium`, `high` or `dynamic`; `None` is the tier's.
     pub foveation: Option<String>,
-    /// The render scale; `None` is the tier's.
+    /// The headset swapchain's render scale; `None` is 1.0 (§1.12 at revision 56, Q-49).
     pub render_scale: Option<f32>,
     /// The reference spaces D-24's chain may try, in order, from `stage`, `local-floor`
     /// and `local`, stored as written; the chain always ends at LOCAL, with a warning,
