@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dv-2 (§3.4, D-4 per view, Q-121): the probe the driver pushed as `dv/probe.safetensors`
-//! loads through `SplatLoad`, is kept 1 m ahead of the left eye once both eyes are splat
-//! cameras (kept there each frame), and is drawn by both for 10 s; PASS with the frame
-//! count when the frames came at the default 72 Hz, neither fewer nor more (`dv2_rate`,
-//! Q-138, #269), and the first eye's statistics saw the probe. The driver judges the
-//! validation layer's messages (Q-123).
+//! Dv-2 (§3.4, D-4 at the running tier's sort mode, Q-399, spike S5): the probe the
+//! driver pushed as `dv/probe.safetensors` loads through `SplatLoad`, is kept 1 m ahead
+//! of the left eye once both eyes are splat cameras (kept there each frame), and is
+//! drawn by both for 10 s; PASS with the frame count when the frames came at the default
+//! 72 Hz, neither fewer nor more (`dv2_rate`, Q-138, #269), and the first eye's
+//! statistics saw the probe. The driver judges the validation layer's messages (Q-123).
 
 use std::time::{Duration, Instant};
 

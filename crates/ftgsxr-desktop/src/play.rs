@@ -200,7 +200,7 @@ pub(crate) fn run(m: &ArgMatches) -> ExitCode {
     app.insert_resource(SettingsPath(path))
         .insert_resource(SettingsRes(settings))
         .insert_resource(SettingsWarnings(warnings));
-    if let Err(code) = add_plugins(&mut app, group, m) {
+    if let Err(code) = add_plugins(&mut app, group, m, &tier) {
         return code;
     }
     app.add_plugins(AppPlugin {
@@ -212,23 +212,32 @@ pub(crate) fn run(m: &ArgMatches) -> ExitCode {
     exit_code(app.run())
 }
 
-/// `DefaultPlugins`, through `add_xr` with `--xr` (Q-120, Q-121); `Err` with exit 2 when
-/// `--xr` finds no OpenXR runtime (§1.7, Q-162), E-XR-RUNTIME on standard error.
+/// `play --xr`'s `XrPlugin`: passthrough and hands wanted, the eyes at the running
+/// tier's sort mode (Q-121, Q-399).
+#[cfg(feature = "xr")]
+fn xr_plugin(tier: &QualityTier) -> ftgsxr_xr::XrPlugin {
+    ftgsxr_xr::XrPlugin {
+        // §1.9 (#568): the layer where the runtime offers it.
+        passthrough: true,
+        hands: true,
+        // Q-399
+        sort: tier.sort_mode,
+    }
+}
+
+/// `DefaultPlugins`, through `add_xr` with `--xr` (Q-120, Q-121) and the running tier
+/// `tier`; `Err` with exit 2 when `--xr` finds no OpenXR runtime (§1.7, Q-162),
+/// E-XR-RUNTIME on standard error.
 // Q-162
 #[cfg(feature = "xr")]
 fn add_plugins(
     app: &mut App,
     group: bevy::app::PluginGroupBuilder,
     m: &ArgMatches,
+    tier: &QualityTier,
 ) -> Result<(), ExitCode> {
     if m.get_flag("xr") {
-        let xr = ftgsxr_xr::XrPlugin {
-            // §1.9 (#568): the layer where the runtime offers it.
-            passthrough: true,
-            hands: true,
-            sort: ftgsxr_app::SortMode::PerView,
-        };
-        app.add_plugins(ftgsxr_xr::add_xr(group, xr));
+        app.add_plugins(ftgsxr_xr::add_xr(group, xr_plugin(tier)));
         if let Some(e) = ftgsxr_xr::runtime_unavailable(app) {
             eprintln!("ftgsxr: {}: {}", e.code(), e.user_text());
             return Err(ExitCode::from(2));
@@ -245,6 +254,7 @@ fn add_plugins(
     app: &mut App,
     group: bevy::app::PluginGroupBuilder,
     _: &ArgMatches,
+    _: &QualityTier,
 ) -> Result<(), ExitCode> {
     app.add_plugins(group);
     Ok(())
@@ -268,6 +278,23 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// Q-399 (#727): `play --xr` gives the eyes the running tier's sort mode, so `--tier`
+    /// `quest-balanced` sorts shared-center (D-4, §1.12) and the desktop tier per view.
+    #[cfg(feature = "xr")]
+    #[test]
+    fn xr_plugin_takes_the_running_tiers_sort_mode() {
+        use ftgsxr_app::SortMode;
+        for (name, sort) in [
+            ("quest-balanced", SortMode::SharedCenter),
+            ("desktop", SortMode::PerView),
+        ] {
+            let tier = QualityTier::by_name(name).unwrap();
+            let xr = xr_plugin(&tier);
+            assert_eq!(xr.sort, sort, "{name}");
+            assert!(xr.passthrough && xr.hands, "{name}");
+        }
     }
 
     #[test]
