@@ -21,6 +21,26 @@ A private `GovernorPlugin`, added last by `AppPlugin`, feeds `govern` each new s
 
 **The live tier switch.** The Display tab's tier picker shows the running tier, and the Settings tab's `[general] tier` the saved one; choosing a tier in either is a pick, a crate-private `TierPick` message that `persist` writes along with `[general] tier` (saved by Q-207's debounce). The last pick of a frame, when `QualityTier::by_name` knows it and it is not the running tier, becomes the running tier, `SplatTierState::of` the new tier with its knobs at the tier's own values, in `PreUpdate` before the library's reload; the render plugin and the library follow (`ftgsxr-render/pipeline.md`, `library.md`, Q-238, Q-239). A pick switches even when it equals the saved tier, so the saved tier can be picked back after a `--tier` override; nothing else switches, so the override holds until the user picks a tier (Q-240, #402).
 
+## On the device
+
+R-17 runs on the headset as well as on the desktop's GPU (M-8, #730, Q-T730.1). The device check needs E16's full ladder with a refresh rate from a real runtime: `quest-balanced`, whose knobs start at render scale 1.0, medium foveation, SH cap 2 and shared-center sort. With `budget_override_ms` at 0.1 the knobs step down in this order:
+
+1. The render scale, from 1.0 to 0.6 in four steps.
+2. The foveation, from medium to high.
+3. The SH cap, from 2 to 1.
+
+Each step comes after 10 blocks over budget. The sort mode never steps, because the tier already sorts shared-center. At 1,000 the knobs step back up in the reverse order, each after 120 blocks under budget.
+
+**How the check runs.** The work is split between three parts:
+
+- **The quest runner** `r17` (`ftgsxr-quest`) loads the probe and keeps it ahead of the left eye. It holds the governor off until the session runs. Then it spawns the marker `ftgsxr-test: r17` (Q-308).
+- **`ftgsxr_xr`'s private `display::r17`** does the rest. It reads `SplatTierState`, which the quest crate cannot name. It runs in `Last`, after this module's `Update`, and counts blocks with the governor's own rule, so each step's count is exact. After a warm-up with the governor off, it turns the governor on with the override in the same frame, so both streaks start at zero. It logs each knob change with its block count.
+- **The host driver** `dv_r17_governor.rs` reads those lines and checks the foveation and swapchain lines from `display` (`ftgsxr-xr/display.md`). A foveation step reaches the swapchain through `display`'s `follow` (`foveation High applied`, then `Medium`). The render scale only sizes the splat layer, so no swapchain is re-created during the run (§1.12 at revision 56).
+
+**What can stop the run.** The device keeps its saved settings between tests, and three of them can break the check. `[general] governor = false` makes `follow_settings` turn the governor off at the first step. A saved `[xr] foveation`, or a runtime without foveation, takes the foveation knob off the ladder. The run checks all three before it starts and fails with the reason. It never writes the settings, because `persist` would save the change on the device.
+
+**GPU time.** The check depends on the device's GPU times (f_gpu). Spike S1 found timestamp queries on the XR device, so f_gpu needs no fallback (#718). The warm-up fails the run if a block's GPU time is not over 1.05 × 0.1 ms. For a heavier model than P1, set `FTGSXR_R17_ROWS`.
+
 ## Q-n rows relied on
 
-Q-153, Q-178, Q-179, Q-218, Q-238, Q-239, Q-240, Q-404, Q-416.
+Q-153, Q-178, Q-179, Q-218, Q-238, Q-239, Q-240, Q-308, Q-404, Q-416, Q-T730.1.
