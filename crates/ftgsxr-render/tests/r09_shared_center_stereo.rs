@@ -198,7 +198,7 @@ fn gpu_r09_probe_p10_shared_center_stereo() {
 // flag (Q-109).
 #[test]
 #[ignore = "gpu"]
-fn gpu_r09_half_records_shared_center_stereo_against_per_view() {
+fn gpu_r09_shared_center_stereo_against_per_view_with_half_records() {
     let _layer = layer_messages(); // R-16, Q-105
     let tier = QualityTier {
         half_records: true,

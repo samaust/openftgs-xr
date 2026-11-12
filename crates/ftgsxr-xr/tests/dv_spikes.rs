@@ -43,7 +43,7 @@ fn after<'a>(lines: &'a [String], needle: &str) -> Vec<&'a str> {
 
 #[test]
 #[ignore = "dv"]
-fn dv_spikes_s1_timestamps_and_counters_s2_foveation_gpu_times() {
+fn dv_spikes_s1_timestamps_and_counters_s2_foveation_timings() {
     let apk = apk();
     device();
     install(&apk);

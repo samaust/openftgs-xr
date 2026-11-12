@@ -1414,7 +1414,7 @@ mod tests {
     /// included, keep the near median (a neighbourhood short of (1, 1) would give far).
     #[test]
     #[ignore = "gpu"]
-    fn gpu_median_pass_clamp_reads_only_texels_inside_the_image_at_its_border() {
+    fn gpu_median_pass_clamp_samples_only_texels_inside_the_image_at_its_border() {
         let size = (5, 4);
         let near = |_, _| NEAR;
         let far = |_, _| FAR;

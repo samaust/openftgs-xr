@@ -15,7 +15,7 @@ use ftgsxr_testkit::{gpu_context, layer_messages, random_model};
 
 #[test]
 #[ignore = "gpu"]
-fn gpu_shared_center_records_keep_rows_visible_in_either_eye() {
+fn gpu_shared_center_record_buffer_keeps_rows_visible_in_either_eye() {
     let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let model = random_model(0x4_04, 20_000, 2);
@@ -150,7 +150,7 @@ fn find(records: &[SharedRecordView], used: &mut [bool], want: Vec3) -> Option<u
 /// mode `shared` is empty.
 #[test]
 #[ignore = "gpu"]
-fn gpu_frame_contents_shared_holds_the_shared_records_against_the_oracle() {
+fn gpu_frame_contents_shared_matches_the_oracle_in_the_shared_records() {
     let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let model = random_model(0x7_21, 4_000, 2);

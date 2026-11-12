@@ -38,7 +38,7 @@ fn pulled(tmp: &Path, name: &str, sha256: [u8; 32]) -> Vec<(String, RenderImage)
 
 #[test]
 #[ignore = "dv"]
-fn dv_r10_tier_bounds_on_the_quest() {
+fn dv_r10_quest_tier_bounds() {
     let apk = apk();
     let tmp = std::env::temp_dir().join(format!("ftgsxr-dv-r10-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("a scratch directory");
