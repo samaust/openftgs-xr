@@ -44,6 +44,7 @@ fn run(name: &str, timeout: Duration) -> Value {
     pull(&format!("{name}.json"), &local);
     let text = std::fs::read_to_string(&local).expect("the pulled file");
     let _ = std::fs::remove_file(&local);
+    dv_support::keep(&format!("{name}.json"), &text);
     println!("{text}");
     let file: Value = serde_json::from_str(&text).expect("well-formed JSON");
     // Q-67, Q-103's top level.
@@ -77,6 +78,8 @@ fn run(name: &str, timeout: Duration) -> Value {
         );
         assert!(r["measure"].is_string() && r["unit"].is_string(), "{r}");
     }
+    // Q-T734.1: the host compares the pulled file with its stored `.quest.json`.
+    dv_support::compare_with_baseline(&text);
     file
 }
 
