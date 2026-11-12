@@ -7,6 +7,7 @@
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
 
 use super::frame::FrameSet;
+use super::passes::CompileTimes;
 use super::tier::SortKey;
 
 /// `sort_count.wgsl`: one block's histogram of the pass's digit.
@@ -70,7 +71,7 @@ fn entry(binding: u32, ty: wgpu::BufferBindingType, dynamic: bool) -> wgpu::Bind
 impl RadixSort {
     /// The three kernels for `key`'s passes on `device`; errors surface in the caller's
     /// validation scope.
-    pub(crate) fn new(device: &wgpu::Device, key: SortKey) -> RadixSort {
+    pub(crate) fn new(device: &wgpu::Device, key: SortKey, times: &mut CompileTimes) -> RadixSort {
         let read = wgpu::BufferBindingType::Storage { read_only: true };
         let write = wgpu::BufferBindingType::Storage { read_only: false };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -91,21 +92,25 @@ impl RadixSort {
             immediate_size: 0,
         });
         let constants = [("SORT_BLOCK", f64::from(SORT_BLOCK))];
-        let pipeline = |name: &str, source: &str, entry: &str| {
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(name),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
+        let mut pipeline = |name: &'static str, source: &str, entry: &str, timed: &'static str| {
+            let module = times.time(name.trim_start_matches("ftgsxr "), || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(name),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                })
             });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(name),
-                layout: Some(&pipeline_layout),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &constants,
-                    ..Default::default()
-                },
-                cache: None,
+            times.time(timed, || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(name),
+                    layout: Some(&pipeline_layout),
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..Default::default()
+                    },
+                    cache: None,
+                })
             })
         };
         let shifts = shifts(key);
@@ -127,9 +132,19 @@ impl RadixSort {
         params.unmap();
         RadixSort {
             device: device.clone(),
-            count: pipeline("ftgsxr sort_count.wgsl", SORT_COUNT_WGSL, "count"),
-            scan: pipeline("ftgsxr sort_scan.wgsl", SORT_SCAN_WGSL, "scan"),
-            scatter: pipeline("ftgsxr sort_scatter.wgsl", SORT_SCATTER_WGSL, "scatter"),
+            count: pipeline(
+                "ftgsxr sort_count.wgsl",
+                SORT_COUNT_WGSL,
+                "count",
+                "sort_count",
+            ),
+            scan: pipeline("ftgsxr sort_scan.wgsl", SORT_SCAN_WGSL, "scan", "sort_scan"),
+            scatter: pipeline(
+                "ftgsxr sort_scatter.wgsl",
+                SORT_SCATTER_WGSL,
+                "scatter",
+                "sort_scatter",
+            ),
             layout,
             params,
             shifts,
@@ -260,7 +275,7 @@ mod tests {
             0,
             &bytes(&[blocks, 1, 1, blocks.min(1), 1, 1]),
         );
-        let sort = RadixSort::new(dev.device(), key);
+        let sort = RadixSort::new(dev.device(), key, &mut CompileTimes::default());
         let mut enc = dev
             .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });

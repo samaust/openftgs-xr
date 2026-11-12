@@ -7,8 +7,9 @@
 //! statistics two frames late (§1.4 stage 8).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use ::bevy::app::SubApp;
 use ::bevy::camera::visibility::InheritedVisibility;
@@ -138,7 +139,25 @@ impl Warming {
     /// The passes `key`'s thread compiled, waiting for it if it is not done; none when no
     /// thread compiles `key` or its thread panicked.
     fn take(&mut self, key: &(TextureFormat, bool)) -> Option<Result<SplatPasses, RenderError>> {
-        self.0.remove(key).and_then(|h| h.join().ok())
+        let handle = self.0.remove(key)?;
+        let ready = handle.is_finished();
+        let start = Instant::now();
+        let joined = handle.join();
+        // #736: how long the first view of `key` waited for its passes.
+        info!(
+            "splat passes ({}): the first view waited {:.3} s for the warm-up{}",
+            sort_name(key.1),
+            start.elapsed().as_secs_f64(),
+            if ready { " (ready)" } else { "" }
+        );
+        joined
+            .inspect_err(|_| {
+                warn!(
+                    "the splat passes' warm-up thread ({}) panicked; compiling them now",
+                    sort_name(key.1)
+                );
+            })
+            .ok()
     }
 }
 
@@ -671,7 +690,30 @@ fn compile(
 ) -> Result<SplatPasses, RenderError> {
     let mut view_tier = tier.clone();
     view_tier.sort_mode = sort;
-    SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
+    let start = Instant::now();
+    let passes = SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier);
+    // #736: each compile's time, per shader module and pipeline, so a device run reads
+    // where the start-up's compile goes.
+    if let Ok(p) = &passes {
+        let times = p.compile_times();
+        info!(
+            "splat passes ({}, {layer_format:?}) compiled in {:.3} s on {:?} ({:.3} s made): {times}",
+            sort_name(sort == SortMode::SharedCenter),
+            start.elapsed().as_secs_f64(),
+            thread::current().name().unwrap_or("an unnamed thread"),
+            times.total().as_secs_f64(),
+        );
+    }
+    passes
+}
+
+/// A passes key's sort mode, for the log.
+fn sort_name(shared_center: bool) -> &'static str {
+    if shared_center {
+        "shared center"
+    } else {
+        "per view"
+    }
 }
 
 /// Starts compiling the `LinearOver` passes of both sort modes, each on a thread of its
@@ -680,22 +722,52 @@ fn compile(
 /// splat camera draws, nor in the frame the governor first switches the sort mode.
 /// `prepare_view` takes a key's result, waiting for it if it is not ready, so the first
 /// frame still draws; a thread that cannot start leaves its key to compile there. A
-/// thread not taken by then is joined when `Views` drops or resets (Q-381).
-// Q-325, Q-381
+/// thread not taken by then is joined when `Views` drops or resets (Q-381). The running
+/// tier's sort mode compiles first and the other once it is done (Q-437), so the
+/// passes the cameras take first do not share the CPU with the others'.
+// Q-325, Q-381, Q-437
 fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
-    for sort in [SortMode::PerView, SortMode::SharedCenter] {
-        let dev = Arc::clone(dev);
-        let tier = tier.clone();
-        // `warm_up_teardown`'s test finds the threads by this name.
-        let spawned = thread::Builder::new()
-            .name("ftgsxr splat passes".into())
-            .spawn(move || compile(&dev, LAYER_FORMAT, &tier, sort));
-        match spawned {
-            Ok(handle) => {
-                views.warming.insert(pass_key(LAYER_FORMAT, sort), handle);
-            }
-            Err(e) => warn!("the splat passes' warm-up thread did not start: {e}"),
+    let [first, second] = warm_up_order(tier.sort_mode);
+    // The first thread drops `done` when its compile ends or unwinds, or when it cannot
+    // start; the second then starts its own.
+    let (done, first_done) = mpsc::channel::<()>();
+    let (d, t) = (Arc::clone(dev), tier.clone());
+    spawn_warm_up(views, first, move || {
+        let passes = compile(&d, LAYER_FORMAT, &t, first);
+        drop(done);
+        passes
+    });
+    let (d, t) = (Arc::clone(dev), tier.clone());
+    spawn_warm_up(views, second, move || {
+        let _ = first_done.recv();
+        compile(&d, LAYER_FORMAT, &t, second)
+    });
+}
+
+/// The order the warm-up compiles the sort modes in: `running`, the tier's, then the
+/// other (Q-437).
+fn warm_up_order(running: SortMode) -> [SortMode; 2] {
+    match running {
+        SortMode::PerView => [SortMode::PerView, SortMode::SharedCenter],
+        SortMode::SharedCenter => [SortMode::SharedCenter, SortMode::PerView],
+    }
+}
+
+/// Starts one warm-up thread, compiling `sort`'s key with `body`.
+fn spawn_warm_up(
+    views: &mut Views,
+    sort: SortMode,
+    body: impl FnOnce() -> Result<SplatPasses, RenderError> + Send + 'static,
+) {
+    // `warm_up_teardown`'s test finds the threads by this name.
+    let spawned = thread::Builder::new()
+        .name("ftgsxr splat passes".into())
+        .spawn(body);
+    match spawned {
+        Ok(handle) => {
+            views.warming.insert(pass_key(LAYER_FORMAT, sort), handle);
         }
+        Err(e) => warn!("the splat passes' warm-up thread did not start: {e}"),
     }
 }
 
@@ -1119,6 +1191,19 @@ mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Q-437: the running tier's sort mode compiles first, the other after it.
+    #[test]
+    fn warm_up_order_puts_the_running_sort_mode_first() {
+        assert_eq!(
+            warm_up_order(SortMode::SharedCenter),
+            [SortMode::SharedCenter, SortMode::PerView]
+        );
+        assert_eq!(
+            warm_up_order(SortMode::PerView),
+            [SortMode::PerView, SortMode::SharedCenter]
+        );
+    }
 
     // Q-233, Q-235: an instance is drawn at the smallest of its loaded degree L, the
     // governor's cap and a replayed request's limit; no limit imposes none, and a limit
