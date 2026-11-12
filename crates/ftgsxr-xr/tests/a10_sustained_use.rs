@@ -83,8 +83,10 @@ fn at_or_above_warning(level: &str) -> bool {
 
 /// A-10's verdict over the record's lines, fed one at a time as logcat gives them.
 ///
-/// The twenty minutes start with the second after the first second in which a model is
-/// loaded, since that second holds the load (Q-T735.1). Every second of the window needs
+/// The twenty minutes start two seconds after the first second whose line reports a model
+/// loaded: that line is written at the first frame of the next second, and the model is
+/// counted once its CPU load is done, before its upload, so the load can reach into the
+/// following second (Q-T735.1). Every second of the window needs
 /// its line (a second without one presented no frame) with at least 71 frames, in
 /// `quest-balanced`; no thermal notification at or above warning may arrive before the
 /// window ends; and the session must report XR\_EXT\_performance\_settings enabled, since
@@ -106,7 +108,7 @@ impl Verdict {
         }
         if let Some(s) = parse_second(line) {
             if self.start.is_none() && s.loaded > 0 {
-                self.start = Some(s.index + 1);
+                self.start = Some(s.index + 2);
             }
             if self.start.is_some_and(|start| s.index >= start) {
                 self.seconds.insert(s.index, s);
@@ -197,10 +199,11 @@ impl Verdict {
             (Some(a), Some(b)) => format!("{}", b.saturating_sub(a)),
             _ => "-".to_owned(),
         };
+        let loaded = judged.iter().map(|s| s.loaded).max().unwrap_or(0);
         let summary = format!(
-            "{} of {SECONDS} seconds recorded; frames per second min {} median {} max {}; \
-             worst frame interval {worst:.1} ms; runtime dropped frames {dropped}; \
-             notifications [{}]",
+            "{} of {SECONDS} seconds recorded; loaded {loaded} primitives; frames per second \
+             min {} median {} max {}; worst frame interval {worst:.1} ms; runtime dropped \
+             frames {dropped}; notifications [{}]",
             judged.len(),
             frames.iter().min().map_or("-".to_owned(), u32::to_string),
             median(&frames).map_or("-".to_owned(), |m| m.to_string()),
@@ -238,8 +241,8 @@ mod verdict {
 
     const ENABLED: &str = "11-12 17:00:00.000  4242  4300 I ftgsxr  : perf settings: XR_EXT_performance_settings enabled";
 
-    /// The session's start, three seconds without a model, the load's second, then
-    /// `seconds` seconds of `frames` each.
+    /// The session's start, three seconds without a model, the load's two slow seconds,
+    /// then `seconds` seconds of `frames` each.
     fn run(seconds: u64, frames: impl Fn(u64) -> u32) -> Verdict {
         let mut v = Verdict::default();
         v.push(ENABLED);
@@ -247,14 +250,15 @@ mod verdict {
             v.push(&second(i, 40, TIER, 0));
         }
         v.push(&second(3, 20, TIER, 1_000_000));
-        for i in 4..4 + seconds {
+        v.push(&second(4, 30, TIER, 1_000_000));
+        for i in 5..5 + seconds {
             v.push(&second(i, frames(i), TIER, 1_000_000));
         }
         v
     }
 
-    /// A-10: a clean twenty minutes passes, the load's slow second and the seconds before
-    /// it left out of the window.
+    /// A-10: a clean twenty minutes passes, the load's two slow seconds and the seconds
+    /// before them left out of the window.
     #[test]
     fn a10_verdict_passes_a_clean_twenty_minutes() {
         let v = run(SECONDS, |_| 72);
@@ -262,6 +266,7 @@ mod verdict {
         let summary = v.verdict().expect("a clean run passes");
         assert!(summary.contains("1200 of 1200 seconds"), "{summary}");
         assert!(summary.contains("min 72"), "{summary}");
+        assert!(summary.contains("loaded 1000000 primitives"), "{summary}");
     }
 
     fn notification(text: &str) -> String {
@@ -279,7 +284,7 @@ mod verdict {
         ] {
             let mut v = run(600, |_| 72);
             v.push(&notification(text));
-            for i in 604..4 + SECONDS {
+            for i in 605..5 + SECONDS {
                 v.push(&second(i, 72, TIER, 1_000_000));
             }
             let e = v.verdict().expect_err(text);
@@ -288,7 +293,7 @@ mod verdict {
         let mut v = run(600, |_| 72);
         v.push(&notification("gpu rendering normal -> warning"));
         v.push(&notification("gpu thermal warning -> normal"));
-        for i in 604..4 + SECONDS {
+        for i in 605..5 + SECONDS {
             v.push(&second(i, 72, TIER, 1_000_000));
         }
         let ok = v.verdict().expect("no thermal warning");
@@ -303,12 +308,12 @@ mod verdict {
             .verdict()
             .expect_err("70 frames");
         assert!(
-            e.contains("1 seconds below 71 frames, the first second 696 with 70"),
+            e.contains("1 seconds below 71 frames, the first second 695 with 70"),
             "{e}"
         );
         assert!(run(SECONDS, |_| 71).verdict().is_ok());
         let mut v = run(100, |_| 72);
-        for i in 105..4 + SECONDS + 1 {
+        for i in 106..5 + SECONDS + 1 {
             v.push(&second(i, 72, TIER, 1_000_000));
         }
         let e = v.verdict().expect_err("a missing second");
