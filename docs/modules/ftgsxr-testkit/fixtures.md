@@ -28,6 +28,7 @@ and over a copy of the committed fixtures with one byte changed.
 | --- | --- | --- | --- |
 | `probes/P1` … `P10`: probe models, render requests, reference renders | `make_probes.py`, from openftgs's harness probe definitions, then `ftgs render --backend reference` | R-1; the readers' U-1, U-4, U-24, U-25 (an openftgs-written renders file) and U-33 | none |
 | `probes/R2_*`: R-2's additional probe models | `make_probes.py` | R-2 | Q-10, Q-11 (the reduced random probe) |
+| `probes/R9_P1` … `R9_P10`: R-9's two-eye requests and their reference renders, against the probe's own model | `make_probes.py` (two eyes 64 mm apart with parallel axes, the midpoint 1 m from the origin on the item camera's optical axis, P6 at its own camera), then `ftgs render --backend reference` | R-9, judged on the `gpu` lane and on the device | Q-402, Q-415 |
 | `probes/R19_transmittance` | `make_probes.py` | R-19 | Q-10 |
 | `probes/R2_overlap_deg3.tau1.3.ply`: a PLY snapshot of a probe model | openftgs's `write_ply` | U-6 | Q-10 |
 | `probes/R7_merged`, `R8_merged` and `merged/`: the pre-posed merged models, the instances and their poses | `merge_posed.py` | R-7, R-8 | Q-12 |
