@@ -28,22 +28,9 @@ const ROWS_VAR: &str = "FTGSXR_SPIKES_ROWS";
 /// before the host read the runner's.
 const LOG_BUFFER: &str = "16M";
 
-/// B-1's every-row-persistent kind (Q-102, Q-420): `random_model(1, ROWS, 0)` with each
-/// transient row made persistent as E3's persistent rows are drawn, opacity in
-/// \[0.6, 0.99\] and duration 2–4 T_τ, each mapped from the row's own uniform opacity draw
-/// in \[0.002, 0.99\], so the model stays the same for the same arguments.
+/// Q-420's model: `dv_support`'s at degree 0.
 pub(crate) fn every_row_persistent(seed: u64, n: usize) -> Model {
-    let mut m = ftgsxr_testkit::random_model(seed, n, 0);
-    let span = m.time.tau1 - m.time.tau0;
-    for i in 0..n {
-        if m.duration[i] >= 2.0 * span {
-            continue;
-        }
-        let u = ((f64::from(m.opacity[i]) - 0.002) / (0.99 - 0.002)).clamp(0.0, 1.0);
-        m.opacity[i] = (0.6 + 0.39 * u) as f32;
-        m.duration[i] = (2.0 + 2.0 * u) * span;
-    }
-    m
+    dv_support::every_row_persistent(seed, n, 0)
 }
 
 /// The lines of `lines` containing `needle`, after it.

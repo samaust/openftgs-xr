@@ -14,8 +14,8 @@ use bevy::window::ExitCondition;
 use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_mod_xr::session::XrState;
 use ftgsxr_app::{
-    AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SettingsRes, SplatLoad, Toast,
-    ToastLevel, load_settings,
+    AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SessionBench, SettingsRes, SplatLoad,
+    Toast, ToastLevel, load_settings,
 };
 use ftgsxr_xr::{XrHands, XrPlugin, add_xr};
 
@@ -76,6 +76,15 @@ pub(crate) fn splat_load(bytes: Vec<u8>) -> SplatLoad {
     }
 }
 
+/// Prints the session benchmark's line once its `result` is filled, then ends the
+/// process (Q-435).
+fn print_session_bench(bench: Res<SessionBench>) {
+    if let Some(result) = &bench.result {
+        info!("{}", bench_runner::session_line(&bench.name, result));
+        std::process::exit(0);
+    }
+}
+
 #[bevy_main]
 fn main() {
     let test = jni_calls::intent_extra(device_test::EXTRA);
@@ -107,7 +116,30 @@ fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
-    if let Some(name) = &bench {
+    // Q-435: B-2, B-7, B-8 and B-9 run in the session, through `SessionBench`.
+    let session_bench = bench
+        .as_deref()
+        .filter(|n| bench_runner::in_session(n))
+        .and_then(|name| {
+            let dv = device_test::dv_dir()?;
+            let model = jni_calls::intent_extra(bench_runner::MODEL_EXTRA);
+            let headset = jni_calls::intent_extra(bench_runner::HEADSET_EXTRA);
+            Some(bench_runner::session_bench(
+                name,
+                &dv,
+                model.as_deref(),
+                headset.as_deref(),
+            ))
+        });
+    if let Some(name) = bench.as_deref()
+        && bench_runner::in_session(name)
+        && session_bench.is_none()
+    {
+        let e = Err("E-IO: no app-external files directory for dv/".to_owned());
+        info!("{}", bench_runner::line(name, &e));
+        std::process::exit(0);
+    }
+    if let Some(name) = bench.as_deref().filter(|n| !bench_runner::in_session(n)) {
         // Q-406: B-3, B-4, B-5 and B-6 before the XR session, as Dv-3 (Q-122), then the process
         // exits.
         let headset = jni_calls::intent_extra(bench_runner::HEADSET_EXTRA);
@@ -171,6 +203,11 @@ fn main() {
     }
     // Q-266: before `AppPlugin`, so panel mode, spatial audio and D-11's auto-fit apply.
     app.insert_resource(Headset);
+    if let Some(b) = session_bench {
+        info!("session bench {}", b.name);
+        app.insert_resource(b)
+            .add_systems(Update, print_session_bench);
+    }
     // Q-163: `SettingsRes` above is left alone by `AppPlugin`.
     let platform = QuestPlatform::new(paths);
     // Q-387: the head's stage pose for the camera's thumbnails, in `Last`, after

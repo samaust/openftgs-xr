@@ -346,9 +346,24 @@ fn gpu_r15_render_writes_the_renders_file() {
 
 #[test]
 fn bench_refuses_a_name_the_desktop_does_not_run() {
-    // Q-103: clap accepts B-1, B-3, B-4, B-5, B-6 and B-9 only; a usage error exits 2.
-    let o = ftgsxr(&["bench", "B-2"]);
+    // Q-103: clap accepts §3.5's names only; a usage error exits 2.
+    let o = ftgsxr(&["bench", "B-10"]);
     assert_eq!(o.status.code(), Some(2));
+}
+
+#[test]
+fn bench_b2_on_the_desktop_names_the_dv_test() {
+    // Q-406, Q-435: B-2, B-7 and B-8 run on the headset, in the session: on the desktop
+    // they are `Input` (exit 2), naming the `dv` test that runs them, before any GPU work.
+    for (name, test) in [("B-2", "dv_b2_"), ("B-7", "dv_b7_"), ("B-8", "dv_b8_")] {
+        let o = ftgsxr(&["bench", name]);
+        assert_eq!(o.status.code(), Some(2), "{name}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains(test) && err.contains("dv_session_bench.rs"),
+            "{name}: {err}"
+        );
+    }
 }
 
 /// `ftgsxr bench` with the baselines' directory `baselines` (Q-103), under the validation
