@@ -38,6 +38,13 @@ impl Rule {
         }
     }
 
+    /// The rule a benchmark file names (`name`'s inverse, Q-440).
+    pub(crate) fn from_name(name: &str) -> Option<Rule> {
+        [Rule::AtLeast, Rule::AtMost, Rule::Within1Percent]
+            .into_iter()
+            .find(|r| r.name() == name)
+    }
+
     pub(crate) fn passes(self, value: f64, limit: f64) -> bool {
         match self {
             Rule::AtLeast => value >= limit,

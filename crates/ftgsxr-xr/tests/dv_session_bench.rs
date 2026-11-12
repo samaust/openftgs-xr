@@ -46,6 +46,20 @@ fn budget_model() -> PathBuf {
 /// Runs the session benchmark `name` on `model` (pushed as `pushed`) and returns its
 /// pulled file, checked well formed.
 fn run(name: &str, model: &std::path::Path, pushed: &str, timeout: Duration) -> Value {
+    let (file, text) = run_unjudged(name, model, pushed, timeout);
+    // Q-440: the host compares the pulled file with its stored `.quest.json`.
+    dv_support::compare_with_baseline(&text);
+    file
+}
+
+/// `run` without the baseline comparison: the pulled file, checked well formed, and its
+/// text (kept under `$FTGSXR_DV_OUT` as `<NAME>.json`).
+fn run_unjudged(
+    name: &str,
+    model: &std::path::Path,
+    pushed: &str,
+    timeout: Duration,
+) -> (Value, String) {
     let apk = apk();
     device();
     install(&apk);
@@ -71,6 +85,7 @@ fn run(name: &str, model: &std::path::Path, pushed: &str, timeout: Duration) -> 
     pull(&format!("{name}.json"), &local);
     let text = std::fs::read_to_string(&local).expect("the pulled file");
     let _ = std::fs::remove_file(&local);
+    dv_support::keep(&format!("{name}.json"), &text);
     let file: Value = serde_json::from_str(&text).expect("well-formed JSON");
     // Q-67, Q-103's top level.
     assert_eq!(file["format"], "ftgsxr-bench");
@@ -92,7 +107,7 @@ fn run(name: &str, model: &std::path::Path, pushed: &str, timeout: Duration) -> 
         assert!(r["measure"].is_string() && r["unit"].is_string(), "{r}");
     }
     assert!(file["budgets"].is_array());
-    file
+    (file, text)
 }
 
 /// The results of `measure` without a `camera` (the setups' figures).
@@ -354,4 +369,192 @@ fn dv_dv5_budgets_p1_p3_p4_on_the_budget_model() {
         })
         .collect();
     assert!(missed.is_empty(), "Dv-5 missed: {}", missed.join("; "));
+}
+
+/// #622's 3,000,000-row `kitchen` model, the sweep's source (Q-441).
+const SWEEP_SOURCE: &str = "kitchen.safetensors";
+
+/// The counts the sweep reduces the source to (Q-409, Q-441).
+const SWEEP_COUNTS: [usize; 6] = [250_000, 500_000, 750_000, 1_000_000, 1_250_000, 1_500_000];
+
+/// The Quest tiers, in §1.12's order.
+const QUEST_TIERS: [&str; 3] = ["quest-high", "quest-balanced", "quest-low"];
+
+/// P-1's limit at 72 Hz (§1.12), the limit every count is held to (Q-409, Q-441).
+const SWEEP_LIMIT_MS: f64 = 12.4;
+
+/// One tier's orbit at the runtime's rate on the model reduced to `n` rows: its
+/// slowest camera's f_gpu and its overflowing cameras, `None` where skipped.
+#[derive(Clone, Debug, PartialEq)]
+struct SweepPoint {
+    n: usize,
+    tier: String,
+    gpu_ms_max: Option<f64>,
+    overflow_cameras: Option<f64>,
+}
+
+/// The sweep's points of one B-2 file, run on the model reduced to `n` rows.
+fn sweep_points(file: &Value, n: usize) -> Vec<SweepPoint> {
+    let figure = |tier: &str, measure: &str| {
+        per_setup(file, measure)
+            .into_iter()
+            .find(|r| {
+                r["setup"]["tier"] == tier
+                    && r["setup"]["view"] == "orbit"
+                    && r["setup"]["refresh_rate"] == "runtime"
+            })
+            .and_then(|r| r["value"].as_f64())
+    };
+    QUEST_TIERS
+        .iter()
+        .map(|tier| SweepPoint {
+            n,
+            tier: (*tier).to_owned(),
+            gpu_ms_max: figure(tier, "gpu_ms_max"),
+            overflow_cameras: figure(tier, "overflow_cameras"),
+        })
+        .collect()
+}
+
+/// Each Quest tier's derived figure (Q-441): the largest count whose orbit at the
+/// runtime's rate holds 12.4 ms with no overflowing camera, `None` when no count does.
+// Q-441
+fn derive_capacities(points: &[SweepPoint]) -> Vec<(String, Option<usize>)> {
+    QUEST_TIERS
+        .iter()
+        .map(|tier| {
+            let held = points
+                .iter()
+                .filter(|p| p.tier == *tier)
+                .filter(|p| {
+                    p.gpu_ms_max.is_some_and(|ms| ms <= SWEEP_LIMIT_MS)
+                        && p.overflow_cameras == Some(0.0)
+                })
+                .map(|p| p.n)
+                .max();
+            ((*tier).to_owned(), held)
+        })
+        .collect()
+}
+
+/// `model`'s rows `rows` (file order), its SH truncated to `degree` (≤ the model's).
+fn reduced(model: &ftgsxr_core::Model, rows: &[u32], degree: u8) -> ftgsxr_core::Model {
+    let k_in = (usize::from(model.sh_degree) + 1).pow(2) * 3;
+    let k_out = (usize::from(degree) + 1).pow(2) * 3;
+    let pick = |i: &u32| *i as usize;
+    let mut m = model.clone();
+    m.position = rows.iter().map(|i| model.position[pick(i)]).collect();
+    m.time_center = rows.iter().map(|i| model.time_center[pick(i)]).collect();
+    m.duration = rows.iter().map(|i| model.duration[pick(i)]).collect();
+    m.velocity = rows.iter().map(|i| model.velocity[pick(i)]).collect();
+    m.scale = rows.iter().map(|i| model.scale[pick(i)]).collect();
+    m.rotation = rows.iter().map(|i| model.rotation[pick(i)]).collect();
+    m.opacity = rows.iter().map(|i| model.opacity[pick(i)]).collect();
+    m.sh = rows
+        .iter()
+        .flat_map(|i| {
+            model.sh[pick(i) * k_in..pick(i) * k_in + k_out]
+                .iter()
+                .copied()
+        })
+        .collect();
+    m.sh_degree = degree;
+    m
+}
+
+#[test]
+#[ignore = "dv"]
+fn dv_b2_capacity_sweep_on_the_3m_kitchen() {
+    // Q-409's alternative (owner, 2026-11-12, #734), Q-441: B-2 on #622's 3 M kitchen
+    // reduced by D-13's rule to each count at degree 2; each tier's derived figure is
+    // printed for the owner, not judged: the tier table and §1.12 are unchanged.
+    let root = std::env::var_os("OPENFTGS_DATASETS")
+        .expect("$OPENFTGS_DATASETS names the datasets (#622's kitchen, Q-441)");
+    let source = PathBuf::from(root).join("xr-fixtures").join(SWEEP_SOURCE);
+    let model = ftgsxr_core::open_model(&source).expect("#622's kitchen model");
+    assert!(model.sh_degree >= 2, "a source of degree 2 or more");
+    let dir = std::env::temp_dir().join(format!("ftgsxr-dv-sweep-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a temporary directory");
+    let mut points = Vec::new();
+    for n in SWEEP_COUNTS {
+        assert!(n <= model.position.len(), "{n} rows of the source");
+        let rows = ftgsxr_core::reduce_to_budget(&model, n);
+        let path = dir.join("kitchen_sweep.safetensors");
+        write_exchange(&path, &reduced(&model, &rows, 2)).expect("the reduced model is written");
+        let (file, text) = run_unjudged(
+            "B-2",
+            &path,
+            "kitchen_sweep.safetensors",
+            Duration::from_secs(2 * 3600),
+        );
+        dv_support::keep(&format!("B-2.sweep-{n}.json"), &text);
+        print(&file);
+        let p = sweep_points(&file, n);
+        for q in &p {
+            println!(
+                "sweep N = {n}: {} orbit f_gpu max {:?} ms, overflowing cameras {:?}",
+                q.tier, q.gpu_ms_max, q.overflow_cameras
+            );
+        }
+        points.extend(p);
+    }
+    std::fs::remove_dir_all(&dir).ok();
+    for (tier, held) in derive_capacities(&points) {
+        match held {
+            Some(n) => println!("derived: {tier} holds {SWEEP_LIMIT_MS} ms up to N = {n}"),
+            None => println!(
+                "derived: {tier} holds {SWEEP_LIMIT_MS} ms at no swept count (below {})",
+                SWEEP_COUNTS[0]
+            ),
+        }
+    }
+}
+
+#[test]
+fn derive_capacities_takes_the_largest_count_that_holds() {
+    // Q-441: a count holds for a tier when its orbit at the runtime's rate is at most
+    // 12.4 ms with no overflowing camera; the derived figure is the largest that holds,
+    // None ("below the smallest count") when none does.
+    let point = |n: usize, tier: &str, ms: f64, overflow: f64| SweepPoint {
+        n,
+        tier: tier.to_owned(),
+        gpu_ms_max: Some(ms),
+        overflow_cameras: Some(overflow),
+    };
+    let points = [
+        point(250_000, "quest-low", 9.0, 0.0),
+        point(500_000, "quest-low", 12.4, 0.0),
+        point(750_000, "quest-low", 13.0, 0.0),
+        point(250_000, "quest-balanced", 11.0, 0.0),
+        point(500_000, "quest-balanced", 12.0, 1.0),
+        point(250_000, "quest-high", 20.0, 0.0),
+        SweepPoint {
+            n: 500_000,
+            tier: "quest-high".into(),
+            gpu_ms_max: None,
+            overflow_cameras: None,
+        },
+    ];
+    assert_eq!(
+        derive_capacities(&points),
+        vec![
+            ("quest-high".to_owned(), None),
+            ("quest-balanced".to_owned(), Some(250_000)),
+            ("quest-low".to_owned(), Some(500_000)),
+        ]
+    );
+}
+
+#[test]
+fn reduced_keeps_the_rows_in_file_order_and_the_low_sh_coefficients() {
+    // Q-441: rows 2 and 0 of a degree-1 model at degree 0 keep each row's fields and
+    // its first coefficient's RGB (E4's coefficient-major order, RGB innermost).
+    let mut m = ftgsxr_testkit::random_model(1, 3, 1);
+    m.sh = (0..36).map(|v| v as f32).collect();
+    let r = reduced(&m, &[0, 2], 0);
+    assert_eq!(r.sh_degree, 0);
+    assert_eq!(r.position, vec![m.position[0], m.position[2]]);
+    assert_eq!(r.opacity, vec![m.opacity[0], m.opacity[2]]);
+    assert_eq!(r.duration, vec![m.duration[0], m.duration[2]]);
+    assert_eq!(r.sh, vec![0.0, 1.0, 2.0, 24.0, 25.0, 26.0]);
 }

@@ -1,0 +1,126 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-5",
+  "machine": {
+    "gpu": "Adreno (TM) 740",
+    "driver": "unknown",
+    "os": "unknown",
+    "cpu": "unknown",
+    "threads": 6,
+    "headset": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52641960034500520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys"
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "debug",
+  "results": [
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 9999916,
+        "tier": "quest-balanced"
+      },
+      "measure": "load_s",
+      "value": 0.068322455,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 9999916,
+        "tier": "quest-balanced"
+      },
+      "measure": "s_per_100mb",
+      "value": 0.6832302891344287,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 99999940,
+        "tier": "quest-balanced"
+      },
+      "measure": "load_s",
+      "value": 0.728887156,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 99999940,
+        "tier": "quest-balanced"
+      },
+      "measure": "s_per_100mb",
+      "value": 0.7288875933325559,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 499999916,
+        "tier": "quest-balanced"
+      },
+      "measure": "load_s",
+      "value": 4.285615011,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 499999916,
+        "tier": "quest-balanced"
+      },
+      "measure": "s_per_100mb",
+      "value": 0.8571231461966886,
+      "unit": "s"
+    }
+  ],
+  "budgets": [
+    {
+      "id": "P-3",
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 9999916,
+        "tier": "quest-balanced"
+      },
+      "measure": "s_per_100mb",
+      "rule": "at_most",
+      "limit": 1,
+      "value": 0.6832302891344287,
+      "pass": true
+    },
+    {
+      "id": "P-3",
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 99999940,
+        "tier": "quest-balanced"
+      },
+      "measure": "s_per_100mb",
+      "rule": "at_most",
+      "limit": 1,
+      "value": 0.7288875933325559,
+      "pass": true
+    },
+    {
+      "id": "P-3",
+      "setup": {
+        "model": "synthetic",
+        "file_bytes": 499999916,
+        "tier": "quest-balanced"
+      },
+      "measure": "s_per_100mb",
+      "rule": "at_most",
+      "limit": 1,
+      "value": 0.8571231461966886,
+      "pass": true
+    }
+  ],
+  "baseline": null,
+  "notes": [
+    "B-5 reads files the page cache may hold (a synthetic file was just written; a cold read needs the cache dropped), so its load times are a lower bound (Q-102)"
+  ]
+}

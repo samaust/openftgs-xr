@@ -47,7 +47,18 @@ pub struct BenchReport {
 /// same id, setup and measure, one line each (§3.5, Q-103). A budget the baseline
 /// lacks is not compared, nor is a `within_1_percent` budget (B-6), whose own budget is
 /// the check.
+#[cfg(test)]
 pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
+    compare_json(
+        &budgets.iter().map(Budget::to_json).collect::<Vec<_>>(),
+        baseline,
+    )
+}
+
+/// `compare` over budgets as a benchmark file writes them (`Budget::to_json`'s members),
+/// so a run's budgets and a written file's are compared by the one rule (Q-103,
+/// Q-440). A budget whose `rule` is not one of Q-103's is not compared.
+fn compare_json(budgets: &[Json], baseline: &Json) -> Vec<String> {
     let old = baseline
         .get("budgets")
         .and_then(Json::as_array)
@@ -55,24 +66,25 @@ pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
     budgets
         .iter()
         .filter_map(|b| {
+            let id = b.get("id")?.as_str()?;
+            let measure = b.get("measure")?.as_str()?;
+            let setup = b.get("setup")?;
+            let rule = Rule::from_name(b.get("rule")?.as_str()?)?;
+            let value = b.get("value")?.as_f64()?;
             let base = old
                 .iter()
                 .find(|o| {
-                    o.get("id").and_then(Json::as_str) == Some(b.id)
-                        && o.get("measure").and_then(Json::as_str) == Some(b.measure)
-                        && o.get("setup").is_some_and(|s| s.same(&b.setup))
+                    o.get("id").and_then(Json::as_str) == Some(id)
+                        && o.get("measure").and_then(Json::as_str) == Some(measure)
+                        && o.get("setup").is_some_and(|s| s.same(setup))
                 })?
                 .get("value")?
                 .as_f64()?;
-            b.rule.regressed(b.value, base).then(|| {
+            rule.regressed(value, base).then(|| {
                 format!(
-                    "{} {} {}: {} against the baseline's {} ({:+.1} %)",
-                    b.id,
-                    b.measure,
-                    b.setup.compact(),
-                    b.value,
-                    base,
-                    100.0 * (b.value / base - 1.0)
+                    "{id} {measure} {}: {value} against the baseline's {base} ({:+.1} %)",
+                    setup.compact(),
+                    100.0 * (value / base - 1.0)
                 )
             })
         })
@@ -85,6 +97,22 @@ pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
 // Q-103
 pub(crate) fn compare_against(
     budgets: &[Budget],
+    profile: &str,
+    gpu: &str,
+    baseline: &Json,
+) -> Result<Vec<String>, String> {
+    compare_json_against(
+        &budgets.iter().map(Budget::to_json).collect::<Vec<_>>(),
+        profile,
+        gpu,
+        baseline,
+    )
+}
+
+/// `compare_against` over a written file's budgets (Q-103, Q-440).
+// Q-103
+fn compare_json_against(
+    budgets: &[Json],
     profile: &str,
     gpu: &str,
     baseline: &Json,
@@ -106,13 +134,76 @@ pub(crate) fn compare_against(
         })
         .collect();
     if differ.is_empty() {
-        Ok(compare(budgets, baseline))
+        Ok(compare_json(budgets, baseline))
     } else {
         Err(format!(
             "baseline not compared: {} (Q-103)",
             differ.join(", ")
         ))
     }
+}
+
+/// Compares a written `ftgsxr-bench` file `json` (a headset's file pulled by the host,
+/// say) with its stored baseline in `baselines` by Q-103's rule: `<bench>.quest.json`
+/// when the file has a `machine.headset`, else `<bench>.json`. The report's `json` is the
+/// file with `baseline` set to the path compared against (null when there is none or it
+/// was not compared) and, when the profile or GPU differ, Q-103's note added to `notes`;
+/// `regressions` lists the budgets more than 10 % worse. A file or baseline that is not
+/// well-formed `ftgsxr-bench` JSON is `Input` (E-JSON).
+// Q-440
+pub fn compare_bench_file(json: &str, baselines: &Path) -> Result<BenchReport, HeadlessError> {
+    let malformed =
+        |why: String| HeadlessError::Input(format!("E-JSON: the benchmark file: {why}"));
+    let mut file = Json::parse(json).map_err(malformed)?;
+    let bench = file
+        .get("bench")
+        .and_then(Json::as_str)
+        .filter(|_| file.get("format").and_then(Json::as_str) == Some("ftgsxr-bench"))
+        .ok_or_else(|| malformed("not an ftgsxr-bench file".into()))?
+        .to_owned();
+    let headset = file
+        .get("machine")
+        .and_then(|m| m.get("headset"))
+        .is_some_and(|h| h.as_str().is_some());
+    let name = if headset {
+        format!("{bench}.quest.json")
+    } else {
+        format!("{bench}.json")
+    };
+    let budgets = file
+        .get("budgets")
+        .and_then(Json::as_array)
+        .ok_or_else(|| malformed("no budgets".into()))?
+        .to_vec();
+    let profile = file.get("profile").and_then(Json::as_str).unwrap_or("");
+    let gpu = file
+        .get("machine")
+        .and_then(|m| m.get("gpu"))
+        .and_then(Json::as_str)
+        .unwrap_or("");
+    let (baseline, regressions, note) = match read_baseline(&baselines.join(&name))? {
+        Some((path, parsed)) => match compare_json_against(&budgets, profile, gpu, &parsed) {
+            Ok(regressions) => (Json::str(path.display().to_string()), regressions, None),
+            Err(note) => (Json::Null, Vec::new(), Some(note)),
+        },
+        None => (Json::Null, Vec::new(), None),
+    };
+    if let Json::Obj(members) = &mut file {
+        for (key, value) in members.iter_mut() {
+            match key.as_str() {
+                "baseline" => *value = baseline.clone(),
+                "notes" => {
+                    if let (Json::Arr(notes), Some(n)) = (value, &note) {
+                        notes.push(Json::str(n.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut json = file.pretty();
+    json.push('\n');
+    Ok(BenchReport { json, regressions })
 }
 
 /// `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5, Q-67): runs the

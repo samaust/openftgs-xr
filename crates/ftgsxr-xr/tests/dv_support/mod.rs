@@ -423,3 +423,45 @@ pub fn wait_for(line: &str, timeout: Duration) -> bool {
     }
     false
 }
+
+/// The workspace's stored baselines (Q-103, Q-406).
+pub fn baselines() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/baselines")
+}
+
+/// Compares a pulled benchmark file with its stored `.quest.json` baseline (§3.5's 10 %
+/// rule, Q-103, Q-440), prints the baseline compared against and any note, and fails
+/// when a budgeted figure regressed.
+// Q-440
+pub fn compare_with_baseline(text: &str) {
+    let report = ftgsxr_app::compare_bench_file(text, &baselines())
+        .unwrap_or_else(|e| panic!("the pulled file compares with its baseline: {e}"));
+    let file: serde_json::Value = serde_json::from_str(&report.json).expect("well-formed JSON");
+    println!("baseline compared against: {}", file["baseline"]);
+    if let Some(notes) = file["notes"].as_array() {
+        for n in notes.iter().filter_map(|n| n.as_str()) {
+            if n.starts_with("baseline not compared") {
+                println!("note: {n}");
+            }
+        }
+    }
+    for r in &report.regressions {
+        println!("regression: {r}");
+    }
+    assert!(
+        report.regressions.is_empty(),
+        "{} budgeted figures more than 10 % worse than the stored baseline (§3.5)",
+        report.regressions.len()
+    );
+}
+
+/// Keeps a copy of a pulled file as `<$FTGSXR_DV_OUT>/<file>` when the variable names a
+/// directory, so a recorded run's file outlives the driver (the drivers remove their own
+/// copy); nothing otherwise.
+pub fn keep(file: &str, text: &str) {
+    if let Some(dir) = std::env::var_os("FTGSXR_DV_OUT").filter(|d| !d.is_empty()) {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("$FTGSXR_DV_OUT can be made");
+        std::fs::write(dir.join(file), text).expect("the kept copy is written");
+    }
+}

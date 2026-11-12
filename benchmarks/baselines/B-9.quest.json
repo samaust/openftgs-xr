@@ -1,0 +1,54 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-9",
+  "machine": {
+    "gpu": "Adreno (TM) 740",
+    "driver": "unknown",
+    "os": "unknown",
+    "cpu": "unknown",
+    "threads": 3,
+    "headset": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52641960034500520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys"
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "debug",
+  "results": [
+    {
+      "setup": {
+        "model": "1fe2ae89b352243f4adbee998ff7565318d86b00ad30ee957c5bf5c9a9671fbc",
+        "n": 100000,
+        "tier": "quest-balanced",
+        "width": 1680,
+        "height": 1760,
+        "ui": true,
+        "run": "first"
+      },
+      "measure": "uploaded_s",
+      "value": 1.4067242549999999,
+      "unit": "s"
+    },
+    {
+      "setup": {
+        "model": "1fe2ae89b352243f4adbee998ff7565318d86b00ad30ee957c5bf5c9a9671fbc",
+        "n": 100000,
+        "tier": "quest-balanced",
+        "width": 1680,
+        "height": 1760,
+        "ui": true,
+        "run": "first"
+      },
+      "measure": "first_frame_s",
+      "value": 1.856297946,
+      "unit": "s"
+    }
+  ],
+  "budgets": [],
+  "baseline": null,
+  "notes": [
+    "B-9 on the headset times one startup per launch, from the time plugin's start (App::new()'s first plugins) to the first frame drawn after the probe's Uploaded, the update two before the statistics first count a splat (Q-222, Q-434); the probe was pushed by the host, so its read may come from the page cache"
+  ]
+}

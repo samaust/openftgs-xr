@@ -19,7 +19,7 @@ use crate::benchmark::json;
 
 mod bench;
 // Q-67, Q-406
-pub use bench::{BenchReport, cmd_bench, cmd_bench_on};
+pub use bench::{BenchReport, cmd_bench, cmd_bench_on, compare_bench_file};
 mod sort_check;
 // Q-146
 pub use sort_check::sort_check;
