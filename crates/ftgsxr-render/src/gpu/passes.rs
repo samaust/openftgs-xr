@@ -5,7 +5,9 @@
 //! stage 4's sort (`sort.rs`), the splat and centers draws of stages 5 and 6 in
 //! `encode_draw`, stage 7's `encode_resolve` and stage 8's `encode_stats`.
 
+use std::fmt;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
 use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, SH_BINDINGS, TrimMode, Vec3};
@@ -117,6 +119,41 @@ pub struct SplatPasses {
     /// E13's non-filtering sampler, bound but unread: the fragment reads the depth image's
     /// 2 × 2 nearest texels with `textureLoad` (Q-340, #601).
     env_sampler: wgpu::Sampler,
+    /// How long each shader module and pipeline took to make (#736).
+    compile_times: CompileTimes,
+}
+
+/// The time each shader module (naga's parse and validation) and each pipeline (the
+/// backend's translation and the driver's compile) took in `SplatPasses::new`, in the
+/// order they were made (#736).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CompileTimes(Vec<(&'static str, Duration)>);
+
+impl CompileTimes {
+    /// Runs `make`, recording its time under `name`.
+    pub(crate) fn time<T>(&mut self, name: &'static str, make: impl FnOnce() -> T) -> T {
+        let start = Instant::now();
+        let made = make();
+        self.0.push((name, start.elapsed()));
+        made
+    }
+
+    /// The sum of the recorded times.
+    pub(crate) fn total(&self) -> Duration {
+        self.0.iter().map(|(_, d)| *d).sum()
+    }
+}
+
+impl fmt::Display for CompileTimes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, (name, d)) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{name} {:.3}", d.as_secs_f64())?;
+        }
+        Ok(())
+    }
 }
 
 fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
@@ -163,11 +200,14 @@ impl SplatPasses {
         }
         let device = dev.device().clone();
         let mode = RecordMode::of(tier);
+        let mut times = CompileTimes::default();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ftgsxr cull.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(cull_source().into()),
+        let module = times.time("cull.wgsl", || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("ftgsxr cull.wgsl"),
+                source: wgpu::ShaderSource::Wgsl(cull_source().into()),
+            })
         });
         // The uniform, the seven whole fields and the SH array's ranges.
         // Q-377
@@ -220,27 +260,40 @@ impl SplatPasses {
             ("RECORD_MODE", f64::from(mode.shader_value())),
             ("SORT_BLOCK", f64::from(SORT_BLOCK)),
         ];
-        let pipeline = |label: &str, layout: &wgpu::PipelineLayout, entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: Some(layout),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &constants,
-                    ..Default::default()
-                },
-                cache: None,
+        let pipeline = |times: &mut CompileTimes,
+                        label: &'static str,
+                        layout: &wgpu::PipelineLayout,
+                        entry: &str| {
+            times.time(label, || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(layout),
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..Default::default()
+                    },
+                    cache: None,
+                })
             })
         };
-        let cull_splats = pipeline("ftgsxr cull splats", &cull_layout, "cull_splats");
-        let cull_centers = pipeline("ftgsxr cull centers", &cull_layout, "cull_centers");
-        let size = pipeline("ftgsxr size", &size_pipeline_layout, "size");
-        let sort = RadixSort::new(&device, tier.sort_key);
-        let (draw_layout, splat) = splat_pipeline(&device, layer_format, depth_format, mode);
-        let centers = centers_pipeline(&device, &draw_layout, layer_format, depth_format, mode);
+        let cull_splats = pipeline(&mut times, "cull_splats", &cull_layout, "cull_splats");
+        let cull_centers = pipeline(&mut times, "cull_centers", &cull_layout, "cull_centers");
+        let size = pipeline(&mut times, "size", &size_pipeline_layout, "size");
+        let sort = RadixSort::new(&device, tier.sort_key, &mut times);
+        let (draw_layout, splat) =
+            splat_pipeline(&device, layer_format, depth_format, mode, &mut times);
+        let centers = centers_pipeline(
+            &device,
+            &draw_layout,
+            layer_format,
+            depth_format,
+            mode,
+            &mut times,
+        );
         let (resolve_layout, resolve, resolve_mesh) =
-            resolve_pipelines(&device, RESOLVE_TARGET_FORMAT, depth_format);
+            resolve_pipelines(&device, RESOLVE_TARGET_FORMAT, depth_format, &mut times);
         let resolve_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("ftgsxr resolve"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -293,7 +346,13 @@ impl SplatPasses {
             resolve_sampler,
             env_placeholder,
             env_sampler,
+            compile_times: times,
         })
+    }
+
+    /// How long each shader module and pipeline took to make (#736).
+    pub(crate) fn compile_times(&self) -> &CompileTimes {
+        &self.compile_times
     }
 
     /// Stages 1–4 of §1.4 for every model at `sort_pose`; `cull_views` holds the view (per view) or both eyes (shared center): a primitive passes when inside either frustum.
@@ -750,10 +809,13 @@ fn splat_pipeline(
     layer_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     mode: RecordMode,
+    times: &mut CompileTimes,
 ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("ftgsxr splat.wgsl"),
-        source: wgpu::ShaderSource::Wgsl(splat_source().into()),
+    let module = times.time("splat.wgsl", || {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ftgsxr splat.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(splat_source().into()),
+        })
     });
     let stages = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
     let storage = |binding| wgpu::BindGroupLayoutEntry {
@@ -813,7 +875,7 @@ fn splat_pipeline(
         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
         operation: wgpu::BlendOperation::Add,
     };
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let descriptor = wgpu::RenderPipelineDescriptor {
         label: Some("ftgsxr splat"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
@@ -855,7 +917,8 @@ fn splat_pipeline(
         }),
         multiview_mask: None,
         cache: None,
-    });
+    };
+    let pipeline = times.time("splat", || device.create_render_pipeline(&descriptor));
     (layout, pipeline)
 }
 
@@ -867,10 +930,13 @@ fn centers_pipeline(
     layer_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     mode: RecordMode,
+    times: &mut CompileTimes,
 ) -> wgpu::RenderPipeline {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("ftgsxr centers.wgsl"),
-        source: wgpu::ShaderSource::Wgsl(CENTERS_WGSL.into()),
+    let module = times.time("centers.wgsl", || {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ftgsxr centers.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(CENTERS_WGSL.into()),
+        })
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ftgsxr centers"),
@@ -878,7 +944,7 @@ fn centers_pipeline(
         immediate_size: 0,
     });
     let constants = [("RECORD_MODE", f64::from(mode.shader_value()))];
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let descriptor = wgpu::RenderPipelineDescriptor {
         label: Some("ftgsxr centers"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
@@ -918,7 +984,8 @@ fn centers_pipeline(
         }),
         multiview_mask: None,
         cache: None,
-    })
+    };
+    times.time("centers", || device.create_render_pipeline(&descriptor))
 }
 
 /// Stage 7's pipelines (`resolve.wgsl`) and their layout: the layer as a filterable float
@@ -932,14 +999,17 @@ fn resolve_pipelines(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
+    times: &mut CompileTimes,
 ) -> (
     wgpu::BindGroupLayout,
     wgpu::RenderPipeline,
     Option<wgpu::RenderPipeline>,
 ) {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("ftgsxr resolve.wgsl"),
-        source: wgpu::ShaderSource::Wgsl(RESOLVE_WGSL.into()),
+    let module = times.time("resolve.wgsl", || {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ftgsxr resolve.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(RESOLVE_WGSL.into()),
+        })
     });
     let fragment = wgpu::ShaderStages::FRAGMENT;
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -984,45 +1054,54 @@ fn resolve_pipelines(
         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
         operation: wgpu::BlendOperation::Add,
     };
-    let make = |entry: &str, compare: wgpu::CompareFunction| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ftgsxr resolve"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_resolve"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
-                format,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(compare),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState {
-                        color: over,
-                        alpha: over,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
+    let make = |times: &mut CompileTimes, name: &'static str, entry: &str, compare| {
+        times.time(name, || {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("ftgsxr resolve"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_resolve"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+                    format,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(compare),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target_format,
+                        blend: Some(wgpu::BlendState {
+                            color: over,
+                            alpha: over,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
         })
     };
-    let pipeline = make("fs_resolve", wgpu::CompareFunction::Equal);
+    let pipeline = make(times, "resolve", "fs_resolve", wgpu::CompareFunction::Equal);
     // Q-101
-    let mesh = depth_format.map(|_| make("fs_resolve_mesh", wgpu::CompareFunction::Less));
+    let mesh = depth_format.map(|_| {
+        make(
+            times,
+            "resolve_mesh",
+            "fs_resolve_mesh",
+            wgpu::CompareFunction::Less,
+        )
+    });
     (layout, pipeline, mesh)
 }
 
@@ -1337,6 +1416,19 @@ const _: () = assert!(MODEL_UNIFORM_BYTES == 64);
 mod tests {
     use super::*;
     use ftgsxr_core::DMat4;
+
+    /// #736: the times are listed in the order they were made, in seconds to the
+    /// millisecond, and their total is their sum.
+    #[test]
+    fn compile_times_list_each_part_in_order() {
+        let mut times = CompileTimes::default();
+        let made = times.time("cull.wgsl", || 7);
+        assert_eq!(made, 7);
+        times.0[0].1 = Duration::from_millis(15);
+        times.0.push(("cull_splats", Duration::from_millis(1250)));
+        assert_eq!(times.to_string(), "cull.wgsl 0.015, cull_splats 1.250");
+        assert_eq!(times.total(), Duration::from_millis(1265));
+    }
 
     /// `cull.wgsl` parses and validates under naga, with every capability wgpu's Vulkan
     /// backend may offer (the device check is `SplatPasses::new`'s).

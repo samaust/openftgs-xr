@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use ::bevy::app::SubApp;
 use ::bevy::camera::visibility::InheritedVisibility;
@@ -138,7 +139,25 @@ impl Warming {
     /// The passes `key`'s thread compiled, waiting for it if it is not done; none when no
     /// thread compiles `key` or its thread panicked.
     fn take(&mut self, key: &(TextureFormat, bool)) -> Option<Result<SplatPasses, RenderError>> {
-        self.0.remove(key).and_then(|h| h.join().ok())
+        let handle = self.0.remove(key)?;
+        let ready = handle.is_finished();
+        let start = Instant::now();
+        let joined = handle.join();
+        // #736: how long the first view of `key` waited for its passes.
+        info!(
+            "splat passes ({}): the first view waited {:.3} s for the warm-up{}",
+            sort_name(key.1),
+            start.elapsed().as_secs_f64(),
+            if ready { " (ready)" } else { "" }
+        );
+        joined
+            .inspect_err(|_| {
+                warn!(
+                    "the splat passes' warm-up thread ({}) panicked; compiling them now",
+                    sort_name(key.1)
+                );
+            })
+            .ok()
     }
 }
 
@@ -671,7 +690,30 @@ fn compile(
 ) -> Result<SplatPasses, RenderError> {
     let mut view_tier = tier.clone();
     view_tier.sort_mode = sort;
-    SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier)
+    let start = Instant::now();
+    let passes = SplatPasses::new(dev, layer_format, Some(CORE_3D_DEPTH_FORMAT), &view_tier);
+    // #736: each compile's time, per shader module and pipeline, so a device run reads
+    // where the start-up's compile goes.
+    if let Ok(p) = &passes {
+        let times = p.compile_times();
+        info!(
+            "splat passes ({}, {layer_format:?}) compiled in {:.3} s on {:?} ({:.3} s made): {times}",
+            sort_name(sort == SortMode::SharedCenter),
+            start.elapsed().as_secs_f64(),
+            thread::current().name().unwrap_or("an unnamed thread"),
+            times.total().as_secs_f64(),
+        );
+    }
+    passes
+}
+
+/// A passes key's sort mode, for the log.
+fn sort_name(shared_center: bool) -> &'static str {
+    if shared_center {
+        "shared center"
+    } else {
+        "per view"
+    }
 }
 
 /// Starts compiling the `LinearOver` passes of both sort modes, each on a thread of its
