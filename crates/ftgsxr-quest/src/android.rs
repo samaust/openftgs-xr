@@ -14,7 +14,7 @@ use bevy::window::ExitCondition;
 use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_mod_xr::session::XrState;
 use ftgsxr_app::{
-    AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SettingsRes, SortMode, SplatLoad, Toast,
+    AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SettingsRes, SplatLoad, Toast,
     ToastLevel, load_settings,
 };
 use ftgsxr_xr::{XrHands, XrPlugin, add_xr};
@@ -141,8 +141,8 @@ fn main() {
         // §1.9 (#568): the layer where the runtime offers it.
         passthrough: true,
         hands: true,
-        // Q-121
-        sort: SortMode::PerView,
+        // Q-121, Q-399: the running tier's (D-4's shared center on the Quest tiers).
+        sort: tier.sort_mode,
     };
     let group = DefaultPlugins
         .build()
