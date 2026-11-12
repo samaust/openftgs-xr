@@ -6,7 +6,7 @@ How `ftgsxr_app::governor` meets E16 and D-47: `Governor`, `GovernorCounters`, `
 
 `govern(gov, counters, state, ladder, e)` is a pure function over a ladder of knobs given as data (Q-153), so U-22 runs E16's full ladder without a GPU. `GovernorCounters` holds the over and under streaks. An e above the band counts over and restarts under, below the band the reverse, inside it restarts both; a streak that reaches its length steps once and restarts. A step down takes the first knob of the ladder that can move, a step up the last; a knob steps down to E16's floor and back up only to the running tier's own value, the render scale in exact tenths, and `Dynamic` foveation is left alone. While `enabled` is false `govern` steps nothing and restarts both streaks (Q-178).
 
-- **Ladders.** `DESKTOP_LADDER` is the render scale then the SH cap; `HEADSET_LADDER` is E16's full order (Q-153). Foveation and the sort mode are off the desktop's ladder: foveation is the headset's, and a one-view desktop has no shared sort to switch to.
+- **Ladders.** `DESKTOP_LADDER` is the render scale then the SH cap; `HEADSET_LADDER` is E16's full order (Q-153). Foveation and the sort mode are off the desktop's ladder: foveation is the headset's, and a one-view desktop has no shared-center mode to switch to.
 
 ## The system
 
