@@ -177,7 +177,7 @@ fn dv_b2_writes_the_frame_time_of_each_quest_tier() {
         ("quest-balanced", "\"runtime\""),
         ("quest-high", "\"runtime\""),
         ("quest-low", "\"runtime\""),
-        ("quest-balanced", "90.0"),
+        ("quest-balanced", "90"),
     ] {
         for view in ["orbit", "center"] {
             expected.push((tier.to_owned(), view.to_owned(), rate.to_owned()));
