@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod audio;
+// Q-Tfix.1: a private module after `governor` and before `plugin`.
 mod benchmark;
 pub mod capture;
 pub mod desktop_input;
