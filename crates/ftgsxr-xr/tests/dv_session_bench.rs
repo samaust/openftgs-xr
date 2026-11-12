@@ -286,3 +286,72 @@ fn dv_b9_writes_the_quests_time_to_the_first_frame() {
         assert_eq!(r[0]["setup"]["run"], "first");
     }
 }
+
+#[test]
+#[ignore = "dv"]
+fn dv_dv5_budgets_p1_p3_p4_on_the_budget_model() {
+    // §3.4 Dv-5, §1.12 P-1, P-3, P-4 (Q-407, Q-T732.1, Q-T732.2): the budget model in
+    // quest-balanced, passthrough and occlusion on, held where orbit camera 0 sees it and
+    // played at speed 1 over its span; every block's GPU time ≤ 12.4 ms, the load ≤ 1 s
+    // per 100 MB, every block's sort ≤ 2.5 ms. Unlike the benchmarks, a miss fails.
+    let file = run(
+        "Dv-5",
+        &budget_model(),
+        BUDGET_MODEL,
+        Duration::from_secs(20 * 60),
+    );
+    print(&file);
+    let value = |measure: &str| {
+        let r = per_setup(&file, measure);
+        assert_eq!(r.len(), 1, "one {measure}");
+        r[0]["value"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{measure}: a number"))
+    };
+    let setup = &per_setup(&file, "frame_gpu_ms_max")[0]["setup"];
+    assert_eq!(setup["tier"], "quest-balanced");
+    assert_eq!(setup["passthrough"], true);
+    assert_eq!(setup["occlusion"], true);
+    assert_eq!(setup["camera"], 0);
+    assert_eq!(setup["speed"], 1);
+    let span = setup["span_s"].as_f64().expect("span_s");
+    assert!(value("play_s") >= span, "the play covers the span");
+    assert!(value("blocks") > 0.0, "blocks arrived");
+    println!(
+        "Dv-5 worst: f_gpu {:.3} ms (median {:.3}, {} of {} blocks over 12.4), sort {:.3} ms ({} over 2.5), \
+         load {:.3} s for {} bytes = {:.3} s per 100 MB, {} frames in {:.2} s, visible max {}, overflow blocks {}",
+        value("frame_gpu_ms_max"),
+        value("frame_gpu_ms_median"),
+        value("blocks_over_p1"),
+        value("blocks"),
+        value("frame_sort_ms_max"),
+        value("blocks_over_p4"),
+        value("load_s"),
+        value("file_bytes"),
+        value("s_per_100mb"),
+        value("frames"),
+        value("play_s"),
+        value("visible_max"),
+        value("overflow_blocks"),
+    );
+    let budgets = file["budgets"].as_array().expect("budgets");
+    let ids: Vec<&str> = budgets.iter().filter_map(|b| b["id"].as_str()).collect();
+    let overflowed = value("overflow_blocks") > 0.0;
+    let expected: &[&str] = if overflowed {
+        &["P-3", "P-4"]
+    } else {
+        &["P-1", "P-3", "P-4"]
+    };
+    assert_eq!(ids, expected, "Dv-5's budgets");
+    let missed: Vec<String> = budgets
+        .iter()
+        .filter(|b| b["pass"] != true)
+        .map(|b| {
+            format!(
+                "{} {} = {} > {}",
+                b["id"], b["measure"], b["value"], b["limit"]
+            )
+        })
+        .collect();
+    assert!(missed.is_empty(), "Dv-5 missed: {}", missed.join("; "));
+}
