@@ -5,6 +5,7 @@
 //! and 2 on an invalid input, printing §1.7's output (Q-77).
 
 use std::fs;
+use std::path::Path;
 use std::process::{Command, Output};
 
 use ftgsxr_app::cmd_info;
@@ -464,7 +465,9 @@ fn gpu_bench_reports_a_regression_against_a_baseline_20_percent_better() {
     assert!(
         written["baseline"]
             .as_str()
-            .is_some_and(|p| p.ends_with("B-5.json"))
+            .is_some_and(|p| p.ends_with("B-5.json") && Path::new(p).is_relative()),
+        "Q-Tfix.2: {}",
+        written["baseline"]
     );
 }
 
@@ -503,7 +506,13 @@ fn gpu_bench_compares_neither_b6_nor_another_profile() {
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert_eq!(o.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("ftgsxr: regression:"), "{stderr}");
-    assert!(written["baseline"].is_string());
+    assert!(
+        written["baseline"]
+            .as_str()
+            .is_some_and(|p| Path::new(p).is_relative()),
+        "Q-Tfix.2: {}",
+        written["baseline"]
+    );
 
     // The same baseline from the other profile.
     let (ours, theirs) = if cfg!(debug_assertions) {
