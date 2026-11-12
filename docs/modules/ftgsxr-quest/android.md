@@ -94,7 +94,7 @@ Files the host pushes and the device writes live in `dv/` under the app's extern
 
 ## The benchmark runner
 
-The launch intent's string extra `ftgsxr-bench` names a benchmark of §3.5 that needs no XR session, B-3, B-5 or B-6, and the extra `ftgsxr-bench-headset` the headset's build fingerprint, which the host reads with `adb shell getprop ro.build.fingerprint` (Q-406, Q-418; `unknown` without it). `bench_runner` runs it before the session, on the headless device as Dv-3 does (Q-122): it makes `dv/`, calls `ftgsxr_app::cmd_bench_on` with `dv/<NAME>.json` as the file and the fingerprint as `machine.headset` (in `quest-balanced`, Q-413; `ftgsxr-app/headless.md`, "On the headset"), prints one logcat line under `ftgsxr` and exits 0:
+The launch intent's string extra `ftgsxr-bench` names a benchmark of §3.5 that needs no XR session, B-3, B-4, B-5 or B-6, and the extra `ftgsxr-bench-headset` the headset's build fingerprint, which the host reads with `adb shell getprop ro.build.fingerprint` (Q-406, Q-418; `unknown` without it). `bench_runner` runs it before the session, on the headless device as Dv-3 does (Q-122): it makes `dv/`, calls `ftgsxr_app::cmd_bench_on` with `dv/<NAME>.json` as the file and the fingerprint as `machine.headset` (in `quest-balanced`, Q-413; `ftgsxr-app/headless.md`, "On the headset"), prints one logcat line under `ftgsxr` and exits 0:
 
 ```
 ftgsxr-bench: <NAME> DONE dv/<NAME>.json
@@ -103,7 +103,7 @@ ftgsxr-bench: <NAME> FAIL <code>: <text>
 
 A DONE line adds `; <n> regressions: …` when a stored baseline lists any. Any other NAME is FAIL with `cmd_bench_on`'s `Input` text. B-5 writes its synthetic files, up to 500 MB, under `dv/` and removes them.
 
-The host tests are `crates/ftgsxr-xr/tests/dv_bench.rs` (`dv_b3_…`, `dv_b5_…`, `dv_b6_…`): each installs the APK, reads the fingerprint, launches with both extras, waits for the line (failing as "none" when the process ends without one, killed for its memory, say, which is not Q-413's refused size), pulls the file, checks it well formed with serde\_json (a dev-dependency, Q-419), the fingerprint in `machine.headset` and the tier in the setups, and prints its budgets. A P-3 or P-4 budget the Quest misses is printed, not failed (spike S4 on #123); B-6's 1 % against §1.12's table, recomputed in the test, is the criterion. Android's GPU debug layers stay off for these runs, since they time the GPU; the `dv` APK's debug assertions keep wgpu's own validation, so the file's `profile` is `debug` (Q-418).
+The host tests are `crates/ftgsxr-xr/tests/dv_bench.rs` (`dv_b3_…`, `dv_b4_…`, `dv_b5_…`, `dv_b6_…`): each installs the APK, reads the fingerprint, launches with both extras, waits for the line (failing as "none" when the process ends without one, killed for its memory, say, which is not Q-413's refused size), pulls the file, checks it well formed with serde\_json (a dev-dependency, Q-419), the fingerprint in `machine.headset` and the tier in the setups, and prints its budgets. A P-3 or P-4 budget the Quest misses is printed, not failed (spike S4 on #123); B-6's 1 % against §1.12's table, recomputed in the test, is the criterion, and so are B-4's two checks (Q-430). Android's GPU debug layers stay off for these runs, since they time the GPU; the `dv` APK's debug assertions keep wgpu's own validation, so the file's `profile` is `debug` (Q-418).
 
 ## The host-side driver and adb paths
 
