@@ -399,6 +399,32 @@ fn compare_bench_file_lists_a_budget_20_percent_worse_than_the_quest_baseline() 
 }
 
 #[test]
+fn compare_bench_file_names_the_baseline_by_a_path_that_is_not_absolute() {
+    // Q-Tfix.2, Q-103 ("the path compared against"): a stored baseline is named by its
+    // path relative to the workspace, so a committed file carries no machine's path;
+    // one outside the workspace by its file name.
+    let stored = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/baselines");
+    let text = std::fs::read_to_string(stored.join("B-3.json")).expect("the stored B-3");
+    let report = ftgsxr_app::compare_bench_file(&text, &stored).expect("compared");
+    let file: Value = serde_json::from_str(&report.json).unwrap();
+    assert_eq!(file["baseline"], "benchmarks/baselines/B-3.json");
+
+    let outside = std::env::temp_dir().join(format!("ftgsxr-baseline-{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(
+        outside.join("B-3.json"),
+        written_file("B-3", "debug", 24.0, None),
+    )
+    .unwrap();
+    let report =
+        ftgsxr_app::compare_bench_file(&written_file("B-3", "debug", 24.0, None), &outside)
+            .expect("compared");
+    std::fs::remove_dir_all(&outside).unwrap();
+    let file: Value = serde_json::from_str(&report.json).unwrap();
+    assert_eq!(file["baseline"], "B-3.json");
+}
+
+#[test]
 fn compare_bench_file_takes_the_desktop_baseline_for_a_file_without_a_headset() {
     // Q-440: without `machine.headset` the baseline is `<bench>.json`; the Quest's
     // `.quest.json` beside it is not read.

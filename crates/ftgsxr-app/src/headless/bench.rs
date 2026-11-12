@@ -146,7 +146,7 @@ fn compare_json_against(
 /// Compares a written `ftgsxr-bench` file `json` (a headset's file pulled by the host,
 /// say) with its stored baseline in `baselines` by Q-103's rule: `<bench>.quest.json`
 /// when the file has a `machine.headset`, else `<bench>.json`. The report's `json` is the
-/// file with `baseline` set to the path compared against (null when there is none or it
+/// file with `baseline` set to the path compared against (relative to the workspace, Q-Tfix.2; null when there is none or it
 /// was not compared) and, when the profile or GPU differ, Q-103's note added to `notes`;
 /// `regressions` lists the budgets more than 10 % worse. A file or baseline that is not
 /// well-formed `ftgsxr-bench` JSON is `Input` (E-JSON).
@@ -183,7 +183,7 @@ pub fn compare_bench_file(json: &str, baselines: &Path) -> Result<BenchReport, H
         .unwrap_or("");
     let (baseline, regressions, note) = match read_baseline(&baselines.join(&name))? {
         Some((path, parsed)) => match compare_json_against(&budgets, profile, gpu, &parsed) {
-            Ok(regressions) => (Json::str(path.display().to_string()), regressions, None),
+            Ok(regressions) => (baseline_name(&path), regressions, None),
             Err(note) => (Json::Null, Vec::new(), Some(note)),
         },
         None => (Json::Null, Vec::new(), None),
@@ -379,7 +379,7 @@ fn cmd_bench_in(
         // against, or null").
         Some((path, parsed)) => {
             match compare_against(&measured.budgets, profile, gpu.dev.adapter_name(), &parsed) {
-                Ok(regressions) => (Json::str(path.display().to_string()), regressions),
+                Ok(regressions) => (baseline_name(&path), regressions),
                 Err(note) => {
                     // #193, Q-110: the library logs; the binary prints the note from the
                     // file's `notes` (Q-103).
@@ -418,6 +418,30 @@ fn read_baseline(path: &Path) -> Result<Option<(PathBuf, Json)>, HeadlessError> 
         .map_err(|e| HeadlessError::Input(format!("E-JSON: {}: {e}", path.display())))?;
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     Ok(Some((canonical, parsed)))
+}
+
+/// The file's `baseline` for the canonical baseline path `path` (Q-103's "the path
+/// compared against"): relative to the workspace when the file lies in it, with `/`
+/// between its parts, else the file name alone, so a written file never carries a
+/// machine's absolute path.
+// Q-Tfix.2
+fn baseline_name(path: &Path) -> Json {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let relative = root
+        .canonicalize()
+        .ok()
+        .and_then(|root| path.strip_prefix(root).ok().map(Path::to_path_buf));
+    let name = match relative {
+        Some(r) => r
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        None => path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+    };
+    Json::str(name)
 }
 
 /// An `Input` error naming `out` when the directory it would be written in is not one, or
