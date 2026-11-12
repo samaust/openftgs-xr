@@ -38,7 +38,8 @@ use crate::xr_input::XrInputPlugin;
 /// extensions where the runtime offers them, an OPAQUE (D-14) `Rgba8UnormSrgb` (Q-91)
 /// session, D-24's reference spaces and the eyes as `SplatCamera`s. Add it through
 /// [`add_xr`] (Q-120). `hands` asks for §1.8's
-/// hand extensions (PRD #452, #454); `sort` is each eye's `SplatCamera.sort` (Q-121).
+/// hand extensions (PRD #452, #454); `sort` is each eye's `SplatCamera.sort` at session
+/// creation, after which the eyes follow `SplatTierState.sort_mode` (Q-121, Q-399).
 /// `passthrough` builds `passthrough`'s layer, switch and style (§1.9, D-14), which run
 /// where the runtime offers XR\_FB\_passthrough; without it the mode stays VR.
 #[derive(Clone, Copy, Debug)]
@@ -47,7 +48,8 @@ pub struct XrPlugin {
     pub passthrough: bool,
     /// Whether hand tracking is wanted: true on the Quest and for `play --xr` (PRD #452).
     pub hands: bool,
-    /// What each eye's `SplatCamera` sorts with (Q-121).
+    /// What each eye's `SplatCamera` sorts with at session creation: the running tier's
+    /// in both builds (Q-121, Q-399).
     pub sort: SortMode,
 }
 
