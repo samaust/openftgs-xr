@@ -52,7 +52,13 @@ fn find(lines: &[String], needle: &str) -> Option<usize> {
 /// clause that fails.
 fn judge(lines: &[String]) -> Result<(), String> {
     let start = find(lines, "r17: budget 0.1 ms").ok_or("no `r17: budget 0.1 ms` line")?;
-    let run = &lines[start..];
+    // Up to the verdict: after it the governor runs on the display's own budget, and may
+    // step a heavier model again.
+    let end = lines[start..]
+        .iter()
+        .position(|l| l.contains("ftgsxr-test: r17 "))
+        .map_or(lines.len(), |i| start + i);
+    let run = &lines[start..end];
     // Each step: `r17: step <n> <down|up> <change> after <k> blocks, GPU total …`.
     let mut steps = Vec::new();
     for (i, l) in run.iter().enumerate() {
@@ -211,6 +217,11 @@ fn r17_judge_passes_e16s_run_and_fails_each_departure() {
         10,
         "I ftgsxr: splat layer 1512x1584 for a 1680x1760 view at render scale 0.9".to_owned(),
     );
+    assert_eq!(judge(&l), Ok(()));
+    // Steps on the display's own budget after the verdict are not the run's.
+    let mut l = canned();
+    l.push("I ftgsxr: governor step knob=RenderScale down=true".to_owned());
+    l.push("I ftgsxr: foveation High applied to the swapchain".to_owned());
     assert_eq!(judge(&l), Ok(()));
     let with = |f: &dyn Fn(&mut Vec<String>)| {
         let mut l = canned();
