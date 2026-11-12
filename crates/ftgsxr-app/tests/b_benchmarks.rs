@@ -12,9 +12,9 @@ use serde_json::Value;
 
 #[test]
 fn bench_refuses_a_benchmark_the_desktop_does_not_run() {
-    // §3.5: B-2, B-4, B-7 and B-8 are the Quest's or reported elsewhere (Q-103); B-9's
-    // desktop half runs here (Q-155, #289).
-    for name in ["B-2", "B-4", "B-7", "B-8", "B-10", "b-1", ""] {
+    // §3.5: B-2, B-7 and B-8 are the Quest's or reported elsewhere (Q-103); B-9's
+    // desktop half runs here (Q-155, #289), and B-4 on both machines (Q-406, #733).
+    for name in ["B-2", "B-7", "B-8", "B-10", "b-1", ""] {
         let e = cmd_bench(name, None, None).expect_err(name);
         assert!(matches!(e, HeadlessError::Input(_)), "{name}: {e:?}");
         assert_eq!(exit_code(&e), 2);
@@ -182,6 +182,115 @@ fn gpu_b3_with_a_model_reports_sort_times() {
     assert!(keys > 0.0 && keys <= 5000.0, "{keys}");
     // P-4 is defined at C = 10⁶ only (Q-102).
     assert!(file["budgets"].as_array().unwrap().is_empty());
+}
+
+/// The value of `measure` in the setup whose `index` is `index` (B-4, Q-430).
+fn b4_result(file: &Value, index: &str, measure: &str) -> f64 {
+    file["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["measure"] == measure && r["setup"]["index"] == index)
+        .unwrap_or_else(|| panic!("no {measure} with index {index}"))["value"]
+        .as_f64()
+        .unwrap()
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_b4_with_a_model_reports_the_cull_with_and_without_the_index() {
+    // §3.5 B-4 (Q-408, Q-430): for the size, the cull time and the rows visited with the
+    // temporal index and with every row; the index visits no more rows than N and is not
+    // slower than the every-row cull by more than the tolerance: the larger of the run's
+    // spread and 10 % of the every-row median (Q-430). `random_model`'s rows
+    // are mostly transient, so at mid-span the index visits fewer than N (E3).
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+    let n = 100_000;
+    let (path, _) = tiny_model("b4", n, 0);
+    let file = run("B-4", Some(&path), "b4-out");
+    let (indexed, every) = ("temporal", "every row");
+    assert_eq!(b4_result(&file, every, "rows_visited"), n as f64);
+    let rows = b4_result(&file, indexed, "rows_visited");
+    assert!(rows > 0.0 && rows < n as f64, "{rows}");
+    for index in [indexed, every] {
+        assert!(b4_result(&file, index, "cull_ms") > 0.0, "{index}");
+        assert!(b4_result(&file, index, "cull_ms_spread") >= 0.0, "{index}");
+        assert_eq!(b4_result(&file, index, "overflow"), 0.0, "{index}");
+    }
+    // D-10: the index restricts the rows visited, never the image.
+    assert_eq!(
+        b4_result(&file, indexed, "visible_splats"),
+        b4_result(&file, every, "visible_splats")
+    );
+    let tolerance = b4_result(&file, indexed, "cull_ms_spread")
+        .max(b4_result(&file, every, "cull_ms_spread"))
+        .max(0.1 * b4_result(&file, every, "cull_ms"));
+    assert!(
+        b4_result(&file, indexed, "cull_ms") <= b4_result(&file, every, "cull_ms") + tolerance,
+        "{}",
+        file["results"]
+    );
+    let budgets = file["budgets"].as_array().unwrap();
+    assert_eq!(budgets.len(), 2, "{budgets:?}");
+    for b in budgets {
+        assert_eq!(b["id"], "B-4");
+        assert_eq!(b["setup"]["index"], indexed);
+        assert_eq!(b["rule"], "at_most");
+        assert_eq!(b["pass"], true, "{b}");
+    }
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_b4_sweeps_every_size_with_both_checks_in_the_headsets_tier() {
+    // §3.5 B-4 (Q-408, Q-430, Q-406, Q-413): the synthetic sweep, run as the headset
+    // runs it (`cmd_bench_on` with a fingerprint, `quest-balanced`), writes for each N
+    // from 10⁵ to 3 × 10⁶ both setups and the two B-4 checks, all met, with the same
+    // splats drawn by both (D-10).
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "b4-sweep",
+    );
+    let out = dir.join("B-4.json");
+    ftgsxr_app::cmd_bench_on("B-4", Some(&out), None, Some("host")).expect("the sweep runs");
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(file["machine"]["headset"], "host");
+    let sizes = [1e5, 2.5e5, 5e5, 1e6, 2e6, 3e6];
+    let results = file["results"].as_array().unwrap();
+    let value = |n: f64, index: &str, measure: &str| -> Value {
+        results
+            .iter()
+            .find(|r| {
+                r["setup"]["n"] == n && r["setup"]["index"] == index && r["measure"] == measure
+            })
+            .unwrap_or_else(|| panic!("{n} {index} {measure}"))["value"]
+            .clone()
+    };
+    for n in sizes {
+        for index in ["temporal", "every row"] {
+            assert!(
+                value(n, index, "cull_ms").as_f64().unwrap() > 0.0,
+                "{n} {index}"
+            );
+        }
+        assert_eq!(value(n, "every row", "rows_visited").as_f64(), Some(n));
+        assert_eq!(
+            value(n, "temporal", "visible_splats"),
+            value(n, "every row", "visible_splats"),
+            "{n}"
+        );
+    }
+    for r in results {
+        assert_eq!(r["setup"]["tier"], "quest-balanced", "{r}");
+    }
+    let budgets = file["budgets"].as_array().unwrap();
+    assert_eq!(budgets.len(), 2 * sizes.len(), "{budgets:?}");
+    for b in budgets {
+        assert_eq!(b["id"], "B-4");
+        assert_eq!(b["pass"], true, "{b}");
+    }
 }
 
 #[test]

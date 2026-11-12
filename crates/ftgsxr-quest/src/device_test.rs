@@ -20,7 +20,9 @@ mod dv6;
 mod dv7;
 mod dv8;
 mod dv9;
+mod r10;
 mod r17;
+mod r9;
 mod s3;
 mod spikes;
 
@@ -36,13 +38,16 @@ pub(crate) fn dv_dir() -> Option<PathBuf> {
         .map(|e| e.join("dv"))
 }
 
-/// Runs `name` when it is a headless test (Dv-3, Dv-4: before the XR session is created,
-/// on the headless renderer's own device, Q-122) with the pushed and written files in
-/// `dv`, printing its verdict; `false` when `name` is not one, for `add`.
+/// Runs `name` when it is a headless test (Dv-3, Dv-4, and R-9 and R-10 on the device,
+/// Q-427: before the XR session is created, on the headless renderer's own device,
+/// Q-122) with the pushed and written files in `dv`, printing its verdict; `false` when
+/// `name` is not one, for `add`.
 pub(crate) fn run_headless(name: &str, dv: &Path) -> bool {
     let result = match name {
         dv3::NAME => dv3::run(dv),
         dv4::NAME => dv4::run(dv),
+        r9::NAME => r9::run(dv),
+        r10::NAME => r10::run(dv),
         _ => return false,
     };
     match result {

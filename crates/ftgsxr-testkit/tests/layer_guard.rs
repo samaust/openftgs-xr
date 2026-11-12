@@ -17,6 +17,7 @@ const EXEMPT: &[&str] = &[
     "ftgsxr-desktop/tests/cli.rs:gpu_r15_render_writes_the_renders_file",
     "ftgsxr-desktop/tests/cli.rs:gpu_bench_reports_a_regression_against_a_baseline_20_percent_better",
     "ftgsxr-desktop/tests/cli.rs:gpu_bench_compares_neither_b6_nor_another_profile",
+    "ftgsxr-desktop/tests/cli.rs:gpu_b4_bench_writes_the_cull_with_and_without_the_index",
     "ftgsxr-desktop/tests/cli.rs:gpu_b9_bench_writes_the_desktops_startup_figures",
     "ftgsxr-desktop/tests/play_exit.rs:gpu_play_interrupted_in_its_first_frames_exits_by_its_code",
     "ftgsxr-desktop/tests/window_resize.rs:gpu_window_resized_seconds_apart_leaves_no_validation_message",
