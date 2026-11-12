@@ -259,27 +259,7 @@ pub(crate) fn summarize(
     m.figure(setup, "visible_max", f64::from(visible_max), "splats");
     m.figure(setup, "overflow_cameras", overflowed as f64, "cameras");
     m.figure(setup, "blocks", blocks as f64, "blocks");
-    if let Some(hz) = observed.refresh_hz {
-        m.figure(setup, "refresh_hz", f64::from(hz), "Hz");
-    }
-    m.figure(
-        setup,
-        "swapchain_width",
-        f64::from(observed.swapchain[0]),
-        "px",
-    );
-    m.figure(
-        setup,
-        "swapchain_height",
-        f64::from(observed.swapchain[1]),
-        "px",
-    );
-    for (path, unit, values) in &observed.counters {
-        if !values.is_empty() {
-            let at = with(setup, "counter", Json::str(path.clone()));
-            m.figure(&at, "runtime_counter", median(&mut values.clone()), unit);
-        }
-    }
+    observe(m, setup, observed);
     summary
 }
 
@@ -386,6 +366,145 @@ pub(crate) fn conclude(name: &str, m: &mut Measured, runs: &[(Setup, Json, Outco
                     "ms",
                 );
             }
+        }
+    }
+}
+
+/// The blocks of Dv-5's play (Q-T732.1): each distinct statistics block that arrived
+/// while the instance played over its span.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Play {
+    /// Each block's `gpu_times_ms.total` (f_gpu, Q-403).
+    pub(crate) gpu_ms: Vec<f64>,
+    /// Each block's `gpu_times_ms.sort`.
+    pub(crate) sort_ms: Vec<f64>,
+    /// Each block's `visible_splats`.
+    pub(crate) visible: Vec<u32>,
+    /// The blocks that overflowed.
+    pub(crate) overflow_blocks: usize,
+    /// The app's frames over the play.
+    pub(crate) frames: u32,
+    /// The play's wall time, s.
+    pub(crate) play_s: f64,
+}
+
+/// §1.12 P-1's limit at the runtime's 72 Hz.
+pub(crate) const P1_MS: f64 = 12.4;
+/// §1.12 P-4's Quest limit.
+pub(crate) const P4_MS: f64 = 2.5;
+/// §1.12 P-3's limit, s per 100 MB.
+pub(crate) const P3_S_PER_100MB: f64 = 1.0;
+
+/// Dv-5's τ after `elapsed` seconds of play at speed 1 from τ₀ (§1.6: τ advances by
+/// speed · Δt), held at τ₁ once the span is played (Q-T732.1).
+// Q-T732.1
+pub(crate) fn play_tau(tau0: f64, tau1: f64, elapsed: f64) -> f64 {
+    (tau0 + elapsed).min(tau1)
+}
+
+/// The note when Dv-5's P-1 is not judged because a block overflowed (Q-407).
+pub(crate) const DV5_OVERFLOW_NOTE: &str = "P-1 not judged: a block's visible count exceeded the tier's C, so the figure is reported only (Q-407)";
+
+/// Records Dv-5's figures and its budgets under `setup` (§3.4 Dv-5, Q-407, Q-T732.1):
+/// P-1 on the largest f_gpu of every block (none when a block overflowed), P-4 on the
+/// largest sort time of every block, and P-3 on the load's `load_s` per 10⁸ of the
+/// file's `file_bytes` (B-5's figure, Q-102); the runtime's counters beside them.
+// Q-407, Q-T732.1, Q-T732.2
+pub(crate) fn conclude_dv5(
+    m: &mut Measured,
+    setup: &Json,
+    play: &Play,
+    observed: &Observed,
+    load_s: f64,
+    file_bytes: u64,
+) {
+    let gpu_max = play.gpu_ms.iter().copied().fold(0.0, f64::max);
+    let sort_max = play.sort_ms.iter().copied().fold(0.0, f64::max);
+    let over = play.gpu_ms.iter().filter(|&&g| g > P1_MS).count();
+    let sort_over = play.sort_ms.iter().filter(|&&s| s > P4_MS).count();
+    let visible_max = play.visible.iter().copied().max().unwrap_or(0);
+    let per_100mb = load_s * 1e8 / file_bytes as f64;
+    m.figure(setup, "frame_gpu_ms_max", gpu_max, "ms");
+    m.figure(
+        setup,
+        "frame_gpu_ms_median",
+        median(&mut play.gpu_ms.clone()),
+        "ms",
+    );
+    m.figure(setup, "frame_sort_ms_max", sort_max, "ms");
+    m.figure(
+        setup,
+        "frame_sort_ms_median",
+        median(&mut play.sort_ms.clone()),
+        "ms",
+    );
+    m.figure(setup, "blocks_over_p1", over as f64, "blocks");
+    m.figure(setup, "blocks_over_p4", sort_over as f64, "blocks");
+    m.figure(setup, "blocks", play.gpu_ms.len() as f64, "blocks");
+    m.figure(setup, "frames", f64::from(play.frames), "frames");
+    m.figure(setup, "play_s", play.play_s, "s");
+    m.figure(setup, "visible_max", f64::from(visible_max), "splats");
+    m.figure(
+        setup,
+        "overflow_blocks",
+        play.overflow_blocks as f64,
+        "blocks",
+    );
+    m.figure(setup, "load_s", load_s, "s");
+    m.figure(setup, "file_bytes", file_bytes as f64, "bytes");
+    m.figure(setup, "s_per_100mb", per_100mb, "s");
+    observe(m, setup, observed);
+    if play.overflow_blocks > 0 {
+        m.notes.push(DV5_OVERFLOW_NOTE);
+    } else {
+        m.budgets.push(Budget {
+            id: "P-1",
+            setup: setup.clone(),
+            measure: "frame_gpu_ms_max",
+            rule: Rule::AtMost,
+            limit: P1_MS,
+            value: gpu_max,
+        });
+    }
+    m.budgets.push(Budget {
+        id: "P-3",
+        setup: setup.clone(),
+        measure: "s_per_100mb",
+        rule: Rule::AtMost,
+        limit: P3_S_PER_100MB,
+        value: per_100mb,
+    });
+    m.budgets.push(Budget {
+        id: "P-4",
+        setup: setup.clone(),
+        measure: "frame_sort_ms_max",
+        rule: Rule::AtMost,
+        limit: P4_MS,
+        value: sort_max,
+    });
+}
+
+/// The observed refresh rate, swapchain size and each runtime counter's median (Q-433).
+fn observe(m: &mut Measured, setup: &Json, observed: &Observed) {
+    if let Some(hz) = observed.refresh_hz {
+        m.figure(setup, "refresh_hz", f64::from(hz), "Hz");
+    }
+    m.figure(
+        setup,
+        "swapchain_width",
+        f64::from(observed.swapchain[0]),
+        "px",
+    );
+    m.figure(
+        setup,
+        "swapchain_height",
+        f64::from(observed.swapchain[1]),
+        "px",
+    );
+    for (path, unit, values) in &observed.counters {
+        if !values.is_empty() {
+            let at = with(setup, "counter", Json::str(path.clone()));
+            m.figure(&at, "runtime_counter", median(&mut values.clone()), unit);
         }
     }
 }
@@ -782,5 +901,115 @@ mod tests {
         assert_eq!(first_frame(&ends, 0.55), 0.7);
         assert_eq!(first_frame(&ends, 0.75), 0.75);
         assert_eq!(first_frame(&ends[..1], 0.4), 0.5);
+    }
+
+    fn play(gpu: &[f64], sort: &[f64], overflow_blocks: usize) -> Play {
+        Play {
+            gpu_ms: gpu.to_vec(),
+            sort_ms: sort.to_vec(),
+            visible: vec![990_000; gpu.len()],
+            overflow_blocks,
+            frames: 150,
+            play_s: 10.0,
+        }
+    }
+
+    /// The budget `id`'s (measure, limit, value, pass).
+    fn budget(m: &Measured, id: &str) -> Option<(&'static str, f64, f64, bool)> {
+        m.budgets
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| (b.measure, b.limit, b.value, b.pass()))
+    }
+
+    /// §3.4 Dv-5, §1.12 P-1, P-3, P-4 (Q-407, Q-T732.1): every block's f_gpu against
+    /// 12.4 ms, so one block of 13 ms among 10 ms ones fails P-1 although the median
+    /// meets it; each block's sort against 2.5 ms (worst 2.4 here, met); the budget
+    /// model's 180,001,152 bytes loaded in 1.80001152 s is 1 s per 100 MB, met at the
+    /// limit, and 0.9 s for 90 MB of 10⁶ bytes is 1 s too.
+    #[test]
+    fn dv5_judges_every_block_and_the_load_per_100_mb() {
+        let setup = Json::obj([("tier", Json::str("quest-balanced"))]);
+        let p = play(
+            &[10.0, 10.5, 13.0, 10.0, 10.2],
+            &[2.0, 2.4, 2.1, 2.2, 2.0],
+            0,
+        );
+        let mut m = Measured::default();
+        conclude_dv5(
+            &mut m,
+            &setup,
+            &p,
+            &Observed::default(),
+            1.800_011_52,
+            180_001_152,
+        );
+        assert_eq!(
+            budget(&m, "P-1"),
+            Some(("frame_gpu_ms_max", 12.4, 13.0, false))
+        );
+        assert_eq!(
+            budget(&m, "P-4"),
+            Some(("frame_sort_ms_max", 2.5, 2.4, true))
+        );
+        let (measure, limit, value, _) = budget(&m, "P-3").expect("P-3");
+        assert_eq!((measure, limit), ("s_per_100mb", 1.0));
+        assert!((value - 1.0).abs() < 1e-12, "{value}");
+        assert_eq!(m.budgets.len(), 3);
+        assert_eq!(figure(&m, &setup, "frame_gpu_ms_median"), Some(10.2));
+        assert_eq!(figure(&m, &setup, "frame_gpu_ms_max"), Some(13.0));
+        assert_eq!(figure(&m, &setup, "frame_sort_ms_max"), Some(2.4));
+        assert_eq!(figure(&m, &setup, "blocks_over_p1"), Some(1.0));
+        assert_eq!(figure(&m, &setup, "blocks"), Some(5.0));
+        assert_eq!(figure(&m, &setup, "frames"), Some(150.0));
+        assert_eq!(figure(&m, &setup, "play_s"), Some(10.0));
+        assert_eq!(figure(&m, &setup, "load_s"), Some(1.800_011_52));
+        assert_eq!(figure(&m, &setup, "file_bytes"), Some(180_001_152.0));
+        assert_eq!(figure(&m, &setup, "visible_max"), Some(990_000.0));
+
+        let mut m = Measured::default();
+        conclude_dv5(
+            &mut m,
+            &setup,
+            &play(&[9.0], &[1.0], 0),
+            &Observed::default(),
+            0.9,
+            90_000_000,
+        );
+        let (_, _, value, pass) = budget(&m, "P-3").expect("P-3");
+        assert!((value - 1.0).abs() < 1e-12 && pass, "{value}");
+        assert_eq!(
+            budget(&m, "P-1"),
+            Some(("frame_gpu_ms_max", 12.4, 9.0, true))
+        );
+    }
+
+    /// Q-407: a block whose visible count exceeded C leaves P-1 reported, not judged,
+    /// with the note; P-3 and P-4 are still judged.
+    #[test]
+    fn dv5_overflow_reports_p1_without_judging_it() {
+        let setup = Json::obj([("tier", Json::str("quest-balanced"))]);
+        let mut m = Measured::default();
+        let p = play(&[70.0, 76.0], &[3.8, 3.9], 1);
+        conclude_dv5(&mut m, &setup, &p, &Observed::default(), 1.0, 180_001_152);
+        assert_eq!(budget(&m, "P-1"), None);
+        assert_eq!(m.notes, [DV5_OVERFLOW_NOTE]);
+        assert_eq!(figure(&m, &setup, "frame_gpu_ms_max"), Some(76.0));
+        assert_eq!(figure(&m, &setup, "overflow_blocks"), Some(1.0));
+        assert_eq!(
+            budget(&m, "P-4"),
+            Some(("frame_sort_ms_max", 2.5, 3.9, false))
+        );
+        assert!(budget(&m, "P-3").is_some_and(|b| b.3));
+    }
+
+    /// §1.6 at speed 1: τ advances by the elapsed time from τ₀ and stays at τ₁ once the
+    /// span is played (Dv-5's "10 s at every τ").
+    #[test]
+    fn play_tau_runs_at_speed_one_and_holds_the_span_end() {
+        assert_eq!(play_tau(0.0, 10.0, 0.0), 0.0);
+        assert_eq!(play_tau(0.0, 10.0, 3.5), 3.5);
+        assert_eq!(play_tau(2.0, 12.0, 3.5), 5.5);
+        assert_eq!(play_tau(0.0, 10.0, 12.0), 10.0);
     }
 }
