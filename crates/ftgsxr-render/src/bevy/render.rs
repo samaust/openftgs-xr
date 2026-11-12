@@ -727,11 +727,7 @@ fn sort_name(shared_center: bool) -> &'static str {
 /// passes the cameras take first do not share the CPU with the others'.
 // Q-325, Q-381, Q-T736.2
 fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
-    let first = tier.sort_mode;
-    let second = match first {
-        SortMode::PerView => SortMode::SharedCenter,
-        SortMode::SharedCenter => SortMode::PerView,
-    };
+    let [first, second] = warm_up_order(tier.sort_mode);
     // The first thread drops `done` when its compile ends or unwinds, or when it cannot
     // start; the second then starts its own.
     let (done, first_done) = mpsc::channel::<()>();
@@ -746,6 +742,15 @@ fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
         let _ = first_done.recv();
         compile(&d, LAYER_FORMAT, &t, second)
     });
+}
+
+/// The order the warm-up compiles the sort modes in: `running`, the tier's, then the
+/// other (Q-T736.2).
+fn warm_up_order(running: SortMode) -> [SortMode; 2] {
+    match running {
+        SortMode::PerView => [SortMode::PerView, SortMode::SharedCenter],
+        SortMode::SharedCenter => [SortMode::SharedCenter, SortMode::PerView],
+    }
 }
 
 /// Starts one warm-up thread, compiling `sort`'s key with `body`.
@@ -1186,6 +1191,19 @@ mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Q-T736.2: the running tier's sort mode compiles first, the other after it.
+    #[test]
+    fn warm_up_order_puts_the_running_sort_mode_first() {
+        assert_eq!(
+            warm_up_order(SortMode::SharedCenter),
+            [SortMode::SharedCenter, SortMode::PerView]
+        );
+        assert_eq!(
+            warm_up_order(SortMode::PerView),
+            [SortMode::PerView, SortMode::SharedCenter]
+        );
+    }
 
     // Q-233, Q-235: an instance is drawn at the smallest of its loaded degree L, the
     // governor's cap and a replayed request's limit; no limit imposes none, and a limit
