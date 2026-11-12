@@ -26,8 +26,10 @@ const UNKNOWN: &str = "unknown";
 #[cfg(target_os = "android")]
 pub(crate) const MODEL_EXTRA: &str = "ftgsxr-bench-model";
 
-/// The benchmarks that run in the XR session through `SessionBench` (Q-406, Q-435).
-const SESSION: [&str; 4] = ["B-2", "B-7", "B-8", "B-9"];
+/// The benchmarks that run in the XR session through `SessionBench` (Q-406, Q-435), and
+/// Dv-5's run (Q-438).
+// Q-438
+const SESSION: [&str; 5] = ["B-2", "B-7", "B-8", "B-9", "Dv-5"];
 
 /// Whether `name` runs in the session rather than before it (Q-435).
 pub(crate) fn in_session(name: &str) -> bool {
@@ -104,8 +106,9 @@ mod tests {
 
     #[test]
     fn session_names_skip_the_headless_runner() {
-        // Q-435: B-2, B-7, B-8 and B-9 run in the session, the others before it.
-        for name in ["B-2", "B-7", "B-8", "B-9"] {
+        // Q-435: B-2, B-7, B-8 and B-9 run in the session, the others before it; Dv-5's
+        // run is a session benchmark too (Q-438).
+        for name in ["B-2", "B-7", "B-8", "B-9", "Dv-5"] {
             assert!(in_session(name), "{name}");
         }
         for name in ["B-1", "B-3", "B-4", "B-5", "B-6"] {

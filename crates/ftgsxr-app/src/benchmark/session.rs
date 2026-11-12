@@ -11,7 +11,8 @@
 //! pose the instance for each of the view's 72 steps where the eyes' midpoint sees it as
 //! orbit camera k does, 8 frames of warm-up and 30 held, gathering each distinct
 //! statistics block's GPU times and the runtime's counters (`HudData.runtime_counters`).
-//! B-9 times the startup to the first frame drawn of `model` (Q-222). At the end the
+//! B-9 times the startup to the first frame drawn of `model` (Q-222); Dv-5 (`dv5`,
+//! Q-438) plays `model` where orbit camera 0 sees it and judges P-1, P-3 and P-4. At the end the
 //! settings the run changed are restored and given time to save.
 // Q-406, Q-407, Q-432, Q-434
 
@@ -38,6 +39,7 @@ use crate::manipulate::head_candidate;
 use crate::persist::SettingsRes;
 use crate::ui::{FeatureState, HudData, XrDisplay, XrFeatures};
 
+pub(crate) mod dv5;
 pub(crate) mod protocol;
 
 use protocol::{
@@ -46,7 +48,7 @@ use protocol::{
 };
 
 /// The session benchmark the Quest's runner names (Q-406): `AppPlugin` runs `name`
-/// (B-2, B-7, B-8 or B-9) in the XR session on the model at `model`, writes its
+/// (B-2, B-7, B-8 or B-9, or Dv-5's run, Q-438) in the XR session on the model at `model`, writes its
 /// `ftgsxr-bench` file at `out` with `headset` as `machine.headset`, and fills `result`,
 /// `Err` with the failure's text.
 // Q-406
@@ -89,7 +91,9 @@ const MEASURES: [(&str, &str); 3] = [
 
 /// Adds the system and its observer (`AppPlugin`); inert without `SessionBench`.
 pub(crate) fn add(app: &mut App) {
-    app.add_systems(Last, run).add_observer(on_event);
+    app.add_systems(Last, run)
+        .add_observer(on_event)
+        .add_observer(dv5::on_event);
 }
 
 /// The model's figures the run needs, read once.
@@ -210,6 +214,8 @@ fn run(world: &mut World) {
         step_run(world);
     } else if world.contains_resource::<B9>() {
         step_b9(world);
+    } else if world.contains_resource::<dv5::Dv5>() {
+        dv5::step(world);
     } else {
         start(world);
     }
@@ -238,6 +244,10 @@ fn start(world: &mut World) {
         );
         return;
     };
+    if name == dv5::NAME {
+        // Q-438
+        return dv5::start(world, out, headset, path);
+    }
     if name == "B-9" {
         // Q-434: the probe loads at once; it is read for its figures afterwards.
         let bytes = match std::fs::read(&path) {
@@ -262,7 +272,7 @@ fn start(world: &mut World) {
         return finish(
             world,
             Err(format!(
-                "E-FILE-FORMAT: {name}: not a session benchmark (B-2, B-7, B-8, B-9)"
+                "E-FILE-FORMAT: {name}: not a session benchmark (B-2, B-7, B-8, B-9, Dv-5)"
             )),
         );
     };
