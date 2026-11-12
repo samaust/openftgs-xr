@@ -368,7 +368,7 @@ fn write_run(world: &mut World) -> Result<(), String> {
     let base = setup_json(&r.model, &setup());
     let json = with(
         &with(
-            &with(&base, "camera", Json::Num(0.0)),
+            &with(&base, "orbit_camera", Json::Num(0.0)),
             "speed",
             Json::Num(1.0),
         ),

@@ -312,7 +312,7 @@ fn dv_dv5_budgets_p1_p3_p4_on_the_budget_model() {
     assert_eq!(setup["tier"], "quest-balanced");
     assert_eq!(setup["passthrough"], true);
     assert_eq!(setup["occlusion"], true);
-    assert_eq!(setup["camera"], 0);
+    assert_eq!(setup["orbit_camera"], 0);
     assert_eq!(setup["speed"], 1);
     let span = setup["span_s"].as_f64().expect("span_s");
     assert!(value("play_s") >= span, "the play covers the span");
