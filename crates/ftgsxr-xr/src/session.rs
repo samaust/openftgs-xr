@@ -36,7 +36,7 @@ use bevy_mod_xr::spaces::{XrPrimaryReferenceSpace, XrReferenceSpace};
 use ftgsxr_app::{ContentGroup, PlayerRig, SettingsRes};
 use ftgsxr_core::{Pose, Quat, Vec3};
 use ftgsxr_io::Settings;
-use ftgsxr_render::{OutputSpace, SortMode, SplatCamera};
+use ftgsxr_render::{OutputSpace, SortMode, SplatCamera, SplatTierState};
 use openxr::ReferenceSpaceType;
 
 use crate::XrError;
@@ -53,7 +53,7 @@ const EYE_NEAR_M: f32 = 0.01;
 /// What `session` was configured with by `XrPlugin`.
 #[derive(Resource, Clone, Copy, Debug)]
 pub(crate) struct SessionConfig {
-    /// What each eye's `SplatCamera` gets (Q-121).
+    /// What each eye's `SplatCamera` gets at session creation (Q-121, Q-399).
     pub(crate) sort: SortMode,
 }
 
@@ -69,10 +69,6 @@ pub(crate) struct SessionPlugin {
 
 impl Plugin for SessionPlugin {
     fn build(&self, app: &mut App) {
-        if self.config.sort == SortMode::SharedCenter {
-            // Q-121
-            warn!("XR sort mode SharedCenter: accepted, but draws nothing until M-8 (R-9)");
-        }
         app.add_plugins(comfort::ComfortPlugin)
             .insert_resource(self.config)
             .init_resource::<Recreate>()
@@ -80,7 +76,7 @@ impl Plugin for SessionPlugin {
             .add_systems(XrSessionCreated, (set_primary_reference_space, bind_rig))
             .add_systems(XrPreDestroySession, cleanup)
             .add_systems(PreUpdate, set_eye_near)
-            .add_systems(Last, make_splat_eyes)
+            .add_systems(Last, (make_splat_eyes, follow_sort).chain())
             .add_systems(Update, (watch_states, recreate_after_destroy).chain())
             .add_oxr_event_handler(replace_on_reference_space_change);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
@@ -261,6 +257,25 @@ fn make_splat_eyes(
                     background: Some(background),
                 },
             });
+        }
+    }
+}
+
+/// Keeps each eye's `SplatCamera.sort` equal to `SplatTierState.sort_mode` once it is a
+/// splat camera, so the governor's fourth knob (E16) and a live tier switch (Q-239) reach
+/// the eyes; `XrPlugin.sort` is only their mode at session creation. A camera's sort is
+/// written only when it differs, since a new sort mode makes new frame buffers.
+// Q-399
+fn follow_sort(
+    tier: Option<Res<SplatTierState>>,
+    mut eyes: Query<&mut SplatCamera, With<XrCamera>>,
+) {
+    let Some(tier) = tier else {
+        return;
+    };
+    for mut camera in &mut eyes {
+        if camera.sort != tier.sort_mode {
+            camera.sort = tier.sort_mode;
         }
     }
 }
@@ -522,5 +537,53 @@ mod tests {
             "the crate's near"
         );
         assert!(is_located(calculate_projection(EYE_NEAR_M, fov)));
+    }
+
+    /// The sort mode of the eye cameras of `app`, in `XrCamera` order.
+    fn eye_sorts(app: &mut App) -> Vec<SortMode> {
+        let mut eyes: Vec<(u32, SortMode)> = app
+            .world_mut()
+            .query::<(&XrCamera, &SplatCamera)>()
+            .iter(app.world())
+            .map(|(i, c)| (i.0, c.sort))
+            .collect();
+        eyes.sort_by_key(|(i, _)| *i);
+        eyes.into_iter().map(|(_, s)| s).collect()
+    }
+
+    /// Q-399 (#727): after session creation a change of `SplatTierState.sort_mode` (the
+    /// governor's fourth knob, a live tier switch) reaches both eyes' `SplatCamera.sort`,
+    /// both ways; a splat camera that is not an eye keeps its own.
+    #[test]
+    fn follow_sort_keeps_both_eyes_on_the_tiers_sort_mode() {
+        use ftgsxr_render::{QualityTier, SplatTierState};
+        let mut app = App::new();
+        app.insert_resource(SplatTierState::of(&QualityTier::quest_balanced()))
+            .add_systems(Last, follow_sort);
+        let camera = |sort| SplatCamera {
+            sort,
+            output: OutputSpace::LinearOver { background: None },
+        };
+        for i in 0..2 {
+            app.world_mut()
+                .spawn((XrCamera(i), camera(SortMode::SharedCenter)));
+        }
+        let other = app.world_mut().spawn(camera(SortMode::SharedCenter)).id();
+        app.update();
+        assert_eq!(eye_sorts(&mut app), [SortMode::SharedCenter; 2]);
+        for sort in [SortMode::PerView, SortMode::SharedCenter, SortMode::PerView] {
+            app.world_mut().resource_mut::<SplatTierState>().sort_mode = sort;
+            app.update();
+            assert_eq!(eye_sorts(&mut app), [sort; 2], "both eyes take {sort:?}");
+        }
+        assert_eq!(
+            app.world().get::<SplatCamera>(other).map(|c| c.sort),
+            Some(SortMode::SharedCenter),
+            "a splat camera that is not an eye keeps its sort"
+        );
+        // A live tier switch replaces the state with the new tier's own knobs (Q-239).
+        app.insert_resource(SplatTierState::of(&QualityTier::quest_low()));
+        app.update();
+        assert_eq!(eye_sorts(&mut app), [SortMode::SharedCenter; 2]);
     }
 }
