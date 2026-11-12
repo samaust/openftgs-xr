@@ -27,6 +27,7 @@ mod exchange_bytes;
 mod fixture_server;
 mod fixtures_dir;
 mod layer_guard;
+mod layer_guard_without_instance;
 mod one_test_binary;
 mod probes;
 mod r9_references;

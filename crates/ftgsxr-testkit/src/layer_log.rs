@@ -27,6 +27,11 @@ const MESSENGER_TARGET: &str = "wgpu_hal::vulkan::instance";
 /// The Khronos layer's status message at instance creation, an INFO-severity message.
 const LAYER_ACTIVE: &str = "Khronos Validation Layer Active";
 
+/// The start of the debug message wgpu-hal logs under [`MESSENGER_TARGET`] for every
+/// Vulkan instance it makes or wraps, `Instance::from_raw` (wgpu-hal 29.0.4,
+/// `src/vulkan/instance.rs`, MIT OR Apache-2.0); Q-T726.2.
+const INSTANCE_MADE: &str = "Instance version:";
+
 /// What the subscriber has kept since the last take.
 #[derive(Default)]
 struct Kept {
@@ -37,12 +42,15 @@ struct Kept {
     /// Whether any instance in the process has reported the layer active; `take_active`
     /// does not clear it, so the guard's check (Q-105, changed) holds per process.
     ever_active: bool,
+    /// Whether wgpu-hal has made a Vulkan instance in the process (Q-T726.2).
+    ever_instance: bool,
 }
 
 static KEPT: Mutex<Kept> = Mutex::new(Kept {
     messages: Vec::new(),
     active: 0,
     ever_active: false,
+    ever_instance: false,
 });
 
 fn kept() -> std::sync::MutexGuard<'static, Kept> {
@@ -87,6 +95,8 @@ impl<S: Subscriber> Layer<S> for Collector {
         } else if record.message.contains(LAYER_ACTIVE) {
             kept.active += 1;
             kept.ever_active = true;
+        } else if record.message.starts_with(INSTANCE_MADE) {
+            kept.ever_instance = true;
         }
     }
 }
@@ -108,8 +118,10 @@ fn install() {
 /// The guard of one `gpu` test (Q-105): made before the test's first device, it installs
 /// the collector, and when dropped in a debug build it panics on any warning or error the
 /// Vulkan validation layer reported that nobody took, so the test fails (§1.13, R-16), and
-/// when no instance in the process has reported the layer active, so R-16 cannot pass
-/// vacuously on a machine where the layer fails to load (Q-105, changed, #209).
+/// when the process made a Vulkan instance but none reported the layer active, so R-16
+/// cannot pass vacuously on a machine where the layer fails to load (Q-105, changed, #209).
+/// A process that made no instance, such as a `ds` test that only reads a file, has no
+/// layer to check (Q-T726.2).
 ///
 /// Messages are kept per process, not per thread: under `--test-threads 1`, the `gpu`
 /// lane's rule (D-28), they are the guarded test's own.
@@ -149,7 +161,12 @@ impl Drop for LayerMessages {
                     left.len()
                 );
             }
-            if !kept().ever_active {
+            // Q-T726.2: the layer check applies once an instance was made.
+            let (made, active) = {
+                let kept = kept();
+                (kept.ever_instance, kept.ever_active)
+            };
+            if made && !active {
                 panic!(
                     "the Vulkan validation layer is not loaded: no instance in this process \
                      reported the Khronos validation layer active (R-16, Q-105)"
