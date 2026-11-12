@@ -31,6 +31,7 @@ mod bevy_adapter;
 mod bevy_adapter_m4;
 mod bevy_adapter_m6;
 mod bevy_adapter_m8;
+mod concurrent_compile;
 mod gpu_foundation;
 mod import_vulkan_texture;
 mod load_splat_asset;

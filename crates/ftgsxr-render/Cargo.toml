@@ -27,7 +27,9 @@ bevy = { workspace = true, features = ["bevy_render", "bevy_core_pipeline", "bev
 ftgsxr-core.workspace = true
 # `ModelBytes`, the input of `load_splat_asset` (§2.1, D-51).
 ftgsxr-io.workspace = true
-wgpu = { workspace = true, features = ["vulkan", "wgsl"] }
+# Q-T736.1: `std` keeps wgpu's error scopes per thread; without it they share one stack
+# per device, and the warm-up threads' scopes (Q-325) pop out of order (#722, #736).
+wgpu = { workspace = true, features = ["vulkan", "wgsl", "std"] }
 
 [dev-dependencies]
 ftgsxr-testkit.workspace = true
