@@ -1,0 +1,149 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-3",
+  "machine": {
+    "gpu": "Adreno (TM) 740",
+    "driver": "unknown",
+    "os": "unknown",
+    "cpu": "unknown",
+    "threads": 6,
+    "headset": "oculus/eureka/eureka:14/UP1A.231005.007.A1/52641960034500520:user/abl_signing_keys:release,amss_signing_keys:release,release-keys"
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "debug",
+  "results": [
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 100000,
+        "tier": "quest-balanced"
+      },
+      "measure": "sort_ms",
+      "value": 2.0645312070846558,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 100000,
+        "tier": "quest-balanced"
+      },
+      "measure": "keys",
+      "value": 99999,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 250000,
+        "tier": "quest-balanced"
+      },
+      "measure": "sort_ms",
+      "value": 5.3182549476623535,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 250000,
+        "tier": "quest-balanced"
+      },
+      "measure": "keys",
+      "value": 249999,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 500000,
+        "tier": "quest-balanced"
+      },
+      "measure": "sort_ms",
+      "value": 10.491640090942383,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 500000,
+        "tier": "quest-balanced"
+      },
+      "measure": "keys",
+      "value": 499999,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 1000000,
+        "tier": "quest-balanced"
+      },
+      "measure": "sort_ms",
+      "value": 21.00307273864746,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 1000000,
+        "tier": "quest-balanced"
+      },
+      "measure": "keys",
+      "value": 999993,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 2000000,
+        "tier": "quest-balanced"
+      },
+      "measure": "sort_ms",
+      "value": 46.19565010070801,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 2000000,
+        "tier": "quest-balanced"
+      },
+      "measure": "keys",
+      "value": 1999982,
+      "unit": "keys"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 4000000,
+        "tier": "quest-balanced"
+      },
+      "measure": "sort_ms",
+      "value": null,
+      "unit": "ms",
+      "skipped": "the frame buffers' records of 256000000 bytes for C = 4000000 exceed the device's max_storage_buffer_binding_size of 134217728 bytes (Q-377, Q-413)"
+    }
+  ],
+  "budgets": [
+    {
+      "id": "P-4",
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 1000000,
+        "tier": "quest-balanced"
+      },
+      "measure": "sort_ms",
+      "rule": "at_most",
+      "limit": 2.5,
+      "value": 21.00307273864746,
+      "pass": false
+    }
+  ],
+  "baseline": null,
+  "notes": []
+}
