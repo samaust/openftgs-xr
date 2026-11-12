@@ -536,6 +536,64 @@ fn gpu_bench_compares_neither_b6_nor_another_profile() {
 
 #[test]
 #[ignore = "gpu"]
+fn gpu_b4_bench_writes_the_cull_with_and_without_the_index() {
+    // §3.5 B-4, §1.7 `bench`, Q-408, Q-430: `ftgsxr bench B-4` is a desktop name; on a
+    // model it writes, for its size, the cull time and the rows visited with the temporal
+    // index and with every row, and the two B-4 checks on the indexed setup.
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "bench-b4",
+    );
+    let baselines = dir.join("baselines");
+    fs::create_dir_all(&baselines).unwrap();
+    let model = dir.join("tiny.ftgs-if");
+    let n = 20_000;
+    fs::write(
+        &model,
+        ftgsxr_testkit::exchange_bytes(&ftgsxr_testkit::random_model(9, n, 0)),
+    )
+    .unwrap();
+    let args = ["B-4", "--model", model.to_str().unwrap(), "--out"];
+    let (o, file) = bench_file(&args, &dir.join("b4.json"), &baselines);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(file["bench"], "B-4", "{file}");
+    let results = file["results"].as_array().unwrap();
+    let value = |index: &str, measure: &str| {
+        results
+            .iter()
+            .find(|r| r["setup"]["index"] == index && r["measure"] == measure)
+            .unwrap_or_else(|| panic!("{index} {measure}: {file}"))["value"]
+            .as_f64()
+            .unwrap()
+    };
+    for index in ["temporal", "every row"] {
+        assert!(value(index, "cull_ms") > 0.0, "{index}");
+    }
+    assert_eq!(value("every row", "rows_visited"), n as f64);
+    assert!(value("temporal", "rows_visited") <= n as f64);
+    let ids: Vec<_> = file["budgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b["id"].clone(), b["measure"].clone()))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            (serde_json::json!("B-4"), serde_json::json!("cull_ms")),
+            (serde_json::json!("B-4"), serde_json::json!("rows_visited")),
+        ]
+    );
+}
+
+#[test]
+#[ignore = "gpu"]
 fn gpu_b9_bench_writes_the_desktops_startup_figures() {
     // §3.5 B-9, Q-155, Q-103: `ftgsxr bench B-9` writes the startup's figures in the
     // benchmark file, the medians without and with the UI and the process's first

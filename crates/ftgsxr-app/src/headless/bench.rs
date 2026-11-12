@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5): the desktop
-//! benchmarks B-1, B-3, B-5, B-6 and B-9 (#289, Q-155), their JSON file and the comparison with the stored
+//! benchmarks B-1, B-3, B-4 (#733, Q-408), B-5, B-6 and B-9 (#289, Q-155), their JSON file and the comparison with the stored
 //! baseline (Q-67, Q-102, Q-103).
 
 use std::fs;
@@ -25,6 +25,7 @@ use ftgsxr_render::{
     SplatPasses, ViewParams,
 };
 
+mod b4;
 mod b9;
 
 use super::{HeadlessError, core_input, identity_file, input_error, load, with_n, write_atomic};
@@ -115,14 +116,14 @@ pub(crate) fn compare_against(
 }
 
 /// `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5, Q-67): runs the
-/// desktop benchmark `name` (B-1, B-3, B-5, B-6 or B-9) on the high-performance adapter, with
+/// desktop benchmark `name` (B-1, B-3, B-4, B-5, B-6 or B-9) on the high-performance adapter, with
 /// the setups of Q-102 or, with `model`, on that one model (any §1.2 input); compares
 /// its budgets with the stored baseline `<NAME>.json` when the baseline has the run's
 /// profile and GPU, else notes why not in the file (Q-103); and writes the file at `out`
 /// when given. A NAME the desktop does not run is `Input`; a malformed baseline is `Input`
 /// (E-JSON), and an `out` whose directory does not exist an `Input` error, both before the
 /// GPU opens; an invalid model is `Input` with its E-FILE code; no adapter, or no timestamp
-/// queries for B-3, is `Environment`. GPU validation messages are a note, not an error
+/// queries for B-3 or B-4, is `Environment`. GPU validation messages are a note, not an error
 /// (Q-116).
 // Q-67, Q-102, Q-103
 pub fn cmd_bench(
@@ -134,8 +135,8 @@ pub fn cmd_bench(
 }
 
 /// `cmd_bench` on a machine that may be a headset (Q-406): with `headset`, the headset's
-/// build fingerprint, the run is the headset's, before any XR session: B-3, B-5 or B-6
-/// (any other NAME is `Input`), in `quest-balanced` with its 1.5 GiB budget, B-3 against
+/// build fingerprint, the run is the headset's, before any XR session: B-3, B-4, B-5 or
+/// B-6 (any other NAME is `Input`), in `quest-balanced` with its 1.5 GiB budget, B-3 against
 /// P-4's Quest limit (Q-413), the file's `machine.headset` holding `headset` as given and
 /// the stored baseline `<NAME>.quest.json`; B-5's files are written beside `out` when it is
 /// given (Q-417). A size the device refuses, over its memory budget or a binding
@@ -169,6 +170,8 @@ impl On {
     fn runner(&self, name: &str) -> Option<Runner> {
         let run: Runner = match (self, name) {
             (_, "B-3") => bench_b3,
+            // Q-408, Q-430
+            (_, "B-4") => b4::bench_b4,
             (_, "B-5") => bench_b5,
             (_, "B-6") => bench_b6,
             (On::Desktop, "B-1") => bench_b1,
@@ -182,8 +185,8 @@ impl On {
     /// The names `runner` takes, for the refusal's text.
     fn names(&self) -> &'static str {
         match self {
-            On::Desktop => "not a desktop benchmark (B-1, B-3, B-5, B-6, B-9)",
-            On::Headset(_) => "not a headset benchmark run before the session (B-3, B-5, B-6)",
+            On::Desktop => "not a desktop benchmark (B-1, B-3, B-4, B-5, B-6, B-9)",
+            On::Headset(_) => "not a headset benchmark run before the session (B-3, B-4, B-5, B-6)",
         }
     }
 
@@ -1579,8 +1582,9 @@ mod tests {
     }
 
     #[test]
-    fn the_headset_runs_b3_b5_and_b6_in_quest_balanced_against_the_quest_baseline() {
-        // Q-406, Q-413: the headset's names, tier, P-4 limit and baseline file.
+    fn the_headset_runs_b3_to_b6_in_quest_balanced_against_the_quest_baseline() {
+        // Q-406, Q-413: the headset's names, tier, P-4 limit and baseline file; B-4 runs
+        // on both machines (§3.5, Q-406, #733).
         let quest = On::Headset("print".to_owned());
         assert_eq!(quest.tier().name, "quest-balanced");
         assert_eq!(On::Desktop.tier().name, "desktop");
@@ -1588,13 +1592,13 @@ mod tests {
         assert_eq!(On::Desktop.p4_limit_ms(), 0.4);
         assert_eq!(quest.baseline_file("B-3"), "B-3.quest.json");
         assert_eq!(On::Desktop.baseline_file("B-3"), "B-3.json");
-        for name in ["B-3", "B-5", "B-6"] {
+        for name in ["B-3", "B-4", "B-5", "B-6"] {
             assert!(quest.runner(name).is_some(), "{name}");
         }
-        for name in ["B-1", "B-2", "B-4", "B-7", "B-8", "B-9", "B-10"] {
+        for name in ["B-1", "B-2", "B-7", "B-8", "B-9", "B-10"] {
             assert!(quest.runner(name).is_none(), "{name}");
         }
-        for name in ["B-1", "B-3", "B-5", "B-6", "B-9"] {
+        for name in ["B-1", "B-3", "B-4", "B-5", "B-6", "B-9"] {
             assert!(On::Desktop.runner(name).is_some(), "{name}");
         }
     }

@@ -2,7 +2,7 @@
 
 //! The headset's benchmark runner (§3.5, Q-406): the launch intent's string extra
 //! `ftgsxr-bench` names a benchmark that runs before the XR session on the headless
-//! device, as Dv-3 does (Q-122): B-3, B-5 or B-6 through `ftgsxr_app::cmd_bench_on`, with
+//! device, as Dv-3 does (Q-122): B-3, B-4, B-5 or B-6 through `ftgsxr_app::cmd_bench_on`, with
 //! the headset's build fingerprint from the extra `ftgsxr-bench-headset` (Q-418). It
 //! writes `dv/<NAME>.json` and prints `ftgsxr-bench: <NAME> DONE|FAIL <detail>` under the
 //! tag `ftgsxr`.

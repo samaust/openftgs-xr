@@ -140,7 +140,7 @@ fn main() {
         std::process::exit(0);
     }
     if let Some(name) = bench.as_deref().filter(|n| !bench_runner::in_session(n)) {
-        // Q-406: B-3, B-5 and B-6 before the XR session, as Dv-3 (Q-122), then the process
+        // Q-406: B-3, B-4, B-5 and B-6 before the XR session, as Dv-3 (Q-122), then the process
         // exits.
         let headset = jni_calls::intent_extra(bench_runner::HEADSET_EXTRA);
         let result = match device_test::dv_dir() {

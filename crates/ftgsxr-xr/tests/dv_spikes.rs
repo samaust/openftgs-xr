@@ -29,7 +29,7 @@ const ROWS_VAR: &str = "FTGSXR_SPIKES_ROWS";
 const LOG_BUFFER: &str = "16M";
 
 /// Q-420's model: `dv_support`'s at degree 0.
-fn every_row_persistent(seed: u64, n: usize) -> Model {
+pub(crate) fn every_row_persistent(seed: u64, n: usize) -> Model {
     dv_support::every_row_persistent(seed, n, 0)
 }
 

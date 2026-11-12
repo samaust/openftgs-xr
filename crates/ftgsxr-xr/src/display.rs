@@ -65,6 +65,9 @@ use crate::error::log_error;
 use crate::session::Recreate;
 
 mod metrics;
+// R-17's device side (#730, Q-431, Q-308), built for the device and the host tests.
+#[cfg(any(test, target_os = "android"))]
+mod r17;
 
 /// The scale change that re-creates the swapchain (§1.12).
 const SCALE_STEP: f32 = 0.1;
@@ -389,6 +392,9 @@ impl Plugin for DisplayPlugin {
             .add_oxr_event_handler(log_rate_change);
         // #725: the runtime's counters for the device spikes (Q-420).
         metrics::add(app);
+        // R-17 on the device: inert until the quest runner's entity names it (Q-308).
+        #[cfg(target_os = "android")]
+        r17::add(app);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(XrPreDestroySession, drop_profile);
             render_app.add_systems(

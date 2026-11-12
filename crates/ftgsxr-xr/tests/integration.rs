@@ -21,6 +21,7 @@ mod dv9_anchors;
 mod dv_bench;
 mod dv_r09_shared_center;
 mod dv_r10_tier_bounds;
+mod dv_r17_governor;
 mod dv_session_bench;
 mod dv_spikes;
 mod i13_xr_unsupported_toast;
