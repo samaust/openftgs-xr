@@ -35,3 +35,4 @@ mod xr_display;
 mod xr_hands;
 mod xr_passthrough_unsupported;
 mod xr_rig_binding;
+mod xr_shared_center;
