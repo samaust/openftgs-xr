@@ -1,0 +1,148 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-1",
+  "machine": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  595.99.02  Wed Aug 26 05:24:08 UTC 2026",
+    "os": "Ubuntu 24.04.5 LTS (kernel 7.0.0-42-generic)",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+    "threads": 24
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "release",
+  "results": [
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "fps_min",
+      "value": 958.4979953014429,
+      "unit": "fps"
+    },
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "fps_mean",
+      "value": 1335.6928595047018,
+      "unit": "fps"
+    },
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "frame_ms_max",
+      "value": 1.043299,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "gpu_cull_ms",
+      "value": 0.10521600022912025,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "gpu_sort_ms",
+      "value": 0.3425440043210983,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "gpu_draw_ms",
+      "value": 0.15360000729560852,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "gpu_total_ms",
+      "value": 0.6154400110244751,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "visible_splats",
+      "value": 194695,
+      "unit": "splats"
+    }
+  ],
+  "budgets": [
+    {
+      "id": "P-2",
+      "setup": {
+        "model": "4dcdeba96f7abba39d5b3bf974d45482bc4af6e0175310a50d76fad07be30387",
+        "n": 1000000,
+        "sh_degree": 2,
+        "width": 1920,
+        "height": 1080,
+        "tier": "desktop"
+      },
+      "measure": "fps_min",
+      "rule": "at_least",
+      "limit": 90,
+      "value": 958.4979953014429,
+      "pass": true
+    }
+  ],
+  "baseline": "/home/auss/git_repos/samaust/openftgs-xr/.claude/worktrees/ticket-734-calibration/benchmarks/baselines/B-1.json",
+  "notes": [
+    "a frame's time is the wall time from encoding to the GPU's completion, each frame submitted and waited for (Q-102)",
+    "gpu_cull_ms, gpu_sort_ms, gpu_draw_ms and gpu_total_ms are medians over the measured frames of the GPU's timestamps: stages 1-3, stage 4, the splat draw, and the cull's begin to the draw's end; reported figures, not budgets (Q-81, Q-114)",
+    "without --model, B-1's synthetic models (every row persistent, Q-102) fill far more pixels per splat than a trained model of the same N, so the draw is bound by fill rate and P-2 is checked against a heavier load than its trained model until M-8 adds kitchen (Q-108)"
+  ]
+}
