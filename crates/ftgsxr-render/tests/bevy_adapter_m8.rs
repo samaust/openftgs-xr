@@ -444,6 +444,7 @@ fn gpu_bevy_adapter_shared_center_pair_prepares_once_and_both_eyes_draw() {
         scene.take_stats();
         scene.frames(SETTLE_FRAMES);
         let skipped = scene.take_stats();
+        assert!(!skipped.is_empty(), "statistics of the unchanged frames");
         assert!(
             skipped
                 .iter()
