@@ -32,7 +32,7 @@ const LOG_BUFFER: &str = "16M";
 /// transient row made persistent as E3's persistent rows are drawn, opacity in
 /// \[0.6, 0.99\] and duration 2–4 T_τ, each mapped from the row's own uniform opacity draw
 /// in \[0.002, 0.99\], so the model stays the same for the same arguments.
-fn every_row_persistent(seed: u64, n: usize) -> Model {
+pub(crate) fn every_row_persistent(seed: u64, n: usize) -> Model {
     let mut m = ftgsxr_testkit::random_model(seed, n, 0);
     let span = m.time.tau1 - m.time.tau0;
     for i in 0..n {

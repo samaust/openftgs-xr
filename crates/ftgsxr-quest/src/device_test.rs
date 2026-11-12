@@ -21,6 +21,7 @@ mod dv7;
 mod dv8;
 mod dv9;
 mod r10;
+mod r17;
 mod r9;
 mod s3;
 mod spikes;
@@ -75,13 +76,19 @@ pub(crate) fn add(app: &mut App, name: &str) {
         dv7::NAME => dv7::add(app),
         dv8::NAME => dv8::add(app),
         dv9::NAME => dv9::add(app),
+        r17::NAME => r17::add(app),
         s3::NAME => s3::add(app),
         spikes::NAME => spikes::add(app),
         _ => verdict(name, false, "unknown test"),
     }
 }
 
-/// The tier a device test runs in, when it names one; otherwise the settings' (#729).
+/// The tier a device test runs in, when it names one; otherwise the settings' (#729,
+/// #730).
 pub(crate) fn tier(name: &str) -> Option<&'static str> {
-    (name == s3::NAME).then_some(s3::TIER)
+    match name {
+        s3::NAME => Some(s3::TIER),
+        r17::NAME => Some(r17::TIER),
+        _ => None,
+    }
 }
