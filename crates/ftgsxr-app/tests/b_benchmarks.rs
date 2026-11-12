@@ -343,3 +343,163 @@ fn gpu_b6_matches_the_memory_table_within_1_percent() {
         assert_eq!(b["pass"], true);
     }
 }
+
+/// A written `ftgsxr-bench` file of `bench` with one P-4 budget of `value` ms, on the
+/// Quest when `headset` is given (Q-67, Q-103, Q-417's `machine.headset`).
+fn written_file(bench: &str, profile: &str, value: f64, headset: Option<&str>) -> String {
+    let mut machine = serde_json::json!({
+        "gpu": "Adreno (TM) 740", "driver": "unknown", "os": "unknown", "cpu": "unknown",
+        "threads": 3
+    });
+    if let Some(h) = headset {
+        machine["headset"] = h.into();
+    }
+    serde_json::to_string_pretty(&serde_json::json!({
+        "format": "ftgsxr-bench", "version": 1, "bench": bench, "machine": machine,
+        "versions": {"ftgsxr": "0.1.0", "bevy": "0.19.1", "wgpu": "29.0.4"},
+        "profile": profile,
+        "results": [{"setup": {"capacity": 1000000, "tier": "quest-balanced"},
+                     "measure": "sort_ms", "value": value, "unit": "ms"}],
+        "budgets": [{"id": "P-4", "setup": {"capacity": 1000000, "tier": "quest-balanced"},
+                     "measure": "sort_ms", "rule": "at_most", "limit": 2.5, "value": value,
+                     "pass": value <= 2.5}],
+        "baseline": null, "notes": []
+    }))
+    .unwrap()
+}
+
+#[test]
+fn compare_bench_file_lists_a_budget_20_percent_worse_than_the_quest_baseline() {
+    // Q-T734.1, §3.5: a pulled headset file is compared with `<bench>.quest.json` by
+    // Q-103's rule; 24 ms against a baseline of 20 ms is 20 % worse, more than 10 %.
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "quest-20-percent",
+    );
+    std::fs::write(
+        dir.join("B-3.quest.json"),
+        written_file("B-3", "debug", 20.0, Some("quest-build")),
+    )
+    .unwrap();
+    let pulled = written_file("B-3", "debug", 24.0, Some("quest-build"));
+    let report = ftgsxr_app::compare_bench_file(&pulled, &dir).expect("compared");
+    assert_eq!(report.regressions.len(), 1, "{:?}", report.regressions);
+    assert!(
+        report.regressions[0].starts_with("P-4 sort_ms"),
+        "{:?}",
+        report.regressions
+    );
+    let file: Value = serde_json::from_str(&report.json).expect("well-formed JSON");
+    let compared = file["baseline"]
+        .as_str()
+        .expect("the baseline compared against");
+    assert!(compared.ends_with("B-3.quest.json"), "{compared}");
+}
+
+#[test]
+fn compare_bench_file_takes_the_desktop_baseline_for_a_file_without_a_headset() {
+    // Q-T734.1: without `machine.headset` the baseline is `<bench>.json`; the Quest's
+    // `.quest.json` beside it is not read.
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "desktop-name",
+    );
+    std::fs::write(
+        dir.join("B-3.json"),
+        written_file("B-3", "debug", 24.0, None),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("B-3.quest.json"),
+        written_file("B-3", "debug", 1.0, Some("quest-build")),
+    )
+    .unwrap();
+    let report = ftgsxr_app::compare_bench_file(&written_file("B-3", "debug", 24.0, None), &dir)
+        .expect("compared");
+    assert!(report.regressions.is_empty(), "{:?}", report.regressions);
+    let file: Value = serde_json::from_str(&report.json).unwrap();
+    assert!(
+        file["baseline"].as_str().unwrap().ends_with("B-3.json"),
+        "{}",
+        file["baseline"]
+    );
+}
+
+#[test]
+fn compare_bench_file_compares_nothing_against_another_profile_and_says_so() {
+    // Q-T734.1, Q-103: a baseline of another profile is not compared; the file's
+    // `baseline` stays null and a note says which field differs.
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "other-profile",
+    );
+    std::fs::write(
+        dir.join("B-3.quest.json"),
+        written_file("B-3", "release", 1.0, Some("quest-build")),
+    )
+    .unwrap();
+    let pulled = written_file("B-3", "debug", 24.0, Some("quest-build"));
+    let report = ftgsxr_app::compare_bench_file(&pulled, &dir).expect("compared");
+    assert!(report.regressions.is_empty(), "{:?}", report.regressions);
+    let file: Value = serde_json::from_str(&report.json).unwrap();
+    assert!(file["baseline"].is_null());
+    let notes = file["notes"].as_array().unwrap();
+    assert!(
+        notes.iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("profile debug against release")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn compare_bench_file_refuses_a_file_that_is_not_a_benchmark_file() {
+    // Q-T734.1: not well-formed ftgsxr-bench JSON is Input (E-JSON), exit 2.
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "malformed",
+    );
+    for text in [
+        "not json",
+        r#"{"format": "something-else", "bench": "B-3"}"#,
+    ] {
+        let e = ftgsxr_app::compare_bench_file(text, &dir).expect_err(text);
+        assert!(matches!(e, HeadlessError::Input(_)), "{e:?}");
+        assert_eq!(exit_code(&e), 2);
+        assert!(e.to_string().contains("E-JSON"), "{e}");
+    }
+}
+
+#[test]
+fn compare_bench_file_compares_each_stored_quest_baseline_with_itself() {
+    // Q-T734.1, Q-406: every committed `.quest.json` is a file the host compares; read
+    // against the workspace's baselines it finds itself and lists nothing.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/baselines");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !name.ends_with(".quest.json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let report = ftgsxr_app::compare_bench_file(&text, &dir).expect(&name);
+        assert!(
+            report.regressions.is_empty(),
+            "{name}: {:?}",
+            report.regressions
+        );
+        let file: Value = serde_json::from_str(&report.json).unwrap();
+        assert!(
+            file["baseline"].as_str().unwrap().ends_with(&name),
+            "{name}"
+        );
+        seen += 1;
+    }
+    assert!(seen >= 8, "the stored Quest baselines: {seen}");
+}

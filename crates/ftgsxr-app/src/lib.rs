@@ -25,10 +25,11 @@ pub mod plugin;
 pub mod rig;
 pub mod ui;
 
-// Q-67: `BenchReport` and `cmd_bench`; Q-406: `cmd_bench_on`; Q-414: `cmd_render_stereo`.
+// Q-67: `BenchReport` and `cmd_bench`; Q-406: `cmd_bench_on`; Q-414: `cmd_render_stereo`;
+// Q-T734.1: `compare_bench_file`.
 pub use headless::{
     BenchReport, HeadlessError, cmd_bench, cmd_bench_on, cmd_export, cmd_import, cmd_info,
-    cmd_render, cmd_render_stereo, cmd_validate, exit_code,
+    cmd_render, cmd_render_stereo, cmd_validate, compare_bench_file, exit_code,
 };
 // §2.1 `ftgsxr_app::desktop_input`; Q-197: `KeyMap`'s methods.
 pub use desktop_input::{DesktopInputPlugin, KeyMap};
