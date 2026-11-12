@@ -1,0 +1,926 @@
+{
+  "format": "ftgsxr-bench",
+  "version": 1,
+  "bench": "B-4",
+  "machine": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  595.99.02  Wed Aug 26 05:24:08 UTC 2026",
+    "os": "Ubuntu 24.04.5 LTS (kernel 7.0.0-42-generic)",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+    "threads": 24
+  },
+  "versions": {
+    "ftgsxr": "0.1.0",
+    "bevy": "0.19.1",
+    "wgpu": "29.0.4"
+  },
+  "profile": "release",
+  "results": [
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "value": 0.01182399969547987,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.0014720000326633453,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "value": 66282,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "visible_splats",
+      "value": 32862,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms",
+      "value": 0.013279999606311321,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.0015040002763271332,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "rows_visited",
+      "value": 100000,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "visible_splats",
+      "value": 32862,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "value": 0.022895999252796173,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.002367999404668808,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "value": 165854,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "visible_splats",
+      "value": 82168,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms",
+      "value": 0.02276800014078617,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.0021119993180036545,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "rows_visited",
+      "value": 250000,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "visible_splats",
+      "value": 82168,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "value": 0.03758399933576584,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.0034560002386569977,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "value": 332095,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "visible_splats",
+      "value": 164411,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms",
+      "value": 0.03832000121474266,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.002399999648332596,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "rows_visited",
+      "value": 500000,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "visible_splats",
+      "value": 164411,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "value": 0.07051200047135353,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.00403200089931488,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "value": 664740,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "visible_splats",
+      "value": 329130,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms",
+      "value": 0.08356799930334091,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.0062720030546188354,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "rows_visited",
+      "value": 1000000,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "visible_splats",
+      "value": 329130,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "value": 0.144384004175663,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.006144002079963684,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "value": 1329701,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "visible_splats",
+      "value": 657971,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms",
+      "value": 0.1708960011601448,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.00831998884677887,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "rows_visited",
+      "value": 2000000,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "visible_splats",
+      "value": 657971,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "value": 0.21967999637126923,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.019040003418922424,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "value": 1995039,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "visible_splats",
+      "value": 986303,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms",
+      "value": 0.25992000102996826,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "cull_ms_spread",
+      "value": 0.0140799880027771,
+      "unit": "ms"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "rows_visited",
+      "value": 3000000,
+      "unit": "rows"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "visible_splats",
+      "value": 986303,
+      "unit": "splats"
+    },
+    {
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "every row"
+      },
+      "measure": "overflow",
+      "value": 0,
+      "unit": "flag"
+    }
+  ],
+  "budgets": [
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "rule": "at_most",
+      "limit": 0.014783999882638454,
+      "value": 0.01182399969547987,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 100000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "rule": "at_most",
+      "limit": 100000,
+      "value": 66282,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "rule": "at_most",
+      "limit": 0.02513599954545498,
+      "value": 0.022895999252796173,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 250000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "rule": "at_most",
+      "limit": 250000,
+      "value": 165854,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "rule": "at_most",
+      "limit": 0.042152001336216924,
+      "value": 0.03758399933576584,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 500000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "rule": "at_most",
+      "limit": 500000,
+      "value": 332095,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "rule": "at_most",
+      "limit": 0.091924799233675,
+      "value": 0.07051200047135353,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 1000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "rule": "at_most",
+      "limit": 1000000,
+      "value": 664740,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "rule": "at_most",
+      "limit": 0.1879856012761593,
+      "value": 0.144384004175663,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 2000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "rule": "at_most",
+      "limit": 2000000,
+      "value": 1329701,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "cull_ms",
+      "rule": "at_most",
+      "limit": 0.2859120011329651,
+      "value": 0.21967999637126923,
+      "pass": true
+    },
+    {
+      "id": "B-4",
+      "setup": {
+        "model": "synthetic, random_model's rows",
+        "n": 3000000,
+        "sh_degree": 0,
+        "tier": "desktop",
+        "index": "temporal"
+      },
+      "measure": "rows_visited",
+      "rule": "at_most",
+      "limit": 3000000,
+      "value": 1995039,
+      "pass": true
+    }
+  ],
+  "baseline": null,
+  "notes": [
+    "B-4's cull_ms is the median GPU time of stages 1-3 (the cull and the one-workgroup size dispatch) over 32 frames, cull_ms_spread their largest minus their smallest; rows_visited is the dispatch range at the frame's tau (the temporal index's, or every row); the B-4 budgets check that the indexed cull is not slower than the every-row cull by more than the tolerance, the larger of the two setups' spreads and 10 % of the every-row median, and visits no more rows (Q-408, Q-430)"
+  ]
+}
