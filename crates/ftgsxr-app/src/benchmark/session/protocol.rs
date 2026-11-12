@@ -793,7 +793,7 @@ mod tests {
     /// at 90 Hz, on the slowest camera's figure; nothing for the other tiers or the center
     /// view; not judged when a camera overflowed (Q-407).
     #[test]
-    fn p1_budgets_only_quest_balanced_orbit_without_overflow() {
+    fn conclude_budgets_only_quest_balanced_orbit_without_overflow() {
         let outcomes = (0..8)
             .map(|i| ran(10.0 + f64::from(i), 9.0, 2.0, false))
             .collect();
@@ -837,7 +837,7 @@ mod tests {
     /// frame time against its reference: occlusion on against off (+1.5), each lighting
     /// mode against occlusion on with lighting off; a mode not reached has no cost.
     #[test]
-    fn b7_ratio_and_b8_costs() {
+    fn conclude_gives_the_sort_ratio_and_the_lighting_costs() {
         let mut m = Measured::default();
         let b7 = runs(
             "B-7",
@@ -896,7 +896,7 @@ mod tests {
     /// Q-222: the statistics of the fifth update count the first splat, so the frame is
     /// the third's (0.7 s), unless the upload ended later.
     #[test]
-    fn b9_first_frame_is_two_updates_before_the_first_counted_splat() {
+    fn first_frame_is_two_updates_before_the_first_counted_splat() {
         let ends = [0.5, 0.6, 0.7, 0.8, 0.9];
         assert_eq!(first_frame(&ends, 0.55), 0.7);
         assert_eq!(first_frame(&ends, 0.75), 0.75);
@@ -928,7 +928,7 @@ mod tests {
     /// model's 180,001,152 bytes loaded in 1.80001152 s is 1 s per 100 MB, met at the
     /// limit, and 0.9 s for 90 MB of 10⁶ bytes is 1 s too.
     #[test]
-    fn dv5_judges_every_block_and_the_load_per_100_mb() {
+    fn conclude_dv5_judges_every_block_and_the_load_per_100_mb() {
         let setup = Json::obj([("tier", Json::str("quest-balanced"))]);
         let p = play(
             &[10.0, 10.5, 13.0, 10.0, 10.2],
@@ -987,7 +987,7 @@ mod tests {
     /// Q-407: a block whose visible count exceeded C leaves P-1 reported, not judged,
     /// with the note; P-3 and P-4 are still judged.
     #[test]
-    fn dv5_overflow_reports_p1_without_judging_it() {
+    fn conclude_dv5_overflow_reports_p1_without_judging_it() {
         let setup = Json::obj([("tier", Json::str("quest-balanced"))]);
         let mut m = Measured::default();
         let p = play(&[70.0, 76.0], &[3.8, 3.9], 1);
