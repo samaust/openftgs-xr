@@ -65,6 +65,8 @@ use crate::error::log_error;
 use crate::session::Recreate;
 
 mod metrics;
+// A-10's record (Q-411).
+mod record;
 // R-17's device side (#730, Q-431, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 mod r17;
@@ -392,6 +394,8 @@ impl Plugin for DisplayPlugin {
             .add_oxr_event_handler(log_rate_change);
         // #725: the runtime's counters for the device spikes (Q-420).
         metrics::add(app);
+        // A-10's record: the performance notifications and a line a second (Q-411).
+        record::add(app);
         // R-17 on the device: inert until the quest runner's entity names it (Q-308).
         #[cfg(target_os = "android")]
         r17::add(app);

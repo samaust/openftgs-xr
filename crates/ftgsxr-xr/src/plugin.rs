@@ -70,9 +70,12 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.fb_swapchain_update_state = true;
     raw.fb_swapchain_update_state_vulkan = true;
     raw.meta_recommended_layer_resolution = true;
-    // §1.13 HUD, Appendix E.1: the runtime's metrics; only the device spikes read them
-    // yet (#725, `display`'s metrics, Q-124's raw tables).
+    // §1.13 HUD, Appendix E.1: the runtime's metrics, for the device spikes (#725), the
+    // session benchmarks (Q-433) and A-10's record (Q-411), through Q-124's raw tables.
     raw.meta_performance_metrics = true;
+    // Appendix E.1: the performance notifications, for A-10's record only; no level is
+    // ever requested (Q-411).
+    raw.ext_performance_settings = true;
     // §1.9's anchors (D-26, #571): the entity, its query by UUID and its persistence.
     raw.fb_spatial_entity = true;
     raw.fb_spatial_entity_query = true;
@@ -356,5 +359,12 @@ mod tests {
     fn extensions_ask_for_the_performance_metrics() {
         assert!(extensions(true).raw().meta_performance_metrics);
         assert!(extensions(false).raw().meta_performance_metrics);
+    }
+
+    /// Q-411: the performance notifications, whether or not hands are wanted.
+    #[test]
+    fn extensions_ask_for_the_performance_settings() {
+        assert!(extensions(true).raw().ext_performance_settings);
+        assert!(extensions(false).raw().ext_performance_settings);
     }
 }

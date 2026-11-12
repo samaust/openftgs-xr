@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The runtime's performance counters (XR\_META\_performance\_metrics; §1.13 HUD,
-//! Appendix E.1), read for the device spikes of #725 only: nothing else reads them yet.
+//! Appendix E.1), read for the device spikes of #725, the session benchmarks (Q-433) and
+//! A-10's record, which reads the dropped-frame count once a second (`record`, Q-411).
 //! Called through the openxr crate's raw function table as `display` calls its
 //! extensions (Q-124), `unsafe` with SAFETY comments (§2.6).
 //!
@@ -54,7 +55,7 @@ struct Window {
 }
 
 #[derive(Resource, Default)]
-struct Metrics {
+pub(crate) struct Metrics {
     /// Whether this session's metrics system was enabled (or the attempt failed).
     tried: bool,
     enabled: bool,
@@ -151,6 +152,46 @@ fn run(
     }
     if benching && let Some(mut hud) = hud {
         hud.runtime_counters = now;
+    }
+}
+
+/// The path A-10's record reads (spike S1: cumulative, changing almost every frame).
+const DROPPED: &str = "/perfmetrics_meta/compositor/dropped_frame_count";
+
+/// The runtime's cumulative dropped-frame count for A-10's record (Q-411): the metrics
+/// system is enabled for the session on the first call, as a window enables it; `None`
+/// without the extension, without the counter, or when the query fails.
+pub(crate) fn dropped_frames(
+    m: &mut Metrics,
+    instance: &OxrInstance,
+    session: &OxrSession,
+) -> Option<f64> {
+    let fp = instance.exts().meta_performance_metrics?;
+    if !m.tried {
+        m.tried = true;
+        m.enabled = enable(instance, session, &fp, &mut m.counters);
+    }
+    if !m.enabled {
+        return None;
+    }
+    let c = m.counters.iter().find(|c| c.name == DROPPED)?;
+    let mut out = sys::PerformanceMetricsCounterMETA {
+        ty: sys::PerformanceMetricsCounterMETA::TYPE,
+        next: std::ptr::null(),
+        counter_flags: sys::PerformanceMetricsCounterFlagsMETA::EMPTY,
+        counter_unit: sys::PerformanceMetricsCounterUnitMETA::GENERIC,
+        uint_value: 0,
+        float_value: 0.0,
+    };
+    // SAFETY: as in `run`: the extension's table is loaded (checked above); the session
+    // handle is alive (a main-world resource while the session exists); the path is one
+    // the runtime enumerated; `out` is a fully initialised output struct with its TYPE
+    // set, outliving the call.
+    let res = unsafe { (fp.query_performance_metrics_counter)(session.as_raw(), c.path, &mut out) };
+    if res.into_raw() < 0 {
+        None
+    } else {
+        value(&out)
     }
 }
 

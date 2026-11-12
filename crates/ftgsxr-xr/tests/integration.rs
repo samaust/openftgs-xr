@@ -6,6 +6,7 @@
 mod dv_support;
 mod xr_support;
 
+mod a10_sustained_use;
 mod dv10_storage;
 mod dv11_light;
 mod dv12_display;
