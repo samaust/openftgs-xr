@@ -261,6 +261,23 @@ pub struct HudData {
     /// crate's to write.
     // Q-389, Q-394
     pub light_gains: Option<Vec3>,
+    /// The runtime's performance counters (XR_META_performance_metrics, §1.13 HUD), each
+    /// frame they are read: while a `SessionBench` runs (Q-T731.2); empty otherwise. The
+    /// XR crate's to write.
+    // Q-T731.2
+    pub runtime_counters: Vec<HudCounter>,
+}
+
+/// One of the runtime's performance counters on the HUD (§1.13, Q-T731.2).
+// Q-T731.2
+#[derive(Clone, Debug, PartialEq)]
+pub struct HudCounter {
+    /// The counter's path, as the runtime enumerates it.
+    pub path: String,
+    /// Its unit: `ms`, `%`, `Hz`, `bytes` or `generic`.
+    pub unit: &'static str,
+    /// This frame's value; `None` when the runtime flags it invalid.
+    pub value: Option<f64>,
 }
 
 /// The scene anchor's state on the HUD (§1.13 HUD, Q-345).

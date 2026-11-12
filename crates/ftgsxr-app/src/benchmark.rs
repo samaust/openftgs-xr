@@ -13,6 +13,7 @@ use bevy::log::warn;
 use ftgsxr_core::{Mat3, Quat, Vec3};
 
 pub(crate) mod json;
+pub(crate) mod session;
 pub(crate) mod synthetic;
 
 use json::Json;
