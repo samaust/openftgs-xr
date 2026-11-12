@@ -801,6 +801,22 @@ fn file_encoded_rule(format: TextureFormat) -> Result<Option<&'static str>, &'st
     }
 }
 
+/// Logs the splat layer's size `layer` for a view of `view` at render scale `scale`, when
+/// the layer is made at a new size (Q-412, spike S3, #729: the device run reads it
+/// beside the swapchain's). A desktop resize changes the size every frame, so the line is
+/// a per-frame message, one per second (§1.13, Q-167's `per_frame` field).
+// Q-167
+fn log_layer_size(layer: UVec2, view: UVec2, scale: f32) {
+    info!(
+        per_frame = true,
+        "splat layer {}x{} for a {}x{} view at render scale {scale}",
+        layer.x,
+        layer.y,
+        view.x,
+        view.y
+    );
+}
+
 /// The splat layer's size at render scale `scale` (§1.12): the view's size times the
 /// scale, rounded, at least one pixel; §1.7 Window: the scale applies to the layer only.
 fn layer_size(view: UVec2, scale: f32) -> UVec2 {
@@ -897,12 +913,7 @@ fn prepare_view(
     if matches!(camera.output, OutputSpace::LinearOver { .. })
         && state.layer.as_ref().is_none_or(|(_, s)| *s != draw_size)
     {
-        // Q-412, spike S3 (#729): the layer's size is logged when it changes, so the
-        // device run reads it beside the swapchain's.
-        info!(
-            "splat layer {}x{} for a {}x{} view at render scale {render_scale}",
-            draw_size.x, draw_size.y, size.x, size.y
-        );
+        log_layer_size(draw_size, size, render_scale);
         let texture = dev.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("ftgsxr splat layer"),
             size: wgpu::Extent3d {
@@ -1191,6 +1202,47 @@ mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A writer into a shared buffer, for a captured log.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("the log buffer")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // §1.13 ("Per-frame messages are rate-limited to one per second per site"), Q-167: a
+    // desktop resize changes the layer's size every frame, so its line is a per-frame
+    // message, marked with the `per_frame` field the desktop's limiter keys on; the
+    // text the device runs read (Q-412) is unchanged.
+    #[test]
+    fn log_layer_size_is_a_per_frame_message() {
+        use ::bevy::log::tracing_subscriber::{self, util::SubscriberInitExt};
+        let log = Captured::default();
+        let writer = log.clone();
+        let guard = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish()
+            .set_default();
+        log_layer_size(UVec2::new(1512, 1584), UVec2::new(1680, 1760), 0.9);
+        drop(guard);
+        let text = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            text.contains("splat layer 1512x1584 for a 1680x1760 view at render scale 0.9"),
+            "{text}"
+        );
+        assert!(text.contains("per_frame=true"), "{text}");
+    }
 
     // Q-437: the running tier's sort mode compiles first, the other after it.
     #[test]
