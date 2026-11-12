@@ -87,5 +87,7 @@ impl Plugin for AppPlugin {
         app.add_plugins(GovernorPlugin);
         // #376 (§2.4 Threads, Q-236): an exit waits for in-flight pipeline compiles.
         crate::exit_wait::add(app);
+        // Q-406: the session benchmark a `SessionBench` names (the Quest's runner).
+        crate::benchmark::session::add(app);
     }
 }

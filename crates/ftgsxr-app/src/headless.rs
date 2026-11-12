@@ -15,14 +15,14 @@ use ftgsxr_core::{
 };
 use ftgsxr_render::{HeadlessRenderer, ModelId, QualityTier, RenderError, SortMode};
 
+use crate::benchmark::json;
+
 mod bench;
 // Q-67, Q-406
 pub use bench::{BenchReport, cmd_bench, cmd_bench_on};
-mod json;
 mod sort_check;
 // Q-146
 pub use sort_check::sort_check;
-mod synthetic;
 
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their
 /// cause's §1.15 code in the message's leading `E-…: ` prefix (Q-64).

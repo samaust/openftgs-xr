@@ -11,11 +11,11 @@ use ftgsxr_core::{
 };
 use ftgsxr_render::{FrameBuffers, FrameStats, GpuModel};
 
-use super::super::synthetic::{Persistence, synthetic_model};
 use super::{
     Budget, Given, Gpu, HeadlessError, Json, Measured, On, Rule, Targets, WARM_UP, draw, frame,
     gpu_error, median, orbit, records_refusal, refused, with_n,
 };
+use crate::benchmark::synthetic::{Persistence, synthetic_model};
 
 /// B-4's sizes N (§3.5: 10⁵ to 3 × 10⁶; Q-430).
 // Q-430

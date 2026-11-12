@@ -15,7 +15,10 @@
 //! the running tier's knobs. Without the extension the window logs
 //! `perf metrics <label>: XR_META_performance_metrics absent`. The counter paths are
 //! the runtime's list, not the specification's ("may be provided", source log 419).
-// Q-420
+//!
+//! While a `SessionBench` exists (Q-433) the counters are also read, and each frame
+//! they are written into `HudData.runtime_counters` for the benchmark's file.
+// Q-420, Q-433
 
 use std::time::Instant;
 
@@ -25,6 +28,7 @@ use bevy::prelude::{Name, Query, Res, ResMut, Resource};
 use bevy_mod_openxr::resources::OxrInstance;
 use bevy_mod_openxr::session::OxrSession;
 use bevy_mod_xr::session::{XrPreDestroySession, XrState};
+use ftgsxr_app::{HudCounter, HudData, SessionBench};
 use ftgsxr_render::SplatTierState;
 use openxr::sys;
 
@@ -71,6 +75,10 @@ fn session_ends(mut m: ResMut<Metrics>) {
     m.enabled = false;
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a Bevy system: one parameter per resource it reads"
+)]
 fn run(
     names: Query<&Name>,
     mut m: ResMut<Metrics>,
@@ -78,7 +86,10 @@ fn run(
     session: Option<Res<OxrSession>>,
     state: Option<Res<XrState>>,
     tier: Option<Res<SplatTierState>>,
+    bench: Option<Res<SessionBench>>,
+    hud: Option<ResMut<HudData>>,
 ) {
+    let benching = bench.is_some_and(|b| b.result.is_none());
     let label = names
         .iter()
         .find_map(|n| n.as_str().strip_prefix(PREFIX).map(str::to_owned));
@@ -89,9 +100,9 @@ fn run(
         finish(&w, &mut m.counters, tier.as_deref());
     }
     match label {
-        None => return,
+        None if !benching => return,
         Some(l) if m.window.is_none() => m.window = Some(start(l)),
-        Some(_) => {}
+        _ => {}
     }
     let (Some(instance), Some(session)) = (instance, session) else {
         return;
@@ -109,6 +120,7 @@ fn run(
     if let Some(w) = m.window.as_mut() {
         w.frames += 1;
     }
+    let mut now = Vec::new();
     for c in &mut m.counters {
         let mut out = sys::PerformanceMetricsCounterMETA {
             ty: sys::PerformanceMetricsCounterMETA::TYPE,
@@ -124,12 +136,34 @@ fn run(
         // initialised output struct with its TYPE set, outliving the call.
         let res =
             unsafe { (fp.query_performance_metrics_counter)(session.as_raw(), c.path, &mut out) };
-        if res.into_raw() < 0 {
-            c.values.push(None);
+        let v = if res.into_raw() < 0 {
+            None
         } else {
             c.unit = Some(out.counter_unit);
-            c.values.push(value(&out));
+            value(&out)
+        };
+        if m.window.is_some() {
+            c.values.push(v);
         }
+        if benching {
+            now.push(hud_counter(&c.name, c.unit, v));
+        }
+    }
+    if benching && let Some(mut hud) = hud {
+        hud.runtime_counters = now;
+    }
+}
+
+/// A counter's HUD entry (Q-433).
+fn hud_counter(
+    path: &str,
+    unit: Option<sys::PerformanceMetricsCounterUnitMETA>,
+    value: Option<f64>,
+) -> HudCounter {
+    HudCounter {
+        path: path.to_owned(),
+        unit: unit.map_or("unknown", unit_name),
+        value,
     }
 }
 
@@ -351,6 +385,29 @@ mod tests {
         assert_eq!(value(&counter(0b001, 7, 2.5)), None);
         assert_eq!(value(&counter(0b011, 7, 2.5)), Some(7.0));
         assert_eq!(value(&counter(0b101, 7, 2.5)), Some(2.5));
+    }
+
+    /// Q-433: the HUD's entry carries the path, the unit's name and the value the
+    /// flags make valid.
+    #[test]
+    fn hud_counters_follow_the_counters_flags_and_units() {
+        use sys::PerformanceMetricsCounterUnitMETA as U;
+        let c = counter(0b101, 0, 18.5);
+        let h = hud_counter(
+            "/perfmetrics_meta/app/gpu_frametime",
+            Some(U::MILLISECONDS),
+            value(&c),
+        );
+        assert_eq!(
+            h,
+            HudCounter {
+                path: "/perfmetrics_meta/app/gpu_frametime".into(),
+                unit: "ms",
+                value: Some(18.5),
+            }
+        );
+        let h = hud_counter("/x", None, value(&counter(0b001, 3, 0.0)));
+        assert_eq!((h.unit, h.value), ("unknown", None));
     }
 
     #[test]
