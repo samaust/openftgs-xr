@@ -278,22 +278,47 @@ impl SplatPasses {
                 })
             })
         };
-        let cull_splats = pipeline(&mut times, "cull_splats", &cull_layout, "cull_splats");
-        let cull_centers = pipeline(&mut times, "cull_centers", &cull_layout, "cull_centers");
-        let size = pipeline(&mut times, "size", &size_pipeline_layout, "size");
-        let sort = RadixSort::new(&device, tier.sort_key, &mut times);
-        let (draw_layout, splat) =
-            splat_pipeline(&device, layer_format, depth_format, mode, &mut times);
-        let centers = centers_pipeline(
-            &device,
-            &draw_layout,
-            layer_format,
-            depth_format,
-            mode,
-            &mut times,
-        );
-        let (resolve_layout, resolve, resolve_mesh) =
-            resolve_pipelines(&device, RESOLVE_TARGET_FORMAT, depth_format, &mut times);
+        // Q-T736.2: `cull_splats`, the largest compile, on a thread of its own while this
+        // one makes the others, under that thread's own validation scope (wgpu's scopes
+        // are per thread, Q-T736.1); a thread that cannot start leaves it to this one.
+        let cull_splats_alone = || {
+            let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let mut side = CompileTimes::default();
+            let made = pipeline(&mut side, "cull_splats", &cull_layout, "cull_splats");
+            (made, side, bevy::tasks::block_on(scope.pop()))
+        };
+        let (side, cull_centers, size, sort, draw, centers, resolves) = std::thread::scope(|s| {
+            let side = std::thread::Builder::new()
+                .name("ftgsxr cull_splats".into())
+                .spawn_scoped(s, cull_splats_alone);
+            let cull_centers = pipeline(&mut times, "cull_centers", &cull_layout, "cull_centers");
+            let size = pipeline(&mut times, "size", &size_pipeline_layout, "size");
+            let sort = RadixSort::new(&device, tier.sort_key, &mut times);
+            let draw = splat_pipeline(&device, layer_format, depth_format, mode, &mut times);
+            let centers = centers_pipeline(
+                &device,
+                &draw.0,
+                layer_format,
+                depth_format,
+                mode,
+                &mut times,
+            );
+            let resolves =
+                resolve_pipelines(&device, RESOLVE_TARGET_FORMAT, depth_format, &mut times);
+            let side = match side {
+                Ok(h) => h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)),
+                Err(_) => {
+                    let made = pipeline(&mut times, "cull_splats", &cull_layout, "cull_splats");
+                    (made, CompileTimes::default(), None)
+                }
+            };
+            (side, cull_centers, size, sort, draw, centers, resolves)
+        });
+        let (cull_splats, side_times, side_error) = side;
+        // The side thread's time after the shader module's, where it started.
+        times.0.splice(1..1, side_times.0);
+        let (draw_layout, splat) = draw;
+        let (resolve_layout, resolve, resolve_mesh) = resolves;
         let resolve_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("ftgsxr resolve"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -322,7 +347,7 @@ impl SplatPasses {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
-        if let Some(e) = bevy::tasks::block_on(scope.pop()) {
+        if let Some(e) = bevy::tasks::block_on(scope.pop()).or(side_error) {
             return Err(RenderError::Shader(e.to_string()));
         }
         Ok(SplatPasses {

@@ -7,7 +7,7 @@
 //! statistics two frames late (§1.4 stage 8).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -722,22 +722,47 @@ fn sort_name(shared_center: bool) -> &'static str {
 /// splat camera draws, nor in the frame the governor first switches the sort mode.
 /// `prepare_view` takes a key's result, waiting for it if it is not ready, so the first
 /// frame still draws; a thread that cannot start leaves its key to compile there. A
-/// thread not taken by then is joined when `Views` drops or resets (Q-381).
-// Q-325, Q-381
+/// thread not taken by then is joined when `Views` drops or resets (Q-381). The running
+/// tier's sort mode compiles first and the other once it is done (Q-T736.2), so the
+/// passes the cameras take first do not share the CPU with the others'.
+// Q-325, Q-381, Q-T736.2
 fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
-    for sort in [SortMode::PerView, SortMode::SharedCenter] {
-        let dev = Arc::clone(dev);
-        let tier = tier.clone();
-        // `warm_up_teardown`'s test finds the threads by this name.
-        let spawned = thread::Builder::new()
-            .name("ftgsxr splat passes".into())
-            .spawn(move || compile(&dev, LAYER_FORMAT, &tier, sort));
-        match spawned {
-            Ok(handle) => {
-                views.warming.insert(pass_key(LAYER_FORMAT, sort), handle);
-            }
-            Err(e) => warn!("the splat passes' warm-up thread did not start: {e}"),
+    let first = tier.sort_mode;
+    let second = match first {
+        SortMode::PerView => SortMode::SharedCenter,
+        SortMode::SharedCenter => SortMode::PerView,
+    };
+    // The first thread drops `done` when its compile ends or unwinds, or when it cannot
+    // start; the second then starts its own.
+    let (done, first_done) = mpsc::channel::<()>();
+    let (d, t) = (Arc::clone(dev), tier.clone());
+    spawn_warm_up(views, first, move || {
+        let passes = compile(&d, LAYER_FORMAT, &t, first);
+        drop(done);
+        passes
+    });
+    let (d, t) = (Arc::clone(dev), tier.clone());
+    spawn_warm_up(views, second, move || {
+        let _ = first_done.recv();
+        compile(&d, LAYER_FORMAT, &t, second)
+    });
+}
+
+/// Starts one warm-up thread, compiling `sort`'s key with `body`.
+fn spawn_warm_up(
+    views: &mut Views,
+    sort: SortMode,
+    body: impl FnOnce() -> Result<SplatPasses, RenderError> + Send + 'static,
+) {
+    // `warm_up_teardown`'s test finds the threads by this name.
+    let spawned = thread::Builder::new()
+        .name("ftgsxr splat passes".into())
+        .spawn(body);
+    match spawned {
+        Ok(handle) => {
+            views.warming.insert(pass_key(LAYER_FORMAT, sort), handle);
         }
+        Err(e) => warn!("the splat passes' warm-up thread did not start: {e}"),
     }
 }
 
