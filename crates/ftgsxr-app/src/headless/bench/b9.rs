@@ -30,9 +30,9 @@ use ftgsxr_core::write_exchange;
 use ftgsxr_io::{AppPaths, DocumentProvider, ModelRef};
 use ftgsxr_render::{OutputSpace, QualityTier, SortMode, SplatCamera, SplatEvent, SplatStats};
 
-use super::super::synthetic::{Persistence, synthetic_model};
 use super::super::{HeadlessError, core_input, input_error};
 use super::{Given, Gpu, HEIGHT, Json, Measured, WIDTH};
+use crate::benchmark::synthetic::{Persistence, synthetic_model};
 use crate::platform::{CameraFrames, Permission, PermissionHandle, PickHandle, PickKind, Platform};
 // Q-223: `headless` after `plugin` in §2.1's order (owner, 2026-11-03).
 use crate::plugin::AppPlugin;

@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod audio;
+mod benchmark;
 pub mod capture;
 pub mod desktop_input;
 mod desktop_log;
