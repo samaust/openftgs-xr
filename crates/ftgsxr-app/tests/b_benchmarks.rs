@@ -240,6 +240,59 @@ fn gpu_b4_with_a_model_reports_the_cull_with_and_without_the_index() {
 
 #[test]
 #[ignore = "gpu"]
+fn gpu_b4_sweeps_every_size_with_both_checks_in_the_headsets_tier() {
+    // §3.5 B-4 (Q-408, Q-T733.1, Q-406, Q-413): the synthetic sweep, run as the headset
+    // runs it (`cmd_bench_on` with a fingerprint, `quest-balanced`), writes for each N
+    // from 10⁵ to 3 × 10⁶ both setups and the two B-4 checks, all met, with the same
+    // splats drawn by both (D-10).
+    let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
+    let dir = ftgsxr_testkit::scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "b4-sweep",
+    );
+    let out = dir.join("B-4.json");
+    ftgsxr_app::cmd_bench_on("B-4", Some(&out), None, Some("host")).expect("the sweep runs");
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(file["machine"]["headset"], "host");
+    let sizes = [1e5, 2.5e5, 5e5, 1e6, 2e6, 3e6];
+    let results = file["results"].as_array().unwrap();
+    let value = |n: f64, index: &str, measure: &str| -> Value {
+        results
+            .iter()
+            .find(|r| {
+                r["setup"]["n"] == n && r["setup"]["index"] == index && r["measure"] == measure
+            })
+            .unwrap_or_else(|| panic!("{n} {index} {measure}"))["value"]
+            .clone()
+    };
+    for n in sizes {
+        for index in ["temporal", "every row"] {
+            assert!(
+                value(n, index, "cull_ms").as_f64().unwrap() > 0.0,
+                "{n} {index}"
+            );
+        }
+        assert_eq!(value(n, "every row", "rows_visited").as_f64(), Some(n));
+        assert_eq!(
+            value(n, "temporal", "visible_splats"),
+            value(n, "every row", "visible_splats"),
+            "{n}"
+        );
+    }
+    for r in results {
+        assert_eq!(r["setup"]["tier"], "quest-balanced", "{r}");
+    }
+    let budgets = file["budgets"].as_array().unwrap();
+    assert_eq!(budgets.len(), 2 * sizes.len(), "{budgets:?}");
+    for b in budgets {
+        assert_eq!(b["id"], "B-4");
+        assert_eq!(b["pass"], true, "{b}");
+    }
+}
+
+#[test]
+#[ignore = "gpu"]
 fn gpu_b5_with_a_model_reports_its_load_time() {
     let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let (path, _) = tiny_model("b5", 3000, 2);
