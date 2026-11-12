@@ -262,7 +262,7 @@ pub struct HudData {
     // Q-389, Q-394
     pub light_gains: Option<Vec3>,
     /// The runtime's performance counters (XR_META_performance_metrics, §1.13 HUD), each
-    /// frame they are read: while a `SessionBench` runs (Q-T731.2); empty otherwise. The
+    /// frame while a `SessionBench` runs (Q-T731.2); empty otherwise. The
     /// XR crate's to write.
     // Q-T731.2
     pub runtime_counters: Vec<HudCounter>,

@@ -58,6 +58,8 @@ fn run(name: &str, model: &std::path::Path, pushed: &str, timeout: Duration) -> 
     let start = launch_session_bench(name, &fingerprint, pushed);
     let line = bench_line(name, start, timeout);
     stop();
+    // As Dv-11's driver: the camera permissions go back; USE_SCENE stays, as Dv-7 leaves it.
+    pm(name, "revoke", &PERMISSIONS[1..]);
     let (done, detail) =
         line.unwrap_or_else(|| panic!("an ftgsxr-bench line for {name} (none: killed?)"));
     assert!(done, "{name} FAIL {detail}");
