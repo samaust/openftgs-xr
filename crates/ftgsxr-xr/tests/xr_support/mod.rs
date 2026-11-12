@@ -191,12 +191,15 @@ pub struct RenderErrored;
 /// from a minimal plugin group without winit or Bevy's log plugin (the test's subscriber
 /// holds the log), finished and cleaned up.
 pub fn xr_app(xr: XrPlugin, setup: impl FnOnce(&mut App)) -> App {
+    xr_app_in(QualityTier::conformance(), xr, setup)
+}
+
+/// As [`xr_app`], with `SplatPlugin { tier }`.
+pub fn xr_app_in(tier: QualityTier, xr: XrPlugin, setup: impl FnOnce(&mut App)) -> App {
     let mut app = App::new();
     setup(&mut app);
     app.add_plugins(add_xr(xr_group(), xr))
-        .add_plugins(SplatPlugin {
-            tier: QualityTier::conformance(),
-        });
+        .add_plugins(SplatPlugin { tier });
     finish(app)
 }
 
