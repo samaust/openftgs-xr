@@ -230,6 +230,16 @@ fn cmd_bench_in(
     on: &On,
     baselines: &Path,
 ) -> Result<BenchReport, HeadlessError> {
+    // Q-T731.4: the session benchmarks run on the headset, in the XR session.
+    let session =
+        matches!(name, "B-2" | "B-7" | "B-8") || (name == "B-9" && on.headset().is_some());
+    if session {
+        let test = format!("dv_{}_", name.to_lowercase().replace('-', ""));
+        return Err(HeadlessError::Input(format!(
+            "{name}: a headset benchmark run in the session: the dv test {test}… in \
+             crates/ftgsxr-xr/tests/dv_session_bench.rs (Q-T731.4)"
+        )));
+    }
     let Some(run) = on.runner(name) else {
         return Err(HeadlessError::Input(format!("{name}: {}", on.names())));
     };
