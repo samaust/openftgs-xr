@@ -9,8 +9,9 @@
 //! decision, 2026-11-07, #622). The figures are those of the file
 //! the triage measured, openftgs-m17's `kitchen/default-395` (N = 3,000,000, τ in
 //! [0, 9.97] s); a `kitchen` trained again gives other figures. The test reads it at
-//! `$OPENFTGS_DATASETS/xr-fixtures/kitchen.safetensors`, where Q-108 puts M-8's
-//! `kitchen`, and fails with the reason when it is absent (§2.7 Lanes).
+//! `$OPENFTGS_DATASETS/xr-fixtures/kitchen.safetensors`, #622's openftgs-m17 file (M-8's
+//! budget model is `kitchen_1m.safetensors` beside it, Q-410), and fails with the reason
+//! when it is absent (§2.7 Lanes).
 
 use std::path::PathBuf;
 

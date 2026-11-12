@@ -160,7 +160,8 @@ fn gpu_b1_reports_the_draw_time_and_the_synthetic_load_note() {
     let budgets = file["budgets"].as_array().unwrap();
     assert_eq!(budgets.len(), 1);
     assert_eq!(budgets[0]["measure"], "fps_min");
-    // §1.12 P-2 ("the same model") against the synthetic sweep's load, until `kitchen` (Q-108).
+    // §1.12 P-2 ("the same model") against the synthetic sweep's load: B-1 sweeps synthetic
+    // models, and the note says so (Q-108; M-8's budget model is `kitchen_1m`, Q-410).
     let notes = file["notes"].as_array().unwrap();
     assert!(
         notes.iter().any(|n| {

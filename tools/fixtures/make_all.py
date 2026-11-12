@@ -265,8 +265,9 @@ package versions, a rerun changes none.
   header-only read over HTTP is the server's 416 (U-31; Q-44 as changed in #87); no script
   writes or removes it.
 
-No trained dataset model is committed (§2.7): `train_tiny.sh` (M-2) writes those under
-`$OPENFTGS_DATASETS/xr-fixtures/`.
+No trained dataset model is committed (§2.7): `train_tiny.sh` writes those under
+`$OPENFTGS_DATASETS/xr-fixtures/`, the tiny models (M-2) and M-8's budget model
+`kitchen_1m` (Q-410).
 """
 
 
