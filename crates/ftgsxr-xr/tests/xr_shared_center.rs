@@ -109,8 +109,10 @@ fn xr_shared_center_eyes_render_from_one_statistics_block_a_frame() {
     assert!(frames > 10, "frames ran: {frames}");
     let overflows = *seen.overflows.lock().unwrap();
     eprintln!("{overflows} overflow events in {frames} frames");
+    // Pipelined rendering can land a block's event one update late at either edge of
+    // the window; two per-view eyes would still raise about two a frame.
     assert!(
-        (1..=frames).contains(&overflows),
+        (1..=frames + 2).contains(&overflows),
         "one statistics block a frame: {overflows} overflow events in {frames} frames"
     );
 
