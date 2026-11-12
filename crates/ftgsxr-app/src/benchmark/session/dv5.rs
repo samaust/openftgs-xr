@@ -34,7 +34,8 @@ use crate::ui::{HudData, XrDisplay};
 pub(crate) const NAME: &str = "Dv-5";
 /// Dv-5's tier (§3.4).
 const TIER: &str = "quest-balanced";
-/// Frames left for a tier switch (a new device, Q-239) before the load's clock starts.
+/// Frames the eyes draw before the load's clock starts (Q-T732.2): after the session's
+/// start and its warm-up, and a tier switch's new device (Q-239).
 const SWITCH_FRAMES: u32 = 30;
 /// Blocks arrive two frames late (Q-81): the play's first frames bring the warm-up's,
 /// and it runs this many frames past τ₁ for its own last ones.
@@ -45,14 +46,17 @@ const PLAY_SLACK: Duration = Duration::from_secs(20);
 /// The note on Dv-5's figures.
 const NOTE: &str = "Dv-5 (Q-407, Q-T732.1): the instance is posed each frame where the eyes' midpoint sees it as orbit camera 0 does and played at speed 1 over the model's span; every distinct statistics block of the play (the first two frames' blocks, the warm-up's, left out; two frames past the span's end kept) is judged: P-1 on frame_gpu_ms_max, the largest gpu_times_ms.total (f_gpu, Q-403), P-4 on frame_sort_ms_max, the largest gpu_times_ms.sort; blocks skipped while the GPU falls behind (Q-81) are not seen, so blocks may be fewer than frames";
 /// The note on Dv-5's load time.
-const LOAD_NOTE: &str = "Dv-5's load_s (Q-T732.2) is one load in the session, from the start of the file's read to the instance's Uploaded (read, parse, validate, pack on the task pool, upload at 64 MB per frame), against B-5's median of three on the headless device; the file was just read for its bounds, so the page cache may hold it and the time is a lower bound for a cold read (as B-5's)";
+const LOAD_NOTE: &str = "Dv-5's load_s (Q-T732.2) is one load in the running session (begun once both eyes have drawn 30 frames and 2 s more have passed), from the start of the file's read to the instance's Uploaded (read, parse, validate, pack on the task pool, upload at 64 MB per frame), against B-5's median of three on the headless device; the file was just read for its bounds, so the page cache may hold it and the time is a lower bound for a cold read (as B-5's)";
 /// The note when the running tier was switched before the load.
 const SWITCH_NOTE: &str = "the app started in another tier; Dv-5 switched to quest-balanced before the load's clock started";
 
 /// Where the run is.
 enum Phase {
-    /// The tier was switched this many frames ago.
+    /// Frames drawn with both eyes since the tier was set (Q-T732.2: the load starts
+    /// in the running session, not during its start).
     Switch(u32),
+    /// The eyes have drawn `SWITCH_FRAMES` frames; settling before the load.
+    Ready(Instant),
     /// The load's clock runs since the read's start.
     Load(Instant),
     /// Uploaded; waiting until the device shows the setup.
@@ -171,7 +175,7 @@ pub(super) fn start(world: &mut World, out: PathBuf, headset: Option<String>, pa
         prepared.tau.1,
         if switched { ", tier switched" } else { "" }
     );
-    let mut r = Dv5 {
+    let r = Dv5 {
         out,
         headset,
         path,
@@ -190,9 +194,6 @@ pub(super) fn start(world: &mut World, out: PathBuf, headset: Option<String>, pa
         play: Play::default(),
         observed: Observed::default(),
     };
-    if !switched {
-        r.phase = Phase::Switch(SWITCH_FRAMES);
-    }
     world.insert_resource(r);
 }
 
@@ -257,8 +258,11 @@ pub(super) fn step(world: &mut World) {
     };
     let phase = take_phase(world);
     let next = match phase {
-        Phase::Switch(n) if n >= SWITCH_FRAMES => begin_load(world),
-        Phase::Switch(n) => Phase::Switch(n + 1),
+        Phase::Switch(n) if n >= SWITCH_FRAMES => Phase::Ready(Instant::now()),
+        Phase::Switch(n) if head(world).is_some() => Phase::Switch(n + 1),
+        Phase::Switch(n) => Phase::Switch(n),
+        Phase::Ready(since) if since.elapsed() >= SETTLE => begin_load(world),
+        Phase::Ready(since) => Phase::Ready(since),
         Phase::Load(started) => {
             if world.resource::<Dv5>().uploaded {
                 let load_s = started.elapsed().as_secs_f64();
