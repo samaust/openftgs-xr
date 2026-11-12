@@ -31,6 +31,6 @@ pub use inputs::{
 pub use model::GpuModel;
 pub use passes::SplatPasses;
 pub use probe::LayerSums;
-pub use readback::{FrameContents, RecordView}; // Q-69
+pub use readback::{FrameContents, RecordView, SharedRecordView}; // Q-69, Q-400
 pub use stats::{FrameStats, GpuTimes};
 pub use tier::{Capacity, Foveation, QualityTier, SortKey, SortMode};
