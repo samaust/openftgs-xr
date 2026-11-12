@@ -129,8 +129,13 @@ fn main() {
         }
     }
 
-    let tier = QualityTier::by_name(&settings.general.tier).unwrap_or_else(|| {
-        warn!("unknown tier {}; quest-balanced", settings.general.tier);
+    // A device test that names its tier runs in it (spike S3, #729), the settings left alone.
+    let tier_name = test
+        .as_deref()
+        .and_then(device_test::tier)
+        .unwrap_or(settings.general.tier.as_str());
+    let tier = QualityTier::by_name(tier_name).unwrap_or_else(|| {
+        warn!("unknown tier {tier_name}; quest-balanced");
         QualityTier::by_name("quest-balanced").expect("invariant: §1.12's tier exists")
     });
     let xr = XrPlugin {
