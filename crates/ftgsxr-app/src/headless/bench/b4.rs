@@ -20,6 +20,10 @@ use super::{
 /// B-4's sizes N (§3.5: 10⁵ to 3 × 10⁶; Q-T733.1).
 // Q-T733.1
 pub(super) const B4_N: [usize; 6] = [100_000, 250_000, 500_000, 1_000_000, 2_000_000, 3_000_000];
+/// The share of the every-row median the index may be slower by when the run's spread is
+/// smaller (Q-T733.1).
+// Q-T733.1
+const B4_RELATIVE_TOLERANCE: f64 = 0.1;
 /// B-4's measured frames per setup, as B-3's (Q-102, Q-T733.1).
 const B4_FRAMES: usize = 32;
 /// The `model` label of B-4's synthetic models: `random_model`'s rows, mostly transient
@@ -30,7 +34,7 @@ const INDEXED: &str = "temporal";
 /// As `INDEXED`.
 const EVERY_ROW: &str = "every row";
 /// The note on B-4's figures.
-const B4_NOTE: &str = "B-4's cull_ms is the median GPU time of stages 1-3 (the cull and the one-workgroup size dispatch) over 32 frames, cull_ms_spread their largest minus their smallest; rows_visited is the dispatch range at the frame's tau (the temporal index's, or every row); the B-4 budgets check that the indexed cull is not slower than the every-row cull by more than the larger spread, and visits no more rows (Q-408, Q-T733.1)";
+const B4_NOTE: &str = "B-4's cull_ms is the median GPU time of stages 1-3 (the cull and the one-workgroup size dispatch) over 32 frames, cull_ms_spread their largest minus their smallest; rows_visited is the dispatch range at the frame's tau (the temporal index's, or every row); the B-4 budgets check that the indexed cull is not slower than the every-row cull by more than the tolerance, the larger of the two setups' spreads and 10 % of the every-row median, and visits no more rows (Q-408, Q-T733.1)";
 
 /// The temporal index of `n` rows that visits every row at every τ: a single-timestamp
 /// model's, every row persistent (E3, `TemporalIndex::build`). Only its range is used:
@@ -95,18 +99,22 @@ impl Cull {
 }
 
 /// B-4's two checks at one size of N rows, on the `temporal` setup (§3.5 "the index never
-/// slower", Q-408): the indexed cull time at most the every-row one plus the run's
-/// spread, the larger of the two setups' spreads; the rows visited at most N.
+/// slower", Q-408): the indexed cull time at most the every-row one plus the tolerance,
+/// the larger of the run's spread (the larger of the two setups' spreads) and 10 % of the
+/// every-row median (the owner's option 2 on #733); the rows visited at most N.
 // Q-T733.1
 pub(super) fn b4_budgets(setup: &Json, n: usize, indexed: &Cull, every: &Cull) -> [Budget; 2] {
-    let spread = indexed.spread_ms.max(every.spread_ms);
+    let tolerance = indexed
+        .spread_ms
+        .max(every.spread_ms)
+        .max(B4_RELATIVE_TOLERANCE * every.median_ms);
     [
         Budget {
             id: "B-4",
             setup: setup.clone(),
             measure: "cull_ms",
             rule: Rule::AtMost,
-            limit: every.median_ms + spread,
+            limit: every.median_ms + tolerance,
             value: indexed.median_ms,
         },
         Budget {
@@ -348,5 +356,31 @@ mod tests {
             ..indexed
         };
         assert!(!b4_budgets(&setup, 100, &more, &every)[1].pass());
+    }
+
+    #[test]
+    fn b4_budgets_allow_10_percent_of_the_every_row_median_when_the_spreads_are_smaller() {
+        // Q-T733.1 (owner, option 2): the tolerance is the larger of the run's spread and
+        // 10 % of the every-row median: here 0.008 ms against 0.01 ms, so the limit is
+        // 0.1 + 0.01 = 0.11 ms.
+        let setup = Json::obj([("n", Json::Num(100.0))]);
+        let every = Cull {
+            median_ms: 0.1,
+            spread_ms: 0.005,
+            rows: 100,
+        };
+        let indexed = Cull {
+            median_ms: 0.108,
+            spread_ms: 0.008,
+            rows: 40,
+        };
+        let [time, _] = b4_budgets(&setup, 100, &indexed, &every);
+        assert!((time.limit - 0.11).abs() < 1e-12, "{}", time.limit);
+        assert!(time.pass());
+        let slow = Cull {
+            median_ms: 0.111,
+            ..indexed
+        };
+        assert!(!b4_budgets(&setup, 100, &slow, &every)[0].pass());
     }
 }

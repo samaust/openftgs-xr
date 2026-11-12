@@ -201,7 +201,8 @@ fn b4_result(file: &Value, index: &str, measure: &str) -> f64 {
 fn gpu_b4_with_a_model_reports_the_cull_with_and_without_the_index() {
     // §3.5 B-4 (Q-408, Q-T733.1): for the size, the cull time and the rows visited with the
     // temporal index and with every row; the index visits no more rows than N and is not
-    // slower than the every-row cull by more than the run's spread. `random_model`'s rows
+    // slower than the every-row cull by more than the tolerance: the larger of the run's
+    // spread and 10 % of the every-row median (Q-T733.1). `random_model`'s rows
     // are mostly transient, so at mid-span the index visits fewer than N (E3).
     let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let n = 100_000;
@@ -221,10 +222,11 @@ fn gpu_b4_with_a_model_reports_the_cull_with_and_without_the_index() {
         b4_result(&file, indexed, "visible_splats"),
         b4_result(&file, every, "visible_splats")
     );
-    let spread =
-        b4_result(&file, indexed, "cull_ms_spread").max(b4_result(&file, every, "cull_ms_spread"));
+    let tolerance = b4_result(&file, indexed, "cull_ms_spread")
+        .max(b4_result(&file, every, "cull_ms_spread"))
+        .max(0.1 * b4_result(&file, every, "cull_ms"));
     assert!(
-        b4_result(&file, indexed, "cull_ms") <= b4_result(&file, every, "cull_ms") + spread,
+        b4_result(&file, indexed, "cull_ms") <= b4_result(&file, every, "cull_ms") + tolerance,
         "{}",
         file["results"]
     );

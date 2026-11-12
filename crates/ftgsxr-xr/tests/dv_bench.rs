@@ -147,7 +147,7 @@ fn dv_b4_writes_the_cull_times_with_and_without_the_index_on_the_quest() {
     // §3.5 B-4 (Q-408, Q-T733.1): for each size, the cull time and the rows visited with
     // the temporal index and with every row, in Q-413's tier; a size the device refuses
     // is skipped in both setups. The B-4 checks are printed with the other budgets and
-    // must hold: the index never visits more rows and is never slower beyond the spread.
+    // must hold: the index never visits more rows and is never slower beyond the tolerance (Q-T733.1).
     let file = run("B-4", Duration::from_secs(30 * 60));
     print_budgets(&file);
     for index in ["temporal", "every row"] {
