@@ -149,6 +149,53 @@ pub fn launch_bench(name: &str, headset: &str) -> Instant {
     start
 }
 
+/// `launch_bench` with the session benchmark's model, a file in `dv/`, in the extra
+/// `ftgsxr-bench-model` (Q-T731.4).
+pub fn launch_session_bench(name: &str, headset: &str, model: &str) -> Instant {
+    assert!(
+        !headset.contains('\'') && !model.contains('\''),
+        "a fingerprint and a model name without quotes"
+    );
+    adb(&["logcat", "-c"]);
+    let start = Instant::now();
+    adb(&[
+        "shell",
+        "am",
+        "start",
+        "-S",
+        "-n",
+        ACTIVITY,
+        "--es",
+        "ftgsxr-bench",
+        name,
+        "--es",
+        "ftgsxr-bench-headset",
+        &format!("'{headset}'"),
+        "--es",
+        "ftgsxr-bench-model",
+        &format!("'{model}'"),
+    ]);
+    start
+}
+
+/// B-1's every-row-persistent kind (Q-102, Q-420): `random_model(seed, n, degree)` with
+/// each transient row made persistent as E3's persistent rows are drawn, opacity in
+/// \[0.6, 0.99\] and duration 2–4 T_τ, each mapped from the row's own uniform opacity
+/// draw in \[0.002, 0.99\], so the model stays the same for the same arguments.
+pub fn every_row_persistent(seed: u64, n: usize, degree: u8) -> ftgsxr_core::Model {
+    let mut m = ftgsxr_testkit::random_model(seed, n, degree);
+    let span = m.time.tau1 - m.time.tau0;
+    for i in 0..n {
+        if m.duration[i] >= 2.0 * span {
+            continue;
+        }
+        let u = ((f64::from(m.opacity[i]) - 0.002) / (0.99 - 0.002)).clamp(0.0, 1.0);
+        m.opacity[i] = (0.6 + 0.39 * u) as f32;
+        m.duration[i] = (2.0 + 2.0 * u) * span;
+    }
+    m
+}
+
 /// The runner's line for the benchmark `name` (Q-406): `(done, detail)`, or `None` when
 /// no line arrives within `timeout` or the app's process ends without one (killed for
 /// its memory, say: not a size the device refused, Q-413).
