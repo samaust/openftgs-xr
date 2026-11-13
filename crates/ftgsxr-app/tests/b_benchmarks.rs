@@ -160,13 +160,25 @@ fn gpu_b1_reports_the_draw_time_and_the_synthetic_load_note() {
     let budgets = file["budgets"].as_array().unwrap();
     assert_eq!(budgets.len(), 1);
     assert_eq!(budgets[0]["measure"], "fps_min");
-    // §1.12 P-2 ("the same model") against the synthetic sweep's load, until `kitchen` (Q-108).
+    // §1.12 P-2 ("the same model"): the note says what the synthetic sweep's load is and
+    // that the budget model, `kitchen_1m` given with `--model`, is P-2's measured case
+    // (Q-410); no model is still to be added.
     let notes = file["notes"].as_array().unwrap();
     assert!(
         notes.iter().any(|n| {
             let n = n.as_str().unwrap();
-            n.contains("synthetic") && n.contains("P-2") && n.contains("Q-108")
+            n.contains("synthetic")
+                && n.contains("P-2")
+                && n.contains("budget model")
+                && n.contains("kitchen_1m")
+                && n.contains("Q-410")
         }),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .all(|n| !n.as_str().unwrap().contains("until M-8")),
         "{notes:?}"
     );
 }
@@ -395,6 +407,32 @@ fn compare_bench_file_lists_a_budget_20_percent_worse_than_the_quest_baseline() 
         .as_str()
         .expect("the baseline compared against");
     assert!(compared.ends_with("B-3.quest.json"), "{compared}");
+}
+
+#[test]
+fn compare_bench_file_names_the_baseline_by_a_path_that_is_not_absolute() {
+    // Q-444, Q-103 ("the path compared against"): a stored baseline is named by its
+    // path relative to the workspace, so a committed file carries no machine's path;
+    // one outside the workspace by its file name.
+    let stored = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/baselines");
+    let text = std::fs::read_to_string(stored.join("B-3.json")).expect("the stored B-3");
+    let report = ftgsxr_app::compare_bench_file(&text, &stored).expect("compared");
+    let file: Value = serde_json::from_str(&report.json).unwrap();
+    assert_eq!(file["baseline"], "benchmarks/baselines/B-3.json");
+
+    let outside = std::env::temp_dir().join(format!("ftgsxr-baseline-{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(
+        outside.join("B-3.json"),
+        written_file("B-3", "debug", 24.0, None),
+    )
+    .unwrap();
+    let report =
+        ftgsxr_app::compare_bench_file(&written_file("B-3", "debug", 24.0, None), &outside)
+            .expect("compared");
+    std::fs::remove_dir_all(&outside).unwrap();
+    let file: Value = serde_json::from_str(&report.json).unwrap();
+    assert_eq!(file["baseline"], "B-3.json");
 }
 
 #[test]

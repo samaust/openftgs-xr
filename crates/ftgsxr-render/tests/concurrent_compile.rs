@@ -19,7 +19,7 @@ const ROUNDS: usize = 5;
 
 #[test]
 #[ignore = "gpu"]
-fn gpu_splat_passes_compile_on_two_threads_of_one_device_at_once() {
+fn gpu_splat_passes_compile_at_once_on_one_device_from_two_threads() {
     let _layer = layer_messages(); // R-16, Q-105
     let dev = Arc::new(gpu_context());
     let start = Arc::new(Barrier::new(THREADS));

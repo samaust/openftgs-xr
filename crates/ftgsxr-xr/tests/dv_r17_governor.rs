@@ -209,7 +209,7 @@ fn canned() -> Vec<String> {
 /// The driver's judgement (private to it, so a `cpu` test of its own): the expected run
 /// passes, and each clause fails on its own.
 #[test]
-fn r17_judge_passes_e16s_run_and_fails_each_departure() {
+fn judge_passes_e16s_run_and_fails_each_departure() {
     assert_eq!(judge(&canned()), Ok(()));
     // The adapter's layer line at a stepped scale is no re-creation (§1.12).
     let mut l = canned();

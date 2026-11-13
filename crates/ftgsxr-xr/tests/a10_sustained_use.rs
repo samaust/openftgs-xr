@@ -323,7 +323,7 @@ mod verdict {
     /// The window stays open until its last second: a short run fails, as does a run
     /// with no model loaded, without the extension, or in another tier.
     #[test]
-    fn a10_verdict_needs_the_whole_window_the_extension_and_the_tier() {
+    fn verdict_needs_the_whole_window_the_extension_and_the_tier() {
         let short = run(SECONDS - 1, |_| 72);
         assert!(!short.done());
         assert!(

@@ -103,7 +103,7 @@ impl Cull {
 /// the larger of the run's spread (the larger of the two setups' spreads) and 10 % of the
 /// every-row median (the owner's option 2 on #733); the rows visited at most N.
 // Q-430
-pub(super) fn b4_budgets(setup: &Json, n: usize, indexed: &Cull, every: &Cull) -> [Budget; 2] {
+pub(super) fn cull_budgets(setup: &Json, n: usize, indexed: &Cull, every: &Cull) -> [Budget; 2] {
     let tolerance = indexed
         .spread_ms
         .max(every.spread_ms)
@@ -237,7 +237,8 @@ pub(super) fn bench_b4(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, Hea
                 skip_all(&mut m, reason);
             }
             (None, [indexed, every]) => {
-                m.budgets.extend(b4_budgets(&setups[0], n, indexed, every));
+                m.budgets
+                    .extend(cull_budgets(&setups[0], n, indexed, every));
             }
             (None, _) => unreachable!("both setups ran"),
         }
@@ -279,7 +280,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn b4_sizes_run_from_1e5_to_3e6() {
+    fn sizes_run_from_1e5_to_3e6() {
         // §3.5 B-4: rows visited from 10⁵ to 3 × 10⁶.
         assert_eq!(B4_N.first(), Some(&100_000));
         assert_eq!(B4_N.last(), Some(&3_000_000));
@@ -287,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn b4_every_row_index_visits_every_row_at_every_tau() {
+    fn every_row_index_visits_every_row_at_every_tau() {
         let index = every_row_index(1000);
         assert_eq!(index.len(), 1000);
         for tau in [-5.0, 0.0, 0.95, 1.9, 7.0] {
@@ -299,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn b4_the_mixed_model_visits_fewer_rows_with_the_index_at_mid_span() {
+    fn rows_visited_by_the_mixed_model_are_fewer_with_the_index_at_mid_span() {
         // Q-408: random_model's transient rows are what the index exists for.
         let model = synthetic_model(1, 20_000, 0, Persistence::Few);
         let (index, _) = TemporalIndex::build(&model);
@@ -310,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn b4_cull_takes_the_median_and_the_full_range() {
+    fn cull_of_takes_the_median_and_the_full_range() {
         let cull = Cull::of(&mut [0.3, 0.1, 0.2, 0.6, 0.2], 7);
         assert_eq!(cull.median_ms, 0.2);
         assert!((cull.spread_ms - 0.5).abs() < 1e-12);
@@ -318,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn b4_budgets_allow_the_index_the_larger_spread_and_no_more_rows() {
+    fn cull_budgets_allow_the_index_the_larger_spread_and_no_more_rows() {
         let setup = Json::obj([("n", Json::Num(100.0))]);
         let every = Cull {
             median_ms: 1.0,
@@ -331,7 +332,7 @@ mod tests {
             spread_ms: 0.25,
             rows: 40,
         };
-        let [time, rows] = b4_budgets(&setup, 100, &indexed, &every);
+        let [time, rows] = cull_budgets(&setup, 100, &indexed, &every);
         assert_eq!(
             (time.id, time.measure, time.rule),
             ("B-4", "cull_ms", Rule::AtMost)
@@ -349,17 +350,17 @@ mod tests {
             median_ms: 1.3,
             ..indexed.clone()
         };
-        assert!(!b4_budgets(&setup, 100, &slow, &every)[0].pass());
+        assert!(!cull_budgets(&setup, 100, &slow, &every)[0].pass());
         // More rows than N: fails.
         let more = Cull {
             rows: 101,
             ..indexed
         };
-        assert!(!b4_budgets(&setup, 100, &more, &every)[1].pass());
+        assert!(!cull_budgets(&setup, 100, &more, &every)[1].pass());
     }
 
     #[test]
-    fn b4_budgets_allow_10_percent_of_the_every_row_median_when_the_spreads_are_smaller() {
+    fn cull_budgets_allow_10_percent_of_the_every_row_median_when_the_spreads_are_smaller() {
         // Q-430 (owner, option 2): the tolerance is the larger of the run's spread and
         // 10 % of the every-row median: here 0.008 ms against 0.01 ms, so the limit is
         // 0.1 + 0.01 = 0.11 ms.
@@ -374,13 +375,13 @@ mod tests {
             spread_ms: 0.008,
             rows: 40,
         };
-        let [time, _] = b4_budgets(&setup, 100, &indexed, &every);
+        let [time, _] = cull_budgets(&setup, 100, &indexed, &every);
         assert!((time.limit - 0.11).abs() < 1e-12, "{}", time.limit);
         assert!(time.pass());
         let slow = Cull {
             median_ms: 0.111,
             ..indexed
         };
-        assert!(!b4_budgets(&setup, 100, &slow, &every)[0].pass());
+        assert!(!cull_budgets(&setup, 100, &slow, &every)[0].pass());
     }
 }

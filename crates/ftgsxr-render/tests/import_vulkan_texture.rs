@@ -27,7 +27,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 #[test]
 #[ignore = "gpu"]
-fn gpu_import_vulkan_texture_reads_the_images_texels() {
+fn gpu_import_vulkan_texture_gives_the_images_texels() {
     let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
     let device = dev.device();
