@@ -716,15 +716,15 @@ fn sort_name(shared_center: bool) -> &'static str {
     }
 }
 
-/// Starts compiling the `LinearOver` passes of both sort modes, each on a thread of its
-/// own rather than a shared pool a model load could hold (Q-325): the 0.3 s of pipeline
-/// compiles on the Quest 3 then run while the session starts, not in the first frame a
-/// splat camera draws, nor in the frame the governor first switches the sort mode.
-/// `prepare_view` takes a key's result, waiting for it if it is not ready, so the first
-/// frame still draws; a thread that cannot start leaves its key to compile there. A
-/// thread not taken by then is joined when `Views` drops or resets (Q-381). The running
-/// tier's sort mode compiles first and the other once it is done (Q-437), so the
-/// passes the cameras take first do not share the CPU with the others'.
+/// Starts compiling the `LinearOver` passes of the two sort modes, the running tier's
+/// first and the other once that compile has ended (Q-437), each on a thread of its own
+/// rather than a shared pool a model load could hold (Q-325): the pipeline compiles on
+/// the Quest 3 then run while the session starts, not in the first frame a splat camera
+/// draws, nor in the frame the governor first switches the sort mode, and the passes the
+/// cameras take first do not share the CPU with the others'. `prepare_view` takes a
+/// key's result, waiting for it if it is not ready, so the first frame still draws; a
+/// thread that cannot start leaves its key to compile there. A thread not taken by then
+/// is joined when `Views` drops or resets (Q-381).
 // Q-325, Q-381, Q-437
 fn warm_up(views: &mut Views, dev: &Arc<SplatDevice>, tier: &QualityTier) {
     let [first, second] = warm_up_order(tier.sort_mode);
