@@ -116,6 +116,124 @@ pub fn launch(test: &str) -> Instant {
     start
 }
 
+/// The device's system property `key` (`adb shell getprop`), trimmed.
+pub fn getprop(key: &str) -> String {
+    adb(&["shell", "getprop", key]).trim().to_owned()
+}
+
+/// Clears logcat, force-stops the app and launches it with the benchmark `name` in the
+/// extra `ftgsxr-bench` and `headset` in `ftgsxr-bench-headset` (Q-406, Q-418); the
+/// instant of the launch. The device's shell reads the command line, so `headset` is
+/// quoted.
+pub fn launch_bench(name: &str, headset: &str) -> Instant {
+    assert!(
+        !headset.contains('\''),
+        "a fingerprint without quotes: {headset}"
+    );
+    adb(&["logcat", "-c"]);
+    let start = Instant::now();
+    adb(&[
+        "shell",
+        "am",
+        "start",
+        "-S",
+        "-n",
+        ACTIVITY,
+        "--es",
+        "ftgsxr-bench",
+        name,
+        "--es",
+        "ftgsxr-bench-headset",
+        &format!("'{headset}'"),
+    ]);
+    start
+}
+
+/// `launch_bench` with the session benchmark's model, a file in `dv/`, in the extra
+/// `ftgsxr-bench-model` (Q-435).
+pub fn launch_session_bench(name: &str, headset: &str, model: &str) -> Instant {
+    assert!(
+        !headset.contains('\'') && !model.contains('\''),
+        "a fingerprint and a model name without quotes"
+    );
+    adb(&["logcat", "-c"]);
+    let start = Instant::now();
+    adb(&[
+        "shell",
+        "am",
+        "start",
+        "-S",
+        "-n",
+        ACTIVITY,
+        "--es",
+        "ftgsxr-bench",
+        name,
+        "--es",
+        "ftgsxr-bench-headset",
+        &format!("'{headset}'"),
+        "--es",
+        "ftgsxr-bench-model",
+        &format!("'{model}'"),
+    ]);
+    start
+}
+
+/// B-1's every-row-persistent kind (Q-102, Q-420): `random_model(seed, n, degree)` with
+/// each transient row made persistent as E3's persistent rows are drawn, opacity in
+/// \[0.6, 0.99\] and duration 2–4 T_τ, each mapped from the row's own uniform opacity
+/// draw in \[0.002, 0.99\], so the model stays the same for the same arguments.
+pub fn every_row_persistent(seed: u64, n: usize, degree: u8) -> ftgsxr_core::Model {
+    let mut m = ftgsxr_testkit::random_model(seed, n, degree);
+    let span = m.time.tau1 - m.time.tau0;
+    for i in 0..n {
+        if m.duration[i] >= 2.0 * span {
+            continue;
+        }
+        let u = ((f64::from(m.opacity[i]) - 0.002) / (0.99 - 0.002)).clamp(0.0, 1.0);
+        m.opacity[i] = (0.6 + 0.39 * u) as f32;
+        m.duration[i] = (2.0 + 2.0 * u) * span;
+    }
+    m
+}
+
+/// The runner's line for the benchmark `name` (Q-406): `(done, detail)`, or `None` when
+/// no line arrives within `timeout` or the app's process ends without one (killed for
+/// its memory, say: not a size the device refused, Q-413).
+pub fn bench_line(name: &str, start: Instant, timeout: Duration) -> Option<(bool, String)> {
+    let prefix = format!("ftgsxr-bench: {name} ");
+    let find = || {
+        log().iter().find_map(|line| {
+            let rest = line.split_once(&prefix)?.1;
+            let (word, detail) = rest.split_once(' ').unwrap_or((rest, ""));
+            Some((word == "DONE", detail.to_owned()))
+        })
+    };
+    while start.elapsed() < timeout {
+        if let Some(found) = find() {
+            return Some(found);
+        }
+        if start.elapsed() > Duration::from_secs(15) && !running() {
+            return find();
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    None
+}
+
+/// Whether the app's process is running.
+pub fn running() -> bool {
+    !adb_ok(&["shell", "pidof", PACKAGE]).trim().is_empty()
+}
+
+/// `adb` with `args`, its standard output whatever its exit status.
+fn adb_ok(args: &[&str]) -> String {
+    Command::new(adb_path())
+        .args(args)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
 /// Stops the app.
 pub fn stop() {
     adb(&["shell", "am", "force-stop", PACKAGE]);
@@ -304,4 +422,46 @@ pub fn wait_for(line: &str, timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+/// The workspace's stored baselines (Q-103, Q-406).
+pub fn baselines() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/baselines")
+}
+
+/// Compares a pulled benchmark file with its stored `.quest.json` baseline (§3.5's 10 %
+/// rule, Q-103, Q-440), prints the baseline compared against and any note, and fails
+/// when a budgeted figure regressed.
+// Q-440
+pub fn compare_with_baseline(text: &str) {
+    let report = ftgsxr_app::compare_bench_file(text, &baselines())
+        .unwrap_or_else(|e| panic!("the pulled file compares with its baseline: {e}"));
+    let file: serde_json::Value = serde_json::from_str(&report.json).expect("well-formed JSON");
+    println!("baseline compared against: {}", file["baseline"]);
+    if let Some(notes) = file["notes"].as_array() {
+        for n in notes.iter().filter_map(|n| n.as_str()) {
+            if n.starts_with("baseline not compared") {
+                println!("note: {n}");
+            }
+        }
+    }
+    for r in &report.regressions {
+        println!("regression: {r}");
+    }
+    assert!(
+        report.regressions.is_empty(),
+        "{} budgeted figures more than 10 % worse than the stored baseline (§3.5)",
+        report.regressions.len()
+    );
+}
+
+/// Keeps a copy of a pulled file as `<$FTGSXR_DV_OUT>/<file>` when the variable names a
+/// directory, so a recorded run's file outlives the driver (the drivers remove their own
+/// copy); nothing otherwise.
+pub fn keep(file: &str, text: &str) {
+    if let Some(dir) = std::env::var_os("FTGSXR_DV_OUT").filter(|d| !d.is_empty()) {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).expect("$FTGSXR_DV_OUT can be made");
+        std::fs::write(dir.join(file), text).expect("the kept copy is written");
+    }
 }

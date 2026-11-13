@@ -31,7 +31,10 @@ pub(crate) const TIERS: [&str; 5] = [
 ];
 
 /// The benchmarks the desktop runs (§3.5, Q-103).
-const BENCHMARKS: [&str; 5] = ["B-1", "B-3", "B-5", "B-6", "B-9"];
+// Q-435: B-2, B-7 and B-8 so that `cmd_bench` names their `dv` test.
+const BENCHMARKS: [&str; 9] = [
+    "B-1", "B-2", "B-3", "B-4", "B-5", "B-6", "B-7", "B-8", "B-9",
+];
 
 /// The exit code of a run whose budgets regressed against the baseline (Q-67).
 const REGRESSION_EXIT: u8 = 3;
@@ -108,7 +111,7 @@ pub(crate) fn command() -> Command {
                     Arg::new("NAME")
                         .required(true)
                         .value_parser(BENCHMARKS)
-                        .help("The benchmark: B-1, B-3, B-5, B-6 or B-9"),
+                        .help("The benchmark: B-1, B-3, B-4, B-5, B-6 or B-9 (B-2, B-7, B-8 run on the headset)"),
                 )
                 .arg(
                     Arg::new("out")

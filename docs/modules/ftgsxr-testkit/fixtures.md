@@ -28,6 +28,7 @@ and over a copy of the committed fixtures with one byte changed.
 | --- | --- | --- | --- |
 | `probes/P1` … `P10`: probe models, render requests, reference renders | `make_probes.py`, from openftgs's harness probe definitions, then `ftgs render --backend reference` | R-1; the readers' U-1, U-4, U-24, U-25 (an openftgs-written renders file) and U-33 | none |
 | `probes/R2_*`: R-2's additional probe models | `make_probes.py` | R-2 | Q-10, Q-11 (the reduced random probe) |
+| `probes/R9_P1` … `R9_P10`: R-9's two-eye requests and their reference renders, against the probe's own model | `make_probes.py` (two eyes 64 mm apart with parallel axes, the midpoint 1 m from the origin on the item camera's optical axis, P6 at its own camera), then `ftgs render --backend reference` | R-9, judged on the `gpu` lane and on the device | Q-402, Q-415 |
 | `probes/R19_transmittance` | `make_probes.py` | R-19 | Q-10 |
 | `probes/R2_overlap_deg3.tau1.3.ply`: a PLY snapshot of a probe model | openftgs's `write_ply` | U-6 | Q-10 |
 | `probes/R7_merged`, `R8_merged` and `merged/`: the pre-posed merged models, the instances and their poses | `merge_posed.py` | R-7, R-8 | Q-12 |
@@ -50,8 +51,28 @@ scripts above in order with openftgs as a program on the CPU, writes the README 
 deterministic in content but not byte for byte, so the script keeps the previous bytes of every
 file whose content did not change and names any checksum that still changed; on the README's
 openftgs commit and package versions a rerun changes nothing. Trained models are never committed:
-the `ds` lane's models are written under `$OPENFTGS_DATASETS/xr-fixtures/` by M-2's tooling
-(D-29).
+the `ds` lane's models are written under `$OPENFTGS_DATASETS/xr-fixtures/` by
+`tools/fixtures/train_tiny.sh` (D-29, below).
+
+## The trained models
+
+`tools/fixtures/train_tiny.sh` runs openftgs as a program from its venv on openftgs-synth and
+writes into `$OPENFTGS_DATASETS/xr-fixtures/`, with a provenance `README.md` there. Each argument
+names a part to make, and a run rewrites only its own files and its own README part:
+
+- `tiny`, the default (Q-84): `tiny` and `tiny_unsync`, each as its export, R-3's request and
+  openftgs's reference renders of it. R-3 reads them.
+- `kitchen_1m`, the budget model (Q-410, Q-428): openftgs-synth's `kitchen`, all 300 frames
+  at 1352 × 1014, trained at SH degree 2 with `growth.n_max` 1,000,000 and the tiny runs'
+  deterministic kernels, seed 0, as `kitchen_1m.safetensors`: P-1's "1 M primitives at degree
+  2". It has no request and no reference renders. B-1 with `--model` (P-2), B-2 and Dv-5 load
+  it; `ds_kitchen_1m` checks that it opens at degree 2 within the cap. The training holds the
+  GPU for about an hour (openftgs §2.4), so the script makes it only when asked. Its provenance,
+  configuration, final primitive count and checksum are a section of the README between two
+  marker comments; a `kitchen_1m` run replaces that section alone, and a `tiny` run keeps it.
+
+`kitchen.safetensors` beside them is #622's model (openftgs-m17's `kitchen` at 3,000,000
+primitives), which `ds_kitchen_boxes` measures; the script never writes it.
 
 ## Made at test time, not committed
 

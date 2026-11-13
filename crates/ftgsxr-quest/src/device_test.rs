@@ -20,6 +20,11 @@ mod dv6;
 mod dv7;
 mod dv8;
 mod dv9;
+mod r10;
+mod r17;
+mod r9;
+mod s3;
+mod spikes;
 
 /// The intent extra naming the test (§3.4).
 pub(crate) const EXTRA: &str = "ftgsxr-test";
@@ -33,13 +38,16 @@ pub(crate) fn dv_dir() -> Option<PathBuf> {
         .map(|e| e.join("dv"))
 }
 
-/// Runs `name` when it is a headless test (Dv-3, Dv-4: before the XR session is created,
-/// on the headless renderer's own device, Q-122) with the pushed and written files in
-/// `dv`, printing its verdict; `false` when `name` is not one, for `add`.
+/// Runs `name` when it is a headless test (Dv-3, Dv-4, and R-9 and R-10 on the device,
+/// Q-427: before the XR session is created, on the headless renderer's own device,
+/// Q-122) with the pushed and written files in `dv`, printing its verdict; `false` when
+/// `name` is not one, for `add`.
 pub(crate) fn run_headless(name: &str, dv: &Path) -> bool {
     let result = match name {
         dv3::NAME => dv3::run(dv),
         dv4::NAME => dv4::run(dv),
+        r9::NAME => r9::run(dv),
+        r10::NAME => r10::run(dv),
         _ => return false,
     };
     match result {
@@ -68,6 +76,19 @@ pub(crate) fn add(app: &mut App, name: &str) {
         dv7::NAME => dv7::add(app),
         dv8::NAME => dv8::add(app),
         dv9::NAME => dv9::add(app),
+        r17::NAME => r17::add(app),
+        s3::NAME => s3::add(app),
+        spikes::NAME => spikes::add(app),
         _ => verdict(name, false, "unknown test"),
+    }
+}
+
+/// The tier a device test runs in, when it names one; otherwise the settings' (#729,
+/// #730).
+pub(crate) fn tier(name: &str) -> Option<&'static str> {
+    match name {
+        s3::NAME => Some(s3::TIER),
+        r17::NAME => Some(r17::TIER),
+        _ => None,
     }
 }

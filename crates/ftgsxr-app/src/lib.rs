@@ -8,6 +8,8 @@
 #![warn(missing_docs)]
 
 pub mod audio;
+// Q-443: a private module after `governor` and before `plugin`.
+mod benchmark;
 pub mod capture;
 pub mod desktop_input;
 mod desktop_log;
@@ -24,10 +26,11 @@ pub mod plugin;
 pub mod rig;
 pub mod ui;
 
-// Q-67: `BenchReport` and `cmd_bench`.
+// Q-67: `BenchReport` and `cmd_bench`; Q-406: `cmd_bench_on`; Q-414: `cmd_render_stereo`;
+// Q-440: `compare_bench_file`.
 pub use headless::{
-    BenchReport, HeadlessError, cmd_bench, cmd_export, cmd_import, cmd_info, cmd_render,
-    cmd_validate, exit_code,
+    BenchReport, HeadlessError, cmd_bench, cmd_bench_on, cmd_export, cmd_import, cmd_info,
+    cmd_render, cmd_render_stereo, cmd_validate, compare_bench_file, exit_code,
 };
 // §2.1 `ftgsxr_app::desktop_input`; Q-197: `KeyMap`'s methods.
 pub use desktop_input::{DesktopInputPlugin, KeyMap};
@@ -60,10 +63,11 @@ pub use rig::{
 };
 // §2.1 `ftgsxr_app::ui`; Q-159: `HudInstance`; Q-263: `PanelPointer`; Q-274:
 // `HudHandSource`; Q-336: `XrFeatures`, `FeatureState`; Q-345: `HudAnchor`; Q-383:
-// `Lighting`.
+// `Lighting`; Q-404: `XrDisplay`; Q-433: `HudCounter`.
 pub use ui::{
-    FeatureState, HudAnchor, HudData, HudHandSource, HudInstance, Lighting, PanelPointer, Toast,
-    ToastLevel, UiSurface, WorldPanel, WristMenu, XrFeatures, panel_hit,
+    FeatureState, HudAnchor, HudCounter, HudData, HudHandSource, HudInstance, Lighting,
+    PanelPointer, Toast, ToastLevel, UiSurface, WorldPanel, WristMenu, XrDisplay, XrFeatures,
+    panel_hit,
 };
 // §2.1 `ftgsxr_app::capture`.
 pub use capture::ScreenshotRequest;
@@ -82,6 +86,8 @@ pub use platform::{
 // §2.1 `ftgsxr_app::plugin`; Q-151: `init_desktop_log` and the `IoError` it returns.
 pub use ftgsxr_io::IoError;
 pub use plugin::{AppPlugin, init_desktop_log};
+// Q-406: the session benchmark the Quest's runner names.
+pub use benchmark::session::SessionBench;
 // Q-168: what `ftgsxr-desktop` names for `AppPlugin.initial` and `LinuxPlatform`, for
 // callers that depend on the app alone (§2.1's `ftgsxr-desktop`), as Q-129.
 pub use ftgsxr_io::{DocumentProvider, ModelRef, Url};

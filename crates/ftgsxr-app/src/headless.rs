@@ -9,19 +9,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ftgsxr_core::{
-    CoreError, InfoReply, Model, ModelInfo, ModelKind, Pose, RenderConventions, checkpoint_dir,
-    info_json, open_model, read_request, sha256, write_exchange, write_renders,
+    CoreError, InfoReply, Model, ModelInfo, ModelKind, Pose, RenderConventions, RenderItem,
+    RenderRequest, checkpoint_dir, info_json, open_model, read_request, sha256, write_exchange,
+    write_renders,
 };
-use ftgsxr_render::{HeadlessRenderer, QualityTier, RenderError};
+use ftgsxr_render::{HeadlessRenderer, ModelId, QualityTier, RenderError, SortMode};
+
+use crate::benchmark::json;
 
 mod bench;
-// Q-67
-pub use bench::{BenchReport, cmd_bench};
-mod json;
+// Q-67, Q-406
+pub use bench::{BenchReport, cmd_bench, cmd_bench_on, compare_bench_file};
 mod sort_check;
 // Q-146
 pub use sort_check::sort_check;
-mod synthetic;
 
 /// A headless command's failure (§1.7, §1.15). `Input` and `Environment` carry their
 /// cause's §1.15 code in the message's leading `E-…: ` prefix (Q-64).
@@ -142,6 +143,98 @@ pub fn cmd_render(
     tier: QualityTier,
     version: &str,
 ) -> Result<(), HeadlessError> {
+    let (req, loaded) = checked_request(model, request)?;
+    let (mut renderer, id) = renderer_with(model, &loaded, tier, req.sh_degree)?;
+    let renders = req
+        .items
+        .iter()
+        .map(|item| {
+            renderer
+                .render(
+                    &[(id, Pose::IDENTITY)],
+                    &item.camera,
+                    item.timestamp,
+                    req.background,
+                )
+                .map(|image| (item.id.clone(), image))
+                .map_err(|e| item_error(model, &item.id, e))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let producer = format!("openftgs-xr {version} ({})", renderer.adapter_name());
+    write_renders(out, &renders, &producer, req.sha256).map_err(|e| core_input(out, &e))
+}
+
+/// R-9 on the device (§3.2, Q-414): `cmd_render` for a request whose items come in left
+/// and right pairs (`<id>L` immediately followed by `<id>R` at one τ, R-9's `R9_<P>`
+/// requests, Q-415), each pair rendered by `HeadlessRenderer::render_stereo` with `sort`
+/// in `tier`, both eyes at the identity pose. It makes `cmd_render`'s checks, refuses a
+/// request whose items do not pair before the GPU (E-FILE-VALUE, Q-426), and writes
+/// `out` as `ftgs-renders` in the request's order with the same producer and
+/// `request_sha256`, once every pair has rendered (Q-90). It serves the device run only:
+/// `ftgsxr render` has no option for it.
+// Q-414, Q-426, Q-90
+pub fn cmd_render_stereo(
+    model: &Path,
+    request: &Path,
+    out: &Path,
+    tier: QualityTier,
+    sort: SortMode,
+    version: &str,
+) -> Result<(), HeadlessError> {
+    let (req, loaded) = checked_request(model, request)?;
+    let pairs = eye_pairs(&req.items)
+        .map_err(|why| core_input(request, &CoreError::Value(format!("items = {why}"))))?;
+    let (mut renderer, id) = renderer_with(model, &loaded, tier, req.sh_degree)?;
+    let mut renders = Vec::with_capacity(req.items.len());
+    for [left, right] in pairs {
+        let eyes = [left.camera, right.camera];
+        let [l, r] = renderer
+            .render_stereo(
+                &[(id, Pose::IDENTITY)],
+                &eyes,
+                left.timestamp,
+                req.background,
+                sort,
+            )
+            .map_err(|e| item_error(model, &left.id, e))?;
+        renders.push((left.id.clone(), l));
+        renders.push((right.id.clone(), r));
+    }
+    let producer = format!("openftgs-xr {version} ({})", renderer.adapter_name());
+    write_renders(out, &renders, &producer, req.sha256).map_err(|e| core_input(out, &e))
+}
+
+/// The items in left and right pairs (Q-415): `<x>L` immediately followed by `<x>R`, at one
+/// timestamp; otherwise why not (Q-426).
+// Q-426
+fn eye_pairs(items: &[RenderItem]) -> Result<Vec<[&RenderItem; 2]>, String> {
+    if !items.len().is_multiple_of(2) {
+        return Err(format!("{} items, not left and right pairs", items.len()));
+    }
+    items
+        .chunks(2)
+        .map(|pair| {
+            let (l, r) = (&pair[0], &pair[1]);
+            let stems = (l.id.strip_suffix('L'), r.id.strip_suffix('R'));
+            match stems {
+                (Some(a), Some(b)) if a == b => {}
+                _ => return Err(format!("{:?} then {:?}, not <id>L then <id>R", l.id, r.id)),
+            }
+            if l.timestamp != r.timestamp {
+                return Err(format!(
+                    "{:?} at {} and {:?} at {}, not one time",
+                    l.id, l.timestamp, r.id, r.timestamp
+                ));
+            }
+            Ok([l, r])
+        })
+        .collect()
+}
+
+/// A render's request read and checked against its model before the GPU (§1.7, Q-90):
+/// E-REQ-UNIT and E-REQ-DEGREE (exit 2), then the convention warnings on standard error
+/// (Q-110).
+fn checked_request(model: &Path, request: &Path) -> Result<(RenderRequest, Model), HeadlessError> {
     let bytes = fs::read(request).map_err(|e| input_error(request, e))?;
     let req = read_request(&bytes).map_err(|e| core_input(request, &e))?;
     let loaded = load(model)?;
@@ -166,30 +259,30 @@ pub fn cmd_render(
     for w in loaded.conventions.warnings() {
         eprintln!("ftgsxr: warning: {}: {w}", model.display());
     }
+    Ok((req, loaded))
+}
+
+/// A headless renderer of `tier` with `loaded` uploaded at `sh_degree`; a refusal over the
+/// budget gives N (Q-117).
+fn renderer_with(
+    model: &Path,
+    loaded: &Model,
+    tier: QualityTier,
+    sh_degree: Option<u8>,
+) -> Result<(HeadlessRenderer, ModelId), HeadlessError> {
     let mut renderer = HeadlessRenderer::new(tier).map_err(|e| render_error(model, e))?;
     let id = renderer
-        .load(&loaded, req.sh_degree)
+        .load(loaded, sh_degree)
         .map_err(|e| with_n(render_error(model, e), loaded.len()))?;
-    let renders = req
-        .items
-        .iter()
-        .map(|item| {
-            renderer
-                .render(
-                    &[(id, Pose::IDENTITY)],
-                    &item.camera,
-                    item.timestamp,
-                    req.background,
-                )
-                .map(|image| (item.id.clone(), image))
-                .map_err(|e| match e {
-                    RenderError::NonFinite => HeadlessError::Numeric(format!("item {}", item.id)),
-                    other => render_error(model, other),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let producer = format!("openftgs-xr {version} ({})", renderer.adapter_name());
-    write_renders(out, &renders, &producer, req.sha256).map_err(|e| core_input(out, &e))
+    Ok((renderer, id))
+}
+
+/// An item's render failure: a non-finite render names the item (E-NUMERIC, exit 3).
+fn item_error(model: &Path, id: &str, e: RenderError) -> HeadlessError {
+    match e {
+        RenderError::NonFinite => HeadlessError::Numeric(format!("item {id}")),
+        other => render_error(model, other),
+    }
 }
 
 /// A render-layer failure as a `HeadlessError` (Q-90): a core error on the model as
@@ -394,6 +487,17 @@ fn input_error(path: &Path, e: std::io::Error) -> HeadlessError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eye_pairs_pairs_every_r9_request() {
+        // Q-415's requests are what Q-414's command reads: every item paired, none refused.
+        for p in 1..=10 {
+            let path = ftgsxr_testkit::fixtures_dir().join(format!("probes/R9_P{p}.request.json"));
+            let req = read_request(&fs::read(&path).unwrap()).unwrap();
+            let pairs = eye_pairs(&req.items).unwrap_or_else(|e| panic!("R9_P{p}: {e}"));
+            assert_eq!(2 * pairs.len(), req.items.len());
+        }
+    }
 
     #[test]
     fn info_text_writes_the_query_kinds_bare() {

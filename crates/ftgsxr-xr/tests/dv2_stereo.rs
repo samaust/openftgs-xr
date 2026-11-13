@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dv-2 (§3.4, `dv` lane; §1.4 Stereo, §1.13 GPU validation, D-4 per view, Q-121, Q-123):
+//! Dv-2 (§3.4, `dv` lane; §1.4 Stereo, §1.13 GPU validation, D-4, Q-399, Q-123, spike S5):
 //! two eyes draw a probe for 10 s at the default 72 Hz, with no Vulkan validation message
 //! in logcat in the debug build. The driver pushes P1 as `dv/probe.safetensors`, enables
 //! the bundled Khronos layer through Android's GPU debug-layer settings for the app (reset

@@ -14,14 +14,14 @@ use bevy::window::ExitCondition;
 use bevy::winit::{UpdateMode, WinitSettings};
 use bevy_mod_xr::session::XrState;
 use ftgsxr_app::{
-    AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SettingsRes, SortMode, SplatLoad, Toast,
-    ToastLevel, load_settings,
+    AppPaths, AppPlugin, Headset, ModelBytes, QualityTier, SessionBench, SettingsRes, SplatLoad,
+    Toast, ToastLevel, load_settings,
 };
 use ftgsxr_xr::{XrHands, XrPlugin, add_xr};
 
 use crate::exit::{EXIT_ENVIRONMENT, exit_code, exit_without_session};
 use crate::platform::QuestPlatform;
-use crate::{device_test, jni_calls};
+use crate::{bench_runner, device_test, jni_calls};
 
 /// The logcat tag (§1.13).
 const TAG: &str = "ftgsxr";
@@ -76,17 +76,32 @@ pub(crate) fn splat_load(bytes: Vec<u8>) -> SplatLoad {
     }
 }
 
+/// Prints the session benchmark's line once its `result` is filled, then ends the
+/// process (Q-435).
+fn print_session_bench(bench: Res<SessionBench>) {
+    if let Some(result) = &bench.result {
+        info!("{}", bench_runner::session_line(&bench.name, result));
+        std::process::exit(0);
+    }
+}
+
 #[bevy_main]
 fn main() {
     let test = jni_calls::intent_extra(device_test::EXTRA);
+    // Q-406
+    let bench = jni_calls::intent_extra(bench_runner::EXTRA);
     let (paths, external) = paths();
     let (settings, warnings) = match load_settings(&paths.config.join("settings.toml")) {
         Ok(s) => s,
         Err(e) => (Default::default(), vec![format!("{}: {e}", e.code())]),
     };
-    // The verdict lines are info; a device test keeps them whatever the settings' level.
-    let level = match (&test, settings.general.log_level.as_str()) {
-        (Some(_), "error" | "warn") => "info",
+    // The verdict lines are info; a device test or a benchmark keeps them whatever the
+    // settings' level.
+    let level = match (
+        test.is_some() || bench.is_some(),
+        settings.general.log_level.as_str(),
+    ) {
+        (true, "error" | "warn") => "info",
         (_, l) => l,
     };
     init_log(level);
@@ -101,8 +116,44 @@ fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
+    // Q-435: B-2, B-7, B-8 and B-9 run in the session, through `SessionBench`.
+    let session_bench = bench
+        .as_deref()
+        .filter(|n| bench_runner::in_session(n))
+        .and_then(|name| {
+            let dv = device_test::dv_dir()?;
+            let model = jni_calls::intent_extra(bench_runner::MODEL_EXTRA);
+            let headset = jni_calls::intent_extra(bench_runner::HEADSET_EXTRA);
+            Some(bench_runner::session_bench(
+                name,
+                &dv,
+                model.as_deref(),
+                headset.as_deref(),
+            ))
+        });
+    if let Some(name) = bench.as_deref()
+        && bench_runner::in_session(name)
+        && session_bench.is_none()
+    {
+        let e = Err("E-IO: no app-external files directory for dv/".to_owned());
+        info!("{}", bench_runner::line(name, &e));
+        std::process::exit(0);
+    }
+    if let Some(name) = bench.as_deref().filter(|n| !bench_runner::in_session(n)) {
+        // Q-406: B-3, B-4, B-5 and B-6 before the XR session, as Dv-3 (Q-122), then the process
+        // exits.
+        let headset = jni_calls::intent_extra(bench_runner::HEADSET_EXTRA);
+        let result = match device_test::dv_dir() {
+            Some(dv) => bench_runner::run(name, &dv, headset.as_deref()),
+            None => Err("E-IO: no app-external files directory for dv/".to_owned()),
+        };
+        info!("{}", bench_runner::line(name, &result));
+        std::process::exit(0);
+    }
+
     if let Some(name) = &test {
-        // Dv-3, Dv-4 (Q-122): before the XR session, then the process exits.
+        // Dv-3, Dv-4, R-9 and R-10 (Q-122, Q-427): before the XR session, then the
+        // process exits.
         if let Some(dv) = device_test::dv_dir()
             && device_test::run_headless(name, &dv)
         {
@@ -110,16 +161,21 @@ fn main() {
         }
     }
 
-    let tier = QualityTier::by_name(&settings.general.tier).unwrap_or_else(|| {
-        warn!("unknown tier {}; quest-balanced", settings.general.tier);
+    // A device test that names its tier runs in it (spike S3, #729), the settings left alone.
+    let tier_name = test
+        .as_deref()
+        .and_then(device_test::tier)
+        .unwrap_or(settings.general.tier.as_str());
+    let tier = QualityTier::by_name(tier_name).unwrap_or_else(|| {
+        warn!("unknown tier {tier_name}; quest-balanced");
         QualityTier::by_name("quest-balanced").expect("invariant: §1.12's tier exists")
     });
     let xr = XrPlugin {
         // §1.9 (#568): the layer where the runtime offers it.
         passthrough: true,
         hands: true,
-        // Q-121
-        sort: SortMode::PerView,
+        // Q-121, Q-399: the running tier's (D-4's shared center on the Quest tiers).
+        sort: tier.sort_mode,
     };
     let group = DefaultPlugins
         .build()
@@ -147,6 +203,11 @@ fn main() {
     }
     // Q-266: before `AppPlugin`, so panel mode, spatial audio and D-11's auto-fit apply.
     app.insert_resource(Headset);
+    if let Some(b) = session_bench {
+        info!("session bench {}", b.name);
+        app.insert_resource(b)
+            .add_systems(Update, print_session_bench);
+    }
     // Q-163: `SettingsRes` above is left alone by `AppPlugin`.
     let platform = QuestPlatform::new(paths);
     // Q-387: the head's stage pose for the camera's thumbnails, in `Last`, after

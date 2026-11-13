@@ -35,7 +35,7 @@ impl Drop for Pushed {
 
 #[test]
 #[ignore = "dv"]
-fn dv_dv10_a_pushed_probe_is_listed_and_a_granted_tree_reads_a_model() {
+fn dv_dv10_a_pushed_probe_is_listed_and_a_granted_tree_opens_a_model() {
     let apk = apk();
     device();
     install(&apk);

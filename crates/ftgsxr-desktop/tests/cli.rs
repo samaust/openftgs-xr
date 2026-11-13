@@ -5,6 +5,7 @@
 //! and 2 on an invalid input, printing §1.7's output (Q-77).
 
 use std::fs;
+use std::path::Path;
 use std::process::{Command, Output};
 
 use ftgsxr_app::cmd_info;
@@ -346,9 +347,24 @@ fn gpu_r15_render_writes_the_renders_file() {
 
 #[test]
 fn bench_refuses_a_name_the_desktop_does_not_run() {
-    // Q-103: clap accepts B-1, B-3, B-5, B-6 and B-9 only; a usage error exits 2.
-    let o = ftgsxr(&["bench", "B-2"]);
+    // Q-103: clap accepts §3.5's names only; a usage error exits 2.
+    let o = ftgsxr(&["bench", "B-10"]);
     assert_eq!(o.status.code(), Some(2));
+}
+
+#[test]
+fn bench_b2_on_the_desktop_names_the_dv_test() {
+    // Q-406, Q-435: B-2, B-7 and B-8 run on the headset, in the session: on the desktop
+    // they are `Input` (exit 2), naming the `dv` test that runs them, before any GPU work.
+    for (name, test) in [("B-2", "dv_b2_"), ("B-7", "dv_b7_"), ("B-8", "dv_b8_")] {
+        let o = ftgsxr(&["bench", name]);
+        assert_eq!(o.status.code(), Some(2), "{name}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains(test) && err.contains("dv_session_bench.rs"),
+            "{name}: {err}"
+        );
+    }
 }
 
 /// `ftgsxr bench` with the baselines' directory `baselines` (Q-103), under the validation
@@ -449,7 +465,9 @@ fn gpu_bench_reports_a_regression_against_a_baseline_20_percent_better() {
     assert!(
         written["baseline"]
             .as_str()
-            .is_some_and(|p| p.ends_with("B-5.json"))
+            .is_some_and(|p| p.ends_with("B-5.json") && Path::new(p).is_relative()),
+        "Q-444: {}",
+        written["baseline"]
     );
 }
 
@@ -488,7 +506,13 @@ fn gpu_bench_compares_neither_b6_nor_another_profile() {
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert_eq!(o.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("ftgsxr: regression:"), "{stderr}");
-    assert!(written["baseline"].is_string());
+    assert!(
+        written["baseline"]
+            .as_str()
+            .is_some_and(|p| Path::new(p).is_relative()),
+        "Q-444: {}",
+        written["baseline"]
+    );
 
     // The same baseline from the other profile.
     let (ours, theirs) = if cfg!(debug_assertions) {
@@ -516,6 +540,64 @@ fn gpu_bench_compares_neither_b6_nor_another_profile() {
             .any(|n| n.as_str() == Some(note.as_str())),
         "{}",
         written["notes"]
+    );
+}
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_b4_bench_writes_the_cull_with_and_without_the_index() {
+    // §3.5 B-4, §1.7 `bench`, Q-408, Q-430: `ftgsxr bench B-4` is a desktop name; on a
+    // model it writes, for its size, the cull time and the rows visited with the temporal
+    // index and with every row, and the two B-4 checks on the indexed setup.
+    let dir = scratch_dir(
+        env!("CARGO_TARGET_TMPDIR"),
+        crate::test_file_stem(),
+        "bench-b4",
+    );
+    let baselines = dir.join("baselines");
+    fs::create_dir_all(&baselines).unwrap();
+    let model = dir.join("tiny.ftgs-if");
+    let n = 20_000;
+    fs::write(
+        &model,
+        ftgsxr_testkit::exchange_bytes(&ftgsxr_testkit::random_model(9, n, 0)),
+    )
+    .unwrap();
+    let args = ["B-4", "--model", model.to_str().unwrap(), "--out"];
+    let (o, file) = bench_file(&args, &dir.join("b4.json"), &baselines);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(file["bench"], "B-4", "{file}");
+    let results = file["results"].as_array().unwrap();
+    let value = |index: &str, measure: &str| {
+        results
+            .iter()
+            .find(|r| r["setup"]["index"] == index && r["measure"] == measure)
+            .unwrap_or_else(|| panic!("{index} {measure}: {file}"))["value"]
+            .as_f64()
+            .unwrap()
+    };
+    for index in ["temporal", "every row"] {
+        assert!(value(index, "cull_ms") > 0.0, "{index}");
+    }
+    assert_eq!(value("every row", "rows_visited"), n as f64);
+    assert!(value("temporal", "rows_visited") <= n as f64);
+    let ids: Vec<_> = file["budgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b["id"].clone(), b["measure"].clone()))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            (serde_json::json!("B-4"), serde_json::json!("cull_ms")),
+            (serde_json::json!("B-4"), serde_json::json!("rows_visited")),
+        ]
     );
 }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5): the desktop
-//! benchmarks B-1, B-3, B-5, B-6 and B-9 (#289, Q-155), their JSON file and the comparison with the stored
+//! benchmarks B-1, B-3, B-4 (#733, Q-408), B-5, B-6 and B-9 (#289, Q-155), their JSON file and the comparison with the stored
 //! baseline (Q-67, Q-102, Q-103).
 
 use std::fs;
@@ -16,19 +16,22 @@ use bevy::render::render_resource::{
     TextureUsages, TextureViewDescriptor, WgpuTextureView,
 };
 use ftgsxr_core::{
-    Camera, DMat3, DVec3, Fov, Mat3, Model, Pose, Quat, TemporalIndex, UVec2, Vec3,
-    encode_exchange, hex, pack_for_gpu, write_exchange,
+    Camera, DMat3, DVec3, Fov, Model, Pose, TemporalIndex, UVec2, Vec3, encode_exchange, hex,
+    pack_for_gpu, write_exchange,
 };
 use ftgsxr_render::{
-    Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, Overlays, QualityTier,
-    RenderError, RenderMode, SortPose, SplatDevice, SplatPasses, ViewParams,
+    BudgetSource, Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, MemoryBudget,
+    ModelDraw, Overlays, QualityTier, RenderError, RenderMode, SortMode, SortPose, SplatDevice,
+    SplatPasses, ViewParams,
 };
 
+mod b4;
 mod b9;
 
-use super::json::Json;
-use super::synthetic::{Persistence, synthetic_model};
 use super::{HeadlessError, core_input, identity_file, input_error, load, with_n, write_atomic};
+use crate::benchmark::json::Json;
+use crate::benchmark::synthetic::{Persistence, synthetic_model};
+use crate::benchmark::{Budget, Measured, Rule, look_at, median, report_json};
 
 /// What `cmd_bench` measured (Q-67): the file's text and the budgets that regressed
 /// against the stored baseline, one line each; the binary exits 3 when there is any.
@@ -40,89 +43,22 @@ pub struct BenchReport {
     pub regressions: Vec<String>,
 }
 
-/// How a budget's value meets its limit (Q-103).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Rule {
-    /// value ≥ limit; higher is better.
-    AtLeast,
-    /// value ≤ limit; lower is better.
-    AtMost,
-    /// |value / limit − 1| ≤ 1 %; lower is better.
-    Within1Percent,
-}
-
-impl Rule {
-    fn name(self) -> &'static str {
-        match self {
-            Rule::AtLeast => "at_least",
-            Rule::AtMost => "at_most",
-            Rule::Within1Percent => "within_1_percent",
-        }
-    }
-
-    fn passes(self, value: f64, limit: f64) -> bool {
-        match self {
-            Rule::AtLeast => value >= limit,
-            Rule::AtMost => value <= limit,
-            Rule::Within1Percent => (value / limit - 1.0).abs() <= 0.01,
-        }
-    }
-
-    /// Whether `value` is more than 10 % worse than `baseline` (§3.5). A
-    /// `within_1_percent` budget (B-6) never is: it is deterministic, and its own 1 %
-    /// budget is the check (Q-103).
-    fn regressed(self, value: f64, baseline: f64) -> bool {
-        match self {
-            Rule::AtLeast => value < 0.9 * baseline,
-            Rule::AtMost => value > 1.1 * baseline,
-            Rule::Within1Percent => false,
-        }
-    }
-}
-
-/// One measured figure: `{setup, measure, value, unit}`.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Figure {
-    pub(crate) setup: Json,
-    pub(crate) measure: &'static str,
-    pub(crate) value: f64,
-    pub(crate) unit: &'static str,
-}
-
-/// One budgeted figure: `{id, setup, measure, rule, limit, value, pass}`.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Budget {
-    pub(crate) id: &'static str,
-    pub(crate) setup: Json,
-    pub(crate) measure: &'static str,
-    pub(crate) rule: Rule,
-    pub(crate) limit: f64,
-    pub(crate) value: f64,
-}
-
-impl Budget {
-    fn pass(&self) -> bool {
-        self.rule.passes(self.value, self.limit)
-    }
-
-    fn to_json(&self) -> Json {
-        Json::obj([
-            ("id", Json::str(self.id)),
-            ("setup", self.setup.clone()),
-            ("measure", Json::str(self.measure)),
-            ("rule", Json::str(self.rule.name())),
-            ("limit", Json::Num(self.limit)),
-            ("value", Json::Num(self.value)),
-            ("pass", Json::Bool(self.pass())),
-        ])
-    }
-}
-
 /// The budgets of `budgets` more than 10 % worse than the baseline file's budget with the
 /// same id, setup and measure, one line each (§3.5, Q-103). A budget the baseline
 /// lacks is not compared, nor is a `within_1_percent` budget (B-6), whose own budget is
 /// the check.
+#[cfg(test)]
 pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
+    compare_json(
+        &budgets.iter().map(Budget::to_json).collect::<Vec<_>>(),
+        baseline,
+    )
+}
+
+/// `compare` over budgets as a benchmark file writes them (`Budget::to_json`'s members),
+/// so a run's budgets and a written file's are compared by the one rule (Q-103,
+/// Q-440). A budget whose `rule` is not one of Q-103's is not compared.
+fn compare_json(budgets: &[Json], baseline: &Json) -> Vec<String> {
     let old = baseline
         .get("budgets")
         .and_then(Json::as_array)
@@ -130,24 +66,25 @@ pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
     budgets
         .iter()
         .filter_map(|b| {
+            let id = b.get("id")?.as_str()?;
+            let measure = b.get("measure")?.as_str()?;
+            let setup = b.get("setup")?;
+            let rule = Rule::from_name(b.get("rule")?.as_str()?)?;
+            let value = b.get("value")?.as_f64()?;
             let base = old
                 .iter()
                 .find(|o| {
-                    o.get("id").and_then(Json::as_str) == Some(b.id)
-                        && o.get("measure").and_then(Json::as_str) == Some(b.measure)
-                        && o.get("setup").is_some_and(|s| s.same(&b.setup))
+                    o.get("id").and_then(Json::as_str) == Some(id)
+                        && o.get("measure").and_then(Json::as_str) == Some(measure)
+                        && o.get("setup").is_some_and(|s| s.same(setup))
                 })?
                 .get("value")?
                 .as_f64()?;
-            b.rule.regressed(b.value, base).then(|| {
+            rule.regressed(value, base).then(|| {
                 format!(
-                    "{} {} {}: {} against the baseline's {} ({:+.1} %)",
-                    b.id,
-                    b.measure,
-                    b.setup.compact(),
-                    b.value,
-                    base,
-                    100.0 * (b.value / base - 1.0)
+                    "{id} {measure} {}: {value} against the baseline's {base} ({:+.1} %)",
+                    setup.compact(),
+                    100.0 * (value / base - 1.0)
                 )
             })
         })
@@ -160,6 +97,22 @@ pub(crate) fn compare(budgets: &[Budget], baseline: &Json) -> Vec<String> {
 // Q-103
 pub(crate) fn compare_against(
     budgets: &[Budget],
+    profile: &str,
+    gpu: &str,
+    baseline: &Json,
+) -> Result<Vec<String>, String> {
+    compare_json_against(
+        &budgets.iter().map(Budget::to_json).collect::<Vec<_>>(),
+        profile,
+        gpu,
+        baseline,
+    )
+}
+
+/// `compare_against` over a written file's budgets (Q-103, Q-440).
+// Q-103
+fn compare_json_against(
+    budgets: &[Json],
     profile: &str,
     gpu: &str,
     baseline: &Json,
@@ -181,7 +134,7 @@ pub(crate) fn compare_against(
         })
         .collect();
     if differ.is_empty() {
-        Ok(compare(budgets, baseline))
+        Ok(compare_json(budgets, baseline))
     } else {
         Err(format!(
             "baseline not compared: {} (Q-103)",
@@ -190,15 +143,78 @@ pub(crate) fn compare_against(
     }
 }
 
+/// Compares a written `ftgsxr-bench` file `json` (a headset's file pulled by the host,
+/// say) with its stored baseline in `baselines` by Q-103's rule: `<bench>.quest.json`
+/// when the file has a `machine.headset`, else `<bench>.json`. The report's `json` is the
+/// file with `baseline` set to the path compared against (relative to the workspace, Q-444; null when there is none or it
+/// was not compared) and, when the profile or GPU differ, Q-103's note added to `notes`;
+/// `regressions` lists the budgets more than 10 % worse. A file or baseline that is not
+/// well-formed `ftgsxr-bench` JSON is `Input` (E-JSON).
+// Q-440
+pub fn compare_bench_file(json: &str, baselines: &Path) -> Result<BenchReport, HeadlessError> {
+    let malformed =
+        |why: String| HeadlessError::Input(format!("E-JSON: the benchmark file: {why}"));
+    let mut file = Json::parse(json).map_err(malformed)?;
+    let bench = file
+        .get("bench")
+        .and_then(Json::as_str)
+        .filter(|_| file.get("format").and_then(Json::as_str) == Some("ftgsxr-bench"))
+        .ok_or_else(|| malformed("not an ftgsxr-bench file".into()))?
+        .to_owned();
+    let headset = file
+        .get("machine")
+        .and_then(|m| m.get("headset"))
+        .is_some_and(|h| h.as_str().is_some());
+    let name = if headset {
+        format!("{bench}.quest.json")
+    } else {
+        format!("{bench}.json")
+    };
+    let budgets = file
+        .get("budgets")
+        .and_then(Json::as_array)
+        .ok_or_else(|| malformed("no budgets".into()))?
+        .to_vec();
+    let profile = file.get("profile").and_then(Json::as_str).unwrap_or("");
+    let gpu = file
+        .get("machine")
+        .and_then(|m| m.get("gpu"))
+        .and_then(Json::as_str)
+        .unwrap_or("");
+    let (baseline, regressions, note) = match read_baseline(&baselines.join(&name))? {
+        Some((path, parsed)) => match compare_json_against(&budgets, profile, gpu, &parsed) {
+            Ok(regressions) => (baseline_name(&path), regressions, None),
+            Err(note) => (Json::Null, Vec::new(), Some(note)),
+        },
+        None => (Json::Null, Vec::new(), None),
+    };
+    if let Json::Obj(members) = &mut file {
+        for (key, value) in members.iter_mut() {
+            match key.as_str() {
+                "baseline" => *value = baseline.clone(),
+                "notes" => {
+                    if let (Json::Arr(notes), Some(n)) = (value, &note) {
+                        notes.push(Json::str(n.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut json = file.pretty();
+    json.push('\n');
+    Ok(BenchReport { json, regressions })
+}
+
 /// `ftgsxr bench NAME [--out BENCH.json] [--model MODEL]` (§1.7, §3.5, Q-67): runs the
-/// desktop benchmark `name` (B-1, B-3, B-5, B-6 or B-9) on the high-performance adapter, with
+/// desktop benchmark `name` (B-1, B-3, B-4, B-5, B-6 or B-9) on the high-performance adapter, with
 /// the setups of Q-102 or, with `model`, on that one model (any §1.2 input); compares
 /// its budgets with the stored baseline `<NAME>.json` when the baseline has the run's
 /// profile and GPU, else notes why not in the file (Q-103); and writes the file at `out`
 /// when given. A NAME the desktop does not run is `Input`; a malformed baseline is `Input`
 /// (E-JSON), and an `out` whose directory does not exist an `Input` error, both before the
 /// GPU opens; an invalid model is `Input` with its E-FILE code; no adapter, or no timestamp
-/// queries for B-3, is `Environment`. GPU validation messages are a note, not an error
+/// queries for B-3 or B-4, is `Environment`. GPU validation messages are a note, not an error
 /// (Q-116).
 // Q-67, Q-102, Q-103
 pub fn cmd_bench(
@@ -206,35 +222,134 @@ pub fn cmd_bench(
     out: Option<&Path>,
     model: Option<&Path>,
 ) -> Result<BenchReport, HeadlessError> {
-    cmd_bench_in(name, out, model, &baseline_dir())
+    cmd_bench_on(name, out, model, None)
 }
 
-/// `cmd_bench` with the baselines' directory given.
+/// `cmd_bench` on a machine that may be a headset (Q-406): with `headset`, the headset's
+/// build fingerprint, the run is the headset's, before any XR session: B-3, B-4, B-5 or
+/// B-6 (any other NAME is `Input`), in `quest-balanced` with its 1.5 GiB budget, B-3 against
+/// P-4's Quest limit (Q-413), the file's `machine.headset` holding `headset` as given and
+/// the stored baseline `<NAME>.quest.json`; B-5's files are written beside `out` when it is
+/// given (Q-417). A size the device refuses, over its memory budget or a binding
+/// limit (Q-377), is a result with a null `value` and the reason in `skipped`, and no
+/// budget (Q-413). Without `headset` it is `cmd_bench`.
+// Q-406, Q-413, Q-417
+pub fn cmd_bench_on(
+    name: &str,
+    out: Option<&Path>,
+    model: Option<&Path>,
+    headset: Option<&str>,
+) -> Result<BenchReport, HeadlessError> {
+    let on = headset.map_or(On::Desktop, |h| On::Headset(h.to_owned()));
+    cmd_bench_in(name, out, model, &on, &baseline_dir())
+}
+
+/// The machine a run is on (Q-406).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum On {
+    /// The desktop (Q-67, Q-102).
+    Desktop,
+    /// The headset, with its build fingerprint (Q-406).
+    Headset(String),
+}
+
+/// A benchmark's runner.
+type Runner = fn(&Gpu, Option<&Given>) -> Result<Measured, HeadlessError>;
+
+impl On {
+    /// The runner of `name` on this machine, `None` when it does not run it here.
+    fn runner(&self, name: &str) -> Option<Runner> {
+        let run: Runner = match (self, name) {
+            (_, "B-3") => bench_b3,
+            // Q-408, Q-430
+            (_, "B-4") => b4::bench_b4,
+            (_, "B-5") => bench_b5,
+            (_, "B-6") => bench_b6,
+            (On::Desktop, "B-1") => bench_b1,
+            // Q-155
+            (On::Desktop, "B-9") => b9::bench_b9,
+            _ => return None,
+        };
+        Some(run)
+    }
+
+    /// The names `runner` takes, for the refusal's text.
+    fn names(&self) -> &'static str {
+        match self {
+            On::Desktop => "not a desktop benchmark (B-1, B-3, B-4, B-5, B-6, B-9)",
+            On::Headset(_) => "not a headset benchmark run before the session (B-3, B-4, B-5, B-6)",
+        }
+    }
+
+    /// The tier of the run: `desktop` (Q-102), `quest-balanced` on the headset (Q-413).
+    // Q-413
+    fn tier(&self) -> QualityTier {
+        match self {
+            On::Desktop => QualityTier::desktop(),
+            On::Headset(_) => QualityTier::quest_balanced(),
+        }
+    }
+
+    /// P-4's limit on this machine (§1.12): 0.4 ms on the RTX 4090, 2.5 ms on the Quest.
+    fn p4_limit_ms(&self) -> f64 {
+        match self {
+            On::Desktop => 0.4,
+            On::Headset(_) => 2.5,
+        }
+    }
+
+    /// The stored baseline's file name (Q-103, Q-406).
+    // Q-406
+    fn baseline_file(&self, name: &str) -> String {
+        match self {
+            On::Desktop => format!("{name}.json"),
+            On::Headset(_) => format!("{name}.quest.json"),
+        }
+    }
+
+    /// The headset's build fingerprint, if any.
+    fn headset(&self) -> Option<&str> {
+        match self {
+            On::Desktop => None,
+            On::Headset(h) => Some(h),
+        }
+    }
+}
+
+/// `cmd_bench_on` with the baselines' directory given.
 fn cmd_bench_in(
     name: &str,
     out: Option<&Path>,
     model: Option<&Path>,
+    on: &On,
     baselines: &Path,
 ) -> Result<BenchReport, HeadlessError> {
-    let run: fn(&Gpu, Option<&Given>) -> Result<Measured, HeadlessError> = match name {
-        "B-1" => bench_b1,
-        "B-3" => bench_b3,
-        "B-5" => bench_b5,
-        "B-6" => bench_b6,
-        // Q-155
-        "B-9" => b9::bench_b9,
-        _ => {
-            return Err(HeadlessError::Input(format!(
-                "{name}: not a desktop benchmark (B-1, B-3, B-5, B-6, B-9)"
-            )));
-        }
+    // Q-435: the session benchmarks run on the headset, in the XR session.
+    let session =
+        matches!(name, "B-2" | "B-7" | "B-8") || (name == "B-9" && on.headset().is_some());
+    if session {
+        let test = format!("dv_{}_", name.to_lowercase().replace('-', ""));
+        return Err(HeadlessError::Input(format!(
+            "{name}: a headset benchmark run in the session: the dv test {test}… in \
+             crates/ftgsxr-xr/tests/dv_session_bench.rs (Q-435)"
+        )));
+    }
+    let Some(run) = on.runner(name) else {
+        return Err(HeadlessError::Input(format!("{name}: {}", on.names())));
     };
     // #194: the baseline and the output directory are checked before any frame, so a bad
     // one doesn't throw a run away (Q-103's errors, unchanged).
-    let baseline = read_baseline(&baselines.join(format!("{name}.json")))?;
+    let baseline = read_baseline(&baselines.join(on.baseline_file(name)))?;
     if let Some(out) = out {
         check_out_dir(out)?;
     }
+    // Q-417: on the headset the system's temporary directory is not the app's to
+    // write, so B-5's files go beside `out`.
+    let scratch = match (on, out.and_then(Path::parent)) {
+        (On::Headset(_), Some(dir)) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        _ => std::env::temp_dir(),
+    }
+    .join(format!("ftgsxr-bench-{}", std::process::id()));
     let given = model
         .map(|path| {
             load(path).map(|model| Given {
@@ -243,7 +358,7 @@ fn cmd_bench_in(
             })
         })
         .transpose()?;
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::new(on.clone(), scratch)?;
     let measured = run(&gpu, given.as_ref());
     let messages = gpu.dev.take_validation_messages();
     let measured = measured?;
@@ -264,7 +379,7 @@ fn cmd_bench_in(
         // against, or null").
         Some((path, parsed)) => {
             match compare_against(&measured.budgets, profile, gpu.dev.adapter_name(), &parsed) {
-                Ok(regressions) => (Json::str(path.display().to_string()), regressions),
+                Ok(regressions) => (baseline_name(&path), regressions),
                 Err(note) => {
                     // #193, Q-110: the library logs; the binary prints the note from the
                     // file's `notes` (Q-103).
@@ -283,6 +398,7 @@ fn cmd_bench_in(
         &measured,
         baseline,
         notes,
+        on.headset(),
     );
     if let Some(out) = out {
         write_atomic(out, json.as_bytes()).map_err(|e| input_error(out, e))?;
@@ -302,6 +418,30 @@ fn read_baseline(path: &Path) -> Result<Option<(PathBuf, Json)>, HeadlessError> 
         .map_err(|e| HeadlessError::Input(format!("E-JSON: {}: {e}", path.display())))?;
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     Ok(Some((canonical, parsed)))
+}
+
+/// The file's `baseline` for the canonical baseline path `path` (Q-103's "the path
+/// compared against"): relative to the workspace when the file lies in it, with `/`
+/// between its parts, else the file name alone, so a written file never carries a
+/// machine's absolute path.
+// Q-444
+fn baseline_name(path: &Path) -> Json {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let relative = root
+        .canonicalize()
+        .ok()
+        .and_then(|root| path.strip_prefix(root).ok().map(Path::to_path_buf));
+    let name = match relative {
+        Some(r) => r
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        None => path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+    };
+    Json::str(name)
 }
 
 /// An `Input` error naming `out` when the directory it would be written in is not one, or
@@ -344,68 +484,6 @@ pub(crate) fn validation_note(messages: &[String]) -> Option<String> {
     })
 }
 
-/// The benchmark file's text, two-space indented with a final newline (Q-67, Q-103).
-// Q-67, Q-103
-fn report_json(
-    name: &str,
-    gpu: &str,
-    profile: &str,
-    measured: &Measured,
-    baseline: Json,
-    notes: Vec<String>,
-) -> String {
-    let file = Json::obj([
-        ("format", Json::str("ftgsxr-bench")),
-        ("version", Json::Num(1.0)),
-        ("bench", Json::str(name)),
-        ("machine", machine(gpu)),
-        (
-            "versions",
-            Json::obj([
-                ("ftgsxr", Json::str(env!("CARGO_PKG_VERSION"))),
-                ("bevy", Json::str(BEVY_VERSION)),
-                ("wgpu", Json::str(WGPU_VERSION)),
-            ]),
-        ),
-        ("profile", Json::str(profile)),
-        (
-            "results",
-            Json::Arr(
-                measured
-                    .figures
-                    .iter()
-                    .map(|f| {
-                        Json::obj([
-                            ("setup", f.setup.clone()),
-                            ("measure", Json::str(f.measure)),
-                            ("value", Json::Num(f.value)),
-                            ("unit", Json::str(f.unit)),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
-        (
-            "budgets",
-            Json::Arr(measured.budgets.iter().map(Budget::to_json).collect()),
-        ),
-        ("baseline", baseline),
-        (
-            "notes",
-            Json::Arr(notes.into_iter().map(Json::str).collect()),
-        ),
-    ]);
-    let mut json = file.pretty();
-    json.push('\n');
-    json
-}
-
-/// The pinned Bevy (§2.3, the workspace's `[workspace.dependencies]`), which no runtime
-/// API reports; `versions_match_the_lock_file` keeps it true.
-const BEVY_VERSION: &str = "0.19.1";
-/// The wgpu in the build (Bevy's pin, Q-73), as `BEVY_VERSION`.
-const WGPU_VERSION: &str = "29.0.4";
-
 /// The variable that overrides the baselines' directory (Q-103).
 const BASELINES_VAR: &str = "FTGSXR_BENCH_BASELINES";
 
@@ -419,45 +497,6 @@ fn baseline_dir() -> PathBuf {
     }
 }
 
-/// The machine fields (§3.5, Q-103).
-fn machine(gpu: &str) -> Json {
-    let first_line = |path: &str| {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|t| t.lines().next().map(|l| l.trim().to_owned()))
-    };
-    let driver = first_line("/proc/driver/nvidia/version").unwrap_or_else(|| "unknown".into());
-    let os_name = fs::read_to_string("/etc/os-release")
-        .ok()
-        .and_then(|t| {
-            t.lines()
-                .find_map(|l| l.strip_prefix("PRETTY_NAME="))
-                .map(|v| v.trim_matches('"').to_owned())
-        })
-        .unwrap_or_else(|| std::env::consts::OS.to_owned());
-    let os = match first_line("/proc/sys/kernel/osrelease") {
-        Some(kernel) => format!("{os_name} (kernel {kernel})"),
-        None => os_name,
-    };
-    let cpu = fs::read_to_string("/proc/cpuinfo")
-        .ok()
-        .and_then(|t| {
-            t.lines()
-                .find(|l| l.starts_with("model name"))
-                .and_then(|l| l.split_once(':'))
-                .map(|(_, v)| v.trim().to_owned())
-        })
-        .unwrap_or_else(|| std::env::consts::ARCH.to_owned());
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-    Json::obj([
-        ("gpu", Json::str(gpu)),
-        ("driver", Json::str(driver)),
-        ("os", Json::str(os)),
-        ("cpu", Json::str(cpu)),
-        ("threads", Json::Num(threads as f64)),
-    ])
-}
-
 /// The model `--model` names, read and validated before the GPU opens.
 struct Given {
     path: PathBuf,
@@ -468,25 +507,6 @@ impl Given {
     /// The `model` value of a setup: the model's identity.
     fn label(&self) -> Json {
         Json::str(hex(&self.model.identity))
-    }
-}
-
-/// A benchmark's figures, budgets and notes.
-#[derive(Default)]
-struct Measured {
-    figures: Vec<Figure>,
-    budgets: Vec<Budget>,
-    notes: Vec<&'static str>,
-}
-
-impl Measured {
-    fn figure(&mut self, setup: &Json, measure: &'static str, value: f64, unit: &'static str) {
-        self.figures.push(Figure {
-            setup: setup.clone(),
-            measure,
-            value,
-            unit,
-        });
     }
 }
 
@@ -505,20 +525,37 @@ const LAYER_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 /// The view target's format (Q-91).
 const TARGET_FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
 
-/// The device and the desktop tier's passes.
+/// The device and the run's tier's passes (Q-102, Q-413), the machine and B-5's scratch
+/// directory.
 struct Gpu {
     dev: SplatDevice,
     tier: QualityTier,
     passes: SplatPasses,
+    on: On,
+    scratch: PathBuf,
 }
 
 impl Gpu {
-    fn new() -> Result<Gpu, HeadlessError> {
-        let dev = SplatDevice::headless().map_err(|e| gpu_error(None, e))?;
-        let tier = QualityTier::desktop();
+    fn new(on: On, scratch: PathBuf) -> Result<Gpu, HeadlessError> {
+        let mut dev = SplatDevice::headless().map_err(|e| gpu_error(None, e))?;
+        let tier = on.tier();
+        // Q-86, Q-413: the Quest tier's fixed budget replaces the device's desktop rule,
+        // as `HeadlessRenderer` does.
+        if let On::Headset(_) = on {
+            dev.set_memory_budget(MemoryBudget {
+                bytes: tier.memory_budget_bytes,
+                source: BudgetSource::Tier,
+            });
+        }
         let passes =
             SplatPasses::new(&dev, LAYER_FORMAT, None, &tier).map_err(|e| gpu_error(None, e))?;
-        Ok(Gpu { dev, tier, passes })
+        Ok(Gpu {
+            dev,
+            tier,
+            passes,
+            on,
+            scratch,
+        })
     }
 
     /// `model` packed with `layout`'s options and uploaded (§1.2 load options), with its
@@ -726,29 +763,6 @@ fn orbit(model: &Model) -> Vec<(Camera, f64)> {
         .collect()
 }
 
-/// The stage-space rotation of a camera (looking along −z with y up) that looks along
-/// `forward` with y up.
-fn look_at(forward: Vec3) -> Quat {
-    let back = -forward.normalize();
-    let right = Vec3::Y.cross(back).normalize();
-    let up = back.cross(right);
-    Quat::from_mat3(&Mat3::from_cols(right, up, back))
-}
-
-/// The median of `values` (sorted in place); 0 when empty.
-fn median(values: &mut [f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.sort_by(f64::total_cmp);
-    let mid = values.len() / 2;
-    if values.len() % 2 == 1 {
-        values[mid]
-    } else {
-        (values[mid - 1] + values[mid]) / 2.0
-    }
-}
-
 /// One instance at the identity pose drawn as splats at `tau`.
 fn draw(model: &GpuModel, sh_degree: u8, tau: f64) -> ModelDraw<'_> {
     ModelDraw {
@@ -769,8 +783,81 @@ fn draw(model: &GpuModel, sh_degree: u8, tau: f64) -> ModelDraw<'_> {
 fn persistent_synthetic(n: usize, degree: u8) -> (Model, Json) {
     (
         synthetic_model(1, n, degree, Persistence::All),
-        Json::str("synthetic, every row persistent"),
+        Json::str(SYNTHETIC_PERSISTENT),
     )
+}
+
+/// The `model` label of `persistent_synthetic`'s models.
+const SYNTHETIC_PERSISTENT: &str = "synthetic, every row persistent";
+
+/// B-1's setup (Q-102).
+fn b1_setup(label: Json, n: usize, degree: u8, tier: &QualityTier) -> Json {
+    Json::obj([
+        ("model", label),
+        ("n", Json::Num(n as f64)),
+        ("sh_degree", Json::Num(f64::from(degree))),
+        ("width", Json::Num(f64::from(WIDTH))),
+        ("height", Json::Num(f64::from(HEIGHT))),
+        ("tier", Json::str(tier.name.clone())),
+    ])
+}
+
+/// B-3's setup (Q-102), naming the tier (Q-413).
+fn b3_setup(label: Json, capacity: usize, tier: &QualityTier) -> Json {
+    Json::obj([
+        ("model", label),
+        ("capacity", Json::Num(capacity as f64)),
+        ("tier", Json::str(tier.name.clone())),
+    ])
+}
+
+/// B-5's setup (Q-102), naming the tier (Q-413).
+fn b5_setup(label: Json, file_bytes: u64, tier: &QualityTier) -> Json {
+    Json::obj([
+        ("model", label),
+        ("file_bytes", Json::Num(file_bytes as f64)),
+        ("tier", Json::str(tier.name.clone())),
+    ])
+}
+
+/// §1.12 Memory's record bytes per C: 48 per view, 64 in shared-center mode, 48 with
+/// `quest-low`'s half-precision Σ^S.
+fn record_bytes(tier: &QualityTier) -> u64 {
+    match (tier.sort_mode, tier.half_records) {
+        (SortMode::PerView, _) | (SortMode::SharedCenter, true) => 48,
+        (SortMode::SharedCenter, false) => 64,
+    }
+}
+
+/// Why the device refuses `tier`'s frame buffers of capacity `capacity`, or `None` when
+/// they fit (Q-413, Q-377): the records buffer, the largest, over the device's storage
+/// binding limit or its `max_buffer_size`. `FrameBuffers::new` refuses nothing itself.
+// Q-413
+fn records_refusal(
+    capacity: u32,
+    tier: &QualityTier,
+    binding_limit: u64,
+    max_buffer: u64,
+) -> Option<String> {
+    let bytes = u64::from(capacity.max(1)) * record_bytes(tier);
+    let (limit, name) = if max_buffer < binding_limit {
+        (max_buffer, "max_buffer_size")
+    } else {
+        (binding_limit, "max_storage_buffer_binding_size")
+    };
+    (bytes > limit).then(|| {
+        format!(
+            "the frame buffers' records of {bytes} bytes for C = {capacity} exceed the \
+             device's {name} of {limit} bytes (Q-377, Q-413)"
+        )
+    })
+}
+
+/// Whether `e` is the headset's refusal of a size (E-MEM-BUDGET, Q-377's binding limits),
+/// which the size records as skipped (Q-413); on the desktop it stays the run's error
+/// (Q-117).
+fn refused(on: &On, e: &HeadlessError) -> bool {
+    matches!(on, On::Headset(_)) && e.code() == "E-MEM-BUDGET"
 }
 
 /// B-1's synthetic sizes (§3.5).
@@ -839,14 +926,7 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
         }
         let slowest = per_camera.iter().copied().fold(0.0, f64::max);
         let mean = per_camera.iter().sum::<f64>() / per_camera.len() as f64;
-        let setup = Json::obj([
-            ("model", label),
-            ("n", Json::Num(n as f64)),
-            ("sh_degree", Json::Num(f64::from(degree))),
-            ("width", Json::Num(f64::from(WIDTH))),
-            ("height", Json::Num(f64::from(HEIGHT))),
-            ("tier", Json::str(gpu.tier.name.clone())),
-        ]);
+        let setup = b1_setup(label, n, degree, &gpu.tier);
         let fps_min = 1e3 / slowest;
         m.figure(&setup, "fps_min", fps_min, "fps");
         m.figure(&setup, "fps_mean", 1e3 / mean, "fps");
@@ -874,9 +954,9 @@ fn bench_b1(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
 const FRAME_NOTE: &str = "a frame's time is the wall time from encoding to the GPU's completion, each frame submitted and waited for (Q-102)";
 /// The note on the GPU times (§1.13, Q-81, Q-114).
 const GPU_TIMES_NOTE: &str = "gpu_cull_ms, gpu_sort_ms, gpu_draw_ms and gpu_total_ms are medians over the measured frames of the GPU's timestamps: stages 1-3, stage 4, the splat draw, and the cull's begin to the draw's end; reported figures, not budgets (Q-81, Q-114)";
-/// The note on the synthetic sweep's load against P-2's model (§1.12 P-2, Q-102, Q-108),
-/// carried by a `--model` run's file too.
-const SYNTHETIC_LOAD_NOTE: &str = "without --model, B-1's synthetic models (every row persistent, Q-102) fill far more pixels per splat than a trained model of the same N, so the draw is bound by fill rate and P-2 is checked against a heavier load than its trained model until M-8 adds kitchen (Q-108)";
+/// The note on the synthetic sweep's load against P-2's model, the budget model (§1.12 P-2,
+/// Q-102, Q-410), carried by a `--model` run's file too.
+const SYNTHETIC_LOAD_NOTE: &str = "without --model, B-1's synthetic models (every row persistent, Q-102) fill far more pixels per splat than a trained model of the same N, so the draw is bound by fill rate and P-2 is checked against a heavier load than its own; P-2's measured case is the budget model, kitchen_1m (Q-410), when --model names it";
 
 /// B-3's capacities (§3.5).
 const B3_C: [usize; 6] = [100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];
@@ -902,7 +982,30 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
                 (&synthetic, setup_label)
             }
         };
-        let (gpu_model, loaded) = gpu.upload(model, &gpu.tier, given.map(|g| g.path.as_path()))?;
+        let setup = b3_setup(label, c, &gpu.tier);
+        // Q-413: a size the device refuses is a result without a value.
+        let limits = gpu.dev.device().limits();
+        let refusal = matches!(gpu.on, On::Headset(_)).then(|| {
+            records_refusal(
+                u32::try_from(model.len()).unwrap_or(u32::MAX),
+                &gpu.tier,
+                limits.max_storage_buffer_binding_size,
+                limits.max_buffer_size,
+            )
+        });
+        if let Some(Some(reason)) = refusal {
+            m.skip(&setup, "sort_ms", "ms", reason);
+            continue;
+        }
+        let (gpu_model, loaded) =
+            match gpu.upload(model, &gpu.tier, given.map(|g| g.path.as_path())) {
+                Ok(uploaded) => uploaded,
+                Err(e) if refused(&gpu.on, &e) => {
+                    m.skip(&setup, "sort_ms", "ms", e.to_string());
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
         // C = N, the rows uploaded (at most u32::MAX, `GpuModel` counts them in u32).
         let capacity = gpu_model.n();
         let frames = FrameBuffers::new(&gpu.dev, &gpu.tier, capacity);
@@ -933,11 +1036,6 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
             .map(|s| f64::from(s.gpu_times_ms.sort))
             .collect();
         let mut keys: Vec<f64> = stats.iter().map(|s| f64::from(s.visible_splats)).collect();
-        let setup = Json::obj([
-            ("model", label),
-            ("capacity", Json::Num(c as f64)),
-            ("tier", Json::str(gpu.tier.name.clone())),
-        ]);
         let sort_ms = median(&mut sort);
         m.figure(&setup, "sort_ms", sort_ms, "ms");
         m.figure(&setup, "keys", median(&mut keys), "keys");
@@ -947,7 +1045,8 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
                 setup,
                 measure: "sort_ms",
                 rule: Rule::AtMost,
-                limit: 0.4,
+                // §1.12 P-4, Q-413: the machine's limit.
+                limit: gpu.on.p4_limit_ms(),
                 value: sort_ms,
             });
         }
@@ -967,22 +1066,27 @@ const B5_REPEATS: usize = 3;
 fn bench_b5(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError> {
     let mut m = Measured::default();
     let mut timed = |path: &Path, label: Json, file_bytes: u64| -> Result<(), HeadlessError> {
+        let setup = b5_setup(label, file_bytes, &gpu.tier);
         let mut times = Vec::new();
         for _ in 0..B5_REPEATS {
             let start = Instant::now();
             let model = load(path)?;
-            let uploaded = gpu.upload(&model, &gpu.tier, Some(path))?;
+            let uploaded = match gpu.upload(&model, &gpu.tier, Some(path)) {
+                Ok(uploaded) => uploaded,
+                // Q-413: a size the device refuses is a result without a value.
+                Err(e) if refused(&gpu.on, &e) => {
+                    m.skip(&setup, "load_s", "s", e.to_string());
+                    m.skip(&setup, "s_per_100mb", "s", e.to_string());
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            };
             gpu.wait()?;
             times.push(start.elapsed().as_secs_f64());
             drop(uploaded);
         }
         let load_s = median(&mut times);
         let per_100mb = load_s * 1e8 / file_bytes as f64;
-        let setup = Json::obj([
-            ("model", label),
-            ("file_bytes", Json::Num(file_bytes as f64)),
-            ("tier", Json::str(gpu.tier.name.clone())),
-        ]);
         m.figure(&setup, "load_s", load_s, "s");
         m.figure(&setup, "s_per_100mb", per_100mb, "s");
         m.budgets.push(Budget {
@@ -1006,7 +1110,8 @@ fn bench_b5(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
             ..m
         });
     }
-    let dir = std::env::temp_dir().join(format!("ftgsxr-bench-{}", std::process::id()));
+    // Q-417
+    let dir = gpu.scratch.clone();
     fs::create_dir_all(&dir).map_err(|e| input_error(&dir, e))?;
     let result = (|| {
         let sample = |n| encode_exchange(&synthetic_model(1, n, B5_DEGREE, Persistence::Few)).len();
@@ -1104,6 +1209,7 @@ fn bench_b6(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::benchmark::{BEVY_VERSION, WGPU_VERSION};
     use ftgsxr_core::CoreError;
 
     fn budget(rule: Rule, value: f64) -> Budget {
@@ -1368,8 +1474,14 @@ mod tests {
         // E-JSON proves the baseline is read first.
         let dir = scratch("malformed");
         fs::write(dir.join("B-6.json"), "{ not json").expect("the baseline");
-        let err = cmd_bench_in("B-6", None, Some(&dir.join("missing.ftgs-if")), &dir)
-            .expect_err("a malformed baseline");
+        let err = cmd_bench_in(
+            "B-6",
+            None,
+            Some(&dir.join("missing.ftgs-if")),
+            &On::Desktop,
+            &dir,
+        )
+        .expect_err("a malformed baseline");
         match &err {
             HeadlessError::Input(text) => assert!(text.starts_with("E-JSON: "), "{text}"),
             other => panic!("expected E-JSON, got {other:?}"),
@@ -1384,8 +1496,14 @@ mod tests {
         // (a missing model, which would fail differently) and so before any frame.
         let dir = scratch("out");
         let out = dir.join("no-such-dir").join("b6.json");
-        let err = cmd_bench_in("B-6", Some(&out), Some(&dir.join("missing.ftgs-if")), &dir)
-            .expect_err("an unwritable --out");
+        let err = cmd_bench_in(
+            "B-6",
+            Some(&out),
+            Some(&dir.join("missing.ftgs-if")),
+            &On::Desktop,
+            &dir,
+        )
+        .expect_err("an unwritable --out");
         match &err {
             HeadlessError::Input(text) => assert!(text.contains("no-such-dir"), "{text}"),
             other => panic!("expected an Input error, got {other:?}"),
@@ -1406,8 +1524,14 @@ mod tests {
         let writable = fs::write(locked.join("probe"), b"").is_ok();
         if !writable {
             let out = locked.join("b6.json");
-            let err = cmd_bench_in("B-6", Some(&out), Some(&dir.join("missing.ftgs-if")), &dir)
-                .expect_err("an unwritable --out");
+            let err = cmd_bench_in(
+                "B-6",
+                Some(&out),
+                Some(&dir.join("missing.ftgs-if")),
+                &On::Desktop,
+                &dir,
+            )
+            .expect_err("an unwritable --out");
             match &err {
                 HeadlessError::Input(text) => assert!(text.contains("locked"), "{text}"),
                 other => panic!("expected an Input error, got {other:?}"),
@@ -1427,7 +1551,15 @@ mod tests {
             budgets: vec![budget(Rule::AtLeast, 50.0)],
             ..Measured::default()
         };
-        let json = report_json("B-1", "GPU A", "debug", &measured, Json::Null, Vec::new());
+        let json = report_json(
+            "B-1",
+            "GPU A",
+            "debug",
+            &measured,
+            Json::Null,
+            Vec::new(),
+            None,
+        );
         assert!(
             json.lines()
                 .any(|l| l.trim_start().starts_with("\"pass\": false")),
@@ -1437,8 +1569,259 @@ mod tests {
             budgets: vec![budget(Rule::AtLeast, 100.0)],
             ..Measured::default()
         };
-        let json = report_json("B-1", "GPU A", "debug", &met, Json::Null, Vec::new());
+        let json = report_json("B-1", "GPU A", "debug", &met, Json::Null, Vec::new(), None);
         assert!(!json.contains("\"pass\": false"), "{json}");
+    }
+
+    #[test]
+    fn report_json_names_the_headset_only_when_given() {
+        // Q-406, #724: `cmd_bench`'s file has no `machine.headset`; `cmd_bench_on`'s holds
+        // the string it was given, as given, and stays at `version` 1 (Q-67).
+        let measured = Measured::default();
+        let desktop = Json::parse(&report_json(
+            "B-3",
+            "GPU A",
+            "release",
+            &measured,
+            Json::Null,
+            Vec::new(),
+            None,
+        ))
+        .expect("well formed");
+        let machine = desktop.get("machine").expect("machine");
+        assert!(machine.get("headset").is_none(), "{}", desktop.compact());
+        for field in ["gpu", "driver", "os", "cpu", "threads"] {
+            assert!(machine.get(field).is_some(), "{field}");
+        }
+        let print = "oculus/eureka/eureka:14/UP1A.231005.007.A1/123:user/release-keys";
+        let quest = Json::parse(&report_json(
+            "B-3",
+            "GPU A",
+            "debug",
+            &measured,
+            Json::Null,
+            Vec::new(),
+            Some(print),
+        ))
+        .expect("well formed");
+        assert_eq!(
+            quest
+                .get("machine")
+                .and_then(|m| m.get("headset"))
+                .and_then(Json::as_str),
+            Some(print)
+        );
+        assert_eq!(quest.get("version").and_then(Json::as_f64), Some(1.0));
+    }
+
+    #[test]
+    fn report_json_writes_a_skipped_size_as_a_null_value_with_its_reason() {
+        // Q-413, Q-417: a size the device refuses is one result with a null value and
+        // the reason, and no budget.
+        let mut measured = Measured::default();
+        let setup = Json::obj([("capacity", Json::Num(4e6))]);
+        measured.skip(&setup, "sort_ms", "ms", "E-MEM-BUDGET: refused".to_owned());
+        let file = Json::parse(&report_json(
+            "B-3",
+            "GPU A",
+            "debug",
+            &measured,
+            Json::Null,
+            Vec::new(),
+            Some("print"),
+        ))
+        .expect("well formed");
+        let results = file
+            .get("results")
+            .and_then(Json::as_array)
+            .expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].get("value"), Some(&Json::Null));
+        assert_eq!(
+            results[0].get("skipped").and_then(Json::as_str),
+            Some("E-MEM-BUDGET: refused")
+        );
+        assert_eq!(
+            results[0].get("measure").and_then(Json::as_str),
+            Some("sort_ms")
+        );
+        assert!(
+            file.get("budgets")
+                .and_then(Json::as_array)
+                .expect("budgets")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn records_refusal_names_the_binding_limit_the_records_exceed() {
+        // Q-413, Q-377: §1.12's 64-byte shared-center records of `quest-balanced` at
+        // C = 4 × 10⁶ are 256,000,000 bytes, over the Quest's 134,217,728-byte binding;
+        // at 2 × 10⁶ they are 128,000,000 bytes and fit. The desktop's 48-byte records at
+        // 4 × 10⁶ (192,000,000 bytes) fit a 4 GiB binding.
+        let quest = |c| {
+            records_refusal(
+                c,
+                &QualityTier::quest_balanced(),
+                134_217_728,
+                1_073_741_824,
+            )
+        };
+        let reason = quest(4_000_000).expect("refused");
+        assert!(
+            reason.contains("256000000") && reason.contains("134217728"),
+            "{reason}"
+        );
+        assert_eq!(quest(2_000_000), None);
+        assert_eq!(
+            records_refusal(4_000_000, &QualityTier::desktop(), 4 << 30, 4 << 30),
+            None
+        );
+        // Per-view 48-byte records under a small binding; `quest-low`'s half records too.
+        assert!(
+            records_refusal(3_000_000, &QualityTier::desktop(), 134_217_728, 1 << 30).is_some()
+        );
+        assert_eq!(
+            records_refusal(2_700_000, &QualityTier::quest_low(), 134_217_728, 1 << 30),
+            None
+        );
+        // `max_buffer_size` below the binding limit is the limit hit.
+        let reason = records_refusal(
+            2_000_000,
+            &QualityTier::quest_balanced(),
+            1 << 30,
+            100_000_000,
+        )
+        .expect("over max_buffer_size");
+        assert!(reason.contains("max_buffer_size"), "{reason}");
+    }
+
+    #[test]
+    fn the_headset_runs_b3_to_b6_in_quest_balanced_against_the_quest_baseline() {
+        // Q-406, Q-413: the headset's names, tier, P-4 limit and baseline file; B-4 runs
+        // on both machines (§3.5, Q-406, #733).
+        let quest = On::Headset("print".to_owned());
+        assert_eq!(quest.tier().name, "quest-balanced");
+        assert_eq!(On::Desktop.tier().name, "desktop");
+        assert_eq!(quest.p4_limit_ms(), 2.5);
+        assert_eq!(On::Desktop.p4_limit_ms(), 0.4);
+        assert_eq!(quest.baseline_file("B-3"), "B-3.quest.json");
+        assert_eq!(On::Desktop.baseline_file("B-3"), "B-3.json");
+        for name in ["B-3", "B-4", "B-5", "B-6"] {
+            assert!(quest.runner(name).is_some(), "{name}");
+        }
+        for name in ["B-1", "B-2", "B-7", "B-8", "B-9", "B-10"] {
+            assert!(quest.runner(name).is_none(), "{name}");
+        }
+        for name in ["B-1", "B-3", "B-4", "B-5", "B-6", "B-9"] {
+            assert!(On::Desktop.runner(name).is_some(), "{name}");
+        }
+    }
+
+    /// The stored desktop baseline `<name>.json` (Q-103).
+    fn stored(name: &str) -> Json {
+        let path = baseline_dir().join(format!("{name}.json"));
+        Json::parse(&fs::read_to_string(&path).expect("a stored baseline")).expect("well formed")
+    }
+
+    /// `budget` with its value 20 % worse than `base` under its rule.
+    fn worse(mut budget: Budget, base: f64) -> Budget {
+        budget.value = match budget.rule {
+            Rule::AtLeast => 0.8 * base,
+            _ => 1.2 * base,
+        };
+        budget
+    }
+
+    #[test]
+    fn the_stored_desktop_baselines_still_compare() {
+        // Q-103, #724: the desktop's setups, built as the benches build them, still match
+        // the stored baselines' budgets, so a value 20 % worse than each is listed: the
+        // headset's additions leave the desktop's comparison working, not vacuous.
+        let desktop = QualityTier::desktop();
+        let cases = [
+            (
+                "B-1",
+                vec![b1_setup(
+                    Json::str(SYNTHETIC_PERSISTENT),
+                    1_000_000,
+                    2,
+                    &desktop,
+                )],
+            ),
+            (
+                "B-3",
+                vec![b3_setup(
+                    Json::str(SYNTHETIC_PERSISTENT),
+                    1_000_000,
+                    &desktop,
+                )],
+            ),
+        ];
+        for (name, setups) in cases {
+            let base = stored(name);
+            let old = base
+                .get("budgets")
+                .and_then(Json::as_array)
+                .expect("budgets");
+            assert_eq!(old.len(), setups.len(), "{name}");
+            for (setup, o) in setups.into_iter().zip(old) {
+                let value = o.get("value").and_then(Json::as_f64).expect("a value");
+                let (id, measure, rule, limit) = match name {
+                    "B-1" => ("P-2", "fps_min", Rule::AtLeast, 90.0),
+                    _ => ("P-4", "sort_ms", Rule::AtMost, 0.4),
+                };
+                let b = worse(
+                    Budget {
+                        id,
+                        setup,
+                        measure,
+                        rule,
+                        limit,
+                        value: 0.0,
+                    },
+                    value,
+                );
+                let profile = base.get("profile").and_then(Json::as_str).expect("profile");
+                let gpu = base
+                    .get("machine")
+                    .and_then(|m| m.get("gpu"))
+                    .and_then(Json::as_str)
+                    .expect("gpu");
+                assert_eq!(
+                    compare_against(&[b], profile, gpu, &base).map(|r| r.len()),
+                    Ok(1),
+                    "{name}"
+                );
+            }
+        }
+        // B-5: the file sizes are the run's own, taken from the baseline.
+        let base = stored("B-5");
+        let old = base
+            .get("budgets")
+            .and_then(Json::as_array)
+            .expect("budgets");
+        assert_eq!(old.len(), B5_MB.len());
+        for o in old {
+            let bytes = o
+                .get("setup")
+                .and_then(|s| s.get("file_bytes"))
+                .and_then(Json::as_f64)
+                .expect("file_bytes") as u64;
+            let value = o.get("value").and_then(Json::as_f64).expect("a value");
+            let b = worse(
+                Budget {
+                    id: "P-3",
+                    setup: b5_setup(Json::str("synthetic"), bytes, &desktop),
+                    measure: "s_per_100mb",
+                    rule: Rule::AtMost,
+                    limit: 1.0,
+                    value: 0.0,
+                },
+                value,
+            );
+            assert_eq!(compare(&[b], &base).len(), 1, "{bytes}");
+        }
     }
 
     #[test]
@@ -1454,7 +1837,7 @@ mod tests {
     #[ignore = "gpu"]
     fn gpu_upload_over_the_budget_gives_n_and_the_bytes() {
         let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
-        let mut gpu = Gpu::new().expect("a GPU");
+        let mut gpu = Gpu::new(On::Desktop, std::env::temp_dir()).expect("a GPU");
         // A budget of one byte: ten rows' static bytes, under 1 MB, cannot fit.
         gpu.dev.set_memory_budget(ftgsxr_render::MemoryBudget {
             bytes: 1,

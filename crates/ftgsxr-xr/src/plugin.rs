@@ -38,7 +38,8 @@ use crate::xr_input::XrInputPlugin;
 /// extensions where the runtime offers them, an OPAQUE (D-14) `Rgba8UnormSrgb` (Q-91)
 /// session, D-24's reference spaces and the eyes as `SplatCamera`s. Add it through
 /// [`add_xr`] (Q-120). `hands` asks for §1.8's
-/// hand extensions (PRD #452, #454); `sort` is each eye's `SplatCamera.sort` (Q-121).
+/// hand extensions (PRD #452, #454); `sort` is each eye's `SplatCamera.sort` at session
+/// creation, after which the eyes follow `SplatTierState.sort_mode` (Q-121, Q-399).
 /// `passthrough` builds `passthrough`'s layer, switch and style (§1.9, D-14), which run
 /// where the runtime offers XR\_FB\_passthrough; without it the mode stays VR.
 #[derive(Clone, Copy, Debug)]
@@ -47,7 +48,8 @@ pub struct XrPlugin {
     pub passthrough: bool,
     /// Whether hand tracking is wanted: true on the Quest and for `play --xr` (PRD #452).
     pub hands: bool,
-    /// What each eye's `SplatCamera` sorts with (Q-121).
+    /// What each eye's `SplatCamera` sorts with at session creation: the running tier's
+    /// in both builds (Q-121, Q-399).
     pub sort: SortMode,
 }
 
@@ -68,6 +70,12 @@ fn extensions(hands: bool) -> OxrExtensions {
     raw.fb_swapchain_update_state = true;
     raw.fb_swapchain_update_state_vulkan = true;
     raw.meta_recommended_layer_resolution = true;
+    // §1.13 HUD, Appendix E.1: the runtime's metrics, for the device spikes (#725), the
+    // session benchmarks (Q-433) and A-10's record (Q-411), through Q-124's raw tables.
+    raw.meta_performance_metrics = true;
+    // Appendix E.1: the performance notifications, for A-10's record only; no level is
+    // ever requested (Q-411).
+    raw.ext_performance_settings = true;
     // §1.9's anchors (D-26, #571): the entity, its query by UUID and its persistence.
     raw.fb_spatial_entity = true;
     raw.fb_spatial_entity_query = true;
@@ -195,6 +203,9 @@ impl Plugin for XrPlugin {
             passthrough_available,
             style: PassthroughStyle::default(),
         });
+        // Q-404: the headset's display, which `display` writes while a session runs; its
+        // presence puts the governor on the headset's ladder.
+        app.init_resource::<ftgsxr_app::XrDisplay>();
     }
 }
 
@@ -340,5 +351,20 @@ mod tests {
         );
         enabled.raw_mut().fb_hand_tracking_aim = true;
         assert!(missing_hand_extensions(enabled.raw()).is_empty());
+    }
+
+    /// Appendix E.1, §1.13 HUD (#725): XR\_META\_performance\_metrics is asked for with or
+    /// without hands; the runtime drops it where absent.
+    #[test]
+    fn extensions_ask_for_the_performance_metrics() {
+        assert!(extensions(true).raw().meta_performance_metrics);
+        assert!(extensions(false).raw().meta_performance_metrics);
+    }
+
+    /// Q-411: the performance notifications, whether or not hands are wanted.
+    #[test]
+    fn extensions_ask_for_the_performance_settings() {
+        assert!(extensions(true).raw().ext_performance_settings);
+        assert!(extensions(false).raw().ext_performance_settings);
     }
 }

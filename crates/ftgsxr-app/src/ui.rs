@@ -261,6 +261,23 @@ pub struct HudData {
     /// crate's to write.
     // Q-389, Q-394
     pub light_gains: Option<Vec3>,
+    /// The runtime's performance counters (XR_META_performance_metrics, §1.13 HUD), each
+    /// frame while a `SessionBench` runs (Q-433); empty otherwise. The
+    /// XR crate's to write.
+    // Q-433
+    pub runtime_counters: Vec<HudCounter>,
+}
+
+/// One of the runtime's performance counters on the HUD (§1.13, Q-433).
+// Q-433
+#[derive(Clone, Debug, PartialEq)]
+pub struct HudCounter {
+    /// The counter's path, as the runtime enumerates it.
+    pub path: String,
+    /// Its unit: `ms`, `%`, `Hz`, `bytes` or `generic`.
+    pub unit: &'static str,
+    /// This frame's value; `None` when the runtime flags it invalid.
+    pub value: Option<f64>,
 }
 
 /// The scene anchor's state on the HUD (§1.13 HUD, Q-345).
@@ -316,6 +333,25 @@ pub struct XrFeatures {
     /// denial. The Environment tab offers the auto lighting modes only while `Available`.
     // Q-384
     pub lighting: FeatureState,
+}
+
+/// The headset's display as the XR crate's `display` reports it (§1.12 Headset display,
+/// E16): its presence puts the governor on E16's full ladder with f_budget from
+/// `refresh_hz` (Q-404), and the Display tab offers `available_rates` (Q-405). Only
+/// `XrPlugin` inserts it; the desktop has none.
+// Q-404
+#[derive(Resource, Default)]
+pub struct XrDisplay {
+    /// The runtime's current refresh rate in Hz (or the reciprocal of the predicted
+    /// display period without XR_FB_display_refresh_rate); `None` while no session runs.
+    pub refresh_hz: Option<f32>,
+    /// The rates the runtime offers, in Hz; empty where it lists none.
+    pub available_rates: Vec<f32>,
+    /// Whether the runtime offers fixed foveation (XR_FB_foveation): without it the
+    /// governor skips the foveation knob.
+    pub foveation: bool,
+    /// The swapchain's size per eye, in pixels.
+    pub swapchain: UVec2,
 }
 
 /// Which device a side's HUD line shows (Q-274): the XR crate's `HandSource`, which the

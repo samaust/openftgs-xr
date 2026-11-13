@@ -121,7 +121,7 @@ fn a_caller_s_settings_are_left_alone() {
 
 #[test]
 #[ignore = "gpu"]
-fn gpu_app_plugin_builds_with_the_render_app() {
+fn gpu_app_plugin_with_the_render_app_builds() {
     let _layer = layer_messages(); // R-16, Q-105
     let mut t = TestApp::gpu("gpu-render");
     assert!(t.app.get_sub_app(RenderApp).is_some());
