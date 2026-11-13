@@ -652,6 +652,14 @@ _Avoid_: tracking origin, play area, world origin
 The quality tier's factor, stepped by the quality governor, by which the splat layer is smaller than the view it is drawn for; not `[xr] render_scale`, which sizes the headset's swapchain. §1.12, E16
 _Avoid_: resolution scale, dynamic resolution, supersampling
 
+**Foveation**:
+The quality tier's level, off, low, medium, high or dynamic, at which a headset view is shaded more coarsely away from its optical axis: the runtime's level on the swapchain, the player's density pattern on the layer. §1.12, E16, D-27, D-58
+_Avoid_: FFR, foveated rendering (unqualified), eye-tracked foveation (not used)
+
+**Fragment density map**:
+The player's per-eye image of shading densities for the active foveation level, centered on the eye's optical axis, with which the layer's pass shades coarse fragments away from it; not the runtime's density map of the swapchain images. §1.12, D-58
+_Avoid_: FDM, foveation map, shading-rate image (VRS, a different mechanism)
+
 **Swapchain**:
 The runtime's array of eye images the projection layer is submitted from, sized at the runtime's recommended size times `[xr] render_scale` and re-created when that setting changes by 0.1 or more; the desktop window's images are the window swapchain. §1.12, D-27
 _Avoid_: framebuffer, eye buffer (the runtime's recommended size, not the images), render target
