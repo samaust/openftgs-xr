@@ -695,7 +695,8 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
             choice(ui, "foveation", &mut fov, &options);
             x.foveation = (fov != "runtime").then_some(fov);
             ui.checkbox(&mut x.keep_upright, "keep_upright"); // Q-330
-            // §1.12, Q-49: an unset render scale is 1.0, not the tier's (#799); `{:?}`
+            // §1.12, Q-49: an unset `[xr] render_scale` is 1.0, not the tier's render
+            // scale (#799); `{:?}`
             // keeps the fraction, so unset and 1.0 read alike and 0.85 stays 0.85.
             ui.label(format!(
                 "refresh_rate {} · render_scale {:?} · reference_space {}",
