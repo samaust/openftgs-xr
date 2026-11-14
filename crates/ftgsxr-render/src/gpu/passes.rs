@@ -1321,7 +1321,7 @@ fn folds_decode([a, b, c]: [f32; 3], delta_m: f32) -> bool {
 /// operations with its view-only terms hoisted (#790).
 fn env_decode(near: f32, far: f32) -> [f32; 3] {
     // +∞ (and NaN) fail `far <= 3.4e38`, so they take the infinite form.
-    if far < near || !(far <= 3.4e38) {
+    if far < near || far.is_nan() || far > 3.4e38 {
         [near, 1.0, 1.0]
     } else {
         [far * near, far, far - near]

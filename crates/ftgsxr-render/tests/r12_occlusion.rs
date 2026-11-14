@@ -590,8 +590,8 @@ fn decode(bytes: &[u8]) -> Vec<(String, Vec<[f32; 4]>)> {
         let mut layer = vec![[0.0f32; 4]; pixels];
         for _ in 0..word(&mut at) {
             let i = word(&mut at) as usize;
-            for c in 0..4 {
-                layer[i][c] = f32::from_bits(word(&mut at));
+            for v in &mut layer[i] {
+                *v = f32::from_bits(word(&mut at));
             }
         }
         out.push((id, layer));
