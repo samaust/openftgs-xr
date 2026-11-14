@@ -21,6 +21,8 @@ mod dv2_rate;
 mod exit;
 #[cfg(target_os = "android")]
 mod jni_calls;
+#[cfg(any(test, target_os = "android"))]
+mod log_limit;
 #[cfg(target_os = "android")]
 mod platform;
 #[cfg(target_os = "android")]
