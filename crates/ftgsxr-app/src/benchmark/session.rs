@@ -7,7 +7,8 @@
 //!
 //! B-2, B-7 and B-8 load `model` as a held instance (a `SplatLoad` outside the library,
 //! so nothing else poses or plays it), and for each setup of `protocol::setups` apply its
-//! tier, sort mode, rate, occlusion and lighting, wait until the device shows them, then
+//! tier, sort mode, rate, occlusion and lighting (with each frame the environment's
+//! transform on the instance, Q-432's "Lighting"), wait until the device shows them, then
 //! pose the instance for each of the view's 72 steps where the eyes' midpoint sees it as
 //! orbit camera k does, 8 frames of warm-up and 30 held, gathering each distinct
 //! statistics block's GPU times and the runtime's counters (`HudData.runtime_counters`).
@@ -22,13 +23,16 @@ use std::time::{Duration, Instant};
 use bevy::app::{App, Last};
 use bevy::camera::{Camera, RenderTarget};
 use bevy::log::{info, warn};
-use bevy::prelude::{Entity, GlobalTransform, On, ResMut, Resource, Transform, With, World};
+use bevy::prelude::{
+    DetectChangesMut, Entity, GlobalTransform, On, ResMut, Resource, Transform, With, World,
+};
 use bevy::render::renderer::RenderAdapterInfo;
 use bevy::time::{Real, Time};
 use ftgsxr_core::{Aabb, Pose, hex, open_model};
-use ftgsxr_io::{ModelBytes, Settings};
+use ftgsxr_io::{ManualLighting, ModelBytes, Settings};
 use ftgsxr_render::{
-    QualityTier, SplatCamera, SplatEvent, SplatLoad, SplatStats, SplatTierState, SplatTime,
+    ColorTransform, QualityTier, SplatCamera, SplatEvent, SplatLoad, SplatStats, SplatTierState,
+    SplatTime, SplatTransform,
 };
 
 use crate::benchmark::json::Json;
@@ -37,7 +41,7 @@ use crate::capture::write_atomic;
 use crate::governor::Governor;
 use crate::manipulate::head_candidate;
 use crate::persist::SettingsRes;
-use crate::ui::{FeatureState, HudData, XrDisplay, XrFeatures};
+use crate::ui::{FeatureState, HudData, Lighting, XrDisplay, XrFeatures};
 
 pub(crate) mod dv5;
 pub(crate) mod protocol;
@@ -369,6 +373,56 @@ fn pose_instance(world: &mut World, instance: Entity, camera: Pose, tau: f64) {
     }
 }
 
+/// The environment's lighting on the held instance, each frame (Q-432, #797): its
+/// `SplatTransform` as `Lighting.transform`, the factor the composer gives a library
+/// instance, which it never writes here (no `LoadedModel`); and, in `auto-local`,
+/// `Lighting.per_instance` on it, so auto local's depth band is measured around it (the
+/// composer returns it to `None` each frame, so it is held as the governor's flag is),
+/// back to `None` in any other setup.
+// Q-432
+fn hold_lighting(world: &mut World, instance: Entity, auto_local: bool) {
+    let Some(mut lighting) = world.get_resource_mut::<Lighting>() else {
+        return;
+    };
+    let target = if auto_local {
+        Some(instance)
+    } else {
+        lighting.per_instance.filter(|t| *t != instance)
+    };
+    if lighting.per_instance != target {
+        lighting.per_instance = target;
+    }
+    let transform = lighting.transform;
+    let next = SplatTransform(transform);
+    match world.get_mut::<SplatTransform>(instance) {
+        Some(mut t) => {
+            t.set_if_neq(next);
+        }
+        None => {
+            if let Ok(mut e) = world.get_entity_mut(instance) {
+                e.insert(next);
+            }
+        }
+    }
+}
+
+/// `[environment] lighting_manual` in setup `s` (Q-432, #797): exposure 1 EV, temperature
+/// 0 and tint 0 where it names a lighting mode (gain 2 per channel in `manual`, the fixed
+/// offset on the auto modes' gains), so its transform is never the identity; `saved`,
+/// the values the run found, with lighting `off`.
+// Q-432
+fn lighting_manual(s: &Setup, saved: ManualLighting) -> ManualLighting {
+    if s.lighting == "off" {
+        saved
+    } else {
+        ManualLighting {
+            exposure_ev: 1.0,
+            temperature: 0.0,
+            tint: 0.0,
+        }
+    }
+}
+
 /// The setup's tier, as §1.12 writes it.
 fn tier_of(name: &str) -> QualityTier {
     QualityTier::by_name(name).expect("invariant: the setups name §1.12's tiers")
@@ -406,17 +460,19 @@ fn setup_json(model: &Prepared, s: &Setup) -> Json {
 /// Applies setup `index`'s settings and tier, loading the instance again on a change of
 /// tier (Q-432).
 fn begin_setup(world: &mut World) {
-    let (setup, changed) = {
+    let (setup, changed, saved_manual) = {
         let r = world.resource::<Run>();
         let s = r.setups[r.index].clone();
         let changed = r.loaded_tier != Some(s.tier);
-        (s, changed)
+        (s, changed, r.saved.environment.lighting_manual.clone())
     };
     if let Some(mut settings) = world.get_resource_mut::<SettingsRes>() {
         let env = &mut settings.0.environment;
         env.mode = "passthrough".into();
         env.occlusion = setup.occlusion;
         env.lighting_mode = setup.lighting.into();
+        // Q-432 (#797): a lighting mode's transform is never the identity.
+        env.lighting_manual = lighting_manual(&setup, saved_manual);
         settings.0.xr.refresh_rate = setup.refresh_hz;
     }
     let tier = tier_of(setup.tier);
@@ -485,6 +541,18 @@ fn reached(world: &World, s: &Setup) -> Result<(), String> {
             ));
         }
     }
+    // Q-432 (#797): a lighting mode's transform reaches the held instance.
+    if s.lighting != "off" {
+        let t = world
+            .get_resource::<Lighting>()
+            .map_or(ColorTransform::IDENTITY, |l| l.transform);
+        if t == ColorTransform::IDENTITY {
+            return Err(format!(
+                "lighting {}: the environment's transform is the identity",
+                s.lighting
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -516,10 +584,20 @@ fn skip_setup(world: &mut World, reason: String) {
 
 /// Restores the settings the run changed, then waits for their save (Q-432).
 fn restore(world: &mut World, result: Result<(), String>) {
-    let saved = world.resource::<Run>().saved.clone();
+    let (saved, instance) = {
+        let r = world.resource::<Run>();
+        (r.saved.clone(), r.instance)
+    };
     if let Some(mut settings) = world.get_resource_mut::<SettingsRes>() {
         settings.0.environment = saved.environment;
         settings.0.xr.refresh_rate = saved.xr.refresh_rate;
+    }
+    // Q-432: auto local's band instance goes with the setup.
+    if let Some(mut l) = world.get_resource_mut::<Lighting>()
+        && instance.is_some()
+        && l.per_instance == instance
+    {
+        l.per_instance = None;
     }
     world.resource_mut::<Run>().phase = Phase::Restore(Instant::now(), result);
 }
@@ -530,17 +608,24 @@ fn step_run(world: &mut World) {
         return restore(world, Err(format!("the model failed to load: {e}")));
     }
     // The instance, posed each frame where the current camera sees it.
-    let (instance, camera, tau) = {
+    let (instance, camera, tau, auto_local) = {
         let r = world.resource::<Run>();
         let (pose, tau) = r
             .steps
             .get(r.step)
             .copied()
             .unwrap_or((Pose::IDENTITY, 0.0));
-        (r.instance, pose, tau)
+        // Past the last setup once the run restores.
+        let auto_local = r
+            .setups
+            .get(r.index)
+            .is_some_and(|s| s.lighting == "auto-local")
+            && !matches!(r.phase, Phase::Restore(..));
+        (r.instance, pose, tau, auto_local)
     };
     if let Some(e) = instance {
         pose_instance(world, e, camera, tau);
+        hold_lighting(world, e, auto_local);
     }
     let block = world.get_resource::<SplatStats>().and_then(|s| s.0);
     let fresh = {
@@ -827,4 +912,217 @@ fn write_b9(world: &mut World, uploaded_s: f64, first_frame_s: f64) -> Result<()
         vec![B9_NOTE.to_owned()],
         b.headset.as_deref(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    //! #797, Q-432's "Lighting" part: written from the row's decision cell.
+    use super::*;
+    use bevy::math::Vec3;
+
+    /// An app whose B-8 run starts at setup `index` (`protocol::setups`' order: occlusion
+    /// off, occlusion on, `manual`, `auto-global`, `auto-local`), the instance spawned and
+    /// held in its reach (no eye camera, so it waits there), with `saved` as the
+    /// settings it found.
+    fn b8_at(index: usize, saved: Settings) -> (App, Entity) {
+        let mut app = App::new();
+        app.insert_resource(SessionBench {
+            name: "B-8".into(),
+            model: None,
+            out: PathBuf::new(),
+            headset: None,
+            result: None,
+        })
+        .insert_resource(SettingsRes(saved.clone()))
+        .init_resource::<Lighting>()
+        .add_systems(Last, run);
+        let model = Prepared {
+            path: PathBuf::new(),
+            bytes: Vec::new(),
+            label: Json::str("model"),
+            n: 1,
+            bounds: Aabb {
+                min: Vec3::splat(-1.0),
+                max: Vec3::splat(1.0),
+            },
+            tau: (0.0, 1.0),
+        };
+        app.world_mut().insert_resource(Run {
+            name: "B-8".into(),
+            out: PathBuf::new(),
+            headset: None,
+            model,
+            saved,
+            setups: setups("B-8").expect("B-8's setups"),
+            index,
+            steps: Vec::new(),
+            step: 0,
+            phase: Phase::Load(Instant::now()),
+            instance: None,
+            loaded_tier: None,
+            uploaded: false,
+            failed: None,
+            last_block: None,
+            camera: CameraRun::default(),
+            cameras: Vec::new(),
+            observed: Observed::default(),
+            runs: Vec::new(),
+            measured: Measured::default(),
+        });
+        begin_setup(app.world_mut());
+        app.world_mut().resource_mut::<Run>().uploaded = true;
+        let instance = app.world().resource::<Run>().instance.expect("spawned");
+        (app, instance)
+    }
+
+    fn transform_of(app: &App, e: Entity) -> Option<ColorTransform> {
+        app.world().get::<SplatTransform>(e).map(|t| t.0)
+    }
+
+    #[test]
+    fn the_held_instances_transform_follows_lighting_transform() {
+        // Q-432: "each frame the run writes the held instance's SplatTransform as
+        // Lighting.transform (the identity while lighting is off)".
+        let (mut app, e) = b8_at(1, Settings::default());
+        app.update();
+        assert_eq!(transform_of(&app, e), Some(ColorTransform::IDENTITY));
+        let gains = ColorTransform {
+            gain: Vec3::new(2.0, 0.5, 1.25),
+        };
+        app.world_mut().resource_mut::<Lighting>().transform = gains;
+        app.update();
+        assert_eq!(transform_of(&app, e), Some(gains));
+        app.world_mut().resource_mut::<Lighting>().transform = ColorTransform::IDENTITY;
+        app.update();
+        assert_eq!(transform_of(&app, e), Some(ColorTransform::IDENTITY));
+    }
+
+    #[test]
+    fn a_lighting_setup_sets_lighting_manual_to_one_ev() {
+        // Q-432: "a setup that names a lighting mode sets [environment] lighting_manual to
+        // exposure 1 EV, temperature 0 and tint 0 (gain 2 per channel in manual)".
+        let mut saved = Settings::default();
+        saved.environment.lighting_manual = ManualLighting {
+            exposure_ev: -0.5,
+            temperature: 0.3,
+            tint: -0.2,
+        };
+        let manual_of = |app: &App| {
+            app.world()
+                .resource::<SettingsRes>()
+                .0
+                .environment
+                .lighting_manual
+                .clone()
+        };
+        for index in [2, 3, 4] {
+            let (app, _) = b8_at(index, saved.clone());
+            let m = manual_of(&app);
+            assert_eq!(
+                (m.exposure_ev, m.temperature, m.tint),
+                (1.0, 0.0, 0.0),
+                "setup {index}"
+            );
+            // E14's manual form: g = 2^1 with the white point at its neutral (1, 1, 1).
+            assert_eq!(ColorTransform::from_manual(&m).gain, Vec3::splat(2.0));
+        }
+        for index in [0, 1] {
+            let (app, _) = b8_at(index, saved.clone());
+            assert_eq!(
+                manual_of(&app),
+                saved.environment.lighting_manual,
+                "setup {index}, lighting off"
+            );
+        }
+    }
+
+    /// `Lighting.per_instance` at the start of each frame (`First`) and right after the
+    /// composer (`PostUpdate`).
+    #[derive(Resource, Default)]
+    struct Seen {
+        first: Vec<Option<Entity>>,
+        composed: Vec<Option<Entity>>,
+    }
+
+    /// `b8_at` with the app's composer (Q-383) and the record of `per_instance`.
+    fn b8_composed(index: usize) -> (App, Entity) {
+        use bevy::app::{First, PostUpdate};
+        use bevy::prelude::{IntoScheduleConfigs, Res};
+        let (mut app, e) = b8_at(index, Settings::default());
+        app.init_resource::<Seen>()
+            .add_systems(First, |l: Res<Lighting>, mut s: ResMut<Seen>| {
+                s.first.push(l.per_instance);
+            })
+            .add_systems(
+                PostUpdate,
+                (
+                    crate::ui::compose_transforms,
+                    |l: Res<Lighting>, mut s: ResMut<Seen>| s.composed.push(l.per_instance),
+                )
+                    .chain(),
+            );
+        (app, e)
+    }
+
+    #[test]
+    fn auto_local_holds_per_instance_on_the_held_instance() {
+        // Q-432: "in auto-local the run also keeps Lighting.per_instance on the held
+        // instance where ftgsxr_xr::light reads it (held as the governor's flag is, since
+        // the composer returns a target without LoadedModel to None) and returns it to
+        // None when the setup ends".
+        let (mut app, e) = b8_composed(4);
+        for _ in 0..4 {
+            app.update();
+        }
+        let seen = app.world().resource::<Seen>();
+        assert_eq!(
+            seen.composed,
+            vec![None; 4],
+            "the composer clears it each frame"
+        );
+        assert_eq!(
+            seen.first[1..],
+            [Some(e); 3],
+            "the held instance at each frame's start after the first"
+        );
+        // The setup ends: the run's last, so the run's end and restore follow.
+        next_setup(app.world_mut());
+        app.update();
+        app.update();
+        let seen = app.world().resource::<Seen>();
+        assert_eq!(seen.first[5..], [None], "None once the setup has ended");
+        for index in [0, 1, 2, 3] {
+            let (mut app, _) = b8_composed(index);
+            for _ in 0..4 {
+                app.update();
+            }
+            assert_eq!(
+                app.world().resource::<Seen>().first,
+                vec![None; 4],
+                "setup {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lighting_setup_is_reached_with_a_transform_other_than_the_identity() {
+        // Q-432's Reached: "any lighting mode a Lighting.transform that is not the
+        // identity"; lighting off needs none.
+        let (mut app, _) = b8_at(2, Settings::default());
+        let manual = Setup {
+            occlusion: false,
+            ..setups("B-8").expect("B-8's setups")[2].clone()
+        };
+        assert_eq!(manual.lighting, "manual");
+        assert!(reached(app.world(), &manual).is_err(), "the identity");
+        let off = Setup {
+            lighting: "off",
+            ..manual.clone()
+        };
+        assert_eq!(reached(app.world(), &off), Ok(()));
+        app.world_mut().resource_mut::<Lighting>().transform = ColorTransform {
+            gain: Vec3::splat(2.0),
+        };
+        assert_eq!(reached(app.world(), &manual), Ok(()));
+    }
 }
