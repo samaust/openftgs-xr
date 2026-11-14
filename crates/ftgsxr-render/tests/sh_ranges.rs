@@ -152,7 +152,7 @@ fn assert_same_frames(
 /// binding holds the array, with no validation message on either device.
 #[test]
 #[ignore = "gpu"]
-fn gpu_sh_ranges_give_the_same_records_and_layer() {
+fn gpu_sh_ranges_give_the_same_record_and_layer_bits() {
     let _layer = layer_messages(); // R-16, Q-105
     let model = persistent_model(1000);
     let layout = QualityTier::conformance().layout;
@@ -166,7 +166,7 @@ fn gpu_sh_ranges_give_the_same_records_and_layer() {
 /// binding.
 #[test]
 #[ignore = "gpu"]
-fn gpu_sh_ranges_in_half_precision_give_the_same_records_and_layer() {
+fn gpu_sh_ranges_in_half_precision_give_the_same_record_and_layer_bits() {
     let _layer = layer_messages(); // R-16, Q-105
     let mut model = persistent_model(1800);
     for (i, p) in model.position.iter_mut().enumerate() {
