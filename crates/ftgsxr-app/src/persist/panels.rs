@@ -695,10 +695,13 @@ pub(crate) fn settings_tables(world: &mut World, ui: &mut egui::Ui) {
             choice(ui, "foveation", &mut fov, &options);
             x.foveation = (fov != "runtime").then_some(fov);
             ui.checkbox(&mut x.keep_upright, "keep_upright"); // Q-330
+            // §1.12, Q-49: an unset `[xr] render_scale` is 1.0, not the tier's render
+            // scale (#799); `{:?}`
+            // keeps the fraction, so unset and 1.0 read alike and 0.85 stays 0.85.
             ui.label(format!(
-                "refresh_rate {} · render_scale {} · reference_space {}",
+                "refresh_rate {} · render_scale {:?} · reference_space {}",
                 x.refresh_rate.map_or("runtime".into(), |r| r.to_string()),
-                x.render_scale.map_or("tier".into(), |r| r.to_string()),
+                x.render_scale.unwrap_or(1.0),
                 x.reference_space.join(", ")
             ));
         });
@@ -1053,6 +1056,39 @@ mod tests {
         step(at(&open, "quest-low"), &mut world);
         assert_eq!(picks(&mut world), vec![TierPick("quest-low".into())]);
         assert_eq!(world.resource::<SettingsRes>().0.general.tier, "quest-low");
+    }
+
+    /// §1.12 ("1.0 when unset"), Q-49 (`cpu`, #799): the Settings tab's `[xr]` section
+    /// shows an unset `render_scale` as 1.0, never as the tier's, and an explicit one as
+    /// it is.
+    #[test]
+    fn the_settings_tabs_xr_section_shows_an_unset_render_scale_as_1_0() {
+        let shown = |render_scale: Option<f32>| {
+            let mut world = World::new();
+            let mut settings = Settings::default();
+            settings.xr.render_scale = render_scale;
+            world.insert_resource(SettingsRes(settings));
+            let ctx = egui::Context::default();
+            let closed = frame_of(&ctx, &mut world, Vec::new(), settings_tables);
+            for events in click(at(&closed, "[xr]")) {
+                frame_of(&ctx, &mut world, events, settings_tables);
+            }
+            // The section opens over a few frames (egui's animation).
+            let open = (0..30)
+                .map(|_| frame_of(&ctx, &mut world, Vec::new(), settings_tables))
+                .last()
+                .unwrap();
+            open.iter()
+                .map(|(t, _)| t.clone())
+                .find(|t| t.contains("render_scale"))
+                .unwrap_or_else(|| panic!("the [xr] section shows render_scale: {open:?}"))
+        };
+        let unset = shown(None);
+        assert!(unset.contains("render_scale 1.0 "), "{unset}");
+        assert!(!unset.contains("tier"), "{unset}");
+        assert_eq!(unset, shown(Some(1.0)));
+        let explicit = shown(Some(0.8));
+        assert!(explicit.contains("render_scale 0.8 "), "{explicit}");
     }
 
     /// §1.9 (revision 42), Q-366 (`cpu`): the gauntlets' margin slider and "draw

@@ -17,7 +17,7 @@ use crate::xr_support::{Monado, capture_log, lines, xr_app};
 
 #[test]
 #[ignore = "xr"]
-fn xr_hands_requested_on_monado_keeps_controllers_and_logs_no_error() {
+fn xr_hand_tracking_requested_on_monado_keeps_controllers_and_logs_no_error() {
     capture_log();
     let _monado = Monado::start();
     let mut app = xr_app(
