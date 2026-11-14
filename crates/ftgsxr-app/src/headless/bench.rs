@@ -1625,7 +1625,7 @@ mod tests {
     #[test]
     fn report_json_writes_a_skipped_size_as_a_null_value_with_its_reason() {
         // Q-413, Q-417: a skipped result has a null value and the reason, and a refused
-        // size no budget.
+        // size has no budget.
         let mut measured = Measured::default();
         let setup = Json::obj([("capacity", Json::Num(4e6))]);
         measured.skip(&setup, "sort_ms", "ms", "E-MEM-BUDGET: refused".to_owned());
