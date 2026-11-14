@@ -125,7 +125,7 @@ impl HeadlessRenderer {
     /// budget but not its stereo mode, and the render is at the camera's own size, so the
     /// tier's `render_scale` and foveation (the swapchain's) do not apply. `render_stereo`
     /// takes its sort mode per call, and in shared-center mode the tier's `half_records`
-    /// picks the record layout (D-4).
+    /// picks the record layout (D-4, §1.12).
     pub fn new(tier: QualityTier) -> Result<HeadlessRenderer, RenderError> {
         // Q-109, D-4: "per-view sort on the desktop and in a headless `render`".
         let mut tier = tier;

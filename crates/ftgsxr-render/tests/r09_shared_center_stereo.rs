@@ -2,7 +2,7 @@
 
 //! R-9, shared-center stereo (§3.2, D-4): every probe P1–P10 rendered for two eyes 64 mm
 //! apart at 1 m (`R9_<P>`'s requests, Q-402, Q-415), per view and shared-center through
-//! `HeadlessRenderer::render_stereo` (§2.1). The per-view renders pass E15's tier against
+//! `HeadlessRenderer::render_stereo` (D-4, §2.1). The per-view renders pass E15's tier against
 //! openftgs's reference renders of the same eyes, and the PSNR between the two modes, the
 //! minimum over items, is ≥ 40 dB (calibrated). The minima are reported on standard error.
 //! An added check (#720) runs the mode-to-mode comparison with the conformance tier and
