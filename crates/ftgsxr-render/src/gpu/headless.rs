@@ -3,7 +3,7 @@
 //! `HeadlessRenderer` (§2.1, §1.7 `render`): its own wgpu instance, adapter and device; the
 //! per-view pipeline of §1.4 stages 1–5 into a 16-bit float layer, read back and composited
 //! over the request's background on the CPU, unclamped (E7); the two-eye render of R-9 per
-//! view or shared-center (D-4, Q-401); E-GPU-LOST's single recovery.
+//! view or shared-center (D-4); E-GPU-LOST's single recovery.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,7 +42,7 @@ struct Packed {
     conventions: RenderConventions,
 }
 
-/// The shared-center passes and frame buffers of `render_stereo` (Q-401), made at its
+/// The shared-center passes and frame buffers of `render_stereo` (D-4), made at its
 /// first shared-center call.
 struct Shared {
     passes: SplatPasses,
@@ -104,7 +104,7 @@ impl Gpu {
 /// The headless adapter (§1.7 `render`): its own wgpu instance, adapter and device.
 ///
 /// `render` draws one view per call (per-view sort, §1.4 Stereo), `render_stereo` two
-/// (per view or shared-center, Q-401), each into a 16-bit float layer
+/// (per view or shared-center, D-4), each into a 16-bit float layer
 /// cleared to (0, 0, 0, 0), reads the layer back and composites it over the background on
 /// the CPU (E7). A lost device is re-created once, with every loaded model re-uploaded,
 /// and the render retried; a second loss is `RenderError::DeviceLost` (E-GPU-LOST).
@@ -125,9 +125,9 @@ impl HeadlessRenderer {
     /// budget but not its stereo mode, and the render is at the camera's own size, so the
     /// tier's `render_scale` and foveation (the swapchain's) do not apply. `render_stereo`
     /// takes its sort mode per call, and in shared-center mode the tier's `half_records`
-    /// picks the record layout (Q-401).
+    /// picks the record layout (D-4).
     pub fn new(tier: QualityTier) -> Result<HeadlessRenderer, RenderError> {
-        // Q-109, D-4: "per-view sort on the desktop and in headless renders".
+        // Q-109, D-4: "per-view sort on the desktop and in a headless `render`".
         let mut tier = tier;
         tier.sort_mode = SortMode::PerView;
         let gpu = Gpu::create(&tier, &[])?;
@@ -214,7 +214,7 @@ impl HeadlessRenderer {
     }
 
     /// E6 and E7 for two eyes at `tau` over `background`, one image per eye in `eyes`'
-    /// order, each as `render` makes it (Q-401).
+    /// order, each as `render` makes it (D-4, R-9).
     ///
     /// With `SortMode::PerView` each eye runs §1.4 stages 1–5 with its own camera, as
     /// `render` does. With `SortMode::SharedCenter` (D-4) stages 1–4 run once at the sort
@@ -227,7 +227,7 @@ impl HeadlessRenderer {
     /// # Panics
     ///
     /// When an id was not returned by this renderer's `load`.
-    // Q-401
+    // D-4
     pub fn render_stereo(
         &mut self,
         models: &[(ModelId, Pose)],
@@ -304,7 +304,7 @@ impl HeadlessRenderer {
         )
     }
 
-    /// `render_stereo`'s shared-center render (Q-401): one prepare, two draws, both layers
+    /// `render_stereo`'s shared-center render (D-4): one prepare, two draws, both layers
     /// read back by one submission.
     fn render_shared_once(
         &mut self,
