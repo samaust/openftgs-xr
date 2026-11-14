@@ -55,6 +55,7 @@ struct DrawView {
     camera_size: vec2<f32>,
     target_size: vec2<f32>,
     depth_near: f32,
+    // 0 without E13, 1 with it, 2 with its decode folded into the weight (Q-446).
     occlusion: u32,
     soft: u32,
     delta_m: f32,
@@ -64,9 +65,12 @@ struct DrawView {
     env_size: vec2<f32>,
     env_near: f32,
     env_far: f32,
-    env_from_view: mat4x4<f32>,
+    env_projection: mat4x4<f32>,
     // The view's world-to-camera transform [R_w t_w; 0 1] (E6).
     world_to_camera: mat4x4<f32>,
+    // Q-340's decode terms (A, B, C) of the depth image's planes, for Z = A / (B − d·C)
+    // (`occlusion.wgsl`'s `decode_terms`, #790, Q-445), and 0.
+    env_decode: vec4<f32>,
 }
 
 // 0 per view (12-word records), 1 shared center (16), 2 shared center with half Σ^S (12).

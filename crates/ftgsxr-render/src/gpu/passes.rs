@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
-use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, SH_BINDINGS, TrimMode, Vec3};
+use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, Mat3, SH_BINDINGS, TrimMode, Vec3};
 
 use super::device::SplatDevice;
 use super::error::RenderError;
@@ -49,9 +49,12 @@ const RESOLVE_BYTES: usize = 16;
 /// The byte offset of the centers draw's indirect arguments (`frame.rs`'s counters).
 const CENTERS_INDIRECT_OFFSET: u64 = 16;
 /// The draw's view block (`splat.wgsl`'s `DrawView`).
-const DRAW_VIEW_BYTES: usize = 208;
+const DRAW_VIEW_BYTES: usize = 224;
 /// Where the view block's world-to-camera transform starts (Q-400).
 const DRAW_VIEW_WORLD_TO_CAMERA: usize = 144;
+/// The byte offset of `DrawView.env_decode`, Q-340's decode terms (#790, Q-445).
+// Q-445
+const DRAW_VIEW_ENV_DECODE: usize = 208;
 /// The engine's near plane for the other geometry (§1.7: 0.01 m), which the splats' reverse-Z
 /// depth test maps their depth with. // Q-87
 pub(crate) const ENGINE_NEAR: f32 = 0.01;
@@ -1205,8 +1208,9 @@ struct EnvParams {
 /// The draw's view block (`splat.wgsl`'s `DrawView`): the camera's W × H, the target's
 /// size, the engine's near plane when depth-tested (else 0), E13's switches, the view's
 /// intrinsics, with `occlusion` the depth camera's intrinsics, the depth image's W × H and
-/// planes, and the view's camera space to the depth camera's, composed in float64, then
-/// the view's world-to-camera transform in float32 (Q-400).
+/// planes, and the view's pixels to the depth camera's (`env_projection`, Q-446), composed
+/// in float64, then the view's world-to-camera transform in float32 (Q-400), then with
+/// `occlusion` the planes' decode terms (`env_decode`, #790).
 fn draw_view_uniform(
     view: &ViewParams,
     depth_test: bool,
@@ -1240,12 +1244,17 @@ fn draw_view_uniform(
     }
     b.vec3(t);
     b.f32(1.0);
-    debug_assert_eq!(b.at, DRAW_VIEW_BYTES);
+    debug_assert_eq!(b.at, DRAW_VIEW_ENV_DECODE);
     let Some(o) = occlusion else {
         return out;
     };
     b.at = 20;
-    b.u32(1);
+    let decode = env_decode(o.near, o.far);
+    b.u32(if folds_decode(decode, o.delta_m) {
+        2
+    } else {
+        1
+    });
     b.u32(u32::from(o.soft));
     b.f32(o.delta_m);
     b.at = 48;
@@ -1254,12 +1263,73 @@ fn draw_view_uniform(
     b.f32(o.camera.height as f32);
     b.f32(o.near);
     b.f32(o.far);
-    let m = o.camera.world_to_camera * view.camera.world_to_camera.inverse();
-    for v in m.to_cols_array() {
+    for v in env_projection(&view.camera, &o.camera).to_cols_array() {
         b.f32(v as f32);
     }
     debug_assert_eq!(b.at, DRAW_VIEW_WORLD_TO_CAMERA);
+    b.at = DRAW_VIEW_ENV_DECODE;
+    for v in decode {
+        b.f32(v);
+    }
     out
+}
+
+/// Q-446 (#790): the view's pixels to the depth camera's, for E13's p_f, composed in float64
+/// and rounded once: the columns G₀, G₁, G₂ and g (w 0) of G = K_d·M·K_v⁻¹ and g = K_d·t,
+/// with M and t the view's camera space to the depth camera's
+/// (`depth.world_to_camera · view.world_to_camera⁻¹`) and K_v, K_d each camera's f_x, f_y,
+/// c_x, c_y (the parts of K the draw has always read), so that h = z_c·G·(p, 1) + g is
+/// K_d applied to the point at depth z_c on pixel p's ray, and h_z its depth.
+// Q-446
+fn env_projection(view: &Camera, depth: &Camera) -> DMat4 {
+    let k = |c: &Camera| {
+        DMat3::from_cols(
+            DVec3::new(c.k.x_axis.x, 0.0, 0.0),
+            DVec3::new(0.0, c.k.y_axis.y, 0.0),
+            DVec3::new(c.k.z_axis.x, c.k.z_axis.y, 1.0),
+        )
+    };
+    let m = depth.world_to_camera * view.world_to_camera.inverse();
+    let g = k(depth) * DMat3::from_mat4(m) * k(view).inverse();
+    let t = k(depth) * m.w_axis.truncate();
+    DMat4::from_cols(
+        g.x_axis.extend(0.0),
+        g.y_axis.extend(0.0),
+        g.z_axis.extend(0.0),
+        t.extend(0.0),
+    )
+}
+
+/// Q-446 (#790): whether the draw's fragment stage may fold the decode into E13's weight
+/// (`splat.wgsl`'s `texel_weight_folded`): an identity for every texel when A is positive
+/// and finite, B positive and finite, C finite and non-negative (so every valid texel has
+/// 0 < D = B − d·C ≤ B), A/B a normal float (so A/D never rounds to 0, which the decode
+/// calls invalid) and |δ| below 10³⁰ (so 2δ, and 2δ·D, stay finite as the old form's 2δ
+/// did). Otherwise the draw decodes each texel as before.
+// Q-446
+fn folds_decode([a, b, c]: [f32; 3], delta_m: f32) -> bool {
+    a > 0.0
+        && a.is_finite()
+        && b > 0.0
+        && b.is_finite()
+        && c >= 0.0
+        && c.is_finite()
+        && a / b >= f32::MIN_POSITIVE
+        && delta_m.abs() < 1.0e30
+}
+
+/// Q-340's decode terms (A, B, C) of the depth image's planes, Z = A / (B − d·C): f·n, f
+/// and f − n, or n, 1 and 1 with the infinite far plane (f < n, or f not finite), in float32
+/// as `occlusion.wgsl`'s `decode_terms` computes them, so the draw's decode is the same
+/// operations with its view-only terms hoisted (#790): exact, Q-445.
+// Q-445
+fn env_decode(near: f32, far: f32) -> [f32; 3] {
+    // +∞ (and NaN) fail `far <= 3.4e38`, so they take the infinite form.
+    if far < near || far.is_nan() || far > 3.4e38 {
+        [near, 1.0, 1.0]
+    } else {
+        [far * near, far, far - near]
+    }
 }
 
 fn buffer_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -1440,7 +1510,6 @@ const _: () = assert!(MODEL_UNIFORM_BYTES == 64);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftgsxr_core::DMat4;
 
     /// #736: the times are listed in the order they were made, in seconds to the
     /// millisecond, and their total is their sum.
@@ -1674,6 +1743,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         // are 0.
         assert!(b[20..32].iter().all(|&x| x == 0));
         assert!(b[48..DRAW_VIEW_WORLD_TO_CAMERA].iter().all(|&x| x == 0));
+        assert!(b[DRAW_VIEW_ENV_DECODE..].iter().all(|&x| x == 0));
         assert_eq!(f(&draw_view_uniform(&view, false, None), 16), 0.0);
     }
 
@@ -1715,9 +1785,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     }
 
     // E13's part of the block: the flag, the mode and δ, both cameras' f_x, f_y, c_x, c_y,
-    // the depth image's W × H and planes, and the view's camera space to the depth
-    // camera's (a view at t_w = (0, 0, 1) and a depth camera at t_w = (0.5, 0, 0), both
-    // unrotated: x_d = x_v + (0.5, 0, −1)).
+    // the depth image's W × H and planes, and the view's pixels to the depth camera's
+    // (Q-446), with the view's camera space to the depth camera's (a view at t_w = (0, 0, 1)
+    // and a depth camera at t_w = (0.5, 0, 0), both unrotated: x_d = x_v + (0.5, 0, −1)),
+    // and the planes' decode terms.
     #[test]
     fn draw_view_uniform_lays_out_e13s_block() {
         let cam = |w: u32, f: f64, t: DVec3| {
@@ -1748,14 +1819,86 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         let b = draw_view_uniform(&view, false, Some(&env));
         let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
         let u = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
-        assert_eq!([u(20), u(24)], [1, 1]);
+        // Q-446: the infinite far plane's terms fold into the weight.
+        assert_eq!([u(20), u(24)], [2, 1]);
         assert_eq!(f(28), 0.05);
         assert_eq!([f(32), f(36), f(40), f(44)], [60.0, 61.0, 32.0, 24.0]);
         assert_eq!([f(48), f(52), f(56), f(60)], [80.0, 81.0, 32.0, 24.0]);
         assert_eq!([f(64), f(68), f(72), f(76)], [96.0, 48.0, 0.1, 0.05]);
-        // Column-major: the identity's columns, then the translation (0.5, 0, −1, 1).
-        assert_eq!([f(80), f(100), f(120), f(140)], [1.0, 1.0, 1.0, 1.0]);
-        assert_eq!([f(128), f(132), f(136)], [0.5, 0.0, -1.0]);
+        // Q-446: G = K_d·K_v⁻¹ (M = I) and g = K_d·(0.5, 0, −1), column-major, w 0.
+        let g: Vec<f32> = (0..16).map(|i| f(80 + 4 * i)).collect();
+        let expected = [
+            80.0 / 60.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            81.0 / 61.0,
+            0.0,
+            0.0,
+            32.0 - 80.0 * 32.0 / 60.0,
+            24.0 - 81.0 * 24.0 / 61.0,
+            1.0,
+            0.0,
+            8.0,
+            -24.0,
+            -1.0,
+            0.0,
+        ];
+        for (i, (&got, want)) in g.iter().zip(expected).enumerate() {
+            assert!(
+                (f64::from(got) - want).abs() <= 1e-6 * want.abs().max(1.0),
+                "column-major element {i}: {got}, not {want}"
+            );
+        }
+        // Q-340's decode terms of the infinite far plane (far < near): n, 1, 1.
+        let at = DRAW_VIEW_ENV_DECODE;
+        assert_eq!(
+            [f(at), f(at + 4), f(at + 8), f(at + 12)],
+            [0.1, 1.0, 1.0, 0.0]
+        );
+    }
+
+    // Q-446: the fold is taken for a decode whose terms make it an identity on every
+    // texel, and left for the rest.
+    #[test]
+    fn folds_decode_only_where_it_is_an_identity() {
+        assert!(folds_decode(env_decode(0.25, 10.0), 0.05));
+        assert!(folds_decode(env_decode(0.25, f32::INFINITY), 0.0));
+        assert!(folds_decode(env_decode(0.25, 0.1), -1.0));
+        // n = f: C = 0, D = B for every texel.
+        assert!(folds_decode(env_decode(2.0, 2.0), 0.05));
+        assert!(!folds_decode(env_decode(0.0, 10.0), 0.05));
+        assert!(!folds_decode(env_decode(-0.25, f32::INFINITY), 0.05));
+        assert!(!folds_decode(env_decode(f32::NAN, 10.0), 0.05));
+        assert!(!folds_decode(env_decode(0.25, 10.0), f32::INFINITY));
+        assert!(!folds_decode(env_decode(0.25, 10.0), f32::NAN));
+        // 2δ would overflow (the old form's weight 1, the fold's 0).
+        assert!(!folds_decode(env_decode(0.25, 10.0), 1.0e31));
+        assert!(folds_decode(env_decode(0.25, 10.0), 1.0e29));
+        // f·n overflows: A = +∞.
+        assert!(!folds_decode(env_decode(2.0, 3.0e38), 0.05));
+        // A/B below the normal floats: A/D could round to 0.
+        assert!(!folds_decode(env_decode(1.0e-39, 1.0), 0.05));
+    }
+
+    // #790: the decode's plane terms in float32, as `decode_terms` works them out: f·n, f
+    // and f − n for a finite far plane, n, 1 and 1 for an infinite one (f < n, f = +∞, or
+    // a NaN, which fails `far <= 3.4e38` as in the shader).
+    #[test]
+    fn env_decode_gives_the_planes_terms() {
+        assert_eq!(env_decode(0.25, 10.0), [0.25 * 10.0, 10.0, 10.0 - 0.25]);
+        assert_eq!(
+            env_decode(0.3, 7.0),
+            [7.0f32 * 0.3f32, 7.0, 7.0f32 - 0.3f32]
+        );
+        assert_eq!(env_decode(0.25, 0.1), [0.25, 1.0, 1.0]);
+        assert_eq!(env_decode(0.25, f32::INFINITY), [0.25, 1.0, 1.0]);
+        assert_eq!(env_decode(0.25, f32::NAN), [0.25, 1.0, 1.0]);
+        assert_eq!(
+            env_decode(0.25, 3.4e38),
+            [3.4e38f32 * 0.25, 3.4e38, 3.4e38 - 0.25]
+        );
     }
 
     #[test]
