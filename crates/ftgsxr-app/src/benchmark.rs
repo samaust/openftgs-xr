@@ -246,7 +246,8 @@ impl Measured {
         });
     }
 
-    /// A size the device refused (Q-413): one result, without a value or a budget.
+    /// One measure of a size the device refused (Q-413, Q-417): a result without a value,
+    /// and no budget; a refused size calls it once per measure.
     // Q-413, Q-417
     pub(crate) fn skip(
         &mut self,

@@ -121,18 +121,23 @@ fn dv_b3_writes_the_sort_times_with_p4_on_the_quest() {
     // §3.5 B-3, Q-102's sizes, Q-413's tier; spike S4 reads the figures.
     let file = run("B-3", Duration::from_secs(20 * 60));
     print_budgets(&file);
-    let sorts = results(&file, "sort_ms");
-    let capacities: Vec<f64> = sorts
-        .iter()
-        .map(|r| r["setup"]["capacity"].as_f64().expect("a capacity"))
-        .collect();
-    assert_eq!(
-        capacities,
-        [1e5, 2.5e5, 5e5, 1e6, 2e6, 4e6],
-        "one result for each C"
-    );
-    for r in &sorts {
-        assert_eq!(r["setup"]["tier"], "quest-balanced", "{r}");
+    // Q-102: B-3's measures; Q-417: a C the device refuses is one skipped result per
+    // measure, so each measure has a result for every C (`run` checks each is a number,
+    // or null with `skipped`) (#796).
+    for measure in ["sort_ms", "keys"] {
+        let measured = results(&file, measure);
+        let capacities: Vec<f64> = measured
+            .iter()
+            .map(|r| r["setup"]["capacity"].as_f64().expect("a capacity"))
+            .collect();
+        assert_eq!(
+            capacities,
+            [1e5, 2.5e5, 5e5, 1e6, 2e6, 4e6],
+            "one {measure} result for each C"
+        );
+        for r in &measured {
+            assert_eq!(r["setup"]["tier"], "quest-balanced", "{r}");
+        }
     }
     let budgets = file["budgets"].as_array().expect("budgets");
     assert_eq!(budgets.len(), 1, "{budgets:?}");
