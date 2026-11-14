@@ -36,7 +36,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "frame_gpu_ms_max",
-      "value": 77.1840591430664,
+      "value": 69.24031066894531,
       "unit": "ms"
     },
     {
@@ -58,7 +58,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "frame_gpu_ms_median",
-      "value": 70.6230697631836,
+      "value": 64.93213653564453,
       "unit": "ms"
     },
     {
@@ -80,7 +80,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "frame_sort_ms_max",
-      "value": 6.3081769943237305,
+      "value": 6.151041507720947,
       "unit": "ms"
     },
     {
@@ -102,7 +102,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "frame_sort_ms_median",
-      "value": 3.8480207920074463,
+      "value": 3.8353123664855957,
       "unit": "ms"
     },
     {
@@ -124,7 +124,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "blocks_over_p1",
-      "value": 135,
+      "value": 129,
       "unit": "blocks"
     },
     {
@@ -146,7 +146,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "blocks_over_p4",
-      "value": 135,
+      "value": 129,
       "unit": "blocks"
     },
     {
@@ -168,7 +168,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "blocks",
-      "value": 135,
+      "value": 129,
       "unit": "blocks"
     },
     {
@@ -190,7 +190,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "frames",
-      "value": 137,
+      "value": 131,
       "unit": "frames"
     },
     {
@@ -212,7 +212,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "play_s",
-      "value": 10.142915073,
+      "value": 10.171603097,
       "unit": "s"
     },
     {
@@ -234,7 +234,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "visible_max",
-      "value": 201887,
+      "value": 201731,
       "unit": "splats"
     },
     {
@@ -278,7 +278,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "load_s",
-      "value": 1.8548270599999999,
+      "value": 1.817165337,
       "unit": "s"
     },
     {
@@ -322,7 +322,7 @@
         "span_s": 9.966666666666667
       },
       "measure": "s_per_100mb",
-      "value": 1.0304528828793273,
+      "value": 1.0095298373423744,
       "unit": "s"
     },
     {
@@ -411,7 +411,7 @@
         "counter": "/perfmetrics_meta/app/cpu_frametime"
       },
       "measure": "runtime_counter",
-      "value": 4.625021934509277,
+      "value": 4.915401935577393,
       "unit": "ms"
     },
     {
@@ -434,7 +434,7 @@
         "counter": "/perfmetrics_meta/app/gpu_frametime"
       },
       "measure": "runtime_counter",
-      "value": 67.5771713256836,
+      "value": 67.80281066894531,
       "unit": "ms"
     },
     {
@@ -457,7 +457,7 @@
         "counter": "/perfmetrics_meta/app/motion_to_photon_latency"
       },
       "measure": "runtime_counter",
-      "value": 114.76506805419922,
+      "value": 118.70039367675781,
       "unit": "ms"
     },
     {
@@ -480,7 +480,7 @@
         "counter": "/perfmetrics_meta/compositor/gpu_frametime"
       },
       "measure": "runtime_counter",
-      "value": 1.1285547018051147,
+      "value": 1.448808193206787,
       "unit": "ms"
     },
     {
@@ -503,7 +503,7 @@
         "counter": "/perfmetrics_meta/compositor/dropped_frame_count"
       },
       "measure": "runtime_counter",
-      "value": 397,
+      "value": 484,
       "unit": "generic"
     },
     {
@@ -549,7 +549,7 @@
         "counter": "/perfmetrics_meta/device/cpu_utilization_average"
       },
       "measure": "runtime_counter",
-      "value": 15.254616737365723,
+      "value": 17.008007049560547,
       "unit": "%"
     },
     {
@@ -572,7 +572,7 @@
         "counter": "/perfmetrics_meta/device/cpu_utilization_worst"
       },
       "measure": "runtime_counter",
-      "value": 17.647058486938477,
+      "value": 18.81188201904297,
       "unit": "%"
     },
     {
@@ -595,7 +595,7 @@
         "counter": "/perfmetrics_meta/device/gpu_utilization"
       },
       "measure": "runtime_counter",
-      "value": 98.09326934814453,
+      "value": 97.8697509765625,
       "unit": "%"
     },
     {
@@ -618,7 +618,7 @@
         "counter": "/perfmetrics_meta/compositor/reprojection_latency"
       },
       "measure": "runtime_counter",
-      "value": 23.406673431396484,
+      "value": 23.631053924560547,
       "unit": "ms"
     },
     {
@@ -641,7 +641,7 @@
         "counter": "/perfmetrics_meta/device/cpu0_utilization"
       },
       "measure": "runtime_counter",
-      "value": 33.67346954345703,
+      "value": 41.41414260864258,
       "unit": "%"
     },
     {
@@ -664,7 +664,7 @@
         "counter": "/perfmetrics_meta/device/cpu1_utilization"
       },
       "measure": "runtime_counter",
-      "value": 28.571426391601563,
+      "value": 39.42307662963867,
       "unit": "%"
     },
     {
@@ -687,7 +687,7 @@
         "counter": "/perfmetrics_meta/device/cpu2_utilization"
       },
       "measure": "runtime_counter",
-      "value": 35.71428680419922,
+      "value": 43.68932342529297,
       "unit": "%"
     },
     {
@@ -710,7 +710,7 @@
         "counter": "/perfmetrics_meta/device/cpu3_utilization"
       },
       "measure": "runtime_counter",
-      "value": 13.131314277648926,
+      "value": 17.171716690063477,
       "unit": "%"
     },
     {
@@ -733,7 +733,7 @@
         "counter": "/perfmetrics_meta/device/cpu4_utilization"
       },
       "measure": "runtime_counter",
-      "value": 16.1616153717041,
+      "value": 16.326528549194336,
       "unit": "%"
     },
     {
@@ -756,7 +756,7 @@
         "counter": "/perfmetrics_meta/device/cpu5_utilization"
       },
       "measure": "runtime_counter",
-      "value": 14.851486206054688,
+      "value": 17.525774002075195,
       "unit": "%"
     },
     {
@@ -829,7 +829,7 @@
       "measure": "frame_gpu_ms_max",
       "rule": "at_most",
       "limit": 12.4,
-      "value": 77.1840591430664,
+      "value": 69.24031066894531,
       "pass": false
     },
     {
@@ -854,7 +854,7 @@
       "measure": "s_per_100mb",
       "rule": "at_most",
       "limit": 1,
-      "value": 1.0304528828793273,
+      "value": 1.0095298373423744,
       "pass": false
     },
     {
@@ -879,7 +879,7 @@
       "measure": "frame_sort_ms_max",
       "rule": "at_most",
       "limit": 2.5,
-      "value": 6.3081769943237305,
+      "value": 6.151041507720947,
       "pass": false
     }
   ],
