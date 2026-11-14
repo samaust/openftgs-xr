@@ -17,7 +17,7 @@ use xr_support::{Monado, capture_log, lines, xr_app};
 
 #[test]
 #[ignore = "xr"]
-fn xr_controllers_player_set_attaches_and_xr_hands_are_controllers() {
+fn xr_controllers_player_set_attaches_and_every_hand_source_is_a_controller() {
     capture_log();
     let _monado = Monado::start();
     let mut app = xr_app(
