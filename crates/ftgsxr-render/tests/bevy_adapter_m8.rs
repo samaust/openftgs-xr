@@ -381,7 +381,7 @@ fn layer_image(bytes: &[u8]) -> RenderImage {
     }
 }
 
-/// The eyes' shared-center render by the headless renderer (Q-401), over black.
+/// The eyes' shared-center render by the headless renderer (D-4), over black.
 fn reference_pair() -> [RenderImage; 2] {
     let mut renderer = HeadlessRenderer::new(QualityTier::conformance()).expect("an adapter");
     let id = renderer

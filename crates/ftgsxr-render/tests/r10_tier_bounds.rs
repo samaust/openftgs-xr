@@ -20,7 +20,7 @@ const MIN_STORAGE_PSNR: f64 = 50.0;
 #[ignore = "gpu"]
 fn gpu_r10_quest_balanced_storage_within_50_db_of_conformance() {
     let _layer = layer_messages(); // R-16, Q-105
-    // The tier itself: the headless renderer sorts per view in every tier (D-4, Q-109),
+    // The tier itself: the headless `render` sorts per view in every tier (D-4, Q-109),
     // and E13's occlusion is M-6's (R-12), so against `conformance` only the storage differs.
     let storage = QualityTier::quest_balanced();
     assert!(storage.layout.half.sh && storage.layout.half.rotation);
