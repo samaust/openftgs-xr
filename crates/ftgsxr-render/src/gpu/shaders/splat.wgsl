@@ -60,7 +60,8 @@ struct DrawView {
     target_size: vec2<f32>,
     // The engine's near plane for the reverse-Z depth test, 0 without one (Q-87).
     depth_near: f32,
-    // 1 when E13's environment depth is sampled, else 0: w_occ = 1.
+    // 1 when E13's environment depth is sampled, 2 when it is and its decode folds into
+    // the weight (Q-446), else 0: w_occ = 1.
     occlusion: u32,
     soft: u32,
     delta_m: f32,
@@ -215,8 +216,42 @@ fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) 
 // (Q-340), weighed at the depth camera's z of p_f; an invalid texel weighs 1.
 fn texel_weight(texel: vec2<i32>, z_f: f32) -> f32 {
     let d = textureLoad(env_depth, texel, 0).x;
+    if view.occlusion == 2u {
+        return texel_weight_folded(d, z_f);
+    }
     let e = depth_metres_terms(d, view.env_decode.xyz);
     return occlusion_weight(z_f, e.metres, e.valid, view.delta_m, view.soft != 0u);
+}
+
+// Q-446 (#790): `texel_weight`'s decode folded into the weight, for a draw whose decode
+// term A = `env_decode.x` is positive and finite and whose δ is finite (`occlusion` 2, the
+// CPU's check). With D = B − d·C the decode is z_e = A / D, so z_e > 0 exactly when D > 0
+// (D = +0 gives z_e = +∞, weight 1 either way), and an invalid texel weighs 1 as before.
+// Multiplying through by D > 0: the hard step z_f ≤ z_e + δ is (z_f − δ)·D ≤ A, and the
+// soft ramp t = (z_f − (z_e − δ)) / (2δ) is ((z_f + δ)·D − A) / (2δ·D), clamped by
+// comparing the numerator with 0 and the denominator, so the weight is exactly 1 or 0
+// off the ramp and only a texel on it divides. The same weight up to rounding.
+// Q-446
+fn texel_weight_folded(d: f32, z_f: f32) -> f32 {
+    let dd = view.env_decode.y - d * view.env_decode.z;
+    if !(d >= 0.0 && d < 1.0 && dd > 0.0) {
+        return 1.0;
+    }
+    let a = view.env_decode.x;
+    let delta = max(view.delta_m, 0.0);
+    if view.soft != 0u && delta > 0.0 {
+        let num = (z_f + delta) * dd - a;
+        let den = 2.0 * delta * dd;
+        if num <= 0.0 {
+            return 1.0;
+        }
+        if num >= den {
+            return 0.0;
+        }
+        let t = num / den;
+        return 1.0 - t * t * (3.0 - 2.0 * t);
+    }
+    return select(0.0, 1.0, (z_f - delta) * dd <= a);
 }
 
 // E13's w_occ for the fragment at camera pixel `p` of a record at depth `z_c` (D-45).

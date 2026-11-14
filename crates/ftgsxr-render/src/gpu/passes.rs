@@ -1248,7 +1248,11 @@ fn draw_view_uniform(
         return out;
     };
     b.at = 20;
-    b.u32(1);
+    b.u32(if folds_decode(env_decode(o.near, o.far), o.delta_m) {
+        2
+    } else {
+        1
+    });
     b.u32(u32::from(o.soft));
     b.f32(o.delta_m);
     b.at = 48;
@@ -1267,6 +1271,23 @@ fn draw_view_uniform(
         b.f32(v);
     }
     out
+}
+
+/// Q-446 (#790): whether the draw's fragment stage may fold the decode into E13's weight
+/// (`splat.wgsl`'s `texel_weight_folded`): an identity for every texel when A is positive
+/// and finite, B positive and finite, C finite and non-negative (so every valid texel has
+/// 0 < D = B − d·C ≤ B), A/B a normal float (so A/D never rounds to 0, which the decode
+/// calls invalid) and δ finite. Otherwise the draw decodes each texel as before.
+// Q-446
+fn folds_decode([a, b, c]: [f32; 3], delta_m: f32) -> bool {
+    a > 0.0
+        && a.is_finite()
+        && b > 0.0
+        && b.is_finite()
+        && c >= 0.0
+        && c.is_finite()
+        && a / b >= f32::MIN_POSITIVE
+        && delta_m.is_finite()
 }
 
 /// Q-340's decode terms (A, B, C) of the depth image's planes, Z = A / (B − d·C): f·n, f
@@ -1769,7 +1790,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         let b = draw_view_uniform(&view, false, Some(&env));
         let f = |at: usize| f32::from_le_bytes(b[at..at + 4].try_into().unwrap());
         let u = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
-        assert_eq!([u(20), u(24)], [1, 1]);
+        // Q-446: the infinite far plane's terms fold into the weight.
+        assert_eq!([u(20), u(24)], [2, 1]);
         assert_eq!(f(28), 0.05);
         assert_eq!([f(32), f(36), f(40), f(44)], [60.0, 61.0, 32.0, 24.0]);
         assert_eq!([f(48), f(52), f(56), f(60)], [80.0, 81.0, 32.0, 24.0]);
@@ -1784,6 +1806,26 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     // #790: the decode's plane terms in float32, as `decode_terms` works them out: f·n, f
     // and f − n for a finite far plane, n, 1 and 1 for an infinite one (f < n, f = +∞, or
     // a NaN, which fails `far <= 3.4e38` as in the shader).
+    // Q-446: the fold is taken for a decode whose terms make it an identity on every
+    // texel, and left for the rest.
+    #[test]
+    fn folds_decode_only_where_it_is_an_identity() {
+        assert!(folds_decode(env_decode(0.25, 10.0), 0.05));
+        assert!(folds_decode(env_decode(0.25, f32::INFINITY), 0.0));
+        assert!(folds_decode(env_decode(0.25, 0.1), -1.0));
+        // n = f: C = 0, D = B for every texel.
+        assert!(folds_decode(env_decode(2.0, 2.0), 0.05));
+        assert!(!folds_decode(env_decode(0.0, 10.0), 0.05));
+        assert!(!folds_decode(env_decode(-0.25, f32::INFINITY), 0.05));
+        assert!(!folds_decode(env_decode(f32::NAN, 10.0), 0.05));
+        assert!(!folds_decode(env_decode(0.25, 10.0), f32::INFINITY));
+        assert!(!folds_decode(env_decode(0.25, 10.0), f32::NAN));
+        // f·n overflows: A = +∞.
+        assert!(!folds_decode(env_decode(2.0, 3.0e38), 0.05));
+        // A/B below the normal floats: A/D could round to 0.
+        assert!(!folds_decode(env_decode(1.0e-39, 1.0), 0.05));
+    }
+
     #[test]
     fn env_decode_gives_the_planes_terms() {
         assert_eq!(env_decode(0.25, 10.0), [0.25 * 10.0, 10.0, 10.0 - 0.25]);

@@ -55,6 +55,7 @@ struct DrawView {
     camera_size: vec2<f32>,
     target_size: vec2<f32>,
     depth_near: f32,
+    // 0 without E13, 1 with it, 2 with its decode folded into the weight (Q-446).
     occlusion: u32,
     soft: u32,
     delta_m: f32,
