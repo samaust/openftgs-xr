@@ -65,7 +65,7 @@ struct DrawView {
     env_size: vec2<f32>,
     env_near: f32,
     env_far: f32,
-    env_from_view: mat4x4<f32>,
+    env_projection: mat4x4<f32>,
     // The view's world-to-camera transform [R_w t_w; 0 1] (E6).
     world_to_camera: mat4x4<f32>,
     // Q-340's decode terms (A, B, C) of the depth image's planes, for Z = A / (B − d·C)

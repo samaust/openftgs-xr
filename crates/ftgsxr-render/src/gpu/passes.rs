@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use bevy::render::render_resource::{BufferDescriptor, BufferUsages};
-use ftgsxr_core::{Camera, DMat3, DVec3, Mat3, SH_BINDINGS, TrimMode, Vec3};
+use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, Mat3, SH_BINDINGS, TrimMode, Vec3};
 
 use super::device::SplatDevice;
 use super::error::RenderError;
@@ -1207,9 +1207,9 @@ struct EnvParams {
 /// The draw's view block (`splat.wgsl`'s `DrawView`): the camera's W × H, the target's
 /// size, the engine's near plane when depth-tested (else 0), E13's switches, the view's
 /// intrinsics, with `occlusion` the depth camera's intrinsics, the depth image's W × H and
-/// planes, and the view's camera space to the depth camera's, composed in float64, then
-/// the view's world-to-camera transform in float32 (Q-400), then with `occlusion` the
-/// planes' decode terms (`env_decode`, #790).
+/// planes, and the view's pixels to the depth camera's (`env_projection`, Q-446), composed
+/// in float64, then the view's world-to-camera transform in float32 (Q-400), then with
+/// `occlusion` the planes' decode terms (`env_decode`, #790).
 fn draw_view_uniform(
     view: &ViewParams,
     depth_test: bool,
@@ -1261,8 +1261,7 @@ fn draw_view_uniform(
     b.f32(o.camera.height as f32);
     b.f32(o.near);
     b.f32(o.far);
-    let m = o.camera.world_to_camera * view.camera.world_to_camera.inverse();
-    for v in m.to_cols_array() {
+    for v in env_projection(&view.camera, &o.camera).to_cols_array() {
         b.f32(v as f32);
     }
     debug_assert_eq!(b.at, DRAW_VIEW_WORLD_TO_CAMERA);
@@ -1271,6 +1270,32 @@ fn draw_view_uniform(
         b.f32(v);
     }
     out
+}
+
+/// Q-446 (#790): the view's pixels to the depth camera's, for E13's p_f, composed in float64
+/// and rounded once: the columns G₀, G₁, G₂ and g (w 0) of G = K_d·M·K_v⁻¹ and g = K_d·t,
+/// with M and t the view's camera space to the depth camera's
+/// (`depth.world_to_camera · view.world_to_camera⁻¹`) and K_v, K_d each camera's f_x, f_y,
+/// c_x, c_y (the parts of K the draw has always read), so that h = z_c·G·(p, 1) + g is
+/// K_d applied to the point at depth z_c on pixel p's ray, and h_z its depth.
+// Q-446
+fn env_projection(view: &Camera, depth: &Camera) -> DMat4 {
+    let k = |c: &Camera| {
+        DMat3::from_cols(
+            DVec3::new(c.k.x_axis.x, 0.0, 0.0),
+            DVec3::new(0.0, c.k.y_axis.y, 0.0),
+            DVec3::new(c.k.z_axis.x, c.k.z_axis.y, 1.0),
+        )
+    };
+    let m = depth.world_to_camera * view.world_to_camera.inverse();
+    let g = k(depth) * DMat3::from_mat4(m) * k(view).inverse();
+    let t = k(depth) * m.w_axis.truncate();
+    DMat4::from_cols(
+        g.x_axis.extend(0.0),
+        g.y_axis.extend(0.0),
+        g.z_axis.extend(0.0),
+        t.extend(0.0),
+    )
 }
 
 /// Q-446 (#790): whether the draw's fragment stage may fold the decode into E13's weight
@@ -1481,7 +1506,6 @@ const _: () = assert!(MODEL_UNIFORM_BYTES == 64);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftgsxr_core::DMat4;
 
     /// #736: the times are listed in the order they were made, in seconds to the
     /// millisecond, and their total is their sum.
@@ -1757,8 +1781,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
     }
 
     // E13's part of the block: the flag, the mode and δ, both cameras' f_x, f_y, c_x, c_y,
-    // the depth image's W × H and planes, and the view's camera space to the depth
-    // camera's (a view at t_w = (0, 0, 1) and a depth camera at t_w = (0.5, 0, 0), both
+    // the depth image's W × H and planes, and the view's pixels to the depth camera's
+    // (Q-446), with the view's camera space to the depth camera's (a view at t_w = (0, 0, 1) and a depth camera at t_w = (0.5, 0, 0), both
     // unrotated: x_d = x_v + (0.5, 0, −1)).
     #[test]
     fn draw_view_uniform_lays_out_e13s_block() {
@@ -1796,9 +1820,32 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         assert_eq!([f(32), f(36), f(40), f(44)], [60.0, 61.0, 32.0, 24.0]);
         assert_eq!([f(48), f(52), f(56), f(60)], [80.0, 81.0, 32.0, 24.0]);
         assert_eq!([f(64), f(68), f(72), f(76)], [96.0, 48.0, 0.1, 0.05]);
-        // Column-major: the identity's columns, then the translation (0.5, 0, −1, 1).
-        assert_eq!([f(80), f(100), f(120), f(140)], [1.0, 1.0, 1.0, 1.0]);
-        assert_eq!([f(128), f(132), f(136)], [0.5, 0.0, -1.0]);
+        // Q-446: G = K_d·K_v⁻¹ (M = I) and g = K_d·(0.5, 0, −1), column-major, w 0.
+        let g: Vec<f32> = (0..16).map(|i| f(80 + 4 * i)).collect();
+        let expected = [
+            80.0 / 60.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            81.0 / 61.0,
+            0.0,
+            0.0,
+            32.0 - 80.0 * 32.0 / 60.0,
+            24.0 - 81.0 * 24.0 / 61.0,
+            1.0,
+            0.0,
+            8.0,
+            -24.0,
+            -1.0,
+            0.0,
+        ];
+        for (i, (&got, want)) in g.iter().zip(expected).enumerate() {
+            assert!(
+                (f64::from(got) - want).abs() <= 1e-6 * want.abs().max(1.0),
+                "column-major element {i}: {got}, not {want}"
+            );
+        }
         // Q-340's decode terms of the infinite far plane (far < near): n, 1, 1.
         assert_eq!([f(208), f(212), f(216), f(220)], [0.1, 1.0, 1.0, 0.0]);
     }

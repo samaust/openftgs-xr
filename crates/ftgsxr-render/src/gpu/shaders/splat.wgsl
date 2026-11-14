@@ -67,14 +67,17 @@ struct DrawView {
     delta_m: f32,
     // The view camera's f_x, f_y, c_x, c_y (E6).
     view_k: vec4<f32>,
-    // The depth camera's f_x, f_y, c_x, c_y and its image W × H (E6).
+    // The depth camera's f_x, f_y, c_x, c_y (E6), unread since #790 (`env_projection`
+    // folds them), and its image W × H.
     env_k: vec4<f32>,
     env_size: vec2<f32>,
     // The depth image's nearZ and farZ in metres (farZ < nearZ: infinite).
     env_near: f32,
     env_far: f32,
-    // The view's camera space to the depth camera's: R_d·R_vᵀ and its translation.
-    env_from_view: mat4x4<f32>,
+    // The view's pixels to the depth camera's (Q-446, #790): columns G₀, G₁, G₂ and g of
+    // G = K_d·M·K_v⁻¹ and g = K_d·t, with M = R_d·R_vᵀ and t the view's camera space to
+    // the depth camera's.
+    env_projection: mat4x4<f32>,
     // The view's world-to-camera transform [R_w t_w; 0 1] (E6), read by the shared-center
     // vertex stage (Q-400).
     world_to_camera: mat4x4<f32>,
@@ -263,13 +266,18 @@ fn environment_weight(p: vec2<f32>, z_c: f32) -> f32 {
     if view.occlusion == 0u {
         return 1.0;
     }
-    // p_f on the fragment's own view ray at the record's depth, in the view's camera space.
-    let x_v = vec3<f32>((p - view.view_k.zw) / view.view_k.xy * z_c, z_c);
-    let x_d = (view.env_from_view * vec4<f32>(x_v, 1.0)).xyz;
-    if !(x_d.z > 0.0) {
+    // p_f on the fragment's own view ray at the record's depth, x_v = z_c·K_v⁻¹·(p, 1),
+    // in the depth camera's space, x_d = M·x_v + t, and its pixel q = (h_x, h_y) / h_z
+    // with h = K_d·x_d. Q-446 (#790): the CPU folds G = K_d·M·K_v⁻¹ and g = K_d·t
+    // (`env_projection`), so h = z_c·G·(p, 1) + g; h_z is x_d's z, since K_d's last row
+    // is (0, 0, 1). The same point up to rounding.
+    // Q-446
+    let m = view.env_projection;
+    let h = z_c * (m[0].xyz * p.x + m[1].xyz * p.y + m[2].xyz) + m[3].xyz;
+    if !(h.z > 0.0) {
         return 1.0;
     }
-    let q = view.env_k.xy * x_d.xy / x_d.z + view.env_k.zw;
+    let q = h.xy / h.z;
     if !(all(q >= vec2<f32>(0.0)) && all(q < view.env_size)) {
         return 1.0;
     }
@@ -280,10 +288,10 @@ fn environment_weight(p: vec2<f32>, z_c: f32) -> f32 {
     let last = vec2<i32>(view.env_size) - vec2<i32>(1);
     let a = clamp(i0, vec2<i32>(0), last);
     let b = clamp(i0 + vec2<i32>(1), vec2<i32>(0), last);
-    let w00 = texel_weight(a, x_d.z);
-    let w10 = texel_weight(vec2<i32>(b.x, a.y), x_d.z);
-    let w01 = texel_weight(vec2<i32>(a.x, b.y), x_d.z);
-    let w11 = texel_weight(b, x_d.z);
+    let w00 = texel_weight(a, h.z);
+    let w10 = texel_weight(vec2<i32>(b.x, a.y), h.z);
+    let w01 = texel_weight(vec2<i32>(a.x, b.y), h.z);
+    let w11 = texel_weight(b, h.z);
     // w + f·(w′ − w), not (1 − f)·w + f·w′: equal weights blend to themselves exactly.
     let top = w00 + f.x * (w10 - w00);
     let bottom = w01 + f.x * (w11 - w01);
