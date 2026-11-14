@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! `ftgsxr_quest::main` (§2.1, §2.5): logcat under `ftgsxr` (§1.13), the paths (Q-15),
-//! the settings, the headless device tests, then a Bevy `App` with no window driven by the
-//! XR session: `XrPlugin` through `add_xr` (Q-120), the `Headset` marker (Q-266) and
-//! `AppPlugin` over `QuestPlatform` at the settings' tier (#458; Q-129's harness retired).
+//! `ftgsxr_quest::main` (§2.1, §2.5): logcat under `ftgsxr` (§1.13, per-frame messages
+//! limited, Q-447), the paths (Q-15), the settings, the headless device tests, then a
+//! Bevy `App` with no window driven by the XR session: `XrPlugin` through `add_xr`
+//! (Q-120), the `Headset` marker (Q-266) and `AppPlugin` over `QuestPlatform` at the
+//! settings' tier (#458; Q-129's harness retired).
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
+use android_logger::{AndroidLogger, Filter};
 use bevy::android::ANDROID_APP;
 use bevy::prelude::*;
 use bevy::window::ExitCondition;
@@ -18,24 +20,77 @@ use ftgsxr_app::{
     Toast, ToastLevel, load_settings,
 };
 use ftgsxr_xr::{XrHands, XrPlugin, add_xr};
+use tracing::log::{LevelFilter, Log, Metadata, Record};
 
 use crate::exit::{EXIT_ENVIRONMENT, exit_code, exit_without_session};
+use crate::log_limit::{PER_FRAME_PERIOD, SiteLimit, is_per_frame};
 use crate::platform::QuestPlatform;
 use crate::{bench_runner, device_test, jni_calls};
 
 /// The logcat tag (§1.13).
 const TAG: &str = "ftgsxr";
 
-/// Logs to logcat at `level` (§1.13): tracing's events reach android_logger through
-/// tracing's `log` records, as no tracing subscriber is installed.
+/// android_logger behind §1.13's per-frame limit (Q-447): a record carrying Q-167's
+/// `per_frame` field passes once a second per site; every other record passes as
+/// android_logger writes it.
+// Q-447
+struct Logcat {
+    inner: AndroidLogger,
+    /// The same filter as `inner`'s, applied first, so a record the level drops neither
+    /// is formatted here nor takes its site's second.
+    filter: Filter,
+    limit: SiteLimit,
+}
+
+impl Log for Logcat {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        self.filter.enabled(metadata)
+    }
+
+    fn log(&self, record: &Record<'_>) {
+        if !self.filter.matches(record) {
+            return;
+        }
+        // A message with no arguments carries no field.
+        if record.args().as_str().is_none()
+            && is_per_frame(&record.args().to_string())
+            && !self.limit.allow(
+                record.file().unwrap_or_default(),
+                record.line().unwrap_or_default(),
+                Instant::now(),
+            )
+        {
+            return;
+        }
+        self.inner.log(record);
+    }
+
+    fn flush(&self) {
+        self.inner.flush();
+    }
+}
+
+/// The installed logger.
+static LOGCAT: OnceLock<Logcat> = OnceLock::new();
+
+/// Logs to logcat at `level` (§1.13), per-frame messages limited (Q-447): tracing's
+/// events reach the logger through tracing's `log` records, as no tracing subscriber is
+/// installed.
 fn init_log(level: &str) {
-    let filter = tracing::log::LevelFilter::Trace;
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_tag(TAG)
-            .with_max_level(filter)
-            .with_filter(android_logger::FilterBuilder::new().parse(level).build()),
-    );
+    let filter = || android_logger::FilterBuilder::new().parse(level).build();
+    let logger = LOGCAT.get_or_init(|| Logcat {
+        inner: AndroidLogger::new(
+            android_logger::Config::default()
+                .with_tag(TAG)
+                .with_max_level(LevelFilter::Trace)
+                .with_filter(filter()),
+        ),
+        filter: filter(),
+        limit: SiteLimit::new(PER_FRAME_PERIOD),
+    });
+    if tracing::log::set_logger(logger).is_ok() {
+        tracing::log::set_max_level(logger.filter.filter());
+    }
 }
 
 /// The Quest's locations (§2.5, Q-15), and whether the app-external directory exists.
