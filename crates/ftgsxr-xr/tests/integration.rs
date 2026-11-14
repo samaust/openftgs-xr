@@ -20,6 +20,7 @@ mod dv7_depth;
 mod dv8_hands;
 mod dv9_anchors;
 mod dv_bench;
+mod dv_log_limit;
 mod dv_r09_shared_center;
 mod dv_r10_tier_bounds;
 mod dv_r17_governor;

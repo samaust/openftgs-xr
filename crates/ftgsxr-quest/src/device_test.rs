@@ -20,6 +20,7 @@ mod dv6;
 mod dv7;
 mod dv8;
 mod dv9;
+mod log_limit;
 mod r10;
 mod r17;
 mod r9;
@@ -76,6 +77,7 @@ pub(crate) fn add(app: &mut App, name: &str) {
         dv7::NAME => dv7::add(app),
         dv8::NAME => dv8::add(app),
         dv9::NAME => dv9::add(app),
+        log_limit::NAME => log_limit::add(app),
         r17::NAME => r17::add(app),
         s3::NAME => s3::add(app),
         spikes::NAME => spikes::add(app),
