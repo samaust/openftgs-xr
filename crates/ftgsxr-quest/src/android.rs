@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! `ftgsxr_quest::main` (§2.1, §2.5): logcat under `ftgsxr` (§1.13, per-frame messages
-//! limited, Q-445), the paths (Q-15), the settings, the headless device tests, then a
+//! limited, Q-447), the paths (Q-15), the settings, the headless device tests, then a
 //! Bevy `App` with no window driven by the XR session: `XrPlugin` through `add_xr`
 //! (Q-120), the `Headset` marker (Q-266) and `AppPlugin` over `QuestPlatform` at the
 //! settings' tier (#458; Q-129's harness retired).
@@ -30,10 +30,10 @@ use crate::{bench_runner, device_test, jni_calls};
 /// The logcat tag (§1.13).
 const TAG: &str = "ftgsxr";
 
-/// android_logger behind §1.13's per-frame limit (Q-445): a record carrying Q-167's
+/// android_logger behind §1.13's per-frame limit (Q-447): a record carrying Q-167's
 /// `per_frame` field passes once a second per site; every other record passes as
 /// android_logger writes it.
-// Q-445
+// Q-447
 struct Logcat {
     inner: AndroidLogger,
     /// The same filter as `inner`'s, applied first, so a record the level drops neither
@@ -73,7 +73,7 @@ impl Log for Logcat {
 /// The installed logger.
 static LOGCAT: OnceLock<Logcat> = OnceLock::new();
 
-/// Logs to logcat at `level` (§1.13), per-frame messages limited (Q-445): tracing's
+/// Logs to logcat at `level` (§1.13), per-frame messages limited (Q-447): tracing's
 /// events reach the logger through tracing's `log` records, as no tracing subscriber is
 /// installed.
 fn init_log(level: &str) {

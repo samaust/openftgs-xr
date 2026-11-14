@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Quest's per-frame limit (§1.13 Logs, Q-167, Q-445, #793, `dv` lane): the runner's
+//! The Quest's per-frame limit (§1.13 Logs, Q-167, Q-447, #793, `dv` lane): the runner's
 //! `log-limit` logs, on every frame for a few seconds, a line from one site marked with
 //! Q-167's `per_frame` field and a line from another, unmarked site, and reports how many
 //! of each it logged. By logcat's monotonic timestamps at microsecond resolution, the
@@ -111,7 +111,7 @@ fn line(t: &str, text: &str) -> String {
     format!("{t}  4321  4400 I ftgsxr  : {text}")
 }
 
-/// The driver's judgement (private to it, so `cpu` tests of its own, Q-445) over
+/// The driver's judgement (private to it, so `cpu` tests of its own, Q-447) over
 /// hand-written `-v monotonic,usec` lines.
 #[test]
 fn judge_passes_marked_lines_a_second_apart_and_every_unmarked_line() {

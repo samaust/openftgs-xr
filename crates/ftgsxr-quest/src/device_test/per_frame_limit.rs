@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Quest's per-frame limit on the device (§1.13 Logs, Q-167, Q-445, #793): once the
+//! The Quest's per-frame limit on the device (§1.13 Logs, Q-167, Q-447, #793): once the
 //! session runs, two sites log on every frame for a few seconds, one marked with Q-167's
 //! `per_frame` field, the other unmarked, each line numbered; the verdict reports how
 //! many of each were logged. The host driver judges logcat's lines.
@@ -65,7 +65,7 @@ fn run(mut test: ResMut<LogLimit>, state: Option<Res<XrState>>) {
         _ => {}
     }
     if test.logging.is_some() {
-        // Q-167's marker: one site, limited to one line a second (Q-445).
+        // Q-167's marker: one site, limited to one line a second (Q-447).
         info!(per_frame = true, "log-limit: marked {}", test.marked);
         test.marked += 1;
         // A different site, unmarked: every line reaches logcat.

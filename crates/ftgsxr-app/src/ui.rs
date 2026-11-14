@@ -514,13 +514,14 @@ type ComposeItem = (
     Option<&'static mut SplatTransform>,
 );
 
-/// `SplatTransform`'s one writer: each instance's own E14 manual transform (the identity
-/// without `InstanceLighting`) times the environment's per channel, the environment's
-/// factor going to every instance while `per_instance` is `None`, or only to its target
-/// while it is `Some(e)`, whatever is selected. A target no longer loaded (removed)
-/// returns `per_instance` to `None`. Writes only what changed.
+/// `SplatTransform`'s one writer on library instances (the session benchmarks write their
+/// held instance's, which has no `LoadedModel`, Q-432): each instance's own E14 manual
+/// transform (the identity without `InstanceLighting`) times the environment's per
+/// channel, the environment's factor going to every instance while `per_instance` is
+/// `None`, or only to its target while it is `Some(e)`, whatever is selected. A target no
+/// longer loaded (removed) returns `per_instance` to `None`. Writes only what changed.
 // Q-383
-fn compose_transforms(
+pub(crate) fn compose_transforms(
     mut lighting: ResMut<Lighting>,
     mut instances: Query<ComposeItem, With<LoadedModel>>,
     mut commands: Commands,

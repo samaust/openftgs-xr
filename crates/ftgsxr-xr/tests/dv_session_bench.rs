@@ -275,6 +275,19 @@ fn dv_b8_writes_the_cost_of_occlusion_and_each_lighting_mode() {
         envs, expected,
         "occlusion off and on and each lighting mode"
     );
+    // Q-432 (#797): auto local measures its band around the held instance, so its depth
+    // readback runs during the `auto-local` setup (logged once per process, at the first).
+    let log = dv_support::log();
+    let setup = log
+        .iter()
+        .position(|l| l.contains("session bench: setup") && l.contains("\"auto-local\""))
+        .expect("the auto-local setup's line in the device's log");
+    assert!(
+        log[setup..]
+            .iter()
+            .any(|l| l.contains("light: the depth read back")),
+        "auto local's depth readback in the device's log after the auto-local setup began"
+    );
 }
 
 #[test]

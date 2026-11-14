@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Quest's per-frame limit (§1.13 Logs, Q-445): a `log` record carrying Q-167's
+//! The Quest's per-frame limit (§1.13 Logs, Q-447): a `log` record carrying Q-167's
 //! `per_frame` field passes once a second per site, the site being the record's source
 //! file and line. This is the pure part, built on the host too so its tests run there;
 //! the logger around android_logger is `android`'s.
@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 /// Whether `text`, a record's text as tracing's `log` bridge writes it, carries Q-167's
 /// `per_frame` field: ` per_frame=<value>` after the message, or `per_frame=<value>`
-/// first when the event has no message (Q-445).
-// Q-445
+/// first when the event has no message (Q-447).
+// Q-447
 pub(crate) fn is_per_frame(text: &str) -> bool {
     text.starts_with("per_frame=") || text.contains(" per_frame=")
 }
@@ -21,8 +21,8 @@ pub(crate) fn is_per_frame(text: &str) -> bool {
 /// The per-frame messages' period per site (§1.13).
 pub(crate) const PER_FRAME_PERIOD: Duration = Duration::from_secs(1);
 
-/// One per `period` per site, a site being a record's source file and line (Q-445).
-// Q-445
+/// One per `period` per site, a site being a record's source file and line (Q-447).
+// Q-447
 pub(crate) struct SiteLimit {
     period: Duration,
     last: Mutex<HashMap<(String, u32), Instant>>,
@@ -59,7 +59,7 @@ impl SiteLimit {
 mod tests {
     use super::*;
 
-    // Q-445: tracing's bridge writes the message, then each other field as ` name=value`.
+    // Q-447: tracing's bridge writes the message, then each other field as ` name=value`.
     #[test]
     fn is_per_frame_finds_the_field_after_the_message() {
         assert!(is_per_frame(
@@ -70,7 +70,7 @@ mod tests {
         ));
     }
 
-    // Q-445: an event with no message starts with its first field.
+    // Q-447: an event with no message starts with its first field.
     #[test]
     fn is_per_frame_finds_the_field_first_when_there_is_no_message() {
         assert!(is_per_frame("per_frame=true"));
@@ -93,7 +93,7 @@ mod tests {
         assert!(limit.allow("src/render.rs", 811, at(2014)));
     }
 
-    // Q-445: a site is a file and a line; another line or another file has its own second.
+    // Q-447: a site is a file and a line; another line or another file has its own second.
     #[test]
     fn site_limit_keeps_one_clock_per_file_and_line() {
         let limit = SiteLimit::new(PER_FRAME_PERIOD);

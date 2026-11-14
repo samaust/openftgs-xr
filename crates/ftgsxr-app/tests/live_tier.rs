@@ -137,7 +137,7 @@ fn uploads(events: &std::sync::Mutex<Vec<ftgsxr_app::SplatEvent>>, entity: Entit
 // Q-238, Q-239: the reload is packed with the new tier's layout.
 #[test]
 #[ignore = "gpu"]
-fn gpu_live_tier_switch_reloads_with_the_new_layout() {
+fn gpu_live_tier_switch_reload_is_packed_with_the_new_layout() {
     let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let mut t = TestApp::gpu("live_layout");
     let events = record_events(&mut t.app);
@@ -187,7 +187,7 @@ fn gpu_live_tier_switch_reloads_with_the_new_layout() {
 // unloaded with §1.15's text, the others stay.
 #[test]
 #[ignore = "gpu"]
-fn gpu_live_tier_switch_unloads_a_model_the_new_budget_refuses() {
+fn gpu_live_tier_switch_leaves_a_model_the_new_budget_refuses_unloaded() {
     let _layer = ftgsxr_testkit::layer_messages(); // R-16, Q-105
     let mut t = TestApp::gpu("live_budget");
     let events = record_events(&mut t.app);
