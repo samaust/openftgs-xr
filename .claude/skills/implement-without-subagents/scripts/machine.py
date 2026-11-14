@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The machine's CPU and GPU budget, shared by every session on this checkout.
+"""The machine's CPU, GPU and headset budget, shared by every session on this checkout.
 
 Sessions that run `implement-without-subagents` in parallel have no coordinator, so they keep
 their reservations in a ledger: one JSON file per run, holding or waiting for the machine, in
@@ -8,15 +8,24 @@ lives as long as the process that holds it: an entry whose process has died is i
 
     machine.py status [-C DIR] [-- COMMAND...]
         the physical cores, the GPUs, the load, every run holding or waiting for the machine,
-        what is free and, with COMMAND, that command's past runs on this machine
-    machine.py run (--threads N | --exclusive) [--gpu] [--wait] [--estimate SECONDS]
-                   [-C DIR] -- COMMAND...
+        what is free, who holds the headset and, with COMMAND, that command's past runs on
+        this machine
+    machine.py run (--threads N | --exclusive) [--gpu] [--headset] [--wait]
+                   [--estimate SECONDS] [-C DIR] -- COMMAND...
         runs COMMAND with N threads (CARGO_BUILD_JOBS, RUST_TEST_THREADS and RAYON_NUM_THREADS
         for cargo and the tests; OMP_NUM_THREADS, MKL_NUM_THREADS, OPENBLAS_NUM_THREADS and
         TORCHINDUCTOR_COMPILE_THREADS for the Python tooling that drives openftgs), every GPU
-        with --gpu, or the whole machine at the default thread count with --exclusive, and
-        exits with COMMAND's exit code. When that budget isn't free it exits 75 and prints the
-        ledger, or with --wait takes its turn.
+        with --gpu, the headset with --headset, or the whole machine at the default thread
+        count with --exclusive, and exits with COMMAND's exit code. When that budget isn't free
+        it exits 75 and prints the ledger, or with --wait takes its turn.
+
+The headset (the `device` lane's Quest, reached through `adb`) is held by one run at a time:
+every `dv_` test, and anything else that installs, launches or stops the app on it, runs with
+--headset, since a second run's install replaces the first's APK under it. --exclusive leaves
+the headset alone: it is the host's timings it protects. A `dv_` test found running outside
+the ledger (a process whose arguments hold `--ignored` and a `dv_` filter, not started by a
+run that holds the headset) counts as holding the headset, so a --headset run waits for it
+rather than install over it, and `status` names it.
 
 Waiters start in arrival order: a run that fits starts at once unless a waiter ahead of it is
 short of a resource it would take. Each finished run goes into `history.jsonl` beside the
@@ -134,26 +143,94 @@ def write_entry(ledger: Path, entry: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def fits(entry: dict[str, Any], live: list[dict[str, Any]], cores: int, n_gpus: int) -> bool:
+def is_dv_run(argv: list[str]) -> bool:
+    """Whether the arguments run `dv_` tests: `--ignored` and a filter naming them."""
+    return "--ignored" in argv and any(a.startswith("dv_") or "::dv_" in a for a in argv)
+
+
+def processes() -> dict[int, tuple[int, list[str]]]:
+    """Each live process's parent and arguments, from /proc."""
+    out = {}
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            argv = (proc / "cmdline").read_bytes().split(b"\0")
+            stat = (proc / "stat").read_text()
+        except OSError:
+            continue
+        ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        out[int(proc.name)] = (ppid, [a.decode(errors="replace") for a in argv if a])
+    return out
+
+
+def foreign_headset_runs(live: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    """The `dv_` test processes outside the ledger's headset (pid, arguments), the outermost of
+    a chain only: not a ledger entry's own process (whose arguments hold its command, running or
+    waiting) nor a descendant of a run holding the headset. A `dv_` test that a run without
+    --headset started is outside it."""
+    entry_pids = {e["pid"] for e in live}
+    holders = {e["pid"] for e in live if e["state"] == "running" and e.get("headset")}
+    procs = processes()
+
+    def ancestors(pid: int) -> Iterator[int]:
+        seen = set()
+        while pid in procs and pid not in seen and pid > 1:
+            seen.add(pid)
+            pid = procs[pid][0]
+            yield pid
+
+    found = {
+        pid
+        for pid, (_, argv) in procs.items()
+        if pid != os.getpid()
+        and pid not in entry_pids
+        and is_dv_run(argv)
+        and not holders & set(ancestors(pid))
+    }
+    return sorted(
+        (pid, shlex.join(procs[pid][1]))
+        for pid in found
+        if not found & set(ancestors(pid))
+    )
+
+
+def fits(
+    entry: dict[str, Any],
+    live: list[dict[str, Any]],
+    cores: int,
+    n_gpus: int,
+    headset_foreign: bool = False,
+) -> bool:
     """Whether `entry` may start now: the running entries' budgets subtracted, then each waiter
     ahead of it either taking its budget (it fits, and starts at its next poll) or keeping what
-    it is short of (the free cores up to its own count, the GPUs, or the whole machine)."""
-    free, gpu_free = cores, n_gpus > 0
+    it is short of (the free cores up to its own count, the GPUs, the headset, or the whole
+    machine). A `dv_` run outside the ledger (`headset_foreign`) holds the headset."""
+    free, gpu_free, headset_free = cores, n_gpus > 0, not headset_foreign
     for other in live:
         if other["state"] == "running":
             free -= other["threads"]
             gpu_free = gpu_free and not other["gpu"]
+            headset_free = headset_free and not other.get("headset")
     for other in live:
         if other["state"] != "waiting" or other["pid"] == entry["pid"]:
             continue
         if (other["arrived"], other["pid"]) > (entry["arrived"], entry["pid"]):
             break
-        if other["threads"] <= free and (gpu_free or not other["gpu"]):
+        takes_headset = other.get("headset", False)
+        if (
+            other["threads"] <= free
+            and (gpu_free or not other["gpu"])
+            and (headset_free or not takes_headset)
+        ):
             free -= other["threads"]
         else:
             free -= min(free, other["threads"])
         gpu_free = gpu_free and not other["gpu"]
-    return entry["threads"] <= free and (gpu_free or not entry["gpu"])
+        headset_free = headset_free and not takes_headset
+    return (
+        entry["threads"] <= free
+        and (gpu_free or not entry["gpu"])
+        and (headset_free or not entry.get("headset"))
+    )
 
 
 def duration(seconds: float) -> str:
@@ -165,7 +242,9 @@ def budget(entry: dict[str, Any]) -> str:
     if entry["exclusive"]:
         return "the whole machine"
     n = entry["threads"]
-    return f"{n} thread{'s' if n != 1 else ''}{' + GPU' if entry['gpu'] else ''}"
+    gpu = " + GPU" if entry["gpu"] else ""
+    headset = " + headset" if entry.get("headset") else ""
+    return f"{n} thread{'s' if n != 1 else ''}{gpu}{headset}"
 
 
 def history(ledger: Path, command: str) -> list[dict[str, Any]]:
@@ -205,6 +284,16 @@ def report(ledger: Path, command: str | None = None) -> str:
     waiting = any(e["state"] == "waiting" for e in live)
     claims = ", before what the waiting runs ahead will take" if waiting else ""
     out.append(f"free: {max(cores - held, 0)} cores, GPU {gpu_state}{claims}")
+    holder = next(
+        (e for e in live if e["state"] == "running" and e.get("headset")), None
+    )
+    foreign = foreign_headset_runs(live)
+    if holder is not None:
+        out.append(f"headset: held by {holder['label']}")
+    elif not foreign:
+        out.append("headset: free")
+    for pid, argv in foreign:
+        out.append(f"headset: held outside the ledger by pid {pid}: {argv}")
     if load[0] > held + 2:
         out.append(
             f"note: the 1-min load is {load[0]:.1f} against {held} threads in the ledger: "
@@ -245,6 +334,7 @@ def run(args: argparse.Namespace) -> int:
         "state": "waiting",
         "threads": threads,
         "gpu": args.gpu or (args.exclusive and n_gpus > 0),
+        "headset": args.headset,
         "exclusive": args.exclusive,
         "command": command,
         "cwd": str(cwd),
@@ -267,7 +357,8 @@ def run(args: argparse.Namespace) -> int:
         while True:
             with locked(ledger):
                 live = entries(ledger)
-                if fits(entry, live, cores, n_gpus):
+                foreign = bool(args.headset and foreign_headset_runs(live))
+                if fits(entry, live, cores, n_gpus, foreign):
                     entry |= {"state": "running", "started": time.time()}
                     write_entry(ledger, entry)
                     break
@@ -291,7 +382,8 @@ def run(args: argparse.Namespace) -> int:
             code = 128 - code  # killed by a signal, as a shell reports it
         seconds = time.time() - entry["started"]
         with locked(ledger), open(ledger / "history.jsonl", "a") as log:
-            done = {key: entry[key] for key in ("command", "label", "threads", "gpu", "exclusive")}
+            keys = ("command", "label", "threads", "gpu", "headset", "exclusive")
+            done = {key: entry[key] for key in keys}
             done |= {"seconds": round(seconds, 1), "exit": code, "ended": time.time()}
             log.write(json.dumps(done) + "\n")
         print(f"machine.py: done in {duration(seconds)}, exit {code}", file=sys.stderr)
@@ -318,6 +410,9 @@ def main() -> int:
         "--exclusive", action="store_true", help="the whole machine, at the default threads"
     )
     go.add_argument("--gpu", action="store_true", help="every GPU, for the gpu lane")
+    go.add_argument(
+        "--headset", action="store_true", help="the headset, for the device lane's dv_ tests"
+    )
     go.add_argument("--wait", action="store_true", help="queue until the budget is free")
     go.add_argument("--estimate", type=float, help="the run's expected seconds, for others")
     go.add_argument("-C", metavar="DIR", help="run COMMAND in DIR (a worktree)")
