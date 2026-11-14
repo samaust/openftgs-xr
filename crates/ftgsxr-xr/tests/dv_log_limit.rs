@@ -106,6 +106,7 @@ fn dv_log_limit_marked_lines_once_a_second_unmarked_all() {
     );
 }
 
+/// A `-v monotonic,usec` line of the app's at `t` seconds since boot.
 fn line(t: &str, text: &str) -> String {
     format!("{t}  4321  4400 I ftgsxr  : {text}")
 }

@@ -6,6 +6,7 @@
 //! the logger around android_logger is `android`'s.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,7 @@ pub(crate) struct SiteLimit {
 }
 
 impl SiteLimit {
+    /// A limit with no site seen yet.
     pub(crate) fn new(period: Duration) -> Self {
         Self {
             period,
@@ -39,14 +41,14 @@ impl SiteLimit {
     /// least `period` after the last that passed.
     pub(crate) fn allow(&self, file: &str, line: u32, now: Instant) -> bool {
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-        match last.get_mut(&(file.to_owned(), line)) {
-            Some(t) if now.saturating_duration_since(*t) < self.period => false,
-            Some(t) => {
-                *t = now;
+        match last.entry((file.to_owned(), line)) {
+            Entry::Occupied(e) if now.saturating_duration_since(*e.get()) < self.period => false,
+            Entry::Occupied(mut e) => {
+                e.insert(now);
                 true
             }
-            None => {
-                last.insert((file.to_owned(), line), now);
+            Entry::Vacant(e) => {
+                e.insert(now);
                 true
             }
         }
