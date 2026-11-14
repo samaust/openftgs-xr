@@ -69,7 +69,7 @@ struct DrawView {
     // The view's world-to-camera transform [R_w t_w; 0 1] (E6).
     world_to_camera: mat4x4<f32>,
     // Q-340's decode terms (A, B, C) of the depth image's planes, for Z = A / (B − d·C)
-    // (`occlusion.wgsl`'s `decode_terms`, #790), and 0.
+    // (`occlusion.wgsl`'s `decode_terms`, #790, Q-445), and 0.
     env_decode: vec4<f32>,
 }
 

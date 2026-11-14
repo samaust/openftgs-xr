@@ -403,7 +403,8 @@ const RECORD_VAR: &str = "FTGSXR_RECORD_R12_EXACT";
 /// The occluded layers of R-12's scenes (Q-445), by id: per view, the wall at 2 m in both
 /// formats, each soft-weight case, the 45° wall, and two scenes where the 2 × 2 blend sets
 /// the weight over many pixels: `step_scene` hard and soft, and `field_scene` hard and soft
-/// with δ = 0 and δ > 0, with finite and infinite far planes; in shared-center mode in both
+/// with δ = 0 and δ > 0 (and soft at δ = 10³¹, which the draw weighs without Q-446's fold),
+/// with finite and infinite far planes; in shared-center mode in both
 /// record layouts, each of those scenes with both eyes the view (the first eye's layer)
 /// and the shared-center wall scene (both eyes' layers).
 fn exact_layers(dev: &SplatDevice) -> Vec<(String, Vec<[f32; 4]>)> {
@@ -428,7 +429,15 @@ fn exact_layers(dev: &SplatDevice) -> Vec<(String, Vec<[f32; 4]>)> {
         let (rows, occlusion) = step_scene(soft, delta_m);
         scenes.push((format!("step-{delta_m:.2}"), rows.to_vec(), occlusion));
     }
-    for (soft, delta_m) in [(false, 0.0), (true, 0.3), (true, 0.0), (false, 0.3)] {
+    // The last pair's δ = 10³¹ keeps the draw on the decode's unfolded form (Q-446's
+    // `folds_decode`), so that path is checked too.
+    for (soft, delta_m) in [
+        (false, 0.0),
+        (true, 0.3),
+        (true, 0.0),
+        (false, 0.3),
+        (true, 1.0e31),
+    ] {
         for (planes, (near, far)) in [("finite", (0.25, 20.0)), ("infinite", (0.2, 0.1))] {
             let (rows, occlusion) = field_scene(soft, delta_m, near, far);
             let mode = if soft { "soft" } else { "hard" };
@@ -515,6 +524,9 @@ fn field_scene(soft: bool, delta_m: f32, near: f64, far: f64) -> ([Row; 1], Occl
     let (dw, dh) = (23u32, 17u32);
     let turn =
         DMat3::from_rotation_y(3f64.to_radians()) * DMat3::from_rotation_x(2f64.to_radians());
+    // The common 32-bit linear congruential constants (a = 1 664 525, c = 1 013 904 223,
+    // Numerical Recipes' "quick and dirty" generator, taken from general knowledge, no
+    // source consulted) and an arbitrary seed: any fixed sequence would do.
     let mut state = 0x2545_f491u32;
     let depth = (0..dw * dh)
         .map(|t| {

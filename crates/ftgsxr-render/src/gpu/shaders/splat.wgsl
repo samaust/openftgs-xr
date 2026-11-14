@@ -71,7 +71,8 @@ struct DrawView {
     // folds them), and its image W × H.
     env_k: vec4<f32>,
     env_size: vec2<f32>,
-    // The depth image's nearZ and farZ in metres (farZ < nearZ: infinite).
+    // The depth image's nearZ and farZ in metres (farZ < nearZ: infinite), unread since
+    // #790 (`env_decode` holds their decode terms).
     env_near: f32,
     env_far: f32,
     // The view's pixels to the depth camera's (Q-446, #790): columns G₀, G₁, G₂ and g of
@@ -82,7 +83,7 @@ struct DrawView {
     // vertex stage (Q-400).
     world_to_camera: mat4x4<f32>,
     // Q-340's decode terms (A, B, C) of the depth image's planes, for Z = A / (B − d·C)
-    // (`occlusion.wgsl`'s `decode_terms`, #790), and 0.
+    // (`occlusion.wgsl`'s `decode_terms`, #790, Q-445), and 0.
     env_decode: vec4<f32>,
 }
 
@@ -227,8 +228,8 @@ fn texel_weight(texel: vec2<i32>, z_f: f32) -> f32 {
 }
 
 // Q-446 (#790): `texel_weight`'s decode folded into the weight, for a draw whose decode
-// term A = `env_decode.x` is positive and finite and whose δ is finite (`occlusion` 2, the
-// CPU's check). With D = B − d·C the decode is z_e = A / D, so z_e > 0 exactly when D > 0
+// term A = `env_decode.x` is positive and finite and whose |δ| is below 10³⁰ (`occlusion`
+// 2, the CPU's check, `folds_decode`). With D = B − d·C the decode is z_e = A / D, so z_e > 0 exactly when D > 0
 // (D = +0 gives z_e = +∞, weight 1 either way), and an invalid texel weighs 1 as before.
 // Multiplying through by D > 0: the hard step z_f ≤ z_e + δ is (z_f − δ)·D ≤ A, and the
 // soft ramp t = (z_f − (z_e − δ)) / (2δ) is ((z_f + δ)·D − A) / (2δ·D), clamped by
@@ -236,15 +237,15 @@ fn texel_weight(texel: vec2<i32>, z_f: f32) -> f32 {
 // off the ramp and only a texel on it divides. The same weight up to rounding.
 // Q-446
 fn texel_weight_folded(d: f32, z_f: f32) -> f32 {
-    let dd = view.env_decode.y - d * view.env_decode.z;
-    if !(d >= 0.0 && d < 1.0 && dd > 0.0) {
+    let denom = view.env_decode.y - d * view.env_decode.z;
+    if !(d >= 0.0 && d < 1.0 && denom > 0.0) {
         return 1.0;
     }
     let a = view.env_decode.x;
     let delta = max(view.delta_m, 0.0);
     if view.soft != 0u && delta > 0.0 {
-        let num = (z_f + delta) * dd - a;
-        let den = 2.0 * delta * dd;
+        let num = (z_f + delta) * denom - a;
+        let den = 2.0 * delta * denom;
         if num <= 0.0 {
             return 1.0;
         }
@@ -254,7 +255,7 @@ fn texel_weight_folded(d: f32, z_f: f32) -> f32 {
         let t = num / den;
         return 1.0 - t * t * (3.0 - 2.0 * t);
     }
-    return select(0.0, 1.0, (z_f - delta) * dd <= a);
+    return select(0.0, 1.0, (z_f - delta) * denom <= a);
 }
 
 // E13's w_occ for the fragment at camera pixel `p` of a record at depth `z_c` (D-45).
@@ -272,8 +273,8 @@ fn environment_weight(p: vec2<f32>, z_c: f32) -> f32 {
     // (`env_projection`), so h = z_c·G·(p, 1) + g; h_z is x_d's z, since K_d's last row
     // is (0, 0, 1). The same point up to rounding.
     // Q-446
-    let m = view.env_projection;
-    let h = z_c * (m[0].xyz * p.x + m[1].xyz * p.y + m[2].xyz) + m[3].xyz;
+    let proj = view.env_projection;
+    let h = z_c * (proj[0].xyz * p.x + proj[1].xyz * p.y + proj[2].xyz) + proj[3].xyz;
     if !(h.z > 0.0) {
         return 1.0;
     }

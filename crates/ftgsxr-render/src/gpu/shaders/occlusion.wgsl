@@ -15,7 +15,9 @@ struct EnvDepth {
 // Z = f·n / (f − d·(f − n)); with an infinite far plane (farZ < nearZ, XR_META_environment_depth,
 // or farZ = +∞) Z = n / (1 − d). Both are Z = A / (B − d·C) with the plane terms
 // `decode_terms` gives, which depend on the view only: the draw takes them from its view
-// block, computed by `passes.rs`'s `env_decode` with the same float32 operations (#790).
+// block, computed by `passes.rs`'s `env_decode` with the same float32 operations (#790):
+// exact, Q-445.
+// Q-445
 fn decode_terms(near: f32, far: f32) -> vec3<f32> {
     // +∞ fails `far <= 3.4e38`, so it takes the infinite form.
     if far < near || !(far <= 3.4e38) {
