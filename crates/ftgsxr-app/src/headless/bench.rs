@@ -231,8 +231,8 @@ pub fn cmd_bench(
 /// P-4's Quest limit (Q-413), the file's `machine.headset` holding `headset` as given and
 /// the stored baseline `<NAME>.quest.json`; B-5's files are written beside `out` when it is
 /// given (Q-417). A size the device refuses, over its memory budget or a binding
-/// limit (Q-377), is a result with a null `value` and the reason in `skipped`, and no
-/// budget (Q-413). Without `headset` it is `cmd_bench`.
+/// limit (Q-377), is one result per measure with a null `value` and the reason in
+/// `skipped`, and no budget (Q-413, Q-417). Without `headset` it is `cmd_bench`.
 // Q-406, Q-413, Q-417
 pub fn cmd_bench_on(
     name: &str,
@@ -963,6 +963,14 @@ const B3_C: [usize; 6] = [100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000
 /// B-3's measured frames (Q-102).
 const B3_FRAMES: usize = 32;
 
+/// B-3's size `setup` the device refuses (Q-413, Q-417): a skipped result for each of
+/// B-3's measures, `reason` in each, and no budget.
+// Q-417
+fn b3_skip(m: &mut Measured, setup: &Json, reason: String) {
+    m.skip(setup, "sort_ms", "ms", reason.clone());
+    m.skip(setup, "keys", "keys", reason);
+}
+
 /// B-3 (§3.5, Q-102): the sort's GPU time for C keys; P-4.
 // Q-102
 fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError> {
@@ -994,14 +1002,14 @@ fn bench_b3(gpu: &Gpu, given: Option<&Given>) -> Result<Measured, HeadlessError>
             )
         });
         if let Some(Some(reason)) = refusal {
-            m.skip(&setup, "sort_ms", "ms", reason);
+            b3_skip(&mut m, &setup, reason);
             continue;
         }
         let (gpu_model, loaded) =
             match gpu.upload(model, &gpu.tier, given.map(|g| g.path.as_path())) {
                 Ok(uploaded) => uploaded,
                 Err(e) if refused(&gpu.on, &e) => {
-                    m.skip(&setup, "sort_ms", "ms", e.to_string());
+                    b3_skip(&mut m, &setup, e.to_string());
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -1616,8 +1624,8 @@ mod tests {
 
     #[test]
     fn report_json_writes_a_skipped_size_as_a_null_value_with_its_reason() {
-        // Q-413, Q-417: a size the device refuses is one result with a null value and
-        // the reason, and no budget.
+        // Q-413, Q-417: a skipped result has a null value and the reason, and a refused
+        // size no budget.
         let mut measured = Measured::default();
         let setup = Json::obj([("capacity", Json::Num(4e6))]);
         measured.skip(&setup, "sort_ms", "ms", "E-MEM-BUDGET: refused".to_owned());
@@ -1645,6 +1653,54 @@ mod tests {
             results[0].get("measure").and_then(Json::as_str),
             Some("sort_ms")
         );
+        assert!(
+            file.get("budgets")
+                .and_then(Json::as_array)
+                .expect("budgets")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn b3_skip_writes_a_skipped_result_for_each_of_b3s_measures() {
+        // Q-417: a refused size is one result per measure, `value` null with the reason
+        // in `skipped`, and no budget; Q-102: B-3's measures are `sort_ms` (ms) and
+        // `keys` (#796).
+        let setup = b3_setup(
+            Json::str("synthetic, every row persistent"),
+            4_000_000,
+            &QualityTier::quest_balanced(),
+        );
+        let reason = "the frame buffers' records exceed the binding (Q-377, Q-413)";
+        let mut measured = Measured::default();
+        b3_skip(&mut measured, &setup, reason.to_owned());
+        let file = Json::parse(&report_json(
+            "B-3",
+            "GPU A",
+            "debug",
+            &measured,
+            Json::Null,
+            Vec::new(),
+            Some("print"),
+        ))
+        .expect("well formed");
+        let results = file
+            .get("results")
+            .and_then(Json::as_array)
+            .expect("results");
+        let measures: Vec<(&str, &str)> = results
+            .iter()
+            .map(|r| {
+                assert_eq!(r.get("value"), Some(&Json::Null));
+                assert_eq!(r.get("skipped").and_then(Json::as_str), Some(reason));
+                assert_eq!(r.get("setup"), Some(&setup));
+                (
+                    r.get("measure").and_then(Json::as_str).expect("measure"),
+                    r.get("unit").and_then(Json::as_str).expect("unit"),
+                )
+            })
+            .collect();
+        assert_eq!(measures, [("sort_ms", "ms"), ("keys", "keys")]);
         assert!(
             file.get("budgets")
                 .and_then(Json::as_array)
