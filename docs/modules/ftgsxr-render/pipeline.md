@@ -114,7 +114,7 @@ E13's environment depth reaches stage 5 through `encode_draw`'s `occlusion` argu
 
 ## The two-eye headless render
 
-`HeadlessRenderer::render_stereo` renders two eyes for R-9 (Q-401). Per view, each eye is a `render` of its own. Shared-center, it builds the passes and frame buffers of the renderer's tier with `SortMode::SharedCenter` at its first such call (`half_records` then picks the 48-byte records with half-precision Σ^S), runs stages 1–4 once at the sort pose, the mean of the eyes' centers along the normalized sum of their forward axes (Q-399), with both eyes as cull views, then stage 5 into one layer per eye, and reads both layers back by one submission. `render` keeps its per-view rule (Q-109).
+`HeadlessRenderer::render_stereo` renders two eyes for R-9 (D-4, §2.1). Per view, each eye is a `render` of its own. Shared-center, it builds the passes and frame buffers of the renderer's tier with `SortMode::SharedCenter` at its first such call (`half_records` then picks the 48-byte records with half-precision Σ^S), runs stages 1–4 once at the sort pose, the mean of the eyes' centers along the normalized sum of their forward axes (Q-399), with both eyes as cull views, then stage 5 into one layer per eye, and reads both layers back by one submission. `render` keeps its per-view rule (Q-109).
 
 ## What waits on later milestones
 

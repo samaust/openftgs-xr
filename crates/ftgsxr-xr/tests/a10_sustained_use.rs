@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! §3.6 A-10, sustained use (Q-411): twenty minutes in `quest-balanced` without a thermal
-//! warning or a frame-rate drop below 72 Hz, read from A-10's record in logcat
+//! warning or a second with fewer than 71 frames presented (72 Hz less one, for a frame at a
+//! second's edge), read from A-10's record in logcat
 //! (`ftgsxr-xr`'s `display`, `docs/modules/ftgsxr-xr/display.md`).
 //!
 //! The verdict is a pure function of the record's lines, with `cpu` tests. The run is
