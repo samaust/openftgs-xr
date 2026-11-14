@@ -10,10 +10,16 @@
 //! without an input, so the weight is the ratio of the two layers' alphas. The wall's
 //! visibility clause is also checked in shared-center mode for two eyes (D-4, #721), each
 //! eye's fragments weighed at that eye's z\_c (Q-400).
+//!
+//! Q-445's exactness check (#790): the occluded layers of every R-12 scene, per view and in
+//! shared-center mode in both record layouts, against those recorded at the commit before
+//! an exact change to E13's evaluation, change no pixel by E15's rule (s = 0, s\_α = 0).
 
-use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, UVec2, occlusion_weight};
+use std::path::PathBuf;
+
+use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, RenderImage, UVec2, occlusion_weight};
 use ftgsxr_render::{ColorTransform, RenderMode, SplatDevice};
-use ftgsxr_testkit::{gpu_context, layer_messages};
+use ftgsxr_testkit::{gpu_context, layer_messages, metrics};
 
 use crate::display_support::{
     Occlusion, Row, Run, draw, model, render_occluded, render_shared_stereo, stored_depth, upload,
@@ -93,7 +99,14 @@ fn gpu_r12_a_wall_at_2_m_hides_3_m_and_keeps_1_m() {
     }
 }
 
-fn wall_at_2_m(dev: &SplatDevice, near: f64, far: f64, wall: f32, format: wgpu::TextureFormat) {
+/// The wall scene of `gpu_r12_a_wall_at_2_m_hides_3_m_and_keeps_1_m`: its rows and its
+/// depth image, the wall stored as `wall` in `format`.
+fn wall_scene(
+    near: f64,
+    far: f64,
+    wall: f32,
+    format: wgpu::TextureFormat,
+) -> ([Row; 3], Occlusion) {
     let depth = (0..W * H)
         .map(|i| if i % W < W / 2 { 1.0 } else { wall })
         .collect();
@@ -114,6 +127,11 @@ fn wall_at_2_m(dev: &SplatDevice, near: f64, far: f64, wall: f32, format: wgpu::
         row([0.6, -0.3, 3.0], 0.03, 0.9),
         row([0.2, 0.1, 1.0], 0.02, 0.9),
     ];
+    (rows, occlusion)
+}
+
+fn wall_at_2_m(dev: &SplatDevice, near: f64, far: f64, wall: f32, format: wgpu::TextureFormat) {
+    let (rows, occlusion) = wall_scene(near, far, wall, format);
     let (reference, occluded) = alphas(dev, &rows, &occlusion);
     let region = |u: u32, v: u32| match (u < W / 2, v < H / 2) {
         (true, _) => "invalid",
@@ -145,6 +163,42 @@ fn wall_at_2_m(dev: &SplatDevice, near: f64, far: f64, wall: f32, format: wgpu::
     }
 }
 
+/// The soft-weight scenes' cases: soft or hard, and the primitive at z_e + kδ.
+const SOFT_CASES: [(bool, f32); 11] = [
+    (true, -1.2),
+    (true, -1.0),
+    (true, -0.5),
+    (true, -0.25),
+    (true, 0.0),
+    (true, 0.25),
+    (true, 0.5),
+    (true, 1.0),
+    (true, 1.2),
+    (false, 0.9),
+    (false, 1.1),
+];
+
+/// The scene of `gpu_r12_the_soft_weight_across_z_e_plus_minus_delta` for one case: the
+/// primitive's depth z, its row and the depth image of the wall at 2 m (δ = 5 cm, stored
+/// with the infinite far plane).
+fn soft_scene(soft: bool, k: f32) -> (f32, [Row; 1], Occlusion) {
+    let (near, far) = (0.2, 0.1); // far < near: the infinite far plane
+    let delta = 0.05f32;
+    let wall = stored_depth(2.0, near, far);
+    let occlusion = Occlusion {
+        depth: vec![wall; (W * H) as usize],
+        size: UVec2::new(W, H),
+        format: wgpu::TextureFormat::R32Float,
+        camera: view(),
+        near: near as f32,
+        far: far as f32,
+        soft,
+        delta_m: delta,
+    };
+    let z = 2.0 + k * delta;
+    (z, [row([0.0, 0.0, z], 0.05, 0.999)], occlusion)
+}
+
 /// R-12: the soft weight across z_e ± δ (E13, δ = 5 cm, the wall at z_e = 2 m stored with
 /// the infinite far plane, farZ < nearZ): a primitive at 2 m + s, for s from −1.2δ to
 /// 1.2δ, drawn with the depth camera the view's, so every fragment's z_f is z_c = 2 + s;
@@ -156,36 +210,10 @@ fn wall_at_2_m(dev: &SplatDevice, near: f64, far: f64, wall: f32, format: wgpu::
 fn gpu_r12_the_soft_weight_across_z_e_plus_minus_delta() {
     let _layer = layer_messages(); // R-16, Q-105
     let dev = gpu_context();
-    let (near, far) = (0.2, 0.1); // far < near: the infinite far plane
-    let delta = 0.05f32;
-    let wall = stored_depth(2.0, near, far);
-    let occlusion = |soft: bool| Occlusion {
-        depth: vec![wall; (W * H) as usize],
-        size: UVec2::new(W, H),
-        format: wgpu::TextureFormat::R32Float,
-        camera: view(),
-        near: near as f32,
-        far: far as f32,
-        soft,
-        delta_m: delta,
-    };
-    let cases = [
-        (true, -1.2),
-        (true, -1.0),
-        (true, -0.5),
-        (true, -0.25),
-        (true, 0.0),
-        (true, 0.25),
-        (true, 0.5),
-        (true, 1.0),
-        (true, 1.2),
-        (false, 0.9),
-        (false, 1.1),
-    ];
-    for (soft, k) in cases {
-        let z = 2.0 + k * delta;
-        let rows = [row([0.0, 0.0, z], 0.05, 0.999)];
-        let (reference, occluded) = alphas(&dev, &rows, &occlusion(soft));
+    for (soft, k) in SOFT_CASES {
+        let (z, rows, occlusion) = soft_scene(soft, k);
+        let delta = occlusion.delta_m;
+        let (reference, occluded) = alphas(&dev, &rows, &occlusion);
         let expected = occlusion_weight(z, Some(2.0), delta, soft);
         let mut covered = 0;
         for i in 0..(W * H) as usize {
@@ -205,20 +233,9 @@ fn gpu_r12_the_soft_weight_across_z_e_plus_minus_delta() {
     }
 }
 
-/// R-12: a wall tilted 45° crossing a large primitive. The wall is the plane
-/// z = 2 + (x − x*) of the view's camera space, x* = 2 (u* − 32)/60 with u* = 21.3, so it
-/// meets the primitive's depth plane z_c = 2 at the view's column u*; the depth camera
-/// sits 3 cm right and 1 cm up of the view, turned 5° about its y axis, with an image of
-/// 384 × 288 at focal 240 (stored with nearZ 0.1 and farZ 50), and the occlusion is hard
-/// with δ = 0. Each fragment's p_f on its own ray at z_c lies behind the wall exactly when
-/// its x is below x*, so the pixels whose sample point lies more than 1 px left of u* are
-/// hidden and those more than 1 px right of it are drawn as without occlusion; a weight
-/// taken at the primitive's center (x = x*) would hide all or none of it.
-#[test]
-#[ignore = "gpu"]
-fn gpu_r12_a_45_degree_wall_gives_the_edge_of_each_fragments_own_ray() {
-    let _layer = layer_messages(); // R-16, Q-105
-    let dev = gpu_context();
+/// The scene of `gpu_r12_a_45_degree_wall_gives_the_edge_of_each_fragments_own_ray`: the
+/// edge's column u*, the large primitive's row and the tilted wall's depth image.
+fn tilted_scene() -> (f64, [Row; 1], Occlusion) {
     let u_star = 21.3f64;
     let x_star = 2.0 * (u_star - 32.0) / 60.0;
     let (near, far) = (0.1, 50.0);
@@ -258,6 +275,24 @@ fn gpu_r12_a_45_degree_wall_gives_the_edge_of_each_fragments_own_ray() {
         delta_m: 0.0,
     };
     let rows = [row([x_star as f32, 0.0, 2.0], 0.5, 0.999)];
+    (u_star, rows, occlusion)
+}
+
+/// R-12: a wall tilted 45° crossing a large primitive. The wall is the plane
+/// z = 2 + (x − x*) of the view's camera space, x* = 2 (u* − 32)/60 with u* = 21.3, so it
+/// meets the primitive's depth plane z_c = 2 at the view's column u*; the depth camera
+/// sits 3 cm right and 1 cm up of the view, turned 5° about its y axis, with an image of
+/// 384 × 288 at focal 240 (stored with nearZ 0.1 and farZ 50), and the occlusion is hard
+/// with δ = 0. Each fragment's p_f on its own ray at z_c lies behind the wall exactly when
+/// its x is below x*, so the pixels whose sample point lies more than 1 px left of u* are
+/// hidden and those more than 1 px right of it are drawn as without occlusion; a weight
+/// taken at the primitive's center (x = x*) would hide all or none of it.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r12_a_45_degree_wall_gives_the_edge_of_each_fragments_own_ray() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let (u_star, rows, occlusion) = tilted_scene();
     let (reference, occluded) = alphas(&dev, &rows, &occlusion);
     let (mut hidden, mut kept) = (0, 0);
     for i in 0..(W * H) as usize {
@@ -282,16 +317,9 @@ fn gpu_r12_a_45_degree_wall_gives_the_edge_of_each_fragments_own_ray() {
     );
 }
 
-/// R-12's visibility clause in shared-center mode (D-4, #721, Q-400): two eyes 64 mm apart
-/// share one prepare, each with a synthetic depth image of a wall at 2 m over its whole
-/// image (its own camera, nearZ 0.25, farZ 20, soft with δ = 5 cm). In both eyes the
-/// primitive at 3 m (left half of the image) is hidden and the one at 1 m (right half) is
-/// drawn exactly as the same shared-center frame without occlusion, in both record layouts.
-#[test]
-#[ignore = "gpu"]
-fn gpu_r12_shared_center_a_wall_at_2_m_hides_3_m_and_keeps_1_m_in_both_eyes() {
-    let _layer = layer_messages(); // R-16, Q-105
-    let dev = gpu_context();
+/// The scene of `gpu_r12_shared_center_a_wall_at_2_m_hides_3_m_and_keeps_1_m_in_both_eyes`:
+/// its rows, the two eyes 64 mm apart and each eye's depth image of the wall at 2 m.
+fn shared_scene() -> ([Row; 2], [Camera; 2], [Occlusion; 2]) {
     let (near, far) = (0.25, 20.0);
     let wall = stored_depth(2.0, near, far);
     let eyes =
@@ -311,6 +339,20 @@ fn gpu_r12_shared_center_a_wall_at_2_m_hides_3_m_and_keeps_1_m_in_both_eyes() {
         row([-1.0, -0.2, 3.0], 0.05, 0.9),
         row([0.4, 0.1, 1.0], 0.02, 0.9),
     ];
+    (rows, eyes, occlusion)
+}
+
+/// R-12's visibility clause in shared-center mode (D-4, #721, Q-400): two eyes 64 mm apart
+/// share one prepare, each with a synthetic depth image of a wall at 2 m over its whole
+/// image (its own camera, nearZ 0.25, farZ 20, soft with δ = 5 cm). In both eyes the
+/// primitive at 3 m (left half of the image) is hidden and the one at 1 m (right half) is
+/// drawn exactly as the same shared-center frame without occlusion, in both record layouts.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r12_shared_center_a_wall_at_2_m_hides_3_m_and_keeps_1_m_in_both_eyes() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let (rows, eyes, occlusion) = shared_scene();
     let m = upload(&dev, &model(&rows));
     let draws = [draw(&m, 0.95, RenderMode::Splats, ColorTransform::IDENTITY)];
     for half_records in [false, true] {
@@ -345,5 +387,189 @@ fn gpu_r12_shared_center_a_wall_at_2_m_hides_3_m_and_keeps_1_m_in_both_eyes() {
                 "eye {k}: both primitives drawn without occlusion ({behind}, {front})"
             );
         }
+    }
+}
+
+/// Q-445: the recorded occluded layers of R-12's scenes (`exact_layers`), sparse: per
+/// layer its id, then each pixel that is not (0, 0, 0, 0) as its index and its four f32.
+fn recorded_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r12_exact.bin")
+}
+
+/// Q-445: set to record `exact_layers` into `recorded_path()` instead of comparing, at the
+/// commit before a change to E13's evaluation.
+const RECORD_VAR: &str = "FTGSXR_RECORD_R12_EXACT";
+
+/// The occluded layers of R-12's scenes (Q-445), by id: per view, the wall at 2 m in both
+/// formats, each soft-weight case and the 45° wall; in shared-center mode in both record
+/// layouts, each of those scenes with both eyes the view (the first eye's layer) and the
+/// shared-center wall scene (both eyes' layers).
+fn exact_layers(dev: &SplatDevice) -> Vec<(String, Vec<[f32; 4]>)> {
+    let (near, far) = (0.25, 20.0);
+    let wall = stored_depth(2.0, near, far);
+    let mut scenes: Vec<(String, Vec<Row>, Occlusion)> = Vec::new();
+    for (name, format) in [
+        ("r32float", wgpu::TextureFormat::R32Float),
+        ("depth16", wgpu::TextureFormat::Depth16Unorm),
+    ] {
+        let (rows, occlusion) = wall_scene(near, far, wall, format);
+        scenes.push((format!("wall-{name}"), rows.to_vec(), occlusion));
+    }
+    for (soft, k) in SOFT_CASES {
+        let (_, rows, occlusion) = soft_scene(soft, k);
+        let mode = if soft { "soft" } else { "hard" };
+        scenes.push((format!("{mode}-{k:+.2}"), rows.to_vec(), occlusion));
+    }
+    let (_, rows, occlusion) = tilted_scene();
+    scenes.push(("tilted".to_owned(), rows.to_vec(), occlusion));
+
+    let mut out = Vec::new();
+    for (id, rows, occlusion) in &scenes {
+        let m = upload(dev, &model(rows));
+        let draws = [draw(&m, 0.95, RenderMode::Splats, ColorTransform::IDENTITY)];
+        let frame = render_occluded(dev, &draws, &view(), &RUN, Some(occlusion));
+        out.push((format!("per-view/{id}"), frame.layer));
+        for half_records in [false, true] {
+            let [left, _] = render_shared_stereo(
+                dev,
+                &draws,
+                &[view(), view()],
+                &RUN,
+                [Some(occlusion), Some(occlusion)],
+                half_records,
+            )
+            .0;
+            out.push((format!("{}/{id}", layout(half_records)), left.layer));
+        }
+    }
+    let (rows, eyes, occlusion) = shared_scene();
+    let m = upload(dev, &model(&rows));
+    let draws = [draw(&m, 0.95, RenderMode::Splats, ColorTransform::IDENTITY)];
+    for half_records in [false, true] {
+        let frames = render_shared_stereo(
+            dev,
+            &draws,
+            &eyes,
+            &RUN,
+            [Some(&occlusion[0]), Some(&occlusion[1])],
+            half_records,
+        )
+        .0;
+        for (k, f) in frames.into_iter().enumerate() {
+            out.push((
+                format!("{}/shared-wall-eye{k}", layout(half_records)),
+                f.layer,
+            ));
+        }
+    }
+    out
+}
+
+/// The shared-center record layout's name in an id.
+fn layout(half_records: bool) -> &'static str {
+    if half_records {
+        "shared-half"
+    } else {
+        "shared-full"
+    }
+}
+
+/// The sparse encoding of `recorded_path()`.
+fn encode(layers: &[(String, Vec<[f32; 4]>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(layers.len() as u32).to_le_bytes());
+    for (id, layer) in layers {
+        out.extend_from_slice(&(id.len() as u32).to_le_bytes());
+        out.extend_from_slice(id.as_bytes());
+        out.extend_from_slice(&(layer.len() as u32).to_le_bytes());
+        let set: Vec<(usize, &[f32; 4])> = layer
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.iter().any(|v| v.to_bits() != 0))
+            .collect();
+        out.extend_from_slice(&(set.len() as u32).to_le_bytes());
+        for (i, p) in set {
+            out.extend_from_slice(&(i as u32).to_le_bytes());
+            for v in p {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+    out
+}
+
+fn decode(bytes: &[u8]) -> Vec<(String, Vec<[f32; 4]>)> {
+    let mut at = 0;
+    let take = |at: &mut usize, n: usize| {
+        let slice = &bytes[*at..*at + n];
+        *at += n;
+        slice
+    };
+    let word = |at: &mut usize| u32::from_le_bytes(take(at, 4).try_into().expect("four bytes"));
+    let n = word(&mut at);
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let len = word(&mut at) as usize;
+        let id = String::from_utf8(take(&mut at, len).to_vec()).expect("a UTF-8 id");
+        let pixels = word(&mut at) as usize;
+        let mut layer = vec![[0.0f32; 4]; pixels];
+        for _ in 0..word(&mut at) {
+            let i = word(&mut at) as usize;
+            for c in 0..4 {
+                layer[i][c] = f32::from_bits(word(&mut at));
+            }
+        }
+        out.push((id, layer));
+    }
+    assert_eq!(at, bytes.len(), "the recorded file ends after its layers");
+    out
+}
+
+/// A W × H layer as E15's image: its (C, A) as the RGB and the alpha.
+fn image(layer: &[[f32; 4]]) -> RenderImage {
+    RenderImage {
+        width: W,
+        height: H,
+        rgb: layer.iter().flat_map(|p| [p[0], p[1], p[2]]).collect(),
+        alpha: layer.iter().map(|p| p[3]).collect(),
+    }
+}
+
+/// Q-445 (#790): an exact change to E13's evaluation changes no pixel. The occluded layers
+/// of R-12's scenes (`exact_layers`: per view, and shared-center in both record layouts,
+/// with the soft edge across z_e ± δ among them) against those recorded at the commit
+/// before the change: s = 0 and s_α = 0 by E15's rule (D-46). With `FTGSXR_RECORD_R12_EXACT`
+/// set it records them instead.
+#[test]
+#[ignore = "gpu"]
+fn gpu_r12_exact_e13_changes_no_pixel_of_the_recorded_layers() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let dev = gpu_context();
+    let layers = exact_layers(&dev);
+    if std::env::var_os(RECORD_VAR).is_some_and(|v| !v.is_empty()) {
+        std::fs::write(recorded_path(), encode(&layers)).expect("the recorded layers written");
+        return;
+    }
+    let bytes = std::fs::read(recorded_path()).expect("the recorded layers (Q-445)");
+    let recorded = decode(&bytes);
+    let ids =
+        |l: &[(String, Vec<[f32; 4]>)]| l.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&layers), ids(&recorded), "the same scenes");
+    let drawn = layers
+        .iter()
+        .filter(|(_, l)| l.iter().any(|p| p[3] > 0.0))
+        .count();
+    assert!(
+        drawn * 2 > layers.len(),
+        "most occluded layers draw something"
+    );
+    for ((id, now), (_, then)) in layers.iter().zip(&recorded) {
+        let m = metrics(&image(then), &image(now));
+        assert!(
+            m.share == 0.0 && m.alpha == 0.0,
+            "{id}: s = {}, s_α = {} against the recorded layer",
+            m.share,
+            m.alpha
+        );
     }
 }
