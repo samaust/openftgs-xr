@@ -493,7 +493,7 @@ The stereo mode in which the cull and the sort run once at the midpoint of the e
 _Avoid_: single-pass stereo, shared sort, mono sort
 
 **Per-view mode**:
-The stereo mode in which every pipeline stage runs for each view with that view's camera; exact, and the only mode of the desktop and of headless renders. §1.4 Stereo, D-4
+The stereo mode in which every pipeline stage runs for each view with that view's camera; exact. It is the only mode of the desktop and of a headless `render`; the two-eye headless render takes either mode (R-9). §1.4 Stereo, D-4
 _Avoid_: per-eye mode, multi-pass stereo
 
 **Sort pose**:
