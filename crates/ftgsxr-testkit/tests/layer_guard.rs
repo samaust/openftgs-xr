@@ -20,7 +20,7 @@ const EXEMPT: &[&str] = &[
     "ftgsxr-desktop/tests/cli.rs:gpu_b4_bench_writes_the_cull_with_and_without_the_index",
     "ftgsxr-desktop/tests/cli.rs:gpu_b9_bench_writes_the_desktops_startup_figures",
     "ftgsxr-desktop/tests/play_exit.rs:gpu_play_interrupted_in_its_first_frames_exits_by_its_code",
-    "ftgsxr-desktop/tests/window_resize.rs:gpu_window_resized_seconds_apart_leaves_no_validation_message",
+    "ftgsxr-desktop/tests/window_resize.rs:gpu_window_resized_a_second_or_more_apart_leaves_no_validation_message",
     "ftgsxr-desktop/tests/window_resize.rs:gpu_window_resized_in_a_burst_settles_with_no_message_but_the_resize_race",
 ];
 

@@ -359,12 +359,12 @@ fn summary(text: &str) -> &str {
 /// each resize settles at the size asked for.
 #[test]
 #[ignore = "gpu"]
-fn gpu_window_resized_seconds_apart_leaves_no_validation_message() {
+fn gpu_window_resized_a_second_or_more_apart_leaves_no_validation_message() {
     if std::env::var_os(CHILD).is_some() {
         return resized_app(SECONDS_APART);
     }
     let (status, text, (active, messages)) =
-        run_child("gpu_window_resized_seconds_apart_leaves_no_validation_message");
+        run_child("gpu_window_resized_a_second_or_more_apart_leaves_no_validation_message");
     let failed = failures(status, &text, active, &messages);
     assert!(failed.is_empty(), "{failed}");
     eprintln!("{}", summary(&text));
