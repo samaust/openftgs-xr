@@ -401,7 +401,8 @@ fn recorded_path() -> PathBuf {
 const RECORD_VAR: &str = "FTGSXR_RECORD_R12_EXACT";
 
 /// The occluded layers of R-12's scenes (Q-445), by id: per view, the wall at 2 m in both
-/// formats, each soft-weight case and the 45° wall; in shared-center mode in both record
+/// formats, each soft-weight case, the 45° wall, and two scenes where the 2 × 2 blend sets
+/// the weight over many pixels (`step_scene`, `field_scene`), hard and soft; in shared-center mode in both record
 /// layouts, each of those scenes with both eyes the view (the first eye's layer) and the
 /// shared-center wall scene (both eyes' layers).
 fn exact_layers(dev: &SplatDevice) -> Vec<(String, Vec<[f32; 4]>)> {
@@ -422,6 +423,14 @@ fn exact_layers(dev: &SplatDevice) -> Vec<(String, Vec<[f32; 4]>)> {
     }
     let (_, rows, occlusion) = tilted_scene();
     scenes.push(("tilted".to_owned(), rows.to_vec(), occlusion));
+    for (soft, delta_m) in [(false, 0.0), (true, 0.05)] {
+        let (rows, occlusion) = step_scene(soft, delta_m);
+        scenes.push((format!("step-{delta_m:.2}"), rows.to_vec(), occlusion));
+    }
+    for (soft, delta_m) in [(false, 0.0), (true, 0.3)] {
+        let (rows, occlusion) = field_scene(soft, delta_m);
+        scenes.push((format!("field-{delta_m:.2}"), rows.to_vec(), occlusion));
+    }
 
     let mut out = Vec::new();
     for (id, rows, occlusion) in &scenes {
@@ -463,6 +472,64 @@ fn exact_layers(dev: &SplatDevice) -> Vec<(String, Vec<[f32; 4]>)> {
         }
     }
     out
+}
+
+/// Q-445: `occlusion_edges`' step (one depth texel spans 4 × 4 view pixels, texel columns
+/// 0–7 at 1 m and 8–15 at 3 m, a large primitive at 2 m), where the 2 × 2 blend's x
+/// fraction sets the weight across the edge.
+fn step_scene(soft: bool, delta_m: f32) -> ([Row; 1], Occlusion) {
+    let (near, far) = (0.25, 20.0);
+    let (dw, dh) = (16u32, 12u32);
+    let (occluder, surface) = (stored_depth(1.0, near, far), stored_depth(3.0, near, far));
+    let occlusion = Occlusion {
+        depth: (0..dw * dh)
+            .map(|t| if t % dw < 8 { occluder } else { surface })
+            .collect(),
+        size: UVec2::new(dw, dh),
+        format: wgpu::TextureFormat::R32Float,
+        camera: camera(dw, dh, 15.0, DMat3::IDENTITY, DVec3::ZERO),
+        near: near as f32,
+        far: far as f32,
+        soft,
+        delta_m,
+    };
+    ([row([0.0, 0.0, 2.0], 0.5, 0.999)], occlusion)
+}
+
+/// Q-445: a depth field that varies in both directions, so that the projection q, the
+/// texels and both of the 2 × 2 blend's fractions set the weight over most of the image:
+/// a 23 × 17 image at focal 21 (about 3 view pixels per texel), the depth camera 2 cm
+/// right and 1 cm down of the view and turned 3° about y and 2° about x, each texel a
+/// pseudo-random depth in [1.6 m, 2.4 m] (a fixed linear congruential sequence) around a
+/// large primitive at 2 m, every 7th texel invalid (d = 1).
+fn field_scene(soft: bool, delta_m: f32) -> ([Row; 1], Occlusion) {
+    let (near, far) = (0.25, 20.0);
+    let (dw, dh) = (23u32, 17u32);
+    let turn =
+        DMat3::from_rotation_y(3f64.to_radians()) * DMat3::from_rotation_x(2f64.to_radians());
+    let mut state = 0x2545_f491u32;
+    let depth = (0..dw * dh)
+        .map(|t| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if t % 7 == 3 {
+                1.0
+            } else {
+                let u = f64::from(state >> 8) / f64::from(1u32 << 24);
+                stored_depth(1.6 + 0.8 * u, near, far)
+            }
+        })
+        .collect();
+    let occlusion = Occlusion {
+        depth,
+        size: UVec2::new(dw, dh),
+        format: wgpu::TextureFormat::R32Float,
+        camera: camera(dw, dh, 21.0, turn, DVec3::new(0.02, 0.01, 0.0)),
+        near: near as f32,
+        far: far as f32,
+        soft,
+        delta_m,
+    };
+    ([row([0.0, 0.0, 2.0], 0.5, 0.999)], occlusion)
 }
 
 /// The shared-center record layout's name in an id.
