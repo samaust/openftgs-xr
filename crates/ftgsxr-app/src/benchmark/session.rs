@@ -584,20 +584,10 @@ fn skip_setup(world: &mut World, reason: String) {
 
 /// Restores the settings the run changed, then waits for their save (Q-432).
 fn restore(world: &mut World, result: Result<(), String>) {
-    let (saved, instance) = {
-        let r = world.resource::<Run>();
-        (r.saved.clone(), r.instance)
-    };
+    let saved = world.resource::<Run>().saved.clone();
     if let Some(mut settings) = world.get_resource_mut::<SettingsRes>() {
         settings.0.environment = saved.environment;
         settings.0.xr.refresh_rate = saved.xr.refresh_rate;
-    }
-    // Q-432: auto local's band instance goes with the setup.
-    if let Some(mut l) = world.get_resource_mut::<Lighting>()
-        && instance.is_some()
-        && l.per_instance == instance
-    {
-        l.per_instance = None;
     }
     world.resource_mut::<Run>().phase = Phase::Restore(Instant::now(), result);
 }
@@ -615,7 +605,8 @@ fn step_run(world: &mut World) {
             .get(r.step)
             .copied()
             .unwrap_or((Pose::IDENTITY, 0.0));
-        // Past the last setup once the run restores.
+        // Past the last setup once the run restores; `hold_lighting` then releases
+        // auto local's band instance (Q-432).
         let auto_local = r
             .setups
             .get(r.index)
@@ -980,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn the_held_instances_transform_follows_lighting_transform() {
+    fn hold_lighting_writes_lighting_transform_on_the_held_instance() {
         // Q-432: "each frame the run writes the held instance's SplatTransform as
         // Lighting.transform (the identity while lighting is off)".
         let (mut app, e) = b8_at(1, Settings::default());
@@ -998,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lighting_setup_sets_lighting_manual_to_one_ev() {
+    fn lighting_manual_is_one_ev_in_a_lighting_setup() {
         // Q-432: "a setup that names a lighting mode sets [environment] lighting_manual to
         // exposure 1 EV, temperature 0 and tint 0 (gain 2 per channel in manual)".
         let mut saved = Settings::default();
@@ -1065,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_local_holds_per_instance_on_the_held_instance() {
+    fn hold_lighting_keeps_per_instance_on_the_held_instance_in_auto_local() {
         // Q-432: "in auto-local the run also keeps Lighting.per_instance on the held
         // instance where ftgsxr_xr::light reads it (held as the governor's flag is, since
         // the composer returns a target without LoadedModel to None) and returns it to
@@ -1105,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lighting_setup_is_reached_with_a_transform_other_than_the_identity() {
+    fn reached_needs_a_transform_other_than_the_identity_in_a_lighting_setup() {
         // Q-432's Reached: "any lighting mode a Lighting.transform that is not the
         // identity"; lighting off needs none.
         let (mut app, _) = b8_at(2, Settings::default());
