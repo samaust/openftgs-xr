@@ -77,6 +77,9 @@ struct DrawView {
     // The view's world-to-camera transform [R_w t_w; 0 1] (E6), read by the shared-center
     // vertex stage (Q-400).
     world_to_camera: mat4x4<f32>,
+    // Q-340's decode terms (A, B, C) of the depth image's planes, for Z = A / (B − d·C)
+    // (`occlusion.wgsl`'s `decode_terms`, #790), and 0.
+    env_decode: vec4<f32>,
 }
 
 @group(0) @binding(0) var<storage, read> records: array<u32>;
@@ -212,7 +215,7 @@ fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) 
 // (Q-340), weighed at the depth camera's z of p_f; an invalid texel weighs 1.
 fn texel_weight(texel: vec2<i32>, z_f: f32) -> f32 {
     let d = textureLoad(env_depth, texel, 0).x;
-    let e = depth_metres(d, view.env_near, view.env_far);
+    let e = depth_metres_terms(d, view.env_decode.xyz);
     return occlusion_weight(z_f, e.metres, e.valid, view.delta_m, view.soft != 0u);
 }
 

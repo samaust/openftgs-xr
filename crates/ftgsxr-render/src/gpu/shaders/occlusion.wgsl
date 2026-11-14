@@ -13,21 +13,32 @@ struct EnvDepth {
 // Q-340: the stored depth d as an OpenXR projection writes it (XR_KHR_composition_layer_depth's
 // transform with minDepth 0 and maxDepth 1, zero at near and one at far), inverted:
 // Z = f·n / (f − d·(f − n)); with an infinite far plane (farZ < nearZ, XR_META_environment_depth,
-// or farZ = +∞) Z = n / (1 − d). A sample is valid when 0 ≤ d < 1: NaN fails the test, and
-// d = 1 is the far plane, no surface in range.
-fn depth_metres(d: f32, near: f32, far: f32) -> EnvDepth {
-    var out: EnvDepth;
-    out.valid = d >= 0.0 && d < 1.0;
+// or farZ = +∞) Z = n / (1 − d). Both are Z = A / (B − d·C) with the plane terms
+// `decode_terms` gives, which depend on the view only: the draw takes them from its view
+// block, computed by `passes.rs`'s `env_decode` with the same float32 operations (#790).
+fn decode_terms(near: f32, far: f32) -> vec3<f32> {
     // +∞ fails `far <= 3.4e38`, so it takes the infinite form.
     if far < near || !(far <= 3.4e38) {
-        out.metres = near / (1.0 - d);
-    } else {
-        out.metres = far * near / (far - d * (far - near));
+        return vec3<f32>(near, 1.0, 1.0);
     }
+    return vec3<f32>(far * near, far, far - near);
+}
+
+// One stored depth decoded with `decode_terms`' (A, B, C). A sample is valid when
+// 0 ≤ d < 1: NaN fails the test, and d = 1 is the far plane, no surface in range.
+fn depth_metres_terms(d: f32, k: vec3<f32>) -> EnvDepth {
+    var out: EnvDepth;
+    out.valid = d >= 0.0 && d < 1.0;
+    out.metres = k.x / (k.y - d * k.z);
     if !(out.metres > 0.0) {
         out.valid = false;
     }
     return out;
+}
+
+// `depth_metres_terms` with the planes' terms worked out here.
+fn depth_metres(d: f32, near: f32, far: f32) -> EnvDepth {
+    return depth_metres_terms(d, decode_terms(near, far));
 }
 
 // E13's weight (`ftgsxr_core::occlusion_weight`, Q-63): hard, 1 up to z_e + δ; soft,

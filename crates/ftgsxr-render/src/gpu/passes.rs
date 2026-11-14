@@ -49,9 +49,11 @@ const RESOLVE_BYTES: usize = 16;
 /// The byte offset of the centers draw's indirect arguments (`frame.rs`'s counters).
 const CENTERS_INDIRECT_OFFSET: u64 = 16;
 /// The draw's view block (`splat.wgsl`'s `DrawView`).
-const DRAW_VIEW_BYTES: usize = 208;
+const DRAW_VIEW_BYTES: usize = 224;
 /// Where the view block's world-to-camera transform starts (Q-400).
 const DRAW_VIEW_WORLD_TO_CAMERA: usize = 144;
+/// The byte offset of `DrawView.env_decode`, Q-340's decode terms (#790).
+const DRAW_VIEW_ENV_DECODE: usize = 208;
 /// The engine's near plane for the other geometry (§1.7: 0.01 m), which the splats' reverse-Z
 /// depth test maps their depth with. // Q-87
 pub(crate) const ENGINE_NEAR: f32 = 0.01;
@@ -1206,7 +1208,8 @@ struct EnvParams {
 /// size, the engine's near plane when depth-tested (else 0), E13's switches, the view's
 /// intrinsics, with `occlusion` the depth camera's intrinsics, the depth image's W × H and
 /// planes, and the view's camera space to the depth camera's, composed in float64, then
-/// the view's world-to-camera transform in float32 (Q-400).
+/// the view's world-to-camera transform in float32 (Q-400), then with `occlusion` the
+/// planes' decode terms (`env_decode`, #790).
 fn draw_view_uniform(
     view: &ViewParams,
     depth_test: bool,
@@ -1240,7 +1243,7 @@ fn draw_view_uniform(
     }
     b.vec3(t);
     b.f32(1.0);
-    debug_assert_eq!(b.at, DRAW_VIEW_BYTES);
+    debug_assert_eq!(b.at, DRAW_VIEW_ENV_DECODE);
     let Some(o) = occlusion else {
         return out;
     };
@@ -1259,7 +1262,24 @@ fn draw_view_uniform(
         b.f32(v as f32);
     }
     debug_assert_eq!(b.at, DRAW_VIEW_WORLD_TO_CAMERA);
+    b.at = DRAW_VIEW_ENV_DECODE;
+    for v in env_decode(o.near, o.far) {
+        b.f32(v);
+    }
     out
+}
+
+/// Q-340's decode terms (A, B, C) of the depth image's planes, Z = A / (B − d·C): f·n, f
+/// and f − n, or n, 1 and 1 with the infinite far plane (f < n, or f not finite), in float32
+/// as `occlusion.wgsl`'s `decode_terms` computes them, so the draw's decode is the same
+/// operations with its view-only terms hoisted (#790).
+fn env_decode(near: f32, far: f32) -> [f32; 3] {
+    // +∞ (and NaN) fail `far <= 3.4e38`, so they take the infinite form.
+    if far < near || !(far <= 3.4e38) {
+        [near, 1.0, 1.0]
+    } else {
+        [far * near, far, far - near]
+    }
 }
 
 fn buffer_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -1674,6 +1694,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         // are 0.
         assert!(b[20..32].iter().all(|&x| x == 0));
         assert!(b[48..DRAW_VIEW_WORLD_TO_CAMERA].iter().all(|&x| x == 0));
+        assert!(b[DRAW_VIEW_ENV_DECODE..].iter().all(|&x| x == 0));
         assert_eq!(f(&draw_view_uniform(&view, false, None), 16), 0.0);
     }
 
@@ -1756,6 +1777,27 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
         // Column-major: the identity's columns, then the translation (0.5, 0, −1, 1).
         assert_eq!([f(80), f(100), f(120), f(140)], [1.0, 1.0, 1.0, 1.0]);
         assert_eq!([f(128), f(132), f(136)], [0.5, 0.0, -1.0]);
+        // Q-340's decode terms of the infinite far plane (far < near): n, 1, 1.
+        assert_eq!([f(208), f(212), f(216), f(220)], [0.1, 1.0, 1.0, 0.0]);
+    }
+
+    // #790: the decode's plane terms in float32, as `decode_terms` works them out: f·n, f
+    // and f − n for a finite far plane, n, 1 and 1 for an infinite one (f < n, f = +∞, or
+    // a NaN, which fails `far <= 3.4e38` as in the shader).
+    #[test]
+    fn env_decode_gives_the_planes_terms() {
+        assert_eq!(env_decode(0.25, 10.0), [0.25 * 10.0, 10.0, 10.0 - 0.25]);
+        assert_eq!(
+            env_decode(0.3, 7.0),
+            [7.0f32 * 0.3f32, 7.0, 7.0f32 - 0.3f32]
+        );
+        assert_eq!(env_decode(0.25, 0.1), [0.25, 1.0, 1.0]);
+        assert_eq!(env_decode(0.25, f32::INFINITY), [0.25, 1.0, 1.0]);
+        assert_eq!(env_decode(0.25, f32::NAN), [0.25, 1.0, 1.0]);
+        assert_eq!(
+            env_decode(0.25, 3.4e38),
+            [3.4e38f32 * 0.25, 3.4e38, 3.4e38 - 0.25]
+        );
     }
 
     #[test]
