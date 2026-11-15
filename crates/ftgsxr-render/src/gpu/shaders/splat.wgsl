@@ -119,6 +119,20 @@ fn strip_corner(vid: u32) -> vec2<f32> {
     return vec2<f32>(f32(vid & 1u) * 2.0 - 1.0, f32((vid >> 1u) & 1u) * 2.0 - 1.0);
 }
 
+// Q-450's constants: the relative pad and margin (2⁻¹² of a length), the margin's absolute
+// part (2⁻⁷ target pixel, twice the vertices' 1/256-pixel snapping), the pad's (¼ target
+// pixel) and the bound on the conic's condition, T² ≤ 2⁹·D.
+const QUAD_RELATIVE: f32 = 0.000244140625;
+const QUAD_MARGIN_PX: f32 = 0.0078125;
+const QUAD_PAD_PX: f32 = 0.25;
+const QUAD_CONDITION: f32 = 512.0;
+
+// The ellipse {d : dᵀ C d ≤ e₀²}'s half-width along the unit vector `w`, e₀√(wᵀ C⁻¹ w),
+// with C⁻¹ = Σ′ as (s₀₀, s₀₁, s₁₁).
+fn half_width(e0: f32, s: vec3<f32>, w: vec2<f32>) -> f32 {
+    return e0 * sqrt(w.x * w.x * s.x + 2.0 * w.x * w.y * s.y + w.y * w.y * s.z);
+}
+
 // The quad's corner of vertex `vid` in the camera's pixels (§1.4 stage 5, revision 61):
 // the rectangle along Σ′'s eigenvectors bounding the ellipse the fragment stage keeps,
 // padded, where that ellipse lies inside the box μ′ ± r, else the box (Q-450). Both cover
@@ -151,20 +165,20 @@ fn quad_pixel(
     // The ellipse's half-extents on the image axes, and the margin m that keeps a pixel
     // centre the snapped box edge decides out of it.
     let extent = e0 * sqrt(s.xz);
-    let margin = 0.0078125 * scale + 0.000244140625 * radii;
+    let margin = QUAD_MARGIN_PX * scale + QUAD_RELATIVE * radii;
     // The axes: C's eigenvectors (θ = 0 for an axis-aligned conic, where atan2(0, 0) is
     // unspecified), and the half-lengths e₀√(wᵀ C⁻¹ w) + pad, exact for any unit w, so an
     // error in θ only loosens the rectangle.
     let theta = select(0.5 * atan2(2.0 * b, a - c), 0.0, b == 0.0);
     let u = vec2<f32>(cos(theta), sin(theta));
     let v = vec2<f32>(-u.y, u.x);
-    let pad = 0.25 * max(scale.x, scale.y);
-    let wu = e0 * sqrt(u.x * u.x * s.x + 2.0 * u.x * u.y * s.y + u.y * u.y * s.z);
-    let wv = e0 * sqrt(v.x * v.x * s.x + 2.0 * v.x * v.y * s.y + v.y * v.y * s.z);
-    let hu = wu + pad + 0.000244140625 * wu;
-    let hv = wv + pad + 0.000244140625 * wv;
+    let pad = QUAD_PAD_PX * max(scale.x, scale.y);
+    let wu = half_width(e0, s, u);
+    let wv = half_width(e0, s, v);
+    let hu = wu + pad + QUAD_RELATIVE * wu;
+    let hv = wv + pad + QUAD_RELATIVE * wv;
     // Each test is false on NaN, so a non-finite value falls back to the box.
-    let conditioned = det > 0.0 && trace * trace <= 512.0 * det;
+    let conditioned = det > 0.0 && trace * trace <= QUAD_CONDITION * det;
     let inside = all(extent + abs(delta) + margin <= radii);
     let smaller = hu * hv < radii.x * radii.y;
     let finite_all = finite(hu) && finite(hv) && finite(extent.x) && finite(extent.y);

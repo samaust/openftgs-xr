@@ -240,11 +240,11 @@ fn gpu_q451_tightened_quads_run_fewer_fragments_than_the_boxes_hold() {
         }
         let messages = dev.take_validation_messages();
         assert!(messages.is_empty(), "validation messages: {messages:?}");
+        assert!(boxes > 0, "{name}: the turned pairs see the model");
         let share = counted as f64 / boxes as f64;
         eprintln!(
             "{name}: {counted} fragment invocations against {boxes} box pixel centres ({share:.3})"
         );
-        assert!(boxes > 0, "{name}: the turned pairs see the model");
         assert!(
             share <= MAX_SHARE,
             "{name}: {counted} fragment invocations against {boxes} box pixel centres \
