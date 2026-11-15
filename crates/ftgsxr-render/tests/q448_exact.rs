@@ -84,6 +84,9 @@ pub(crate) fn turned_eyes(camera: &Camera) -> [Camera; 2] {
     })
 }
 
+/// A variant's id suffix and its change to the model's conventions.
+type Variant = (&'static str, fn(&mut RenderConventions));
+
 /// R2_random's turned pairs with the model's conventions as given, then at
 /// `pixel_center_offset` 0, which shifts every kept ellipse by half a pixel, at
 /// `alpha_skip` 10⁻⁴, where E6's cap binds from σ_eff ≈ 0.026, and at `screen_extent_max`
@@ -91,7 +94,7 @@ pub(crate) fn turned_eyes(camera: &Camera) -> [Camera; 2] {
 /// the default cap of 3.33 they lie at α ≤ σ_eff·e^(−5.5), within E15's 1/255): the
 /// tightened quad's shifted rectangle and its fallback to μ′ ± r (Q-450, #820), recorded
 /// before that change (Q-445's rule).
-const TURNED_VARIANTS: [(&str, fn(&mut RenderConventions)); 4] = [
+const TURNED_VARIANTS: [Variant; 4] = [
     ("", |_| {}),
     ("-offset0", |c| c.pixel_center_offset = 0.0),
     ("-skip1e-4", |c| c.alpha_skip = 1e-4),
