@@ -16,10 +16,14 @@
 //! eye 64 mm to its right. P1–P10 hold isotropic primitives and most of their cameras are
 //! axis-aligned, so R2\_random's anisotropic rows under a turned view are what a wrong
 //! regrouping of E6's Σ′ (Q-449) would change; its eye pairs put rows in one eye only.
+//! The same turned pairs at `pixel_center_offset` 0 and at `alpha_skip` 10⁻⁴ carry the
+//! tightened quad's shifted rectangle and its fallback to μ′ ± r (Q-450, #820).
 
 use std::path::PathBuf;
 
-use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, Pose, RenderImage, RenderRequest, read_request};
+use ftgsxr_core::{
+    Camera, DMat3, DMat4, DVec3, Pose, RenderConventions, RenderImage, RenderRequest, read_request,
+};
 use ftgsxr_render::{HeadlessRenderer, QualityTier, SortMode};
 use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe};
 
@@ -78,6 +82,17 @@ fn turned_eyes(camera: &Camera) -> [Camera; 2] {
         world_to_camera,
     })
 }
+
+/// R2_random's turned pairs with the model's conventions as given, then at
+/// `pixel_center_offset` 0, which shifts every kept ellipse by half a pixel, and at
+/// `alpha_skip` 10⁻⁴, where E6's cap binds from σ_eff ≈ 0.026: the tightened quad's
+/// shifted rectangle and its fallback to μ′ ± r (Q-450, #820), recorded before that
+/// change (Q-445's rule).
+const TURNED_VARIANTS: [(&str, fn(&mut RenderConventions)); 3] = [
+    ("", |_| {}),
+    ("-offset0", |c| c.pixel_center_offset = 0.0),
+    ("-skip1e-4", |c| c.alpha_skip = 1e-4),
+];
 
 /// The conformance tier, with the shared-center records' Σ^S in half precision or not
 /// (§1.12 `half_records`; the per-view render ignores the flag, Q-109).
@@ -159,24 +174,30 @@ fn exact_layers() -> Vec<(String, RenderImage)> {
                 }
             }
         }
-        let (model, request) = probe("R2_random");
-        let mut renderer = HeadlessRenderer::new(tier(half_records)).expect("an adapter");
-        let id = renderer
-            .load(&model, request.sh_degree)
-            .expect("the model loads");
-        let instances = [(id, Pose::IDENTITY)];
-        for item in &request.items {
-            let eyes = turned_eyes(&item.camera);
-            let mut modes = vec![(shared, SortMode::SharedCenter)];
-            if !half_records {
-                modes.push(("per-view", SortMode::PerView));
-            }
-            for (mode, sort) in modes {
-                let layers = renderer
-                    .render_stereo(&instances, &eyes, item.timestamp, request.background, sort)
-                    .unwrap_or_else(|e| panic!("R2_random {}: {e}", item.id));
-                for (eye, layer) in ["L", "R"].into_iter().zip(layers) {
-                    out.push((format!("{mode}/R2_random-turned/{}{eye}", item.id), layer));
+        for (variant, conventions) in TURNED_VARIANTS {
+            let (mut model, request) = probe("R2_random");
+            conventions(&mut model.conventions);
+            let mut renderer = HeadlessRenderer::new(tier(half_records)).expect("an adapter");
+            let id = renderer
+                .load(&model, request.sh_degree)
+                .expect("the model loads");
+            let instances = [(id, Pose::IDENTITY)];
+            for item in &request.items {
+                let eyes = turned_eyes(&item.camera);
+                let mut modes = vec![(shared, SortMode::SharedCenter)];
+                if !half_records {
+                    modes.push(("per-view", SortMode::PerView));
+                }
+                for (mode, sort) in modes {
+                    let layers = renderer
+                        .render_stereo(&instances, &eyes, item.timestamp, request.background, sort)
+                        .unwrap_or_else(|e| panic!("R2_random{variant} {}: {e}", item.id));
+                    for (eye, layer) in ["L", "R"].into_iter().zip(layers) {
+                        out.push((
+                            format!("{mode}/R2_random-turned{variant}/{}{eye}", item.id),
+                            layer,
+                        ));
+                    }
                 }
             }
         }
