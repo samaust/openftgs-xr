@@ -5,7 +5,7 @@
   "machine": {
     "gpu": "NVIDIA GeForce RTX 4090",
     "driver": "NVRM version: NVIDIA UNIX x86_64 Kernel Module  595.99.02  Wed Aug 26 05:24:08 UTC 2026",
-    "os": "Ubuntu 24.04.5 LTS (kernel 7.0.0-38-generic)",
+    "os": "Ubuntu 24.04.5 LTS (kernel 7.0.0-43-generic)",
     "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
     "threads": 24
   },
@@ -23,7 +23,7 @@
         "tier": "desktop"
       },
       "measure": "sort_ms",
-      "value": 0.1945599988102913,
+      "value": 0.12800000607967377,
       "unit": "ms"
     },
     {
@@ -43,7 +43,7 @@
         "tier": "desktop"
       },
       "measure": "sort_ms",
-      "value": 0.39745599031448364,
+      "value": 0.1451359987258911,
       "unit": "ms"
     },
     {
@@ -63,7 +63,7 @@
         "tier": "desktop"
       },
       "measure": "sort_ms",
-      "value": 0.7476800084114075,
+      "value": 0.21801599860191345,
       "unit": "ms"
     },
     {
@@ -83,7 +83,7 @@
         "tier": "desktop"
       },
       "measure": "sort_ms",
-      "value": 1.4619200229644775,
+      "value": 0.37910400331020355,
       "unit": "ms"
     },
     {
@@ -103,7 +103,7 @@
         "tier": "desktop"
       },
       "measure": "sort_ms",
-      "value": 2.8928639888763428,
+      "value": 0.7592160105705261,
       "unit": "ms"
     },
     {
@@ -123,7 +123,7 @@
         "tier": "desktop"
       },
       "measure": "sort_ms",
-      "value": 5.702399969100952,
+      "value": 1.3234719634056091,
       "unit": "ms"
     },
     {
@@ -148,10 +148,10 @@
       "measure": "sort_ms",
       "rule": "at_most",
       "limit": 0.4,
-      "value": 1.4619200229644775,
-      "pass": false
+      "value": 0.37910400331020355,
+      "pass": true
     }
   ],
-  "baseline": null,
+  "baseline": "benchmarks/baselines/B-3.json",
   "notes": []
 }

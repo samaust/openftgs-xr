@@ -24,7 +24,7 @@
         "tier": "quest-balanced"
       },
       "measure": "sort_ms",
-      "value": 2.0645312070846558,
+      "value": 2.0566145181655884,
       "unit": "ms"
     },
     {
@@ -44,7 +44,7 @@
         "tier": "quest-balanced"
       },
       "measure": "sort_ms",
-      "value": 5.3182549476623535,
+      "value": 3.8491666316986084,
       "unit": "ms"
     },
     {
@@ -64,7 +64,7 @@
         "tier": "quest-balanced"
       },
       "measure": "sort_ms",
-      "value": 10.491640090942383,
+      "value": 7.154661178588867,
       "unit": "ms"
     },
     {
@@ -84,7 +84,7 @@
         "tier": "quest-balanced"
       },
       "measure": "sort_ms",
-      "value": 21.00307273864746,
+      "value": 14.241249561309814,
       "unit": "ms"
     },
     {
@@ -104,7 +104,7 @@
         "tier": "quest-balanced"
       },
       "measure": "sort_ms",
-      "value": 46.19565010070801,
+      "value": 27.739009857177734,
       "unit": "ms"
     },
     {
@@ -127,6 +127,17 @@
       "value": null,
       "unit": "ms",
       "skipped": "the frame buffers' records of 256000000 bytes for C = 4000000 exceed the device's max_storage_buffer_binding_size of 134217728 bytes (Q-377, Q-413)"
+    },
+    {
+      "setup": {
+        "model": "synthetic, every row persistent",
+        "capacity": 4000000,
+        "tier": "quest-balanced"
+      },
+      "measure": "keys",
+      "value": null,
+      "unit": "keys",
+      "skipped": "the frame buffers' records of 256000000 bytes for C = 4000000 exceed the device's max_storage_buffer_binding_size of 134217728 bytes (Q-377, Q-413)"
     }
   ],
   "budgets": [
@@ -140,7 +151,7 @@
       "measure": "sort_ms",
       "rule": "at_most",
       "limit": 2.5,
-      "value": 21.00307273864746,
+      "value": 14.241249561309814,
       "pass": false
     }
   ],
