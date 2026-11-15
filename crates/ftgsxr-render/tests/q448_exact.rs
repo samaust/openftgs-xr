@@ -8,15 +8,18 @@
 //! covers stages 2–5; a change to the resolve or to the adapter's passes is checked where
 //! it runs (Q-448).
 //!
-//! The recorded file keeps a fixed subset of each request's items, so that it stays a few
-//! megabytes: R-1's and R-2's items 0, 11 and 22 (R2\_random left out: its 320 × 240
-//! items would take most of the file), and R-9's first two eye pairs. The scenes of R-1 and R-2 have one camera,
-//! which shared-center mode renders as both eyes (the first eye's layer is kept), as
-//! Q-445's check does for R-12.
+//! The recorded file keeps a fixed subset, so that it stays a few megabytes (Q-448): R-1's
+//! and R-2's items 0, 11 and 22, rendered with the item's camera as both eyes in
+//! shared-center mode (the first eye's layer kept, as Q-445's check does for R-12); R-9's
+//! first two eye pairs; and R2\_random's three items at 64 × 48 (its intrinsics scaled by
+//! 0.2), each camera turned 9° about y and 6° about x about its own center, with a second
+//! eye 64 mm to its right. P1–P10 hold isotropic primitives and most of their cameras are
+//! axis-aligned, so R2\_random's anisotropic rows under a turned view are what a wrong
+//! regrouping of E6's Σ′ (Q-449) would change; its eye pairs put rows in one eye only.
 
 use std::path::PathBuf;
 
-use ftgsxr_core::{Camera, Pose, RenderImage, RenderRequest, read_request};
+use ftgsxr_core::{Camera, DMat3, DMat4, DVec3, Pose, RenderImage, RenderRequest, read_request};
 use ftgsxr_render::{HeadlessRenderer, QualityTier, SortMode};
 use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe};
 
@@ -30,19 +33,11 @@ fn recorded_path() -> PathBuf {
 /// commit of its own at the commit before an exact change (Q-445's rule).
 const RECORD_VAR: &str = "FTGSXR_RECORD_Q448_EXACT";
 
-/// R-1's probes and R-2's, but R2_random, whose 320 × 240 items would take most of the
-/// file.
-const PROBES: [&str; 14] = [
-    "P1",
-    "P2",
-    "P3",
-    "P4",
-    "P5",
-    "P6",
-    "P7",
-    "P8",
-    "P9",
-    "P10",
+/// R-1's probes, which R-9's requests also render.
+const R1_PROBES: [&str; 10] = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"];
+
+/// R-2's probes rendered at their own size; R2_random goes through `turned_eyes`.
+const R2_PROBES: [&str; 4] = [
     "R2_overlap_deg3",
     "R2_white_background",
     "R2_single_timestamp",
@@ -60,6 +55,28 @@ fn r9_request(p: &str) -> RenderRequest {
     let path = fixtures_dir().join(format!("probes/R9_{p}.request.json"));
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     read_request(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// R2_random's item camera at 64 × 48, turned 9° about y and 6° about x about its own
+/// center, and a second eye 64 mm to its right (along its own x axis).
+fn turned_eyes(camera: &Camera) -> [Camera; 2] {
+    let scale = 0.2;
+    let k = DMat3::from_cols(
+        camera.k.x_axis * scale,
+        camera.k.y_axis * scale,
+        DVec3::new(camera.k.z_axis.x * scale, camera.k.z_axis.y * scale, 1.0),
+    );
+    let turn = DMat4::from_mat3(
+        DMat3::from_rotation_y(9f64.to_radians()) * DMat3::from_rotation_x(6f64.to_radians()),
+    );
+    let left = turn * camera.world_to_camera;
+    let right = DMat4::from_translation(DVec3::new(-0.064, 0.0, 0.0)) * left;
+    [left, right].map(|world_to_camera| Camera {
+        width: 64,
+        height: 48,
+        k,
+        world_to_camera,
+    })
 }
 
 /// The conformance tier, with the shared-center records' Σ^S in half precision or not
@@ -82,12 +99,13 @@ fn layout(half_records: bool) -> &'static str {
 
 /// The layers of the kept scenes, by id: each probe's kept items per view and, with the
 /// item's camera as both eyes, in shared-center mode in both layouts; each R-9 pair's two
-/// eyes per view and in shared-center mode in both layouts.
+/// eyes, and each of R2_random's turned pairs, per view and in shared-center mode in both
+/// layouts.
 fn exact_layers() -> Vec<(String, RenderImage)> {
     let mut out = Vec::new();
     for half_records in [false, true] {
         let shared = layout(half_records);
-        for p in PROBES {
+        for p in R1_PROBES.iter().chain(&R2_PROBES) {
             let (model, request) = probe(p);
             let mut renderer = HeadlessRenderer::new(tier(half_records)).expect("an adapter");
             let id = renderer
@@ -116,7 +134,7 @@ fn exact_layers() -> Vec<(String, RenderImage)> {
                 out.push((format!("{shared}/{p}/{}", item.id), left));
             }
         }
-        for p in &PROBES[..10] {
+        for p in R1_PROBES {
             let (model, _) = probe(p);
             let request = r9_request(p);
             let mut renderer = HeadlessRenderer::new(tier(half_records)).expect("an adapter");
@@ -138,6 +156,27 @@ fn exact_layers() -> Vec<(String, RenderImage)> {
                     for (item, layer) in [l, r].into_iter().zip(layers) {
                         out.push((format!("{mode}/R9_{p}/{}", item.id), layer));
                     }
+                }
+            }
+        }
+        let (model, request) = probe("R2_random");
+        let mut renderer = HeadlessRenderer::new(tier(half_records)).expect("an adapter");
+        let id = renderer
+            .load(&model, request.sh_degree)
+            .expect("the model loads");
+        let instances = [(id, Pose::IDENTITY)];
+        for item in &request.items {
+            let eyes = turned_eyes(&item.camera);
+            let mut modes = vec![(shared, SortMode::SharedCenter)];
+            if !half_records {
+                modes.push(("per-view", SortMode::PerView));
+            }
+            for (mode, sort) in modes {
+                let layers = renderer
+                    .render_stereo(&instances, &eyes, item.timestamp, request.background, sort)
+                    .unwrap_or_else(|e| panic!("R2_random {}: {e}", item.id));
+                for (eye, layer) in ["L", "R"].into_iter().zip(layers) {
+                    out.push((format!("{mode}/R2_random-turned/{}{eye}", item.id), layer));
                 }
             }
         }
