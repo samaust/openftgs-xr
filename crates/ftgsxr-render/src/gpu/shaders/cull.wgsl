@@ -488,13 +488,18 @@ fn cull_splats(
         return;
     }
 
-    // Shared center (D-4): visible when inside either eye's frustum.
+    // Shared center (D-4): visible when inside either eye's frustum. The loop stops at the
+    // first eye that sees the row: nothing reads a later eye's projection then, since the
+    // record is the midpoint's and the non-finite count is taken only for a row no eye sees
+    // (§2.4 rule 2, #802).
+    // Q-448
     var visible = false;
     var non_finite = false;
     for (var i = 0u; i < frame.view_count; i++) {
         let p = project(frame.views[i], mu_s, cov_s, t.sigma_eff);
         if p.visible {
             visible = true;
+            break;
         }
         if p.non_finite {
             non_finite = true;

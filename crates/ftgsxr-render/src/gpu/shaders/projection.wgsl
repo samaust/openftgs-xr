@@ -4,10 +4,11 @@
 // `cull.wgsl` (stage 2, per view and the shared-center cull) and to `splat.wgsl` (stage 5's
 // shared-center vertex stage, which projects each record for its eye, Q-400), so both run
 // the same arithmetic in the same order (`passes.rs`'s `cull_source` and `splat_source`).
-// E6 in the order of `ftgsxr_core::project`: camera space, the near and far culls, the
-// Jacobian with its clamp, Σ′ + εI, the determinant guard, the opacity-aware extent and its
-// cap, whole-pixel radii, the box cull, the conic as (a, b, c) (Q-21), and the non-finite
-// cull, plus the float32 bound on μ′ (Q-118).
+// E6 in the order of `ftgsxr_core::project`, except Σ′'s product, which is regrouped
+// (Q-449): camera space, the near and far culls, the Jacobian with its clamp, Σ′ + εI, the
+// determinant guard, the opacity-aware extent and its cap, whole-pixel radii, the box cull,
+// the conic as (a, b, c) (Q-21), and the non-finite cull, plus the float32 bound on μ′
+// (Q-118).
 
 // The largest finite float32.
 const F32_MAX: f32 = 3.40282347e38;
@@ -88,10 +89,16 @@ fn project_view(v: View, k: E6Constants, mu_s: vec3<f32>, cov_s: mat3x3<f32>, si
     let ty = clamp(w, -(cy / fy + my), (v.height - cy) / fy + my);
     let j0 = vec3<f32>(fx / z, 0.0, -fx * tx / z);
     let j1 = vec3<f32>(0.0, fy / z, -fy * ty / z);
-    let sc = v.rotation * cov_s * transpose(v.rotation);
-    let s00 = dot(j0, sc * j0) + k.eps2d;
-    let s01 = dot(j0, sc * j1);
-    let s11 = dot(j1, sc * j1) + k.eps2d;
+    // Q-449 (#802): Σ′'s entries j_aᵀ (R Σ Rᵀ) j_b regrouped as (Rᵀ j_a)ᵀ Σ (Rᵀ j_b), the
+    // same bilinear form for every Σ, without the 3 × 3 triple product.
+    // Q-449
+    let rt = transpose(v.rotation);
+    let t0 = rt * j0;
+    let t1 = rt * j1;
+    let c1 = cov_s * t1;
+    let s00 = dot(t0, cov_s * t0) + k.eps2d;
+    let s01 = dot(t0, c1);
+    let s11 = dot(t1, c1) + k.eps2d;
     let det = s00 * s11 - s01 * s01;
     if !finite(det) {
         p.non_finite = true;
