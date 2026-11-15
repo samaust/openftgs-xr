@@ -4,10 +4,11 @@
 // `cull.wgsl` (stage 2, per view and the shared-center cull) and to `splat.wgsl` (stage 5's
 // shared-center vertex stage, which projects each record for its eye, Q-400), so both run
 // the same arithmetic in the same order (`passes.rs`'s `cull_source` and `splat_source`).
-// E6 in the order of `ftgsxr_core::project` (Σ′'s product regrouped, Q-449): camera space, the near and far culls, the
-// Jacobian with its clamp, Σ′ + εI, the determinant guard, the opacity-aware extent and its
-// cap, whole-pixel radii, the box cull, the conic as (a, b, c) (Q-21), and the non-finite
-// cull, plus the float32 bound on μ′ (Q-118).
+// E6 in the order of `ftgsxr_core::project`, except Σ′'s product, which is regrouped
+// (Q-449): camera space, the near and far culls, the Jacobian with its clamp, Σ′ + εI, the
+// determinant guard, the opacity-aware extent and its cap, whole-pixel radii, the box cull,
+// the conic as (a, b, c) (Q-21), and the non-finite cull, plus the float32 bound on μ′
+// (Q-118).
 
 // The largest finite float32.
 const F32_MAX: f32 = 3.40282347e38;
