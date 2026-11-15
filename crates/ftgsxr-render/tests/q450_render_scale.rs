@@ -13,20 +13,20 @@
 //! and in shared-center mode in both record layouts. They are drawn at `pixel_center_offset`
 //! 0.5 and 0 and at `screen_extent_max` 2, at render scales 0.7 and E16's floor 0.6. The
 //! target size is the Bevy adapter's `layer_size`: each side × the scale, rounded, at
-//! least 1 (Q-453). On an adapter other than the recording one the test is skipped with a
-//! logged reason, since a bitwise record holds only where it was made (Q-453).
+//! least 1 (Q-453). A bitwise record holds only on the adapter that made it, so on another
+//! adapter the layers are compared by E15's rule instead, with a logged line (Q-453).
 
 use std::path::PathBuf;
 
 use crate::cull_support::{sort_pose, upload};
 use crate::q448_exact::turned_eyes;
 
-use ftgsxr_core::{Camera, Pose, RenderConventions, UVec2};
+use ftgsxr_core::{Camera, Pose, RenderConventions, RenderImage, UVec2};
 use ftgsxr_render::{
     ColorTransform, FrameBuffers, ModelDraw, Overlays, QualityTier, RenderMode, SortMode, SortPose,
     SplatDevice, SplatPasses, ViewParams,
 };
-use ftgsxr_testkit::{layer_messages, probe};
+use ftgsxr_testkit::{layer_messages, metrics, probe};
 
 /// The recorded layers (`scaled_layers`), after the recording adapter's name.
 fn recorded_path() -> PathBuf {
@@ -69,7 +69,7 @@ fn scaled_size(camera: &Camera, scale: f32) -> UVec2 {
 }
 
 /// A device of the test's own, wrapped with `SplatDevice::from_wgpu` (as Q-451's is), or
-/// `None` (and why) when there is no Vulkan adapter or device. The features are
+/// why there is none: no Vulkan adapter or device. The features are
 /// `SplatDevice::headless`'s, where offered.
 fn scaled_device() -> Result<SplatDevice, String> {
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
@@ -172,7 +172,7 @@ fn draw_layer(
     (staging, row_bytes)
 }
 
-/// The two eyes' layers of `draws` in `sort` at the views `views`, after one prepare per eye
+/// The two eyes' layers of `draws` at the views `views` in `tier`'s sort mode, after one prepare per eye
 /// at its own pose (per view) or one at the eyes' midpoint with both as cull views (shared
 /// center), as the Bevy adapter draws them.
 fn draw_eyes(
@@ -252,8 +252,7 @@ fn draw_eyes(
             }
         })
         .collect();
-    let [l, r]: [Layer; 2] = layers.try_into().unwrap_or_else(|_| panic!("two eyes"));
-    [l, r]
+    layers.try_into().unwrap_or_else(|_| panic!("two eyes"))
 }
 
 /// The conformance tier sorting `sort_mode`, with the shared-center records' Σ^S in half
@@ -275,12 +274,12 @@ fn scaled_layers(dev: &SplatDevice) -> Vec<(String, Layer)> {
         ("shared-full", tier(SortMode::SharedCenter, false)),
         ("shared-half", tier(SortMode::SharedCenter, true)),
     ];
-    for (mode, tier) in &modes {
-        let passes = SplatPasses::new(dev, FORMAT, None, tier).expect("the passes compile");
+    for (mode, mode_tier) in &modes {
+        let passes = SplatPasses::new(dev, FORMAT, None, mode_tier).expect("the passes compile");
         for (variant, conventions) in VARIANTS {
             let (mut model, request) = probe("R2_random");
             conventions(&mut model.conventions);
-            let gpu_model = upload(dev, &model, tier);
+            let gpu_model = upload(dev, &model, mode_tier);
             for item in &request.items {
                 let draw = ModelDraw {
                     model: &gpu_model,
@@ -300,7 +299,7 @@ fn scaled_layers(dev: &SplatDevice) -> Vec<(String, Layer)> {
                         camera,
                         target_size: scaled_size(&camera, scale),
                     });
-                    let layers = draw_eyes(dev, &passes, tier, &[draw], &views);
+                    let layers = draw_eyes(dev, &passes, mode_tier, &[draw], &views);
                     for (eye, layer) in ["L", "R"].into_iter().zip(layers) {
                         out.push((
                             format!(
@@ -316,6 +315,35 @@ fn scaled_layers(dev: &SplatDevice) -> Vec<(String, Layer)> {
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
+}
+
+/// The f32 value of the half float `bits` (IEEE 754 binary16).
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let mantissa = f32::from(bits & 0x3ff);
+    sign * match exponent {
+        0 => mantissa * 2f32.powi(-24),
+        31 if mantissa == 0.0 => f32::INFINITY,
+        31 => f32::NAN,
+        _ => (1024.0 + mantissa) * 2f32.powi(exponent - 25),
+    }
+}
+
+/// `layer` as a `RenderImage` for E15's metrics: each texel's half floats (R, G, B, A, low
+/// bits first) as f32.
+fn image(layer: &Layer) -> RenderImage {
+    let channel = |t: u64, c: u32| half_to_f32((t >> (16 * c)) as u16);
+    RenderImage {
+        width: layer.size.x,
+        height: layer.size.y,
+        rgb: layer
+            .texels
+            .iter()
+            .flat_map(|&t| [channel(t, 0), channel(t, 1), channel(t, 2)])
+            .collect(),
+        alpha: layer.texels.iter().map(|&t| channel(t, 3)).collect(),
+    }
 }
 
 /// The encoding of `recorded_path()`: the adapter's name, then each layer's id, its size,
@@ -383,8 +411,9 @@ fn decode(bytes: &[u8]) -> (String, Vec<(String, Layer)>) {
 /// Q-450, Q-453 (#825): at render scales 0.7 and 0.6 the tightened quad changes no texel of
 /// R2_random's turned pairs, per view and shared-center in both record layouts, at
 /// `pixel_center_offset` 0.5 and 0 and at `screen_extent_max` 2, against the layers
-/// recorded at the commit before it, bitwise. With `FTGSXR_RECORD_Q450_SCALED` set it
-/// records them instead.
+/// recorded at the commit before it: bitwise on the recording adapter, by E15's rule
+/// (s = 0 and s_α = 0, Q-448) on another. With `FTGSXR_RECORD_Q450_SCALED` set it records
+/// them instead.
 #[test]
 #[ignore = "gpu"]
 fn gpu_q450_scaled_quad_changes_no_texel_of_the_recorded_layers() {
@@ -402,14 +431,13 @@ fn gpu_q450_scaled_quad_changes_no_texel_of_the_recorded_layers() {
         let bytes = std::fs::read(recorded_path()).expect("the recorded layers (Q-453)");
         decode(&bytes)
     });
-    if let Some((then, _)) = &recorded
-        && *then != adapter
-    {
+    // Q-453: a bitwise record holds only on the adapter that made it; elsewhere E15's rule.
+    let bitwise = recorded.as_ref().is_none_or(|(then, _)| *then == adapter);
+    if let Some((then, _)) = recorded.as_ref().filter(|_| !bitwise) {
         eprintln!(
-            "skipped: the layers were recorded on {then}, this adapter is {adapter}; a \
-             bitwise record holds only on its own adapter (Q-453)"
+            "the layers were recorded on {then}, this adapter is {adapter}: compared by E15's \
+             rule, not bitwise (Q-453)"
         );
-        return;
     }
     let layers = scaled_layers(&dev);
     let messages = dev.take_validation_messages();
@@ -437,14 +465,39 @@ fn gpu_q450_scaled_quad_changes_no_texel_of_the_recorded_layers() {
                 .zip(&then.texels)
                 .filter(|(a, b)| a != b)
                 .count();
-            (differ > 0).then(|| format!("{id}: {differ} texels differ"))
+            let m = metrics(&image(then), &image(now));
+            let fails = if bitwise {
+                differ > 0
+            } else {
+                m.share != 0.0 || m.alpha != 0.0
+            };
+            fails.then(|| {
+                format!(
+                    "{id}: {differ} texels differ bitwise; by E15's rule s = {}, s_α = {}",
+                    m.share, m.alpha
+                )
+            })
         })
         .collect();
     assert!(
         failures.is_empty(),
-        "{} of {} layers differ from the recorded ones (Q-450, Q-453):\n{}",
+        "{} of {} layers differ from the recorded ones {} (Q-450, Q-453):\n{}",
         failures.len(),
         layers.len(),
+        if bitwise { "bitwise" } else { "by E15's rule" },
         failures.join("\n")
     );
+}
+
+/// `half_to_f32` decodes binary16 normals, subnormals, signs and the largest finite value.
+#[test]
+fn half_to_f32_decodes_binary16() {
+    assert_eq!(half_to_f32(0x3c00), 1.0);
+    assert_eq!(half_to_f32(0xc000), -2.0);
+    assert_eq!(half_to_f32(0x3555), 0.333_251_95);
+    assert_eq!(half_to_f32(0x0001), 2f32.powi(-24));
+    assert_eq!(half_to_f32(0x7bff), 65504.0);
+    assert_eq!(half_to_f32(0x7c00), f32::INFINITY);
+    assert!(half_to_f32(0x7e00).is_nan());
+    assert_eq!(half_to_f32(0x0000), 0.0);
 }
