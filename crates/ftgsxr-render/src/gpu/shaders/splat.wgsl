@@ -5,7 +5,9 @@
 // One indirect instanced draw of four-vertex strips in the sorted order (D-3, D-48): instance
 // i draws the record in slot `payloads[i]` (the sort's result, pair 0). The vertex stage
 // places the quad at μ′ ± r in the camera's pixels (E6, continuous pixel convention; image
-// row 0 at the top). The fragment stage evaluates E7's α at the pixel center with the conic,
+// row 0 at the top) or, where the ellipse the fragment stage keeps lies inside that box, at
+// the rectangle along Σ′'s eigenvectors that bounds it, padded (revision 61, Q-450,
+// `quad_pixel`). The fragment stage evaluates E7's α at the pixel center with the conic,
 // skips a negative (or NaN) quadratic form and α < α_skip, clamps at α_max, then multiplies
 // by E13's weight w_occ (mirroring `ftgsxr_core::occlusion_weight`, Q-63; 1 when occlusion
 // is off), and writes the premultiplied (c·α, α) for the `One, OneMinusSrcAlpha` blend.
@@ -117,9 +119,77 @@ fn strip_corner(vid: u32) -> vec2<f32> {
     return vec2<f32>(f32(vid & 1u) * 2.0 - 1.0, f32((vid >> 1u) & 1u) * 2.0 - 1.0);
 }
 
-// The quad's corner at μ′ ± r in the camera's pixels, with the depth test's z.
-fn quad_position(vid: u32, mean: vec2<f32>, radii: vec2<f32>, depth: f32) -> vec4<f32> {
-    let px = mean + strip_corner(vid) * radii;
+// Q-450's constants: the relative pad and margin (2⁻¹² of a length), the margin's absolute
+// part (2⁻⁷ target pixel, twice the vertices' 1/256-pixel snapping), the pad's (¼ target
+// pixel) and the bound on the conic's condition, T² ≤ 2⁹·D.
+const QUAD_RELATIVE: f32 = 0.000244140625;
+const QUAD_MARGIN_PX: f32 = 0.0078125;
+const QUAD_PAD_PX: f32 = 0.25;
+const QUAD_CONDITION: f32 = 512.0;
+
+// The ellipse {d : dᵀ C d ≤ e₀²}'s half-width along the unit vector `w`, e₀√(wᵀ C⁻¹ w),
+// with C⁻¹ = Σ′ as (s₀₀, s₀₁, s₁₁).
+fn half_width(e0: f32, s: vec3<f32>, w: vec2<f32>) -> f32 {
+    return e0 * sqrt(w.x * w.x * s.x + 2.0 * w.x * w.y * s.y + w.y * w.y * s.z);
+}
+
+// The quad's corner of vertex `vid` in the camera's pixels (§1.4 stage 5, revision 61):
+// the rectangle along Σ′'s eigenvectors bounding the ellipse the fragment stage keeps,
+// padded, where that ellipse lies inside the box μ′ ± r, else the box (Q-450). Both cover
+// every pixel the fragment stage keeps, which doesn't change, so the same pixels are
+// written with the same values: an exact optimization (§2.4 rule 2, Q-448).
+// Q-450
+fn quad_pixel(
+    vid: u32,
+    mean: vec2<f32>,
+    conic: vec3<f32>,
+    radii: vec2<f32>,
+    sigma_eff: f32,
+    alpha_skip: f32,
+    pixel_center_offset: f32,
+) -> vec2<f32> {
+    let corner = strip_corner(vid);
+    // The fragment evaluates at p = s + δ (`fs_splat`), so it keeps the ellipse
+    // {d : dᵀ C d ≤ e₀²} around μ′ − δ in raster space, with e₀ uncapped from the half-float
+    // σ_eff and α_skip it reads.
+    let scale = view.camera_size / view.target_size;
+    let delta = vec2<f32>(pixel_center_offset - 0.5) * scale;
+    let e0 = sqrt(2.0 * log(sigma_eff / alpha_skip));
+    let a = conic.x;
+    let b = conic.y;
+    let c = conic.z;
+    let det = a * c - b * b;
+    let trace = a + c;
+    // Σ′ = C⁻¹ as (s₀₀, s₀₁, s₁₁).
+    let s = vec3<f32>(c, -b, a) / det;
+    // The ellipse's half-extents on the image axes, and the margin m that keeps a pixel
+    // centre the snapped box edge decides out of it.
+    let extent = e0 * sqrt(s.xz);
+    let margin = QUAD_MARGIN_PX * scale + QUAD_RELATIVE * radii;
+    // The axes: C's eigenvectors (θ = 0 for an axis-aligned conic, where atan2(0, 0) is
+    // unspecified), and the half-lengths e₀√(wᵀ C⁻¹ w) + pad, exact for any unit w, so an
+    // error in θ only loosens the rectangle.
+    let theta = select(0.5 * atan2(2.0 * b, a - c), 0.0, b == 0.0);
+    let u = vec2<f32>(cos(theta), sin(theta));
+    let v = vec2<f32>(-u.y, u.x);
+    let pad = QUAD_PAD_PX * max(scale.x, scale.y);
+    let wu = half_width(e0, s, u);
+    let wv = half_width(e0, s, v);
+    let hu = wu + pad + QUAD_RELATIVE * wu;
+    let hv = wv + pad + QUAD_RELATIVE * wv;
+    // Each test is false on NaN, so a non-finite value falls back to the box.
+    let conditioned = det > 0.0 && trace * trace <= QUAD_CONDITION * det;
+    let inside = all(extent + abs(delta) + margin <= radii);
+    let smaller = hu * hv < radii.x * radii.y;
+    let finite_all = finite(hu) && finite(hv) && finite(extent.x) && finite(extent.y);
+    if conditioned && inside && smaller && finite_all {
+        return mean - delta + corner.x * hu * u + corner.y * hv * v;
+    }
+    return mean + corner * radii;
+}
+
+// The clip position of camera pixel `px`, with the depth test's z.
+fn quad_position(px: vec2<f32>, depth: f32) -> vec4<f32> {
     let ndc = vec2<f32>(2.0 * px.x / view.camera_size.x - 1.0, 1.0 - 2.0 * px.y / view.camera_size.y);
     var z = 0.0;
     if view.depth_near > 0.0 {
@@ -185,7 +255,10 @@ fn vs_shared(vid: u32, slot: u32) -> VertexOut {
         out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         return out;
     }
-    out.position = quad_position(vid, p.mean, p.radii, p.depth);
+    out.position = quad_position(
+        quad_pixel(vid, p.mean, p.conic, p.radii, sigma_eff, k.alpha_skip, k.pixel_center_offset),
+        p.depth,
+    );
     out.mean = p.mean;
     out.conic = p.conic;
     // c·σ_eff and σ_eff, as the per-view record holds them.
@@ -208,7 +281,10 @@ fn vs_splat(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) 
     let k = instances[records[b + 10u]];
 
     var out: VertexOut;
-    out.position = quad_position(vid, mean, radii, depth);
+    out.position = quad_position(
+        quad_pixel(vid, mean, conic, radii, color.w, k.alpha_skip, k.pixel_center_offset),
+        depth,
+    );
     out.mean = mean;
     out.conic = conic;
     out.color = color;

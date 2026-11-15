@@ -433,7 +433,7 @@ A ftgs-render-request file: items, each a camera and a raw timestamp, that `ftgs
 _Avoid_: view list, render job, query (reserved for the harness's forward queries)
 
 **Splat**:
-The screen-aligned quad the player draws for one visible primitive in one view, carrying its projected mean, conic, color and alpha. E6, E7, §1.4
+The quad in the image plane the player draws for one visible primitive in one view, carrying its projected mean, conic, color and alpha. E6, E7, §1.4
 _Avoid_: primitive (the model's row, which the splat depicts), quad, billboard, point sprite
 
 **Splatting mode**:
