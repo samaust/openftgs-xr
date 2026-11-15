@@ -28,9 +28,26 @@ openftgs trains the models; openftgs-xr only loads and displays them. `docs/spec
 
 ## Repository layout
 
+- `crates/`: the workspace's eight crates (spec §2.1), each with its spec tests in `tests/`. `crates/README.md` says where the tests live and which lane each runs in.
+  - `ftgsxr-core`: the model and its loaders, the CPU mathematics, the clock, the GPU layout and the openftgs formats.
+  - `ftgsxr-io`: paths, settings, scene and pose files, listings, HTTP and model sources.
+  - `ftgsxr-render`: the wgpu render layer and its Bevy plugin.
+  - `ftgsxr-xr`: the OpenXR session, tracking, passthrough, depth, light, anchors and the panel.
+  - `ftgsxr-app`: everything the desktop and Quest builds share.
+  - `ftgsxr-desktop`: the Linux player and command line, the binary `ftgsxr`.
+  - `ftgsxr-quest`: the Meta Quest 3 entry point, the library `libftgsxr_quest.so`.
+  - `ftgsxr-testkit`: fixtures, checksums, image metrics and synthetic models for the tests.
+- `android/`: the Gradle project that packages the Quest APK, with the manifest, the activity and the Kotlin shim (spec §2.5).
+- `vendor/`: patched copies of bevy\_mod\_openxr, bevy\_render, wgpu-core and wgpu-hal, each under its own license, applied through the workspace `Cargo.toml`'s `[patch.crates-io]`, whose comments name the decision behind each patch (D-30, D-52, D-53, Q-139).
+- `tools/`: `build-quest.sh`, which builds the APK, and `fixtures/`, the Python scripts that generate the test fixtures and `train_tiny.sh`, which drives openftgs to train the tiny models (spec §2.7).
+- `tests/fixtures/`: the generated fixtures with their `SHA256SUMS`, shared by every crate's tests.
+- `benchmarks/baselines/`: the stored `ftgsxr bench` results that regression runs compare against (spec §3.5).
+- `deny.toml`: cargo-deny's license and advisory scan (spec §2.3, §2.6).
+- `.github/workflows/`: CI, which runs formatting, clippy, cargo-deny and the `cpu` lane on every push, and the GitHub Pages site that serves the `net` lane's test index.
 - `docs/spec/`: the openftgs-xr spec, the copy of the openftgs spec, and the record of spec revisions.
 - `docs/prd/`: the milestones, the implementation questions and their provisional decisions, and the source log.
 - `docs/GLOSSARY.md`: the project's vocabulary.
+- `docs/modules/`: documentation of the crates' modules, one directory per crate.
 - `docs/agents/`: how the agent skills use the issue tracker, its labels, the guidelines and the domain docs.
 - `.claude/skills/`: the agent workflow, from planning to implementation and review.
 
