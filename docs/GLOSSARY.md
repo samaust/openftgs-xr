@@ -461,7 +461,7 @@ The per-view 32-bit integer derived from a primitive's camera-space depth that o
 _Avoid_: depth key, z-order, distance
 
 **View v**:
-One eye's camera in XR, or the single camera on the desktop or in a headless render; projection and sorting are per view. E6, E8, D-4
+One eye's camera in XR or in the headless two-eye render, or the single camera on the desktop or in a headless `render`; projection is per view, and sorting is per view except in shared-center mode. E6, E8, D-4
 _Avoid_: eye, camera (the engine's component), viewport
 
 **Environment depth**:
