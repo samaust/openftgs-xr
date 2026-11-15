@@ -6,15 +6,17 @@
 //! so Q-448's layers never see that factor away from 1. This test draws the splat layer
 //! through `SplatPasses::encode_draw` itself, at a `target_size` below the camera's, on a
 //! device it makes and wraps with `SplatDevice::from_wgpu`, as Q-451's test does. It
-//! compares the layers bitwise with layers recorded at 1a95a298, the commit before the
-//! tightened quad (Q-445's rule; Q-453).
+//! compares the layers by E15's rule (s = 0 and s\_α = 0), as Q-445's and Q-448's checks
+//! do, on every adapter, with layers recorded at 1a95a298, the commit before the tightened
+//! quad (Q-453).
 //!
 //! The scenes are R2\_random's turned eye pairs (Q-448's cameras, `turned_eyes`), per view
 //! and in shared-center mode in both record layouts. They are drawn at `pixel_center_offset`
-//! 0.5 and 0 and at `screen_extent_max` 2, at render scales 0.7 and E16's floor 0.6. The
-//! target size is the Bevy adapter's `layer_size`: each side × the scale, rounded, at
-//! least 1 (Q-453). A bitwise record holds only on the adapter that made it, so on another
-//! adapter the layers are compared by E15's rule instead, with a logged line (Q-453).
+//! 0.5 and 0, at `screen_extent_max` 2, and at `pixel_center_offset` 0 with `alpha_skip`
+//! 0.05, at render scales 0.7 and E16's floor 0.6: 144 layers. The target size is the Bevy
+//! adapter's `layer_size`: each side × the scale, rounded, at least 1 (Q-453). The
+//! `alpha_skip` 0.05 layers raise the ellipse's rim, where the scale dropped from δ in
+//! `quad_pixel` drops texels, above E15's threshold at both scales (#827).
 
 use std::path::PathBuf;
 
@@ -28,13 +30,15 @@ use ftgsxr_render::{
 };
 use ftgsxr_testkit::{layer_messages, metrics, probe};
 
-/// The recorded layers (`scaled_layers`), after the recording adapter's name.
+/// The recorded layers (`scaled_layers`), after the recording adapter's name, which is kept
+/// for the record only (Q-453).
 fn recorded_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/q450_render_scale.bin")
 }
 
-/// Set to record `scaled_layers` into `recorded_path()` instead of comparing, in a commit
-/// of its own at the commit before an exact change (Q-445's rule).
+/// Set to record `scaled_layers` into `recorded_path()` instead of comparing, only under
+/// Q-445's rule as written: in a commit of its own, made at the commit before an exact
+/// change (Q-453).
 const RECORD_VAR: &str = "FTGSXR_RECORD_Q450_SCALED";
 
 /// The layer format, the headless renderer's (Q-109): four half floats.
@@ -52,12 +56,19 @@ const SCALES: [(&str, f32); 2] = [("0.7", 0.7), ("0.6", 0.6)];
 type Variant = (&'static str, fn(&mut RenderConventions));
 
 /// R2_random's conventions at `pixel_center_offset` 0.5 (δ = 0, so only the scaled pad and
-/// m act), at 0, where δ = −½ × `camera_size/target_size`, and at `screen_extent_max` 2,
-/// where E6's cap binds and the pixels it clips reach α = σ_eff·e⁻² (#820).
-const VARIANTS: [Variant; 3] = [
+/// m act), at 0, where δ = −½ × `camera_size/target_size`, at `screen_extent_max` 2,
+/// where E6's cap binds and the pixels it clips reach α = σ_eff·e⁻² (#820), and at
+/// `pixel_center_offset` 0 with `alpha_skip` 0.05, where the rim texels a misplaced quad
+/// drops reach α ≈ 0.05, above E15's threshold (Q-453, #827).
+// Q-453
+const VARIANTS: [Variant; 4] = [
     ("-offset0.5", |c| c.pixel_center_offset = 0.5),
     ("-offset0", |c| c.pixel_center_offset = 0.0),
     ("-cap2", |c| c.screen_extent_max = 2.0),
+    ("-offset0-skip0.05", |c| {
+        c.pixel_center_offset = 0.0;
+        c.alpha_skip = 0.05;
+    }),
 ];
 
 /// The Bevy adapter's splat-layer size at render scale `scale` (`layer_size`, §1.12):
@@ -410,10 +421,11 @@ fn decode(bytes: &[u8]) -> (String, Vec<(String, Layer)>) {
 
 /// Q-450, Q-453 (#825): at render scales 0.7 and 0.6 the tightened quad changes no texel of
 /// R2_random's turned pairs, per view and shared-center in both record layouts, at
-/// `pixel_center_offset` 0.5 and 0 and at `screen_extent_max` 2, against the layers
-/// recorded at the commit before it: bitwise on the recording adapter, by E15's rule
-/// (s = 0 and s_α = 0, Q-448) on another. With `FTGSXR_RECORD_Q450_SCALED` set it records
-/// them instead.
+/// `pixel_center_offset` 0.5 and 0, at `screen_extent_max` 2 and at `pixel_center_offset` 0
+/// with `alpha_skip` 0.05, against the layers recorded at the commit before it, by E15's
+/// rule (s = 0 and s_α = 0, as Q-445 and Q-448) on every adapter. A failure lists the
+/// texels that differ bitwise beside E15's s and s_α. With `FTGSXR_RECORD_Q450_SCALED` set
+/// it records them instead.
 #[test]
 #[ignore = "gpu"]
 fn gpu_q450_scaled_quad_changes_no_texel_of_the_recorded_layers() {
@@ -431,13 +443,8 @@ fn gpu_q450_scaled_quad_changes_no_texel_of_the_recorded_layers() {
         let bytes = std::fs::read(recorded_path()).expect("the recorded layers (Q-453)");
         decode(&bytes)
     });
-    // Q-453: a bitwise record holds only on the adapter that made it; elsewhere E15's rule.
-    let bitwise = recorded.as_ref().is_none_or(|(then, _)| *then == adapter);
-    if let Some((then, _)) = recorded.as_ref().filter(|_| !bitwise) {
-        eprintln!(
-            "the layers were recorded on {then}, this adapter is {adapter}: compared by E15's \
-             rule, not bitwise (Q-453)"
-        );
+    if let Some((then, _)) = &recorded {
+        eprintln!("the layers were recorded on {then}; this adapter is {adapter} (Q-453)");
     }
     let layers = scaled_layers(&dev);
     let messages = dev.take_validation_messages();
@@ -466,12 +473,8 @@ fn gpu_q450_scaled_quad_changes_no_texel_of_the_recorded_layers() {
                 .filter(|(a, b)| a != b)
                 .count();
             let m = metrics(&image(then), &image(now));
-            let fails = if bitwise {
-                differ > 0
-            } else {
-                m.share != 0.0 || m.alpha != 0.0
-            };
-            fails.then(|| {
+            // Q-453: E15's rule on every adapter, as Q-445 and Q-448.
+            (m.share != 0.0 || m.alpha != 0.0).then(|| {
                 format!(
                     "{id}: {differ} texels differ bitwise; by E15's rule s = {}, s_α = {}",
                     m.share, m.alpha
@@ -481,10 +484,9 @@ fn gpu_q450_scaled_quad_changes_no_texel_of_the_recorded_layers() {
         .collect();
     assert!(
         failures.is_empty(),
-        "{} of {} layers differ from the recorded ones {} (Q-450, Q-453):\n{}",
+        "{} of {} layers differ from the recorded ones by E15's rule (Q-450, Q-453):\n{}",
         failures.len(),
         layers.len(),
-        if bitwise { "bitwise" } else { "by E15's rule" },
         failures.join("\n")
     );
 }
