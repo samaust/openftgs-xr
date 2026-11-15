@@ -51,6 +51,55 @@ openftgs trains the models; openftgs-xr only loads and displays them. `docs/spec
 - `docs/agents/`: how the agent skills use the issue tracker, its labels, the guidelines and the domain docs.
 - `.claude/skills/`: the agent workflow, from planning to implementation and review.
 
+## Environment variables
+
+None is needed to build the desktop player or run plain `cargo test`.
+
+The desktop player:
+
+| Variable | What it sets |
+| --- | --- |
+| `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME` | Where the settings, pose store and scenes, the HTTP cache and logs, and the default model directory go, each under `openftgs-xr/` (spec §1.11, D-23). Default `~/.config`, `~/.cache` and `~/.local/share`. |
+| `XDG_PICTURES_DIR` | Where screenshots go, under `openftgs-xr/`. An absolute path is used as is; otherwise the user-dirs file's entry, else `~/Pictures` (Q-14). |
+| `XR_RUNTIME_JSON` | The OpenXR runtime `play --xr` uses, read by the OpenXR loader; unset, the system's active runtime. |
+| `FTGSXR_BENCH_BASELINES` | The directory of the baselines `ftgsxr bench` compares against. Default the workspace's `benchmarks/baselines/` (Q-103). |
+
+Building the Quest APK with `tools/build-quest.sh`:
+
+| Variable | What it sets |
+| --- | --- |
+| `ANDROID_HOME` | The Android SDK. Default `~/Android/Sdk`. |
+| `ANDROID_NDK_HOME` | The NDK. Default `$ANDROID_HOME/ndk/25.1.8937393`. |
+| `GRADLE_ARGS` | Extra arguments for Gradle, such as `--max-workers=8`. |
+| `CARGO_BUILD_JOBS` | Cargo's parallel jobs, as for any cargo build. |
+
+The test lanes other than `cpu` (`crates/README.md`):
+
+| Variable | Lane | What it sets |
+| --- | --- | --- |
+| `OPENFTGS_DATASETS` | `ds` | The datasets directory, whose `xr-fixtures/` holds the models `tools/fixtures/train_tiny.sh` trains. Required. |
+| `FTGSXR_NET_INDEX` | `net` | The base URL of the public HTTPS index I-21 lists, which the Pages workflow publishes (Q-156). Required. |
+| `XDG_RUNTIME_DIR` | `xr` | Where Monado's socket is found. The `xr` tests select Monado through `XR_RUNTIME_JSON` themselves. |
+| `FTGSXR_QUEST_APK` | `dv` | The debug APK to install, built by `tools/build-quest.sh debug`. Required. |
+| `ANDROID_HOME` | `dv` | Where `adb` (when not on the `PATH`) and `aapt2` are found. |
+| `ANDROID_SERIAL` | `dv` | The headset, when `adb devices` lists more than one device. |
+| `FTGSXR_DV_OUT` | `dv` | A directory that keeps a copy of each file the tests pull from the headset. |
+| `FTGSXR_DV_TREE` | `dv` | The URI of the document tree granted through the app's picker, which Dv-10 reads (Q-273). |
+| `FTGSXR_R17_ROWS`, `FTGSXR_SPIKES_ROWS` | `dv` | The row count of a heavier model than the default for R-17's headset run and for the spike runs (Q-420). |
+| `FTGSXR_WATCHDOG` | `gpu` | Set to `1` to check R-6's 1 ms bounds rather than only report them, on a machine running nothing else (Q-111). |
+| `FTGSXR_RECORD_R12_EXACT`, `FTGSXR_RECORD_Q448_EXACT`, `FTGSXR_RECORD_Q450_SCALED` | `gpu` | Set to record the reference layers of the exactness checks instead of comparing against them, only in a commit of its own before an exact change (Q-445). |
+
+The fixture tools in `tools/fixtures/` (spec §2.7):
+
+| Variable | What it sets |
+| --- | --- |
+| `OPENFTGS_REPO` | The openftgs clone. `train_tiny.sh` requires it and runs its `.venv`; the Python scripts run under that `.venv`'s Python and record the clone's commit. |
+| `OPENFTGS_DATASETS` | The datasets directory, as above; `train_tiny.sh` requires it and reads the openftgs-synth dataset in `synth/`. |
+| `XR_FIXTURES` | Where `train_tiny.sh` writes the trained models. Default `$OPENFTGS_DATASETS/xr-fixtures`. |
+| `THREADS` | The CPU threads of every `train_tiny.sh` command. Default 3. |
+| `FIXTURES_THREADS` | The CPU threads of every openftgs run of the Python scripts, so reruns match bit for bit. Default 6 (Q-415). |
+| `FIXTURES_WORK` | The scripts' intermediates, never committed. Default `.scratch/fixtures-work`. |
+
 ## Contributing
 
 The project is discussed in the issues of [github.com/samaust/openftgs-xr](https://github.com/samaust/openftgs-xr/issues). Contributions follow the source rules in `CLAUDE.md`: above all, no code is ever taken from software under a copyleft, non-commercial or missing license, and every source consulted is recorded in `docs/prd/source-log.md`.
