@@ -4,7 +4,19 @@ An Apache-2.0 Rust workspace that implements a player for openftgs models genera
 
 ## Status
 
-There is no code yet, so nothing can be built or run. The specification, `docs/spec/openftgs-xr-spec.md`, is written (revision 2, 2026-10-29); the milestones of `docs/prd/milestones.md` follow from it, and the implementation from them. The spec's §2 fixes the toolchain: cargo for the desktop build, cargo-ndk and a Gradle project for the Quest build.
+The specification, `docs/spec/openftgs-xr-spec.md`, is at revision 63 (2026-11-15); `docs/spec/README.md` records its revisions. Seven of the nine milestones in `docs/prd/milestones.md` are done: M-1 core and I/O, M-2 the desktop renderer and the headless commands, M-3 the XR spike, M-4 the desktop application, M-5 XR interaction, M-6 passthrough and environment, and M-7 light estimation and color matching. M-8, performance, is in progress ([#718](https://github.com/samaust/openftgs-xr/issues/718)). M-9, polish and release, has not started.
+
+Both builds work:
+
+- **Desktop.** `cargo run --release --bin ftgsxr -- play [MODEL|URL|SCENE ...]` opens the player. The same binary has the headless commands `render`, `info`, `validate`, `import`, `export` and `bench` (spec §1.7). The build needs ALSA's development package (spec §2.3).
+- **Quest 3.** `tools/build-quest.sh [debug|release]` builds the APK with cargo-ndk and Gradle (spec §2.5) and prints its path. The script's header lists what it needs.
+
+Plain `cargo test` runs the `cpu` lane. The tests that need a GPU, an OpenXR runtime, the headset, the network or the datasets are in their own lanes (`crates/README.md`).
+
+What is still open:
+
+- **The headset's frame time.** The Quest 3 misses P-1's 12.4 ms GPU budget per frame in `quest-balanced`, even with occlusion off ([#801](https://github.com/samaust/openftgs-xr/issues/801), [#802](https://github.com/samaust/openftgs-xr/issues/802)). Its sort also misses P-4's 2.5 ms ([#123](https://github.com/samaust/openftgs-xr/issues/123)). Two PRDs are planned to close the gap: the sort experiments ([#829](https://github.com/samaust/openftgs-xr/issues/829)) and foveation on the splat layer ([#804](https://github.com/samaust/openftgs-xr/issues/804)).
+- **M-9.** Still to do: drawing the HUD overlay and the per-instance overlays, the library's thumbnails, the licenses on the Help tab, the panel's Controls page, release packaging and signing, and the documentation.
 
 ## Languages
 
