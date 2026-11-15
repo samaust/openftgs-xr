@@ -66,7 +66,9 @@ pub fn real_sh(degree: u8, dir: Vec3) -> [f64; 16] {
 /// P_l^m(x) for 0 ≤ m ≤ l ≤ 3 with the Condon–Shortley phase (−1)^m, indexed `[l][m]`:
 /// P_m^m = −(2m − 1)√(1 − x²) P_{m−1}^{m−1}, P_{m+1}^m = (2m + 1) x P_m^m, and
 /// (l − m) P_l^m = (2l − 1) x P_{l−1}^m − (l + m − 1) P_{l−2}^m.
-#[expect(
+// `allow`, not `expect`: clippy 1.99 fires this lint here and clippy 1.100 doesn't, so an
+// `expect` fails `-D warnings` on one of them.
+#[allow(
     clippy::needless_range_loop,
     reason = "the recurrences index by l and m"
 )]
