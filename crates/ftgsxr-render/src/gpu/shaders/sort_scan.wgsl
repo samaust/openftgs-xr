@@ -33,10 +33,14 @@ const SPLAT_COUNT: u32 = 1u;
 
 var<workgroup> totals: array<u32, 256>;
 
-// The scan's dispatch is one workgroup only when a key is visible (Q-85), so `blocks` ≥ 1.
+// The scan's dispatch is one workgroup only when a key is visible (Q-85); the kernel also
+// returns at once with no block, so `blocks - 1u` below never wraps.
 @compute @workgroup_size(256)
 fn scan(@builtin(local_invocation_index) d: u32) {
     let blocks = (counters[SPLAT_COUNT] + SORT_BLOCK - 1u) / SORT_BLOCK;
+    if blocks == 0u {
+        return;
+    }
     // Digit d's column from block 1 on: each entry becomes the keys of digit d in the
     // blocks before it, and `total` ends as the column's sum.
     var total = histograms[d];

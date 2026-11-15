@@ -24,6 +24,8 @@ pub(crate) const SORT_SCATTER_WGSL: &str = include_str!("shaders/sort_scatter.wg
 /// name; `sort_scatter.wgsl` packs each thread's four digits in one word, so the block is
 /// four keys per thread (#123). // Q-85
 pub(crate) const SORT_BLOCK: u32 = 1024;
+// `sort_scatter.wgsl` holds four keys per thread of 256 (#123).
+const _: () = assert!(SORT_BLOCK == 4 * 256);
 /// 8-bit digits (E8, D-33).
 const RADIX: u64 = 256;
 /// One pass's uniform block (the kernels' `Params`).
