@@ -16,8 +16,9 @@
 //! eye 64 mm to its right. P1–P10 hold isotropic primitives and most of their cameras are
 //! axis-aligned, so R2\_random's anisotropic rows under a turned view are what a wrong
 //! regrouping of E6's Σ′ (Q-449) would change; its eye pairs put rows in one eye only.
-//! The same turned pairs at `pixel_center_offset` 0 and at `alpha_skip` 10⁻⁴ carry the
-//! tightened quad's shifted rectangle and its fallback to μ′ ± r (Q-450, #820).
+//! The same turned pairs at `pixel_center_offset` 0, at `alpha_skip` 10⁻⁴ and at
+//! `screen_extent_max` 2 carry the tightened quad's shifted rectangle and its fallback to
+//! μ′ ± r (Q-450, #820).
 
 use std::path::PathBuf;
 
@@ -63,7 +64,7 @@ fn r9_request(p: &str) -> RenderRequest {
 
 /// R2_random's item camera at 64 × 48, turned 9° about y and 6° about x about its own
 /// center, and a second eye 64 mm to its right (along its own x axis).
-fn turned_eyes(camera: &Camera) -> [Camera; 2] {
+pub(crate) fn turned_eyes(camera: &Camera) -> [Camera; 2] {
     let scale = 0.2;
     let k = DMat3::from_cols(
         camera.k.x_axis * scale,
@@ -84,14 +85,17 @@ fn turned_eyes(camera: &Camera) -> [Camera; 2] {
 }
 
 /// R2_random's turned pairs with the model's conventions as given, then at
-/// `pixel_center_offset` 0, which shifts every kept ellipse by half a pixel, and at
-/// `alpha_skip` 10⁻⁴, where E6's cap binds from σ_eff ≈ 0.026: the tightened quad's
-/// shifted rectangle and its fallback to μ′ ± r (Q-450, #820), recorded before that
-/// change (Q-445's rule).
-const TURNED_VARIANTS: [(&str, fn(&mut RenderConventions)); 3] = [
+/// `pixel_center_offset` 0, which shifts every kept ellipse by half a pixel, at
+/// `alpha_skip` 10⁻⁴, where E6's cap binds from σ_eff ≈ 0.026, and at `screen_extent_max`
+/// 2, where the cap binds for every row and the pixels it clips reach α = σ_eff·e⁻² (at
+/// the default cap of 3.33 they lie at α ≤ σ_eff·e^(−5.5), within E15's 1/255): the
+/// tightened quad's shifted rectangle and its fallback to μ′ ± r (Q-450, #820), recorded
+/// before that change (Q-445's rule).
+const TURNED_VARIANTS: [(&str, fn(&mut RenderConventions)); 4] = [
     ("", |_| {}),
     ("-offset0", |c| c.pixel_center_offset = 0.0),
     ("-skip1e-4", |c| c.alpha_skip = 1e-4),
+    ("-cap2", |c| c.screen_extent_max = 2.0),
 ];
 
 /// The conformance tier, with the shared-center records' Σ^S in half precision or not
