@@ -16,7 +16,8 @@
 //! 0.05, at render scales 0.7 and E16's floor 0.6: 144 layers. The target size is the Bevy
 //! adapter's `layer_size`: each side × the scale, rounded, at least 1 (Q-453). The
 //! `alpha_skip` 0.05 layers raise the ellipse's rim, where the scale dropped from δ in
-//! `quad_pixel` drops texels, above E15's threshold at both scales (#827).
+//! `quad_pixel` drops texels, above E15's threshold at both scales (#827, measured on an
+//! RTX 4090).
 
 use std::path::PathBuf;
 
@@ -37,8 +38,8 @@ fn recorded_path() -> PathBuf {
 }
 
 /// Set to record `scaled_layers` into `recorded_path()` instead of comparing, only under
-/// Q-445's rule as written: in a commit of its own, made at the commit before an exact
-/// change (Q-453).
+/// Q-445's rule as written: in a commit of its own, with the shaders of the commit before
+/// an exact change (Q-453; #828 recorded with 1a95a298's `splat.wgsl` in the current tree).
 const RECORD_VAR: &str = "FTGSXR_RECORD_Q450_SCALED";
 
 /// The layer format, the headless renderer's (Q-109): four half floats.
