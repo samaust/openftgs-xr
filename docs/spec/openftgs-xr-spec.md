@@ -68,7 +68,7 @@ The player's own symbols:
 | T | the playback clock, seconds since the clock's zero (E9) | ℝ≥0 |
 | P\_m = (t\_m, q\_m, s\_m) | the pose of m: translation, rotation (unit quaternion) and uniform scale, model space → stage space (E5) | ℝ³ × SO(3) × ℝ>0 |
 | S, "stage space" | the player's world frame: the OpenXR stage (or its fallback) on a headset, a Y-up metre frame with the ground at y = 0 on the desktop (§1.14) | — |
-| v | a view: one eye's camera in XR, the one camera on the desktop or in a headless render (E6) | — |
+| v | a view: one eye's camera in XR or in a headless two-eye render (`render_stereo`), the one camera on the desktop or in a headless `render` (E6) | — |
 | o\_v | the eye position of view v, in stage space | ℝ³ |
 | σ\_eff(τ) | the effective opacity σt(τ)·σ at τ (E2) | (0, 1) |
 | k | a primitive's sort key in a view (E8) | 32-bit integer |
@@ -366,7 +366,7 @@ A drag ends when the action that started it is released. It also ends, keeping t
 
 **Method** \[R: splats rendering; D-3\]. Primitives are drawn as sorted screen-aligned quads with hardware premultiplied-alpha blending, the method of the permissive splat renderers the research surveyed (Appendix A), not as a tile-based compute rasterizer: hardware blending needs no per-pixel sort, no 64-bit atomics and no CPU readback, and it runs on the Quest's Vulkan driver as on the desktop. Its deviations from openftgs's render backends are E7's, bounded by §3.2.
 
-**Per-frame pipeline.** One frame of one view runs these stages; a headset frame runs them for both views, sharing stages 1–4 in shared-center mode (D-4):
+**Per-frame pipeline.** One frame of one view runs these stages; a headset frame and the headless two-eye render run them for both views, sharing stages 1–4 in shared-center mode (D-4):
 
 1. **Prepare (CPU, per instance).** τ\_m from E9; the temporal index's dispatch ranges for τ\_m (E3); one uniform block per instance: the pose as a matrix with its rotation and scale (E5), τ\_m − τ₀ as float32, the loaded SH degree, the color transform (E14), the trim (E17), the render mode and flags. Nothing is read back from the GPU in the frame loop (D-34).
 2. **Cull (compute, per instance, per dispatch range).** Per row: σt and σ\_eff (E2; σt ≡ 1 for a single-timestamp model); early exit when σ\_eff < α\_skip (E3); μx(τ) (E1) → the trim test (E17): a row outside the instance's trim is counted as trimmed and skipped; the test runs after the σ\_eff early exit, so a row skipped by E3 is not counted as trimmed, and applies to every render mode, centers included → μ^S (E5) → camera space; the near and far culls, the frustum cull by the projected box, E6's projection, extent and radii, the determinant guard; the E4 color at the view's eye (or the midpoint, D-4) with the E14 transform applied. A visible row takes a slot in the frame's record buffer by an atomic increment of the visible count in the indirect-draw arguments and writes its record: the per-view record holds μ′, the conic, the half-extents, the premultiplied color and α as four half floats, the depth and flags (48 bytes); the shared-center record holds the stage-space position, Σ^S, the color and the key (64 bytes, 48 with half-precision Σ^S). Centers-mode instances append to a second region with its own count. A slot beyond the capacity C is dropped and raises the overflow flag (D-34).
