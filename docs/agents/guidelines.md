@@ -42,7 +42,7 @@ The openftgs-xr spec, `docs/spec/openftgs-xr-spec.md`, may be edited, by the own
 
 An approved edit goes on a short branch `spec-<slug>` from `main`, in its own worktree ("Branches live in worktrees"):
 
-1. Make the approved edit, and record it in `docs/spec/README.md`: the new revision, the date and what changed.
+1. Make the approved edit, and record it in `docs/spec/README.md`: the new revision, the date and what changed. The history goes there only: the spec describes the current specification and carries no record of its revisions (owner rule, 2026-11-15).
 2. For each Q-n row the edit absorbs, set its Status to `in spec (D-n)` and replace its `// Q-n` markers in the code with `// D-n`.
 3. Check that the owner rules CLAUDE.md records and the spec should carry are in it; report what is missing to the owner.
 4. Compare the open PRDs, tickets and agent briefs with the spec items that changed, and comment on each one affected.
