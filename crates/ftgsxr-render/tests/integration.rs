@@ -37,6 +37,7 @@ mod import_vulkan_texture;
 mod load_splat_asset;
 mod occlusion_edges;
 mod q448_exact;
+mod q450_render_scale;
 mod q451_tight_quad;
 mod quality_tiers;
 mod r01_probes;
