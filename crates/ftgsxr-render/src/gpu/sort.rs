@@ -12,7 +12,8 @@ use super::tier::SortKey;
 
 /// `sort_count.wgsl`: one block's histogram of the pass's digit.
 pub(crate) const SORT_COUNT_WGSL: &str = include_str!("shaders/sort_count.wgsl");
-/// `sort_scan.wgsl`: one workgroup scans every block's histogram into scatter offsets.
+/// `sort_scan.wgsl`: one workgroup scans every block's histogram into scatter offsets: the
+/// blocks' column prefixes, and the digits' bases in block 0's row.
 pub(crate) const SORT_SCAN_WGSL: &str = include_str!("shaders/sort_scan.wgsl");
 /// `sort_scatter.wgsl`: one block's stable scatter into the other buffer pair.
 pub(crate) const SORT_SCATTER_WGSL: &str = include_str!("shaders/sort_scatter.wgsl");
@@ -20,7 +21,8 @@ pub(crate) const SORT_SCATTER_WGSL: &str = include_str!("shaders/sort_scatter.wg
 /// The keys one workgroup of the count and scatter passes takes, four per thread of its
 /// 256: stage 3 writes ⌈count / SORT_BLOCK⌉ workgroups (R-4), and the blocks' histograms
 /// take 1 KiB per block, about C bytes (§1.12, Q-23). The kernels' override of the same
-/// name. // Q-85
+/// name; `sort_scatter.wgsl` packs each thread's four digits in one word, so the block is
+/// four keys per thread (#123). // Q-85
 pub(crate) const SORT_BLOCK: u32 = 1024;
 /// 8-bit digits (E8, D-33).
 const RADIX: u64 = 256;
@@ -312,13 +314,25 @@ mod tests {
     }
 
     /// Random keys, a partial last block, an exact block multiple, a single key and no key,
-    /// with stale keys past the count left unsorted.
+    /// with stale keys past the count left unsorted; and block counts around the scan's
+    /// unrolled walk of 16 blocks after block 0 (#123): 16 blocks (no full step, 15 left
+    /// over), 17 (one full step) and 18 (one step and one left over, the last partial).
     #[test]
     #[ignore = "gpu"]
     fn gpu_radix_sort_orders_keys_stably_with_any_tail() {
         let dev = SplatDevice::headless().expect("a graphics adapter for the gpu lane");
         let mut rng = Rng(0x113);
-        for (n, capacity) in [(3000, 5000), (2048, 2048), (1, 300), (0, 10), (1023, 4096)] {
+        let b = SORT_BLOCK;
+        for (n, capacity) in [
+            (3000, 5000),
+            (2048, 2048),
+            (1, 300),
+            (0, 10),
+            (1023, 4096),
+            (16 * b, 16 * b),
+            (17 * b, 17 * b),
+            (17 * b + 5, 20 * b),
+        ] {
             let keys: Vec<u32> = (0..n).map(|_| rng.next() | 1).collect();
             check(&dev, SortKey::Depth32, &keys, capacity);
         }
