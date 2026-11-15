@@ -120,10 +120,12 @@ fn strip_corner(vid: u32) -> vec2<f32> {
 }
 
 // Q-450's constants: the relative pad and margin (2⁻¹² of a length), the margin's absolute
-// part (2⁻⁷ target pixel, twice the vertices' 1/256-pixel snapping), the pad's (¼ target
-// pixel) and the bound on the conic's condition, T² ≤ 2⁹·D.
+// part (2⁻³ target pixel, twice the 1/16-pixel vertex snapping of the 4 sub-pixel bits
+// Vulkan guarantees as `subPixelPrecisionBits`' minimum, which wgpu doesn't report, rather
+// than the 8 of the Quest's and the desktop's GPUs), the pad's (¼ target pixel) and the
+// bound on the conic's condition, T² ≤ 2⁹·D.
 const QUAD_RELATIVE: f32 = 0.000244140625;
-const QUAD_MARGIN_PX: f32 = 0.0078125;
+const QUAD_MARGIN_PX: f32 = 0.125;
 const QUAD_PAD_PX: f32 = 0.25;
 const QUAD_CONDITION: f32 = 512.0;
 
