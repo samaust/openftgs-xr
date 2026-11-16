@@ -221,6 +221,10 @@ pub fn derive_image_layout(usage: wgt::TextureUses, format: wgt::TextureFormat) 
         wgt::TextureUses::RESOURCE if is_color => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         wgt::TextureUses::COLOR_TARGET => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         wgt::TextureUses::DEPTH_STENCIL_WRITE => vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/vulkan/conv.rs,
+        // MIT OR Apache-2.0: a fragment density map's layout, usage and barrier (§2.3's
+        // note for D-58). Was: none.
+        wgt::TextureUses::FRAGMENT_DENSITY_MAP => vk::ImageLayout::FRAGMENT_DENSITY_MAP_OPTIMAL_EXT,
         _ => {
             if usage == wgt::TextureUses::PRESENT {
                 vk::ImageLayout::PRESENT_SRC_KHR
@@ -262,6 +266,9 @@ pub fn map_texture_usage(usage: wgt::TextureUses) -> vk::ImageUsageFlags {
     }
     if usage.contains(wgt::TextureUses::TRANSIENT) {
         flags |= vk::ImageUsageFlags::TRANSIENT_ATTACHMENT;
+    }
+    if usage.contains(wgt::TextureUses::FRAGMENT_DENSITY_MAP) {
+        flags |= vk::ImageUsageFlags::FRAGMENT_DENSITY_MAP_EXT; // openftgs-xr, D-58
     }
     flags
 }
@@ -319,6 +326,12 @@ pub fn map_texture_usage_to_barrier(
         access |= vk::AccessFlags::SHADER_WRITE;
     }
 
+    if usage.contains(wgt::TextureUses::FRAGMENT_DENSITY_MAP) {
+        // openftgs-xr, D-58: read while the render pass is processed
+        stages |= vk::PipelineStageFlags::FRAGMENT_DENSITY_PROCESS_EXT;
+        access |= vk::AccessFlags::FRAGMENT_DENSITY_MAP_READ_EXT;
+    }
+
     if usage == wgt::TextureUses::UNINITIALIZED || usage == wgt::TextureUses::PRESENT {
         (
             vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -354,6 +367,9 @@ pub fn map_vk_image_usage(usage: vk::ImageUsageFlags) -> wgt::TextureUses {
     }
     if usage.contains(vk::ImageUsageFlags::TRANSIENT_ATTACHMENT) {
         bits |= wgt::TextureUses::TRANSIENT;
+    }
+    if usage.contains(vk::ImageUsageFlags::FRAGMENT_DENSITY_MAP_EXT) {
+        bits |= wgt::TextureUses::FRAGMENT_DENSITY_MAP; // openftgs-xr, D-58
     }
     bits
 }

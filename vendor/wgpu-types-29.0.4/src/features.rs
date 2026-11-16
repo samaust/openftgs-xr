@@ -1444,6 +1444,22 @@ bitflags_array! {
         #[name("wgpu-memory-decoration-volatile")]
         const MEMORY_DECORATION_VOLATILE = 1 << 62;
 
+        // openftgs-xr change (D-58), to wgpu-types 29.0.4 (crates.io), file
+        // src/features.rs, MIT OR Apache-2.0: a native-only device feature for a fragment
+        // density map on a render pass (the layer's foveation, §2.3's note for D-58). Was:
+        // no such feature; bit 63 was free.
+        /// Allows a render pass to read a fragment density map
+        /// ([`TextureUsages::FRAGMENT_DENSITY_MAP`]) and a render pipeline to be made for
+        /// such a pass: VK\_EXT\_fragment\_density\_map with `fragmentDensityMap` and
+        /// `fragmentDensityMapNonSubsampledImages`, the attachments never subsampled.
+        ///
+        /// Supported platforms:
+        /// - Vulkan, where the physical device offers the extension and both features
+        ///
+        /// This is a native only feature (openftgs-xr, D-58).
+        #[name("openftgs-xr-fragment-density-map")]
+        const FRAGMENT_DENSITY_MAP = 1 << 63;
+
         // Adding a new feature? Bit 35 (formerly SHADER_PRIMITIVE_INDEX) is available.
     }
 

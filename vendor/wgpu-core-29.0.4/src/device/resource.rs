@@ -1502,6 +1502,28 @@ impl Device {
             }
         }
 
+        // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
+        // src/device/resource.rs, MIT OR Apache-2.0: a fragment density map's texture needs
+        // the device feature and is a 2D `Rg8Unorm` texture of one sample (the format whose
+        // density-map support Vulkan guarantees with the extension); its usage is checked
+        // here, not against the format's allowed usages (§2.3's note for D-58). Was: no
+        // such usage.
+        if desc
+            .usage
+            .contains(wgt::TextureUsages::FRAGMENT_DENSITY_MAP)
+        {
+            self.require_features(wgt::Features::FRAGMENT_DENSITY_MAP)
+                .map_err(|error| CreateTextureError::MissingFeatures(desc.format, error))?;
+            if desc.format != TextureFormat::Rg8Unorm
+                || desc.dimension != wgt::TextureDimension::D2
+                || desc.sample_count != 1
+            {
+                return Err(CreateTextureError::InvalidUsage(
+                    wgt::TextureUsages::FRAGMENT_DENSITY_MAP,
+                ));
+            }
+        }
+
         let format_features = self
             .describe_format_features(desc.format)
             .map_err(|error| CreateTextureError::MissingFeatures(desc.format, error))?;
@@ -1581,7 +1603,7 @@ impl Device {
                 desc.usage - planes_usages
             }
             None => desc.usage - format_features.allowed_usages,
-        };
+        } - wgt::TextureUsages::FRAGMENT_DENSITY_MAP; // openftgs-xr, D-58: checked above
 
         if !missing_allowed_usages.is_empty() {
             // detect downlevel incompatibilities

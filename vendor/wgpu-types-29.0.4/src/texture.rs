@@ -204,6 +204,13 @@ bitflags::bitflags! {
         ///
         /// Requires [`StoreOp::Discard`].
         const TRANSIENT = 1 << 17;
+        // openftgs-xr change (D-58), to wgpu-types 29.0.4 (crates.io), file
+        // src/texture.rs, MIT OR Apache-2.0: a texture usage for a fragment density map
+        // (§2.3's note for D-58). Was: no such usage.
+        /// Allows a texture to be a render pass's fragment density map. Requires
+        /// [`Features::FRAGMENT_DENSITY_MAP`] and [`TextureFormat::Rg8Unorm`], a 2D texture
+        /// of one sample (openftgs-xr, D-58).
+        const FRAGMENT_DENSITY_MAP = 1 << 18;
     }
 }
 
@@ -245,12 +252,18 @@ bitflags::bitflags! {
         const STORAGE_ATOMIC = 1 << 11;
         /// Transient texture that may not have any backing memory. Not a resource state stored in the trackers, only used for passing down usages to create_texture.
         const TRANSIENT = 1 << 12;
+        // openftgs-xr change (D-58), to wgpu-types 29.0.4 (crates.io), file
+        // src/texture.rs, MIT OR Apache-2.0: the state of a texture read as a render
+        // pass's fragment density map (§2.3's note for D-58). Was: bit 15 free.
+        /// Read-only fragment density map of a render pass (openftgs-xr, D-58).
+        const FRAGMENT_DENSITY_MAP = 1 << 15;
         /// The combination of states that a texture may be in _at the same time_.
         /// cbindgen:ignore
         const INCLUSIVE = Self::COPY_SRC.bits() | Self::RESOURCE.bits() | Self::DEPTH_STENCIL_READ.bits() | Self::STORAGE_READ_ONLY.bits();
         /// The combination of states that a texture must exclusively be in.
         /// cbindgen:ignore
-        const EXCLUSIVE = Self::COPY_DST.bits() | Self::COLOR_TARGET.bits() | Self::DEPTH_STENCIL_WRITE.bits() | Self::STORAGE_WRITE_ONLY.bits() | Self::STORAGE_READ_WRITE.bits() | Self::STORAGE_ATOMIC.bits() | Self::PRESENT.bits();
+        const EXCLUSIVE = Self::COPY_DST.bits() | Self::COLOR_TARGET.bits() | Self::DEPTH_STENCIL_WRITE.bits() | Self::STORAGE_WRITE_ONLY.bits() | Self::STORAGE_READ_WRITE.bits() | Self::STORAGE_ATOMIC.bits() | Self::PRESENT.bits()
+            | Self::FRAGMENT_DENSITY_MAP.bits(); // openftgs-xr, D-58: its own layout
 
         /// Flag used by the wgpu-core texture tracker to say a texture is in different states for every sub-resource
         const COMPLEX = 1 << 13;
