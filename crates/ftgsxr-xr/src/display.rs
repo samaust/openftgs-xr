@@ -70,6 +70,9 @@ mod record;
 // R-17's device side (#730, Q-431, Q-308), built for the device and the host tests.
 #[cfg(any(test, target_os = "android"))]
 mod r17;
+// Spike S-F1's device side (#805, Q-454, Q-308), built for the device and the host tests.
+#[cfg(any(test, target_os = "android"))]
+mod sf1;
 
 /// The scale change that re-creates the swapchain (§1.12).
 const SCALE_STEP: f32 = 0.1;
@@ -399,6 +402,9 @@ impl Plugin for DisplayPlugin {
         // R-17 on the device: inert until the quest runner's entity names it (Q-308).
         #[cfg(target_os = "android")]
         r17::add(app);
+        // Spike S-F1 on the device: inert until the quest runner's entity names it (Q-308).
+        #[cfg(target_os = "android")]
+        sf1::add(app);
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.add_systems(XrPreDestroySession, drop_profile);
             render_app.add_systems(
