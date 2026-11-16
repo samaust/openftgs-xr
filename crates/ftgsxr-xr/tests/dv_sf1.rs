@@ -6,8 +6,9 @@
 //! and reads the lines of `display::sf1`: the density-map features and properties, then
 //! at render scale 1.0 and E16's floor of 0.6 each level's window summary (the first
 //! eye's `GpuTimes`, Q-125) and its counters window. The spike judges nothing: the test
-//! fails only on an incomplete sequence or a missing line, never on a figure. Run it with
-//! `--nocapture` for the report. Prerequisites: `dv_support`'s.
+//! fails only on an incomplete sequence or a missing line, never on a figure or a
+//! validation message, which it reports with the layer's announcement (Q-123). Run it
+//! with `--nocapture` for the report. Prerequisites: `dv_support`'s.
 // Q-454, Q-420
 
 use crate::dv_spikes::every_row_persistent;
@@ -15,7 +16,9 @@ use crate::dv_support;
 
 use std::time::Duration;
 
-use dv_support::{apk, clear, device, install, launch, log, push, stop, verdict};
+use dv_support::{
+    DebugLayers, Validation, apk, clear, device, install, launch, log, push, stop, verdict,
+};
 use ftgsxr_core::write_exchange;
 
 /// Q-420's rows; `FTGSXR_SPIKES_ROWS` sets another count, as for the spikes.
@@ -78,10 +81,23 @@ fn dv_sf1_density_map_features_and_foveation_timings_at_two_scales() {
     push(&file, "spike.safetensors");
     std::fs::remove_dir_all(&dir).ok();
     dv_support::adb(&["logcat", "-G", LOG_BUFFER]);
+    // The debug APK's validation layer (Q-123), reported, not judged: whether the layer's
+    // pipelines need a pass with the map is what the spike finds (#805).
+    let layers = DebugLayers::enable();
     let start = launch("sf1");
     let result = verdict("sf1", start, Duration::from_secs(420));
     let lines = log();
+    let validation = Validation::read();
     stop();
+    drop(layers);
+    println!(
+        "--- validation: layer announced {}, {} VALIDATION lines ---",
+        validation.announced,
+        validation.messages.len()
+    );
+    for m in validation.messages.iter().take(20) {
+        println!("{m}");
+    }
     println!("--- sf1 report ({rows} rows, degree 0, every row persistent) ---");
     for l in lines.iter().filter(|l| {
         l.contains("sf1: ")
