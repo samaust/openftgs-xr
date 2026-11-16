@@ -102,9 +102,7 @@ fn dv_sf1_density_map_features_and_foveation_timings_at_two_scales() {
         let Some(id) = m.split_whitespace().find(|w| w.starts_with("VUID-")) else {
             continue;
         };
-        let id = id
-            .trim_end_matches(|c: char| !c.is_alphanumeric())
-            .to_owned();
+        let id = id.split('(').next().unwrap_or(id).to_owned();
         let time = m.split_whitespace().nth(1).unwrap_or("").to_owned();
         match vuids.iter_mut().find(|v| v.0 == id) {
             Some(v) => {
