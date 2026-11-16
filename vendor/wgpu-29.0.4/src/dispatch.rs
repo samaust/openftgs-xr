@@ -338,6 +338,20 @@ pub trait CommandEncoderInterface: CommonTraits {
 
     fn begin_compute_pass(&self, desc: &crate::ComputePassDescriptor<'_>) -> DispatchComputePass;
     fn begin_render_pass(&self, desc: &crate::RenderPassDescriptor<'_>) -> DispatchRenderPass;
+    // openftgs-xr change (D-58), to wgpu 29.0.4 (crates.io), file src/dispatch.rs, MIT OR
+    // Apache-2.0: a render pass begun with a fragment density map (§2.3's note for D-58).
+    // Backends other than wgpu-core take no map. Was: no such method.
+    fn begin_render_pass_with_fragment_density_map(
+        &self,
+        desc: &crate::RenderPassDescriptor<'_>,
+        fragment_density_map: Option<&crate::TextureView>,
+    ) -> DispatchRenderPass {
+        assert!(
+            fragment_density_map.is_none(),
+            "a fragment density map needs the wgpu-core backend (openftgs-xr, D-58)"
+        );
+        self.begin_render_pass(desc)
+    }
     fn finish(&mut self) -> DispatchCommandBuffer;
 
     fn clear_texture(

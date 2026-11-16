@@ -1394,9 +1394,10 @@ impl dispatch::DeviceInterface for CoreDevice {
                 }
             }),
             multiview_mask: desc.multiview_mask,
-            // openftgs-xr change (D-58), to wgpu 29.0.4 (crates.io), file src/backend/wgpu_core.rs, MIT OR
-            // Apache-2.0: the pipeline flag passed to wgpu-core, and no fragment density map on its pass yet (§2.3's note for D-58); each changed line is marked
-            // `openftgs-xr, D-58`.
+            // openftgs-xr change (D-58), to wgpu 29.0.4 (crates.io), file
+            // src/backend/wgpu_core.rs, MIT OR Apache-2.0: the pipeline flag passed to
+            // wgpu-core, and a render pass begun with a fragment density map (§2.3's note for
+            // D-58); each changed line is marked `openftgs-xr, D-58`.
             fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
             cache: desc.cache.map(|cache| cache.inner.as_core().id),
         };
@@ -2584,6 +2585,16 @@ impl dispatch::CommandEncoderInterface for CoreCommandEncoder {
         &self,
         desc: &crate::RenderPassDescriptor<'_>,
     ) -> dispatch::DispatchRenderPass {
+        self.begin_render_pass_with_fragment_density_map(desc, None) // openftgs-xr, D-58
+    }
+
+    // openftgs-xr, D-58: the pass begun with the map's view, if any; the body is upstream's
+    // `begin_render_pass` with the map passed to wgpu-core.
+    fn begin_render_pass_with_fragment_density_map(
+        &self,
+        desc: &crate::RenderPassDescriptor<'_>,
+        fragment_density_map: Option<&crate::TextureView>,
+    ) -> dispatch::DispatchRenderPass {
         let colors = desc
             .color_attachments
             .iter()
@@ -2625,7 +2636,7 @@ impl dispatch::CommandEncoderInterface for CoreCommandEncoder {
                 depth_stencil_attachment: depth_stencil.as_ref(),
                 occlusion_query_set: desc.occlusion_query_set.map(|qs| qs.inner.as_core().id),
                 multiview_mask: desc.multiview_mask,
-                fragment_density_map: None, // openftgs-xr, D-58: no map attached from wgpu yet
+                fragment_density_map: fragment_density_map.map(|v| v.inner.as_core().id), // openftgs-xr, D-58
             },
         );
 

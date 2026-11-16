@@ -85,6 +85,30 @@ impl CommandEncoder {
         }
     }
 
+    // openftgs-xr change (D-58), to wgpu 29.0.4 (crates.io), file src/api/command_encoder.rs,
+    // MIT OR Apache-2.0: a render pass begun with a fragment density map, the render pass
+    // descriptor itself unchanged, since crates that are not vendored build it as a struct
+    // literal (§2.3's note for D-58). Was: no such entry point.
+    /// Begins recording of a render pass that reads `fragment_density_map`, a view of a
+    /// texture made with [`TextureUsages::FRAGMENT_DENSITY_MAP`]; `None` is
+    /// [`CommandEncoder::begin_render_pass`]. The pass's pipelines must be made with
+    /// [`RenderPipelineDescriptor::fragment_density_map`] set exactly when a map is given.
+    /// Requires [`Features::FRAGMENT_DENSITY_MAP`] for a map (openftgs-xr, D-58).
+    pub fn begin_render_pass_with_fragment_density_map<'encoder>(
+        &'encoder mut self,
+        desc: &RenderPassDescriptor<'_>,
+        fragment_density_map: Option<&TextureView>,
+    ) -> RenderPass<'encoder> {
+        let rpass = self
+            .inner
+            .begin_render_pass_with_fragment_density_map(desc, fragment_density_map);
+        RenderPass {
+            inner: rpass,
+            actions: Arc::clone(&self.actions),
+            _encoder_guard: api::PhantomDrop::default(),
+        }
+    }
+
     /// Begins recording of a compute pass.
     ///
     /// This function returns a [`ComputePass`] object which records a single compute pass.

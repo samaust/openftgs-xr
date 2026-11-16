@@ -193,3 +193,76 @@ fn gpu_no_map_and_no_flag_draws_as_before() {
     }
     assert_eq!(layer.take(), Vec::<String>::new(), "no validation message");
 }
+
+#[test]
+#[ignore = "gpu"]
+fn gpu_pass_with_a_map_needs_the_feature() {
+    let _layer = layer_messages();
+    let Some(adapter) = vulkan_adapter() else {
+        return;
+    };
+    if !adapter
+        .features()
+        .contains(wgpu::Features::FRAGMENT_DENSITY_MAP)
+    {
+        eprintln!(
+            "the adapter lacks VK_EXT_fragment_density_map with non-subsampled images: only the rejection without the feature is checked, the map path is not exercised here (D-58)"
+        );
+    }
+    let (device, _queue) =
+        bevy::tasks::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("a device");
+    let texture = |label, format, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let target = texture(
+        "fdm test target",
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    );
+    // A valid Rg8Unorm texture, but neither the feature nor its usage: the map is refused.
+    let map = texture(
+        "fdm test map",
+        wgpu::TextureFormat::Rg8Unorm,
+        wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let (view, map_view) = (
+        target.create_view(&Default::default()),
+        map.create_view(&Default::default()),
+    );
+    let pass = |map: Option<&wgpu::TextureView>| {
+        validation_error(&device, || {
+            let mut enc = device.create_command_encoder(&Default::default());
+            let _p = enc.begin_render_pass_with_fragment_density_map(
+                &wgpu::RenderPassDescriptor {
+                    label: Some("fdm test pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations::default(),
+                    })],
+                    ..Default::default()
+                },
+                map,
+            );
+            drop(_p);
+            let _ = enc.finish();
+        })
+    };
+    assert!(pass(None).is_none(), "no map: the pass as before");
+    assert!(pass(Some(&map_view)).is_some(), "a map needs the feature");
+}

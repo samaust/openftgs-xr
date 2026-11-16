@@ -120,7 +120,7 @@ bevy_mod_openxr = { path = "vendor/bevy_mod_openxr-0.6.0" }
 # changed takes the surface's current extent, not a window size the window system has
 # already left, #409), approved by the owner. D-58: and a second
 # (src/render_resource/pipeline_cache.rs, the vendored wgpu's density-map pipeline flag
-# passed unset, #807).
+# passed unset; Bevy's descriptor has no flag, #807).
 bevy_render = { path = "vendor/bevy_render-0.19.1" }
 # D-30: wgpu-core 29.0.4 vendored with one change (src/instance.rs, an instance made
 # from a Vulkan HAL instance keeps its flags). D-52: and a second (src/present.rs and
@@ -140,8 +140,9 @@ wgpu-hal = { path = "vendor/wgpu-hal-29.0.4" }
 # (§2.3's note for D-58), approved by the owner (#806): wgpu-types adds
 # `Features::FRAGMENT_DENSITY_MAP` and `TextureUsages`/`TextureUses::FRAGMENT_DENSITY_MAP`
 # (src/features.rs, src/texture.rs); wgpu adds `RenderPipelineDescriptor::
-# fragment_density_map` (src/api/render_pipeline.rs, src/backend/wgpu_core.rs,
-# src/util/texture_blitter.rs). Each change is marked `openftgs-xr change (D-58)` (#807).
+# fragment_density_map` and `CommandEncoder::begin_render_pass_with_fragment_density_map`,
+# its `RenderPassDescriptor` unchanged (src/api/{render_pipeline,command_encoder}.rs,
+# src/dispatch.rs, src/backend/wgpu_core.rs, src/util/texture_blitter.rs). Each change is marked `openftgs-xr change (D-58)` (#807).
 wgpu = { path = "vendor/wgpu-29.0.4" }
 wgpu-types = { path = "vendor/wgpu-types-29.0.4" }
 
