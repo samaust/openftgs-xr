@@ -246,6 +246,14 @@ pub struct RenderPassDescriptor<'a> {
     pub occlusion_query_set: Option<id::QuerySetId>,
     /// The multiview array layers that will be used
     pub multiview_mask: Option<NonZeroU32>,
+    // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/command/render.rs,
+    // MIT OR Apache-2.0: a fragment density map read by the pass, its texture made with
+    // `TextureUsages::FRAGMENT_DENSITY_MAP`; the pass tracks its view (alive while the pass
+    // is in flight, moved to the map's state) and its pipelines must be flagged for a map
+    // (§2.3's note for D-58). Was: no map.
+    /// The fragment density map the pass reads, if any. Requires
+    /// [`wgt::Features::FRAGMENT_DENSITY_MAP`].
+    pub fragment_density_map: Option<id::TextureViewId>,
 }
 
 /// Describes the attachments of a render pass.
@@ -263,6 +271,8 @@ struct ArcRenderPassDescriptor<'a> {
     pub occlusion_query_set: Option<Arc<QuerySet>>,
     /// The multiview array layers that will be used
     pub multiview_mask: Option<NonZeroU32>,
+    /// The fragment density map, if any (openftgs-xr, D-58).
+    pub fragment_density_map: Option<Arc<TextureView>>,
 }
 
 pub type RenderBasePass = BasePass<ArcRenderCommand, RenderPassError>;
@@ -291,6 +301,7 @@ pub struct RenderPass {
     timestamp_writes: Option<ArcPassTimestampWrites>,
     occlusion_query_set: Option<Arc<QuerySet>>,
     multiview_mask: Option<NonZeroU32>,
+    fragment_density_map: Option<Arc<TextureView>>, // openftgs-xr, D-58
 
     // Resource binding dedupe state.
     current_bind_groups: BindGroupStateChange,
@@ -307,6 +318,7 @@ impl RenderPass {
             depth_stencil_attachment,
             occlusion_query_set,
             multiview_mask,
+            fragment_density_map,
         } = desc;
 
         Self {
@@ -317,6 +329,7 @@ impl RenderPass {
             timestamp_writes,
             occlusion_query_set,
             multiview_mask,
+            fragment_density_map,
 
             current_bind_groups: BindGroupStateChange::new(),
             current_pipeline: StateChange::new(),
@@ -332,6 +345,7 @@ impl RenderPass {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            fragment_density_map: None, // openftgs-xr, D-58
             current_bind_groups: BindGroupStateChange::new(),
             current_pipeline: StateChange::new(),
         }
@@ -944,6 +958,9 @@ struct RenderPassInfo {
 
     divergent_discarded_depth_stencil_aspect: Option<(wgt::TextureAspect, Arc<TextureView>)>,
     multiview_mask: Option<NonZeroU32>,
+    /// The pass's fragment density map, merged into the usage scope in its own state at
+    /// the pass's end (openftgs-xr, D-58).
+    fragment_density_map: Option<Arc<TextureView>>,
 }
 
 impl RenderPassInfo {
@@ -998,6 +1015,7 @@ impl RenderPassInfo {
         pending_discard_init_fixups: &mut SurfacesInDiscardState,
         snatch_guard: &SnatchGuard<'_>,
         multiview_mask: Option<NonZeroU32>,
+        fragment_density_map: Option<Arc<TextureView>>, // openftgs-xr, D-58
     ) -> Result<Self, RenderPassErrorInner> {
         profiling::scope!("RenderPassInfo::start");
 
@@ -1438,10 +1456,35 @@ impl RenderPassInfo {
                 .map(|at| at.view.desc.format),
         };
 
+        // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
+        // src/command/render.rs, MIT OR Apache-2.0: the fragment density map needs the
+        // feature and the texture's density-map usage; its contents must be initialized,
+        // since the pass reads them. Was: no map.
+        let fragment_density_map_hal = match fragment_density_map.as_ref() {
+            Some(view) => {
+                device.require_features(wgt::Features::FRAGMENT_DENSITY_MAP)?;
+                view.parent
+                    .check_usage(TextureUsages::FRAGMENT_DENSITY_MAP)?;
+                Self::add_pass_texture_init_actions(
+                    LoadOp::<()>::Load,
+                    StoreOp::Store,
+                    texture_memory_actions,
+                    view,
+                    pending_discard_init_fixups,
+                );
+                Some(hal::Attachment {
+                    view: view.try_raw(snatch_guard)?,
+                    usage: wgt::TextureUses::FRAGMENT_DENSITY_MAP,
+                })
+            }
+            None => None,
+        };
+
         let context = RenderPassContext {
             attachments: attachment_formats,
             sample_count,
             multiview_mask,
+            fragment_density_map: fragment_density_map.is_some(), // openftgs-xr, D-58
         };
 
         let timestamp_writes_hal = if let Some(tw) = timestamp_writes.as_ref() {
@@ -1480,6 +1523,7 @@ impl RenderPassInfo {
             multiview_mask,
             timestamp_writes: timestamp_writes_hal,
             occlusion_query_set: occlusion_query_set_hal,
+            fragment_density_map: fragment_density_map_hal, // openftgs-xr, D-58
         };
         unsafe {
             encoder
@@ -1504,6 +1548,10 @@ impl RenderPassInfo {
                 trackers.views.insert_single(resolve_target);
             }
         }
+        if let Some(view) = fragment_density_map.as_ref() {
+            // openftgs-xr, D-58: the map's view lives while the command buffer is in flight
+            trackers.views.insert_single(view.clone());
+        }
 
         Ok(Self {
             context,
@@ -1513,6 +1561,7 @@ impl RenderPassInfo {
             extent,
             divergent_discarded_depth_stencil_aspect,
             multiview_mask,
+            fragment_density_map,
         })
     }
 
@@ -1538,6 +1587,16 @@ impl RenderPassInfo {
                 scope
                     .textures
                     .merge_single(texture, Some(ra.selector.clone()), ra.usage)?
+            };
+        }
+        if let Some(view) = self.fragment_density_map.as_ref() {
+            // openftgs-xr, D-58: the map's texture moves to the map's state for the pass
+            unsafe {
+                scope.textures.merge_single(
+                    &view.parent,
+                    Some(view.selector.clone()),
+                    wgt::TextureUses::FRAGMENT_DENSITY_MAP,
+                )?
             };
         }
 
@@ -1582,6 +1641,7 @@ impl RenderPassInfo {
                 multiview_mask: self.multiview_mask,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                fragment_density_map: None, // openftgs-xr, D-58
             };
             unsafe {
                 raw.begin_render_pass(&desc)
@@ -1750,6 +1810,15 @@ impl Global {
 
             arc_desc.multiview_mask = desc.multiview_mask;
 
+            // openftgs-xr, D-58: the fragment density map's view
+            arc_desc.fragment_density_map = if let Some(view_id) = desc.fragment_density_map {
+                let view = hub.texture_views.get(view_id).get()?;
+                view.same_device(device)?;
+                Some(view)
+            } else {
+                None
+            };
+
             Ok(())
         }
 
@@ -1769,6 +1838,7 @@ impl Global {
                     depth_stencil_attachment: None,
                     occlusion_query_set: None,
                     multiview_mask: None,
+                    fragment_density_map: None, // openftgs-xr, D-58
                 };
                 match fill_arc_desc(hub, desc, &mut arc_desc, &cmd_enc.device) {
                     Ok(()) => (RenderPass::new(cmd_enc, arc_desc), None),
@@ -1854,6 +1924,7 @@ impl Global {
                 timestamp_writes: pass.timestamp_writes.take(),
                 occlusion_query_set: pass.occlusion_query_set.take(),
                 multiview_mask: pass.multiview_mask,
+                fragment_density_map: pass.fragment_density_map.take(), // openftgs-xr, D-58
             })
         })
     }
@@ -1869,6 +1940,7 @@ pub(super) fn encode_render_pass(
     mut timestamp_writes: Option<ArcPassTimestampWrites>,
     occlusion_query_set: Option<Arc<QuerySet>>,
     multiview_mask: Option<NonZeroU32>,
+    fragment_density_map: Option<Arc<TextureView>>, // openftgs-xr, D-58
 ) -> Result<(), RenderPassError> {
     let pass_scope = PassErrorScope::Pass;
 
@@ -1908,6 +1980,7 @@ pub(super) fn encode_render_pass(
             &mut pending_discard_init_fixups,
             parent_state.snatch_guard,
             multiview_mask,
+            fragment_density_map,
         )
         .map_pass_err(pass_scope)?;
 

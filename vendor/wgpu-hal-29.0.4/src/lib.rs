@@ -2500,6 +2500,11 @@ pub struct RenderPipelineDescriptor<
     /// If the pipeline will be used with a multiview render pass, this indicates how many array
     /// layers the attachments will have.
     pub multiview_mask: Option<NonZeroU32>,
+    // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/lib.rs, MIT OR
+    // Apache-2.0: the pipeline flag for a pass with a fragment density map, which the
+    // Vulkan backend makes the pipeline against (§2.3's note for D-58). Was: none.
+    /// Whether the pipeline is for render passes with a fragment density map.
+    pub fragment_density_map: bool,
     /// The cache which will be used and filled when compiling this pipeline
     pub cache: Option<&'a Pc>,
 }
@@ -2662,6 +2667,10 @@ pub struct RenderPassDescriptor<'a, Q: DynQuerySet + ?Sized, T: DynTextureView +
     pub multiview_mask: Option<NonZeroU32>,
     pub timestamp_writes: Option<PassTimestampWrites<'a, Q>>,
     pub occlusion_query_set: Option<&'a Q>,
+    // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/lib.rs, MIT OR
+    // Apache-2.0: the pass's fragment density map, in `TextureUses::FRAGMENT_DENSITY_MAP`
+    // (§2.3's note for D-58). Was: none.
+    pub fragment_density_map: Option<Attachment<'a, T>>,
 }
 
 #[derive(Clone, Debug)]

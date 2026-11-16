@@ -1532,6 +1532,10 @@ impl Global {
                 multisample: desc.multisample,
                 fragment,
                 multiview_mask: desc.multiview_mask,
+                // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/device/global.rs, MIT OR
+                // Apache-2.0: the pipeline flag passed on (§2.3's note for D-58); each changed line is marked
+                // `openftgs-xr, D-58`.
+                fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
                 cache,
             };
 

@@ -789,6 +789,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             depth_stencil: None,
             sample_count: desc.sample_count,
             multiview_mask: desc.multiview_mask,
+            fragment_density_map: desc.fragment_density_map.is_some(), // openftgs-xr, D-58
         };
         let mut fb_key = super::FramebufferKey {
             raw_pass: vk::RenderPass::null(),
@@ -846,6 +847,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 stencil_ops: ds.stencil_ops,
             });
             fb_key.push_view(ds.target.view.identified_raw_view());
+        }
+        // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/vulkan/command.rs,
+        // MIT OR Apache-2.0: the fragment density map, the pass's and the framebuffer's last
+        // attachment, with an unused clear value (§2.3's note for D-58). Was: no map.
+        if let Some(ref map) = desc.fragment_density_map {
+            vk_clear_values.push(unsafe { mem::zeroed() });
+            fb_key.push_view(map.view.identified_raw_view());
         }
 
         let render_area = vk::Rect2D {

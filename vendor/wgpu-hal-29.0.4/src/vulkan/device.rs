@@ -85,6 +85,7 @@ impl super::DeviceShared {
                     ref depth_stencil,
                     sample_count,
                     multiview_mask,
+                    fragment_density_map,
                 } = *e.key();
 
                 let mut vk_attachments = Vec::new();
@@ -203,9 +204,37 @@ impl super::DeviceShared {
                     vk_subpass
                 }];
 
+                // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file
+                // src/vulkan/device.rs, MIT OR Apache-2.0: the fragment density map, the last
+                // attachment, read in its own layout, into which wgpu-core moves it before
+                // the pass (§2.3's note for D-58). Was: no map.
+                let fdm_ref = vk::AttachmentReference {
+                    attachment: vk_attachments.len() as u32,
+                    layout: vk::ImageLayout::FRAGMENT_DENSITY_MAP_OPTIMAL_EXT,
+                };
+                if fragment_density_map {
+                    vk_attachments.push(
+                        vk::AttachmentDescription::default()
+                            .format(vk::Format::R8G8_UNORM)
+                            .samples(vk::SampleCountFlags::TYPE_1)
+                            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+                            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                            .initial_layout(vk::ImageLayout::FRAGMENT_DENSITY_MAP_OPTIMAL_EXT)
+                            .final_layout(vk::ImageLayout::FRAGMENT_DENSITY_MAP_OPTIMAL_EXT),
+                    );
+                }
+
                 let mut vk_info = vk::RenderPassCreateInfo::default()
                     .attachments(&vk_attachments)
                     .subpasses(&vk_subpasses);
+
+                let mut fdm_info = vk::RenderPassFragmentDensityMapCreateInfoEXT::default()
+                    .fragment_density_map_attachment(fdm_ref);
+                if fragment_density_map {
+                    vk_info = vk_info.push_next(&mut fdm_info); // openftgs-xr, D-58
+                }
 
                 let mut multiview_info;
                 let mask;
@@ -1811,6 +1840,11 @@ impl crate::Device for super::Device {
         let mut compatible_rp_key = super::RenderPassKey {
             sample_count: desc.multisample.count,
             multiview_mask: desc.multiview_mask,
+            // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file
+            // src/vulkan/device.rs, MIT OR Apache-2.0: a pipeline flagged for a fragment density
+            // map is made against a compatible pass that has the map (§2.3's note for D-58).
+            // Was: always a pass without one.
+            fragment_density_map: desc.fragment_density_map,
             ..Default::default()
         };
         let mut stages = ArrayVec::<_, { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();

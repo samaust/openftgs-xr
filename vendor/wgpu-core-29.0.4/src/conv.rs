@@ -133,6 +133,12 @@ pub fn map_texture_usage(
         wgt::TextureUses::TRANSIENT,
         usage.contains(wgt::TextureUsages::TRANSIENT),
     );
+    // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/conv.rs, MIT OR
+    // Apache-2.0: the fragment density map's usage (§2.3's note for D-58). Was: none.
+    u.set(
+        wgt::TextureUses::FRAGMENT_DENSITY_MAP,
+        usage.contains(wgt::TextureUsages::FRAGMENT_DENSITY_MAP),
+    );
     u
 }
 
@@ -195,6 +201,10 @@ pub fn map_texture_usage_from_hal(uses: wgt::TextureUses) -> wgt::TextureUsages 
     u.set(
         wgt::TextureUsages::TRANSIENT,
         uses.contains(wgt::TextureUses::TRANSIENT),
+    );
+    u.set(
+        wgt::TextureUsages::FRAGMENT_DENSITY_MAP, // openftgs-xr, D-58
+        uses.contains(wgt::TextureUses::FRAGMENT_DENSITY_MAP),
     );
     u
 }

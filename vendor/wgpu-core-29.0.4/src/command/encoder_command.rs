@@ -172,6 +172,11 @@ pub enum Command<R: ReferenceType> {
         timestamp_writes: Option<crate::command::PassTimestampWrites<R::QuerySet>>,
         occlusion_query_set: Option<R::QuerySet>,
         multiview_mask: Option<NonZero<u32>>,
+        // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
+        // src/command/encoder_command.rs, MIT OR Apache-2.0: the pass's fragment density
+        // map (§2.3's note for D-58). Was: none.
+        #[cfg_attr(feature = "serde", serde(default))]
+        fragment_density_map: Option<R::TextureView>,
     },
     BuildAccelerationStructures {
         blas: Vec<crate::ray_tracing::OwnedBlasBuildEntry<R>>,

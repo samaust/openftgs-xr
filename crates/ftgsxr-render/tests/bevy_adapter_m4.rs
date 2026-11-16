@@ -353,6 +353,7 @@ fn quad_node(
                 targets: &[Some(TextureFormat::Rgba8UnormSrgb.into())],
             }),
             multiview_mask: None,
+            fragment_density_map: false, // D-58: no density map (#807)
             cache: None,
         });
         commands.insert_resource(QuadPipeline(p));
