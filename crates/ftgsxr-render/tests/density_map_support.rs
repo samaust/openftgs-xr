@@ -19,10 +19,17 @@ fn gpu_density_map_support_reports_the_vulkan_adapter() {
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     desc.backends = wgpu::Backends::VULKAN;
     let instance = wgpu::Instance::new(desc);
-    let adapter = pollster_block(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .expect("a Vulkan adapter");
+    let adapter = match bevy::tasks::block_on(
+        instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("skipped: no Vulkan adapter: {e} (Q-461)");
+            return;
+        }
+    };
     let (device, _queue) =
-        pollster_block(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        bevy::tasks::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
             .expect("a device");
     let s = density_map_support(&adapter, &device).expect("a Vulkan adapter gives a report");
     println!("{s}");
@@ -49,8 +56,4 @@ fn gpu_density_map_support_reports_the_vulkan_adapter() {
     ] {
         assert!(line.contains(word), "{word} in {line}");
     }
-}
-
-fn pollster_block<F: std::future::Future>(f: F) -> F::Output {
-    bevy::tasks::block_on(f)
 }

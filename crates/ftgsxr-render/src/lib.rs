@@ -15,10 +15,11 @@ pub use crate::bevy::{
     load_splat_asset,
 };
 pub use gpu::import_vulkan_texture; // Q-339
+// Q-339
 pub use gpu::{
     BudgetSource, Capacity, ColorTransform, Colormap, Foveation, FrameBuffers, FrameContents,
     FrameStats, GpuModel, GpuTimes, HeadlessRenderer, LayerSums, MemoryBudget, ModelDraw, ModelId,
     OcclusionInput, Overlays, QualityTier, RecordView, RenderError, RenderMode, SharedRecordView,
     SortKey, SortMode, SortPose, SplatDevice, SplatPasses, ViewParams,
 };
-pub use gpu::{DensityMapSupport, density_map_support}; // Q-461 // Q-339
+pub use gpu::{DensityMapSupport, density_map_support}; // Q-461
