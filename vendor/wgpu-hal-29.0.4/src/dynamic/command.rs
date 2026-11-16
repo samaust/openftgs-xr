@@ -418,6 +418,11 @@ impl<C: CommandEncoder + DynResource> DynCommandEncoder for C {
                 occlusion_query_set: desc
                     .occlusion_query_set
                     .map(|set| set.expect_downcast_ref()),
+                // openftgs-xr, D-58
+                fragment_density_map: desc
+                    .fragment_density_map
+                    .as_ref()
+                    .map(|map| map.expect_downcast()),
             };
         unsafe { C::begin_render_pass(self, &desc) }
     }

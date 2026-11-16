@@ -118,19 +118,30 @@ bevy_mod_openxr = { path = "vendor/bevy_mod_openxr-0.6.0" }
 # D-53: bevy_render 0.19.1 vendored with one change (src/view/window/mod.rs, a window
 # surface reconfigured when found `Outdated` or when the window's size or present mode
 # changed takes the surface's current extent, not a window size the window system has
-# already left, #409), approved by the owner.
+# already left, #409), approved by the owner. D-58: and a second
+# (src/render_resource/pipeline_cache.rs, the vendored wgpu's density-map pipeline flag
+# passed unset, #807).
 bevy_render = { path = "vendor/bevy_render-0.19.1" }
 # D-30: wgpu-core 29.0.4 vendored with one change (src/instance.rs, an instance made
 # from a Vulkan HAL instance keeps its flags). D-52: and a second (src/present.rs and
 # src/track/texture.rs, a surface texture presented with no submission having used it is
-# cleared and submitted first, #401), approved by the owner.
+# cleared and submitted first, #401), approved by the owner. D-58: and a third
+# (src/command/render.rs, src/device/{mod,resource,global}.rs, src/pipeline.rs, src/conv.rs
+# and the trace's records: a render pass's fragment density map tracked and checked against
+# its pipelines' flag, behind `Features::FRAGMENT_DENSITY_MAP`, #807).
 wgpu-core = { path = "vendor/wgpu-core-29.0.4" }
 # D-30: wgpu-hal 29.0.4 vendored with one change (src/vulkan/instance.rs, a `flags()`
-# getter on the Vulkan instance).
+# getter on the Vulkan instance). D-58: and a second (src/lib.rs, src/dynamic/*.rs and
+# src/vulkan/{adapter,command,conv,device,mod}.rs: the fragment density map's feature, the
+# map in the render pass, the framebuffer and their keys, a flagged pipeline made against a
+# pass with the map, #807).
 wgpu-hal = { path = "vendor/wgpu-hal-29.0.4" }
 # D-58: wgpu and wgpu-types 29.0.4 vendored for the layer's fragment density map
-# (§2.3's note for D-58), approved by the owner (#806); their changes are marked in the
-# sources as `openftgs-xr change (D-58)`.
+# (§2.3's note for D-58), approved by the owner (#806): wgpu-types adds
+# `Features::FRAGMENT_DENSITY_MAP` and `TextureUsages`/`TextureUses::FRAGMENT_DENSITY_MAP`
+# (src/features.rs, src/texture.rs); wgpu adds `RenderPipelineDescriptor::
+# fragment_density_map` (src/api/render_pipeline.rs, src/backend/wgpu_core.rs,
+# src/util/texture_blitter.rs). Each change is marked `openftgs-xr change (D-58)` (#807).
 wgpu = { path = "vendor/wgpu-29.0.4" }
 wgpu-types = { path = "vendor/wgpu-types-29.0.4" }
 

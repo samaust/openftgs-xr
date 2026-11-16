@@ -4633,6 +4633,15 @@ impl Device {
             }
         };
 
+        // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
+        // src/device/resource.rs, MIT OR Apache-2.0: a pipeline flagged for a pass with a
+        // fragment density map needs the feature, is made against a hal pass with the map,
+        // and its pass context says so, so that it is used only in such passes (§2.3's note
+        // for D-58). Was: no flag.
+        if desc.fragment_density_map {
+            self.require_features(wgt::Features::FRAGMENT_DENSITY_MAP)?;
+        }
+
         // Multiview is only supported if the feature is enabled
         if let Some(mv_mask) = desc.multiview_mask {
             self.require_features(wgt::Features::MULTIVIEW)?;
@@ -4689,6 +4698,7 @@ impl Device {
                 fragment_stage,
                 color_targets,
                 multiview_mask: desc.multiview_mask,
+                fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
                 cache: cache.as_ref().map(|it| it.raw()),
             };
             unsafe { self.raw().create_render_pipeline(&pipeline_desc) }.map_err(
@@ -4723,6 +4733,7 @@ impl Device {
             },
             sample_count: samples,
             multiview_mask: desc.multiview_mask,
+            fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
         };
 
         let mut flags = pipeline::PipelineFlags::empty();

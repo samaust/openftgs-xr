@@ -1061,6 +1061,7 @@ impl CommandEncoder {
                         timestamp_writes,
                         occlusion_query_set,
                         multiview_mask,
+                        fragment_density_map, // openftgs-xr, D-58
                     } => {
                         api_log!(
                             "Begin encoding render pass with '{}' label",
@@ -1074,6 +1075,7 @@ impl CommandEncoder {
                             timestamp_writes,
                             occlusion_query_set,
                             multiview_mask,
+                            fragment_density_map, // openftgs-xr, D-58
                         );
                         match res.as_ref() {
                             Err(err) => {

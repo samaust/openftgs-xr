@@ -1532,6 +1532,7 @@ impl Global {
                 multisample: desc.multisample,
                 fragment,
                 multiview_mask: desc.multiview_mask,
+                fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
                 cache,
             };
 

@@ -944,6 +944,7 @@ fn splat_pipeline(
             })],
         }),
         multiview_mask: None,
+        fragment_density_map: false, // D-58: no density map (#807)
         cache: None,
     };
     let pipeline = times.time("splat", || device.create_render_pipeline(&descriptor));
@@ -1011,6 +1012,7 @@ fn centers_pipeline(
             })],
         }),
         multiview_mask: None,
+        fragment_density_map: false, // D-58: no density map (#807)
         cache: None,
     };
     times.time("centers", || device.create_render_pipeline(&descriptor))
@@ -1116,6 +1118,7 @@ fn resolve_pipelines(
                     })],
                 }),
                 multiview_mask: None,
+                fragment_density_map: false, // D-58: no density map (#807)
                 cache: None,
             })
         })

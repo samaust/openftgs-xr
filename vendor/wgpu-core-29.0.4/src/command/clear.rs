@@ -536,6 +536,7 @@ fn clear_texture_via_render_passes(
                         multiview_mask: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        fragment_density_map: None, // openftgs-xr, D-58
                     })
                     .map_err(|e| dst_texture.device.handle_hal_error(e))?;
                 encoder.end_render_pass();

@@ -256,6 +256,7 @@ impl IntoTrace for ArcCommand {
                 timestamp_writes,
                 occlusion_query_set,
                 multiview_mask,
+                fragment_density_map, // openftgs-xr, D-58
             } => Command::RunRenderPass {
                 pass: pass.into_trace(),
                 color_attachments: color_attachments.into_trace(),
@@ -263,6 +264,7 @@ impl IntoTrace for ArcCommand {
                 timestamp_writes: timestamp_writes.map(|tw| tw.into_trace()),
                 occlusion_query_set: occlusion_query_set.map(|q| q.to_trace()),
                 multiview_mask,
+                fragment_density_map: fragment_density_map.map(|v| v.to_trace()),
             },
             ArcCommand::BuildAccelerationStructures { blas, tlas } => {
                 Command::BuildAccelerationStructures {
@@ -728,6 +730,7 @@ impl<'a> IntoTrace for crate::pipeline::ResolvedGeneralRenderPipelineDescriptor<
             multisample: self.multisample,
             fragment: self.fragment.map(|f| f.into_trace()),
             multiview_mask: self.multiview_mask,
+            fragment_density_map: self.fragment_density_map, // openftgs-xr, D-58
             cache: self.cache.map(|c| c.into_trace()),
         }
     }

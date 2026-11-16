@@ -408,6 +408,7 @@ impl<D: Device + DynResource> DynDevice for D {
             fragment_stage: desc.fragment_stage.clone().map(|f| f.expect_downcast()),
             color_targets: desc.color_targets,
             multiview_mask: desc.multiview_mask,
+            fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
             cache: desc.cache.map(|c| c.expect_downcast_ref()),
         };
 

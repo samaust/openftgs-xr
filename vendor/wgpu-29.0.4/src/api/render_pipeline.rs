@@ -236,6 +236,13 @@ pub struct RenderPipelineDescriptor<'a> {
     /// wanted to render to only the 2nd layer, you would use 2=0b10. If you aren't using
     /// multiview this should be `None`.
     pub multiview_mask: Option<NonZeroU32>,
+    // openftgs-xr change (D-58), to wgpu 29.0.4 (crates.io), file src/api/render_pipeline.rs,
+    // MIT OR Apache-2.0: the pipeline flag for a render pass with a fragment density map
+    // (§2.3's note for D-58). Was: no such field.
+    /// Whether the pipeline will be used in render passes that read a fragment density map.
+    /// A flagged pipeline is used only in such passes and an unflagged one only in passes
+    /// without a map. Requires [`Features::FRAGMENT_DENSITY_MAP`] (openftgs-xr, D-58).
+    pub fragment_density_map: bool,
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<&'a PipelineCache>,
 }

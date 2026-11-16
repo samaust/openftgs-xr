@@ -216,6 +216,7 @@ impl RenderBundleEncoder {
                     sc
                 },
                 multiview_mask: desc.multiview,
+                fragment_density_map: false, // openftgs-xr, D-58: bundles have no map
             },
 
             is_depth_read_only,
@@ -237,6 +238,7 @@ impl RenderBundleEncoder {
                 },
                 sample_count: 0,
                 multiview_mask: None,
+                fragment_density_map: false, // openftgs-xr, D-58
             },
             is_depth_read_only: false,
             is_stencil_read_only: false,

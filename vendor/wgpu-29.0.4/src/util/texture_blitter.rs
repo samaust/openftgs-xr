@@ -131,6 +131,7 @@ impl<'a> TextureBlitterBuilder<'a> {
                     })],
                 }),
                 multiview_mask: None,
+                fragment_density_map: false, // openftgs-xr, D-58
                 cache: None,
             });
 

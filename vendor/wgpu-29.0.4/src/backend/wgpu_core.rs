@@ -1394,6 +1394,7 @@ impl dispatch::DeviceInterface for CoreDevice {
                 }
             }),
             multiview_mask: desc.multiview_mask,
+            fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
             cache: desc.cache.map(|cache| cache.inner.as_core().id),
         };
 
@@ -2621,6 +2622,7 @@ impl dispatch::CommandEncoderInterface for CoreCommandEncoder {
                 depth_stencil_attachment: depth_stencil.as_ref(),
                 occlusion_query_set: desc.occlusion_query_set.map(|qs| qs.inner.as_core().id),
                 multiview_mask: desc.multiview_mask,
+                fragment_density_map: None, // openftgs-xr, D-58: no map attached from wgpu yet
             },
         );
 
