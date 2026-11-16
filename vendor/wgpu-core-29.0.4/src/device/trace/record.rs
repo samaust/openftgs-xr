@@ -256,6 +256,9 @@ impl IntoTrace for ArcCommand {
                 timestamp_writes,
                 occlusion_query_set,
                 multiview_mask,
+                // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/device/trace/record.rs, MIT OR
+                // Apache-2.0: the pipeline flag and the pass's map recorded in traces (§2.3's note for D-58); each changed line is marked
+                // `openftgs-xr, D-58`.
                 fragment_density_map, // openftgs-xr, D-58
             } => Command::RunRenderPass {
                 pass: pass.into_trace(),

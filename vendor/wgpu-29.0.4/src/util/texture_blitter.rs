@@ -131,6 +131,9 @@ impl<'a> TextureBlitterBuilder<'a> {
                     })],
                 }),
                 multiview_mask: None,
+                // openftgs-xr change (D-58), to wgpu 29.0.4 (crates.io), file src/util/texture_blitter.rs, MIT OR
+                // Apache-2.0: the blitter's pipeline unflagged (§2.3's note for D-58); each changed line is marked
+                // `openftgs-xr, D-58`.
                 fragment_density_map: false, // openftgs-xr, D-58
                 cache: None,
             });

@@ -536,6 +536,9 @@ fn clear_texture_via_render_passes(
                         multiview_mask: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/command/clear.rs, MIT OR
+                        // Apache-2.0: the clear pass has no fragment density map (§2.3's note for D-58); each changed line is marked
+                        // `openftgs-xr, D-58`.
                         fragment_density_map: None, // openftgs-xr, D-58
                     })
                     .map_err(|e| dst_texture.device.handle_hal_error(e))?;

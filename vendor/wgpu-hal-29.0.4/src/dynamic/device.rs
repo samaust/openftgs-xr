@@ -408,6 +408,9 @@ impl<D: Device + DynResource> DynDevice for D {
             fragment_stage: desc.fragment_stage.clone().map(|f| f.expect_downcast()),
             color_targets: desc.color_targets,
             multiview_mask: desc.multiview_mask,
+            // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/dynamic/device.rs, MIT OR
+            // Apache-2.0: the pipeline flag passed on (§2.3's note for D-58); each changed line is marked
+            // `openftgs-xr, D-58`.
             fragment_density_map: desc.fragment_density_map, // openftgs-xr, D-58
             cache: desc.cache.map(|c| c.expect_downcast_ref()),
         };

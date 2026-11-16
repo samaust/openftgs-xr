@@ -418,6 +418,9 @@ impl<C: CommandEncoder + DynResource> DynCommandEncoder for C {
                 occlusion_query_set: desc
                     .occlusion_query_set
                     .map(|set| set.expect_downcast_ref()),
+                // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/dynamic/command.rs, MIT OR
+                // Apache-2.0: the pass's fragment density map downcast (§2.3's note for D-58); each changed line is marked
+                // `openftgs-xr, D-58`.
                 // openftgs-xr, D-58
                 fragment_density_map: desc
                     .fragment_density_map

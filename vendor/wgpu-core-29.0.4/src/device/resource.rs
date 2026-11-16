@@ -1504,10 +1504,10 @@ impl Device {
 
         // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
         // src/device/resource.rs, MIT OR Apache-2.0: a fragment density map's texture needs
-        // the device feature and is a 2D `Rg8Unorm` texture of one sample (the format whose
-        // density-map support Vulkan guarantees with the extension); its usage is checked
-        // here, not against the format's allowed usages (§2.3's note for D-58). Was: no
-        // such usage.
+        // the device feature and is a 2D `Rg8Unorm` texture of one sample (the one map
+        // format chosen, two 8-bit densities, as the Vulkan render pass's attachment is made);
+        // its usage is checked here, not against the format's allowed usages (§2.3's note
+        // for D-58). Was: no such usage.
         if desc
             .usage
             .contains(wgt::TextureUsages::FRAGMENT_DENSITY_MAP)
