@@ -6,6 +6,7 @@
 //! of stages 5 and 6, the resolve of stage 7 and the statistics of stage 8), the frame
 //! buffers' read back, the layer probe, the headless renderer and the import of a Vulkan image (Q-339).
 
+mod density;
 pub(crate) mod device;
 mod error;
 pub(crate) mod frame;
@@ -20,6 +21,7 @@ mod sort;
 mod stats;
 pub(crate) mod tier;
 
+pub use density::{DensityMapSupport, density_map_support}; // Q-T805.1
 pub use device::{BudgetSource, MemoryBudget, SplatDevice}; // Q-68, Q-74
 pub use error::RenderError;
 pub use frame::FrameBuffers;

@@ -20,4 +20,5 @@ pub use gpu::{
     FrameStats, GpuModel, GpuTimes, HeadlessRenderer, LayerSums, MemoryBudget, ModelDraw, ModelId,
     OcclusionInput, Overlays, QualityTier, RecordView, RenderError, RenderMode, SharedRecordView,
     SortKey, SortMode, SortPose, SplatDevice, SplatPasses, ViewParams,
-}; // Q-339
+};
+pub use gpu::{DensityMapSupport, density_map_support}; // Q-T805.1 // Q-339
