@@ -14,13 +14,19 @@ use std::fmt;
 /// values of ash 0.38 (MIT OR Apache-2.0, source-log row 457).
 const FEATURES_2: i32 = 1_000_059_000;
 const PROPERTIES_2: i32 = 1_000_059_001;
-const FDM_FEATURES: i32 = 1_000_218_000;
-const FDM_PROPERTIES: i32 = 1_000_218_001;
+const DENSITY_MAP_FEATURES_EXT: i32 = 1_000_218_000;
+const DENSITY_MAP_PROPERTIES_EXT: i32 = 1_000_218_001;
 
-const FDM: &CStr = c"VK_EXT_fragment_density_map";
-const FDM2: &CStr = c"VK_EXT_fragment_density_map2";
+const DENSITY_MAP_EXT: &CStr = c"VK_EXT_fragment_density_map";
+const DENSITY_MAP2_EXT: &CStr = c"VK_EXT_fragment_density_map2";
 const OFFSET_QCOM: &CStr = c"VK_QCOM_fragment_density_map_offset";
+/// `VK_API_VERSION_1_1`: `VK_MAKE_API_VERSION(0, 1, 1, 0)`.
+const VK_API_VERSION_1_1: u32 = 1 << 22 | 1 << 12;
+
 const OFFSET_EXT: &CStr = c"VK_EXT_fragment_density_map_offset";
+
+// The structs below restate layouts of ash 0.38.0+1.3.281, `src/vk/definitions.rs`
+// (MIT OR Apache-2.0; source-log row 457).
 
 /// `VkPhysicalDeviceFeatures2`: 55 `VkBool32` features after the header.
 #[repr(C)]
@@ -32,7 +38,7 @@ struct Features2 {
 
 /// `VkPhysicalDeviceFragmentDensityMapFeaturesEXT`.
 #[repr(C)]
-struct FdmFeatures {
+struct DensityMapFeaturesExt {
     s_type: i32,
     p_next: *mut c_void,
     map: u32,
@@ -51,7 +57,7 @@ struct Properties2<P> {
 
 /// `VkPhysicalDeviceFragmentDensityMapPropertiesEXT`.
 #[repr(C)]
-struct FdmProperties {
+struct DensityMapPropertiesExt {
     s_type: i32,
     p_next: *mut c_void,
     min: [u32; 2],
@@ -126,7 +132,7 @@ pub fn density_map_support(
     // created with, and is dropped at the block's end.
     let enabled = unsafe {
         let hal = device.as_hal::<wgpu::hal::api::Vulkan>()?;
-        hal.enabled_device_extensions().contains(&FDM)
+        hal.enabled_device_extensions().contains(&DENSITY_MAP_EXT)
     };
     let mut s = DensityMapSupport {
         enabled,
@@ -135,7 +141,9 @@ pub fn density_map_support(
     // SAFETY: as `largest_device_local_heap`: the adapter's guard is held for this block
     // only, nothing is destroyed or mutated, and the queries only read properties of the
     // physical device the guard's instance enumerated. The two `*2` entry points are core
-    // Vulkan 1.1, which wgpu-hal requires of the instance it uses; each is called through
+    // Vulkan 1.1; wgpu-hal may create a 1.0 instance, whose `fp_v1_1()` holds ash's
+    // panicking stubs, so they are called only when both the instance's and the physical
+    // device's API versions are at least 1.1 (else the features stay unread); each is called through
     // its own pointer transmuted to a signature over `#[repr(C)]` structs of the
     // specification's layouts (the handle is ash's `#[repr(transparent)]` pointer), whose
     // `pNext` chains end in null and outlive the calls.
@@ -150,14 +158,17 @@ pub fn density_map_support(
             exts.iter()
                 .any(|e| e.extension_name_as_c_str().is_ok_and(|n| n == name))
         };
-        s.extension = has(FDM);
-        s.map2 = has(FDM2);
+        s.extension = has(DENSITY_MAP_EXT);
+        s.map2 = has(DENSITY_MAP2_EXT);
         s.offset_qcom = has(OFFSET_QCOM);
         s.offset_ext = has(OFFSET_EXT);
-        if s.extension {
+        let shared = hal.shared_instance();
+        let v1_1 = shared.instance_api_version() >= VK_API_VERSION_1_1
+            && instance.get_physical_device_properties(pd).api_version >= VK_API_VERSION_1_1;
+        if s.extension && v1_1 {
             let fp = instance.fp_v1_1();
-            let mut fdm = FdmFeatures {
-                s_type: FDM_FEATURES,
+            let mut map = DensityMapFeaturesExt {
+                s_type: DENSITY_MAP_FEATURES_EXT,
                 p_next: std::ptr::null_mut(),
                 map: 0,
                 dynamic: 0,
@@ -165,17 +176,17 @@ pub fn density_map_support(
             };
             let mut f2 = Features2 {
                 s_type: FEATURES_2,
-                p_next: (&raw mut fdm).cast(),
+                p_next: (&raw mut map).cast(),
                 features: [0; 55],
             };
             let get_features: unsafe extern "system" fn(*mut c_void, *mut Features2) =
                 std::mem::transmute(fp.get_physical_device_features2);
             get_features(std::mem::transmute::<_, *mut c_void>(pd), &raw mut f2);
-            s.map = fdm.map != 0;
-            s.dynamic = fdm.dynamic != 0;
-            s.non_subsampled = fdm.non_subsampled != 0;
-            let mut props = FdmProperties {
-                s_type: FDM_PROPERTIES,
+            s.map = map.map != 0;
+            s.dynamic = map.dynamic != 0;
+            s.non_subsampled = map.non_subsampled != 0;
+            let mut props = DensityMapPropertiesExt {
+                s_type: DENSITY_MAP_PROPERTIES_EXT,
                 p_next: std::ptr::null_mut(),
                 min: [0; 2],
                 max: [0; 2],

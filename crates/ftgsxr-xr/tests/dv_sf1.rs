@@ -4,8 +4,9 @@
 //! Appendix E), on Q-420's pattern extended by Q-454: the driver writes Q-420's
 //! fill-heavy model, pushes it as `dv/spike.safetensors`, launches the runner's `sf1`
 //! and reads the lines of `display::sf1`: the density-map features and properties, then
-//! at render scale 1.0 and E16's floor of 0.6 each level's window summary (the first
-//! eye's `GpuTimes`, Q-125) and its counters window. The spike judges nothing: the test
+//! at render scale 1.0 and E16's floor of 0.6 each level's window summary (the
+//! statistics blocks' `GpuTimes`, Q-125, whose `draw` spans both eyes' splat passes
+//! under `quest-balanced`'s shared center, Q-403) and its counters window. The spike judges nothing: the test
 //! fails only on an incomplete sequence or a missing line, never on a figure or a
 //! validation message, which it reports with the layer's announcement (Q-123). Run it
 //! with `--nocapture` for the report. Prerequisites: `dv_support`'s.
@@ -28,6 +29,14 @@ const ROWS_VAR: &str = "FTGSXR_SPIKES_ROWS";
 const LOG_BUFFER: &str = "16M";
 const SCALES: [&str; 2] = ["1.0", "0.6"];
 const LEVELS: [&str; 4] = ["Off", "Low", "Medium", "High"];
+
+/// One VUID's validation lines: their count and first and last times.
+struct Vuid {
+    id: String,
+    lines: usize,
+    first: String,
+    last: String,
+}
 
 /// The lines the spike must have logged that are missing from `lines`, one entry each:
 /// the feature line, each window's summary and counters summary at each level and scale,
@@ -97,22 +106,33 @@ fn dv_sf1_density_map_features_and_foveation_timings_at_two_scales() {
     );
     // Each VUID once, with its count and first and last times (the layer's own
     // duplicate limit caps the counts).
-    let mut vuids: Vec<(String, usize, String, String)> = Vec::new();
+    let mut vuids: Vec<Vuid> = Vec::new();
     for m in &validation.messages {
         let Some(id) = m.split_whitespace().find(|w| w.starts_with("VUID-")) else {
             continue;
         };
         let id = id.split('(').next().unwrap_or(id).to_owned();
         let time = m.split_whitespace().nth(1).unwrap_or("").to_owned();
-        match vuids.iter_mut().find(|v| v.0 == id) {
+        match vuids.iter_mut().find(|v| v.id == id) {
             Some(v) => {
-                v.1 += 1;
-                v.3 = time;
+                v.lines += 1;
+                v.last = time;
             }
-            None => vuids.push((id, 1, time.clone(), time)),
+            None => vuids.push(Vuid {
+                id,
+                lines: 1,
+                first: time.clone(),
+                last: time,
+            }),
         }
     }
-    for (id, n, first, last) in &vuids {
+    for Vuid {
+        id,
+        lines: n,
+        first,
+        last,
+    } in &vuids
+    {
         println!("validation {id}: {n} lines, {first} .. {last}");
     }
     for m in validation.messages.iter().take(12) {

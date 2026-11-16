@@ -6,8 +6,9 @@
 //! (Q-461), holds the governor off, and at render scale 1.0 and then E16's floor
 //! (written into `SplatTierState.render_scale`, which the runner cannot name: Q-133)
 //! steps `DisplaySettings.foveation` through off, low, medium and high. Each level
-//! settles, then its first-eye statistics blocks (Q-125) are gathered beside counters
-//! window `sf1 <scale> <level>` (Q-420) and summarized in one line. It judges nothing:
+//! settles, then its statistics blocks (Q-125) are gathered beside counters window
+//! `sf1 <scale> <level>` (Q-420) and summarized in one line; under `quest-balanced`'s
+//! shared center (Q-403, Q-425) a block's `GpuTimes.draw` spans both eyes' splat passes. It judges nothing:
 //! the verdict is PASS once the sequence completes, FAIL only on a timeout; the host's
 //! `dv` test reads the lines (Q-454, Q-122).
 // Q-454, Q-308, Q-420
@@ -63,10 +64,17 @@ pub(crate) struct Block {
     pub(crate) overflow: bool,
 }
 
+/// A window's place in the sequence: indices into [`SCALES`] and [`LEVELS`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Step {
+    scale: usize,
+    level: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Phase {
-    Settle(usize, usize),
-    Measure(usize, usize),
+    Settle(Step),
+    Measure(Step),
     Closing,
     Done,
 }
@@ -100,15 +108,15 @@ fn quantile(v: &[f32], q: f32) -> f32 {
     v.get(i).copied().unwrap_or(0.0)
 }
 
-fn label(s: usize, l: usize) -> String {
-    format!("{:.1} {:?}", SCALES[s], LEVELS[l])
+fn label(t: Step) -> String {
+    format!("{:.1} {:?}", SCALES[t.scale], LEVELS[t.level])
 }
 
 impl Run {
     /// The run, and the first frame's requests: scale 1.0 at off.
     pub(crate) fn start() -> (Run, Vec<Out>) {
         let run = Run {
-            phase: Phase::Settle(0, 0),
+            phase: Phase::Settle(Step { scale: 0, level: 0 }),
             blocks: Vec::new(),
             done: Vec::new(),
         };
@@ -118,7 +126,7 @@ impl Run {
     /// The scale the run holds now.
     pub(crate) fn scale(&self) -> Option<f32> {
         match self.phase {
-            Phase::Settle(s, _) | Phase::Measure(s, _) => Some(SCALES[s]),
+            Phase::Settle(t) | Phase::Measure(t) => Some(SCALES[t.scale]),
             _ => None,
         }
     }
@@ -127,40 +135,46 @@ impl Run {
         self.phase == Phase::Done
     }
 
-    /// One frame: `since` the time since the phase began, `block` a new first-eye block.
+    /// One frame: `since` the time since the phase began, `block` a new statistics block.
     /// Returns the requests and whether the phase changed (its clock restarts).
     pub(crate) fn frame(&mut self, since: Duration, block: Option<Block>) -> (Vec<Out>, bool) {
         let mut out = Vec::new();
         let next = match self.phase {
-            Phase::Settle(s, l) => {
-                let settle = if l == 0 { SETTLE_SCALE } else { SETTLE };
+            Phase::Settle(t) => {
+                let settle = if t.level == 0 { SETTLE_SCALE } else { SETTLE };
                 (since >= settle).then(|| {
                     self.blocks.clear();
-                    out.push(Out::Window(Some(format!("sf1 {}", label(s, l)))));
-                    Phase::Measure(s, l)
+                    out.push(Out::Window(Some(format!("sf1 {}", label(t)))));
+                    Phase::Measure(t)
                 })
             }
-            Phase::Measure(s, l) => {
+            Phase::Measure(t) => {
                 if let Some(b) = block {
                     self.blocks.push(b);
                 }
                 let full = self.blocks.len() >= BLOCKS;
                 (full || since > WINDOW_TIMEOUT).then(|| {
-                    let line = self.summary(s, l, since);
+                    let line = self.summary(t, since);
                     out.push(Out::Log(format!("sf1: scale {line}")));
                     out.push(Out::Window(None));
                     if !full {
                         out.push(Out::Verdict(false, format!("too few blocks: {line}")));
                         return Phase::Done;
                     }
-                    self.done.push(label(s, l));
-                    if l + 1 < LEVELS.len() {
-                        out.push(Out::Level(LEVELS[l + 1]));
-                        Phase::Settle(s, l + 1)
-                    } else if s + 1 < SCALES.len() {
-                        out.push(Out::Scale(SCALES[s + 1]));
+                    self.done.push(label(t));
+                    if t.level + 1 < LEVELS.len() {
+                        out.push(Out::Level(LEVELS[t.level + 1]));
+                        Phase::Settle(Step {
+                            level: t.level + 1,
+                            ..t
+                        })
+                    } else if t.scale + 1 < SCALES.len() {
+                        out.push(Out::Scale(SCALES[t.scale + 1]));
                         out.push(Out::Level(LEVELS[0]));
-                        Phase::Settle(s + 1, 0)
+                        Phase::Settle(Step {
+                            scale: t.scale + 1,
+                            level: 0,
+                        })
                     } else {
                         Phase::Closing
                     }
@@ -182,14 +196,14 @@ impl Run {
     /// `<scale> <level> draw median <ms> ms, p10 <ms> p90 <ms> min <ms> max <ms>, total
     /// median <ms> cull <ms> sort <ms> over <n> blocks in <s> s, visible <a>..<b>,
     /// overflow <bool>`.
-    fn summary(&self, s: usize, l: usize, since: Duration) -> String {
+    fn summary(&self, t: Step, since: Duration) -> String {
         let b = &self.blocks;
         let of = |f: fn(&Block) -> f32| b.iter().map(f).collect::<Vec<_>>();
         let draw = of(|b| b.draw);
         format!(
             "{} draw median {} ms, p10 {} p90 {} min {} max {}, total median {} cull {} sort {} \
              over {} blocks in {:.2} s, visible {}..{}, overflow {}",
-            label(s, l),
+            label(t),
             quantile(&draw, 0.5),
             quantile(&draw, 0.1),
             quantile(&draw, 0.9),
@@ -229,7 +243,6 @@ pub(crate) fn add(app: &mut App) {
 }
 
 #[cfg_attr(test, allow(dead_code))]
-#[allow(clippy::too_many_arguments)]
 fn detect(
     names: Query<&Name>,
     adapter: Option<Res<RenderAdapter>>,
