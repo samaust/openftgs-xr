@@ -25,6 +25,7 @@ mod r10;
 mod r17;
 mod r9;
 mod s3;
+mod sf1;
 mod spikes;
 
 /// The intent extra naming the test (§3.4).
@@ -80,6 +81,7 @@ pub(crate) fn add(app: &mut App, name: &str) {
         per_frame_limit::NAME => per_frame_limit::add(app),
         r17::NAME => r17::add(app),
         s3::NAME => s3::add(app),
+        sf1::NAME => sf1::add(app),
         spikes::NAME => spikes::add(app),
         _ => verdict(name, false, "unknown test"),
     }
@@ -91,6 +93,7 @@ pub(crate) fn tier(name: &str) -> Option<&'static str> {
     match name {
         s3::NAME => Some(s3::TIER),
         r17::NAME => Some(r17::TIER),
+        sf1::NAME => Some(sf1::TIER),
         _ => None,
     }
 }
