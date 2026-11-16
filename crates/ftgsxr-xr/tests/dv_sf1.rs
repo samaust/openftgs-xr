@@ -95,7 +95,29 @@ fn dv_sf1_density_map_features_and_foveation_timings_at_two_scales() {
         validation.announced,
         validation.messages.len()
     );
-    for m in validation.messages.iter().take(20) {
+    // Each VUID once, with its count and first and last times (the layer's own
+    // duplicate limit caps the counts).
+    let mut vuids: Vec<(String, usize, String, String)> = Vec::new();
+    for m in &validation.messages {
+        let Some(id) = m.split_whitespace().find(|w| w.starts_with("VUID-")) else {
+            continue;
+        };
+        let id = id
+            .trim_end_matches(|c: char| !c.is_alphanumeric())
+            .to_owned();
+        let time = m.split_whitespace().nth(1).unwrap_or("").to_owned();
+        match vuids.iter_mut().find(|v| v.0 == id) {
+            Some(v) => {
+                v.1 += 1;
+                v.3 = time;
+            }
+            None => vuids.push((id, 1, time.clone(), time)),
+        }
+    }
+    for (id, n, first, last) in &vuids {
+        println!("validation {id}: {n} lines, {first} .. {last}");
+    }
+    for m in validation.messages.iter().take(12) {
         println!("{m}");
     }
     println!("--- sf1 report ({rows} rows, degree 0, every row persistent) ---");
