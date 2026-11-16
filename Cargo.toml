@@ -128,6 +128,11 @@ wgpu-core = { path = "vendor/wgpu-core-29.0.4" }
 # D-30: wgpu-hal 29.0.4 vendored with one change (src/vulkan/instance.rs, a `flags()`
 # getter on the Vulkan instance).
 wgpu-hal = { path = "vendor/wgpu-hal-29.0.4" }
+# D-58: wgpu and wgpu-types 29.0.4 vendored for the layer's fragment density map
+# (§2.3's note for D-58), approved by the owner (#806); their changes are marked in the
+# sources as `openftgs-xr change (D-58)`.
+wgpu = { path = "vendor/wgpu-29.0.4" }
+wgpu-types = { path = "vendor/wgpu-types-29.0.4" }
 
 # Q-140: the dv lane's debug APK: the dev profile's debug assertions (and so the
 # validation of §1.13), optimised so Dv-2 can hold 72 Hz.
