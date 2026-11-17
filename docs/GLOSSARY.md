@@ -500,6 +500,10 @@ _Avoid_: per-eye mode, multi-pass stereo
 The eye position and forward axis that the cull and the sort use in shared-center mode in place of a view's camera: the midpoint of the eyes. §1.4 Stereo, §2.1 `SortPose`, D-4
 _Avoid_: center eye, cyclopean eye, head pose (the tracked head, which the player rig follows)
 
+**Passes warm-up**:
+The adapter's compile of the `LinearOver` splat passes of both sort modes ahead of the first frame, each on a thread of its own, once per device and tier, the running tier's sort mode first. A camera's first prepare of its passes key waits for that compile, unless the camera carries `SplatNoWarmUpWait`: it then draws neither splats nor the VR background until the compile ends. Q-325, Q-437, Q-465
+_Avoid_: warm-up (unqualified; Dv-2's 2 s lead before its window is also called its warm-up, Q-464), shader precompile, pipeline cache (Q-437's on-disk alternative)
+
 ### Data
 
 **Scene manifest**:

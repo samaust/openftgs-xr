@@ -88,6 +88,14 @@ pub struct SplatCamera {
     pub output: OutputSpace,
 }
 
+/// Marks a splat camera that never waits for the adapter's passes warm-up (Q-325): while
+/// the warm-up still compiles its passes, at start-up or after a device or tier reset,
+/// the camera is not drawn that frame (no splats, no VR background: the view keeps its
+/// transparent clear) and the frame goes on; without it, its first prepare waits for the
+/// compile so its first frame draws. The headset's eyes carry it (Q-465).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SplatNoWarmUpWait;
+
 /// The space a `SplatCamera`'s splats are written in (D-6, §1.4 stage 7).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OutputSpace {

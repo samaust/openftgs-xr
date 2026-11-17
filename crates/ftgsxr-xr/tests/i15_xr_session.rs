@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy_mod_xr::session::XrState;
 use ftgsxr_io::ModelBytes;
-use ftgsxr_render::{SortMode, SplatCamera, SplatEvent, SplatLoad, SplatStats, SplatTime};
+use ftgsxr_render::{
+    SortMode, SplatCamera, SplatEvent, SplatLoad, SplatNoWarmUpWait, SplatStats, SplatTime,
+};
 use ftgsxr_testkit::fixtures_dir;
 use ftgsxr_xr::{Environment, EnvironmentMode, XrPlugin};
 use tracing::Level;
@@ -85,6 +87,13 @@ fn xr_i15_session_runs_two_splat_eyes_in_vr_without_passthrough() {
         .filter(|c| c.sort == SortMode::PerView)
         .count();
     assert_eq!(eyes, 2, "two SplatCamera eyes");
+    // Q-465: the eyes never wait for the warm-up's compile.
+    let no_wait = app
+        .world_mut()
+        .query_filtered::<(), (With<SplatCamera>, With<SplatNoWarmUpWait>)>()
+        .iter(app.world())
+        .count();
+    assert_eq!(no_wait, 2, "both eyes carry SplatNoWarmUpWait");
     let env = app.world().resource::<Environment>();
     assert!(
         !env.passthrough_available,

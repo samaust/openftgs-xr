@@ -31,9 +31,13 @@ fn dv_dv2_two_eyes_draw_a_probe_for_10_s_without_validation_messages() {
     let start = launch("dv2");
     let shot = screenshot_while_drawing(start);
     let result = verdict("dv2", start, Duration::from_secs(60));
+    let lines = log();
     stop();
     let validation = Validation::read();
-    let warnings: Vec<String> = log()
+    let first = first_second(&lines);
+    println!("dv2: {first:?} in the first second after both eyes draw");
+    print_first_second(&lines);
+    let warnings: Vec<String> = lines
         .into_iter()
         // The adapter's warnings (`W` lines), not dv2's own info lines.
         .filter(|l| l.contains(" W ") && l.contains("splat camera"))
@@ -44,6 +48,8 @@ fn dv_dv2_two_eyes_draw_a_probe_for_10_s_without_validation_messages() {
     validation.assert_clean();
     assert!(warnings.is_empty(), "no splat camera warning: {warnings:?}");
     assert!(pass, "dv2 FAIL {detail}");
+    // Q-464, #854: reported, never bounded.
+    first.expect("the first second's line once");
     let shot = shot.expect("a screenshot while both eyes draw");
     for (eye, lit) in probe_pixels(&shot).into_iter().enumerate() {
         assert!(
@@ -74,14 +80,16 @@ fn dv_dv2_two_eyes_draw_with_the_map_at_every_level_without_validation_messages(
         let lines = log();
         stop();
         let validation = Validation::read();
+        let first = first_second(&lines);
         let maps: Vec<&String> = lines
             .iter()
             .filter(|l| l.contains("layer foveation: map for"))
             .collect();
         println!(
-            "--- dv2 at {level}: {result:?}, {} maps made ---",
+            "--- dv2 at {level}: {result:?}, {} maps made, first second {first:?} ---",
             maps.len()
         );
+        print_first_second(&lines);
         for l in &maps {
             println!("{l}");
         }
@@ -106,10 +114,11 @@ fn dv_dv2_two_eyes_draw_with_the_map_at_every_level_without_validation_messages(
             || !validation.messages.is_empty()
             || !warnings.is_empty()
             || maps.len() < want
+            || first.is_err()
         {
             failures.push(format!(
                 "{level}: verdict {result:?}, layer announced {}, {} validation lines, \
-                 warnings {warnings:?}, {} maps",
+                 warnings {warnings:?}, {} maps, first second {first:?}",
                 validation.announced,
                 validation.messages.len(),
                 maps.len()
@@ -118,6 +127,46 @@ fn dv_dv2_two_eyes_draw_with_the_map_at_every_level_without_validation_messages(
     }
     drop(layers);
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The frames of the first second after both eyes draw, from `dv2`'s line, which a
+/// launch logs exactly once (Q-464, #854); the count is reported, never bounded.
+fn first_second(lines: &[String]) -> Result<u32, String> {
+    const PREFIX: &str = "dv2: first second after both eyes draw: ";
+    let found: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| l.split_once(PREFIX).map(|(_, r)| r))
+        .collect();
+    match found.as_slice() {
+        [rest] => rest
+            .trim()
+            .strip_suffix(" frames")
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(|| format!("not a frame count: {rest:?}")),
+        other => Err(format!("{} first-second lines, not one", other.len())),
+    }
+}
+
+/// Prints the first second's frame times and, since Q-465, how many view frames the eyes
+/// went without splats while the passes compiled, so a slower compile stays visible.
+fn print_first_second(lines: &[String]) {
+    for l in lines.iter().filter(|l| {
+        l.contains("first second's frame times") || l.contains("view frames without splats")
+    }) {
+        println!("{l}");
+    }
+}
+
+#[test]
+fn first_second_reads_the_one_line_and_rejects_none_or_two() {
+    let line = |n: &str| format!("11-16 12:00:00.000  1 2 I ftgsxr  : {n}");
+    let one = [line("dv2: first second after both eyes draw: 56 frames")];
+    assert_eq!(first_second(&one), Ok(56));
+    assert!(first_second(&[]).is_err());
+    let two = [one[0].clone(), one[0].clone()];
+    assert!(first_second(&two).is_err());
+    let bad = [line("dv2: first second after both eyes draw: many frames")];
+    assert!(first_second(&bad).is_err());
 }
 
 /// The pixels each eye's probe must cover in the screenshot. P1's splat (σ 0.08 m,
