@@ -41,6 +41,7 @@ mod xr_controllers;
 mod xr_density_map;
 mod xr_display;
 mod xr_hands;
+mod xr_layer_foveation;
 mod xr_passthrough_unsupported;
 mod xr_rig_binding;
 mod xr_shared_center;
