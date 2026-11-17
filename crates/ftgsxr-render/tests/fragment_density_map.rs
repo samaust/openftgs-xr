@@ -84,11 +84,11 @@ const SHADER: &str = "
 
 fn pipeline(device: &wgpu::Device, fragment_density_map: bool) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("fdm test"),
+        label: Some("density map test"),
         source: wgpu::ShaderSource::Wgsl(SHADER.into()),
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("fdm test"),
+        label: Some("density map test"),
         layout: None,
         vertex: wgpu::VertexState {
             module: &module,
@@ -130,7 +130,7 @@ fn gpu_no_map_and_no_flag_draws_as_before() {
     // No map and no flag: the triangle covers the target in its color, as without D-58.
     let plain = pipeline(&device, false);
     let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("fdm test target"),
+        label: Some("density map test target"),
         size: wgpu::Extent3d {
             width: 64,
             height: 64,
@@ -145,7 +145,7 @@ fn gpu_no_map_and_no_flag_draws_as_before() {
     });
     let view = target.create_view(&Default::default());
     let read = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("fdm test read"),
+        label: Some("density map test read"),
         size: 64 * 64 * 4,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
@@ -153,7 +153,7 @@ fn gpu_no_map_and_no_flag_draws_as_before() {
     let mut enc = device.create_command_encoder(&Default::default());
     {
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("fdm test pass"),
+            label: Some("density map test pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 depth_slice: None,
@@ -229,13 +229,13 @@ fn gpu_pass_with_a_map_needs_the_feature() {
         })
     };
     let target = texture(
-        "fdm test target",
+        "density map test target",
         wgpu::TextureFormat::Rgba8Unorm,
         wgpu::TextureUsages::RENDER_ATTACHMENT,
     );
     // A valid Rg8Unorm texture, but neither the feature nor its usage: the map is refused.
     let map = texture(
-        "fdm test map",
+        "density map test map",
         wgpu::TextureFormat::Rg8Unorm,
         wgpu::TextureUsages::TEXTURE_BINDING,
     );
@@ -248,7 +248,7 @@ fn gpu_pass_with_a_map_needs_the_feature() {
             let mut enc = device.create_command_encoder(&Default::default());
             let _p = enc.begin_render_pass_with_fragment_density_map(
                 &wgpu::RenderPassDescriptor {
-                    label: Some("fdm test pass"),
+                    label: Some("density map test pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
                         depth_slice: None,
