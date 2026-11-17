@@ -130,7 +130,12 @@ struct Instance {
 /// new device or tier (Q-239), so no thread outlives the state that started it and
 /// releases the device on its own, during the process's exit (#650).
 #[derive(Default)]
-struct Warming(HashMap<(TextureFormat, bool), JoinHandle<Result<SplatPasses, RenderError>>>);
+struct Warming {
+    threads: HashMap<(TextureFormat, bool), JoinHandle<Result<SplatPasses, RenderError>>>,
+    /// The keys whose thread had ended when the frame's prepare began (Q-465), so the
+    /// cameras of one key, a shared-center pair among them, see the same state all frame.
+    ended: HashSet<(TextureFormat, bool)>,
+}
 
 impl Warming {
     fn insert(
@@ -138,22 +143,33 @@ impl Warming {
         key: (TextureFormat, bool),
         handle: JoinHandle<Result<SplatPasses, RenderError>>,
     ) {
-        self.0.insert(key, handle);
+        self.ended.remove(&key);
+        self.threads.insert(key, handle);
+    }
+
+    /// Notes which threads have ended, once at the start of each frame's prepare (Q-465).
+    fn observe(&mut self) {
+        self.ended = self
+            .threads
+            .iter()
+            .filter(|(_, h)| h.is_finished())
+            .map(|(k, _)| *k)
+            .collect();
     }
 
     /// The passes `key`'s thread compiled, waiting for it if it is not done and `wait`;
-    /// pending, keeping the thread, when it is not done and not `wait` (Q-465); none when
-    /// no thread compiles `key` or its thread panicked.
+    /// pending, keeping the thread, when it had not ended at the last `observe` and not
+    /// `wait` (Q-465); compile, when no thread compiles `key` or its thread panicked.
     // Q-325, Q-465
     fn take(&mut self, key: &(TextureFormat, bool), wait: bool) -> Warmed {
-        let Some(handle) = self.0.remove(key) else {
-            return Warmed::None;
-        };
-        let ready = handle.is_finished();
-        if !ready && !wait {
-            self.0.insert(*key, handle);
+        if !wait && self.threads.contains_key(key) && !self.ended.contains(key) {
             return Warmed::Pending;
         }
+        self.ended.remove(key);
+        let Some(handle) = self.threads.remove(key) else {
+            return Warmed::Compile;
+        };
+        let ready = handle.is_finished();
         let start = Instant::now();
         let joined = handle.join();
         // #736: how long the first view of `key` waited for its passes.
@@ -170,7 +186,7 @@ impl Warming {
                     "the splat passes' warm-up thread ({}) panicked; compiling them now",
                     sort_name(key.1)
                 );
-                Warmed::None
+                Warmed::Compile
             }
         }
     }
@@ -183,7 +199,7 @@ impl Warming {
 )]
 enum Warmed {
     /// No thread compiles the key, or it panicked: the prepare compiles it.
-    None,
+    Compile,
     /// The thread still compiles the key and the camera does not wait for it.
     Pending,
     /// The thread's compile.
@@ -193,7 +209,7 @@ enum Warmed {
 // Q-381
 impl Drop for Warming {
     fn drop(&mut self) {
-        for (_, handle) in self.0.drain() {
+        for (_, handle) in self.threads.drain() {
             // The passes go with the thread; a panic in it was its own.
             let _ = handle.join();
         }
@@ -545,6 +561,8 @@ fn prepare_views(
         views.warm_started = true;
         warm_up(&mut views, &dev, &tier.0);
     }
+    // Q-465: one view of the warm-up's threads for the whole frame.
+    views.warming.observe();
     let live: HashSet<Entity> = extracted.cameras.keys().copied().collect();
     views.states.retain(|e, _| live.contains(e));
     for (&entity, &camera) in &extracted.cameras {
@@ -1013,7 +1031,7 @@ fn prepare_view(
                     return Ok(false);
                 }
                 Warmed::Done(passes) => passes,
-                Warmed::None => compile(dev, layer_format, tier, camera.sort),
+                Warmed::Compile => compile(dev, layer_format, tier, camera.sort),
             };
             if let Some(n) = views.pending.remove(&key) {
                 info!(
@@ -1526,8 +1544,9 @@ mod tests {
     }
 
     // Q-465: a camera that does not wait finds its key pending while the thread
-    // compiles, and the thread kept; once the thread ends, the passes as Q-325 takes
-    // them; a camera that waits joins the thread; a key with no thread compiles here.
+    // compiles, and the thread kept, until a frame's `observe` sees it ended; then the
+    // passes as Q-325 takes them; a camera that waits joins the thread; a key with no
+    // thread compiles here.
     #[test]
     fn warming_take_is_pending_while_the_thread_compiles_unless_it_waits() {
         let key = (LAYER_FORMAT, true);
@@ -1541,20 +1560,31 @@ mod tests {
                 Err(RenderError::NonFinite)
             }),
         );
+        warming.observe();
         assert!(matches!(warming.take(&key, false), Warmed::Pending));
         assert!(matches!(warming.take(&key, false), Warmed::Pending), "kept");
-        assert!(matches!(warming.take(&other, false), Warmed::None));
+        assert!(matches!(warming.take(&other, false), Warmed::Compile));
         go.send(()).unwrap();
         let start = Instant::now();
-        while warming.0.get(&key).is_some_and(|h| !h.is_finished()) {
+        while warming.threads.get(&key).is_some_and(|h| !h.is_finished()) {
             assert!(start.elapsed().as_secs() < 10, "the thread ended");
             thread::yield_now();
         }
+        // The frame's view holds until the next `observe`, so both views of a
+        // shared-center pair see the same state within a frame.
+        assert!(
+            matches!(warming.take(&key, false), Warmed::Pending),
+            "same frame"
+        );
+        warming.observe();
         assert!(matches!(
             warming.take(&key, false),
             Warmed::Done(Err(RenderError::NonFinite))
         ));
-        assert!(matches!(warming.take(&key, false), Warmed::None), "taken");
+        assert!(
+            matches!(warming.take(&key, false), Warmed::Compile),
+            "taken"
+        );
 
         let (go, gate) = mpsc::channel::<()>();
         warming.insert(
