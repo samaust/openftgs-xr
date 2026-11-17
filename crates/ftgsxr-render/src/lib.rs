@@ -8,6 +8,7 @@
 pub mod bevy;
 pub mod gpu;
 
+pub use crate::bevy::SplatFoveation; // Q-458
 pub use crate::bevy::{
     DepthFrame, LayerProbe, OutputSpace, SplatAsset, SplatBounds, SplatCamera, SplatEvent,
     SplatGpu, SplatLoad, SplatMode, SplatModel, SplatOcclusion, SplatOverlays, SplatPlugin,

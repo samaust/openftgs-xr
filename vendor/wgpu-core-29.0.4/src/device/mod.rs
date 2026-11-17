@@ -62,6 +62,11 @@ pub(crate) struct RenderPassContext {
     pub attachments: AttachmentData<TextureFormat>,
     pub sample_count: u32,
     pub multiview_mask: Option<NonZeroU32>,
+    // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/device/mod.rs, MIT
+    // OR Apache-2.0: whether the pass reads a fragment density map, or the pipeline is made
+    // for such a pass; a pipeline and its pass must agree (§2.3's note for D-58). Was: no
+    // such field.
+    pub fragment_density_map: bool,
 }
 #[derive(Clone, Debug, Error)]
 #[non_exhaustive]
@@ -95,6 +100,13 @@ pub enum RenderPassCompatibilityError {
     IncompatibleMultiview {
         expected: Option<NonZeroU32>,
         actual: Option<NonZeroU32>,
+        res: ResourceErrorIdent,
+    },
+    // openftgs-xr, D-58
+    #[error("Incompatible fragment density map: the RenderPass has a map: {expected} but the {res} is made for a pass with a map: {actual}")]
+    IncompatibleFragmentDensityMap {
+        expected: bool,
+        actual: bool,
         res: ResourceErrorIdent,
     },
 }
@@ -150,6 +162,16 @@ impl RenderPassContext {
                 actual: other.multiview_mask,
                 res: res.error_ident(),
             });
+        }
+        if self.fragment_density_map != other.fragment_density_map {
+            // openftgs-xr, D-58
+            return Err(
+                RenderPassCompatibilityError::IncompatibleFragmentDensityMap {
+                    expected: self.fragment_density_map,
+                    actual: other.fragment_density_map,
+                    res: res.error_ident(),
+                },
+            );
         }
         Ok(())
     }

@@ -82,6 +82,7 @@ pub(crate) fn add(app: &mut App, name: &str) {
         r17::NAME => r17::add(app),
         s3::NAME => s3::add(app),
         sf1::NAME => sf1::add(app),
+        sf1::DV14 => sf1::add_dv14(app),
         spikes::NAME => spikes::add(app),
         _ => verdict(name, false, "unknown test"),
     }
@@ -93,7 +94,7 @@ pub(crate) fn tier(name: &str) -> Option<&'static str> {
     match name {
         s3::NAME => Some(s3::TIER),
         r17::NAME => Some(r17::TIER),
-        sf1::NAME => Some(sf1::TIER),
+        sf1::NAME | sf1::DV14 => Some(sf1::TIER),
         _ => None,
     }
 }

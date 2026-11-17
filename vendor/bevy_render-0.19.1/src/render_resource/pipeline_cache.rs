@@ -541,6 +541,12 @@ impl PipelineCache {
 
                 let descriptor = RawRenderPipelineDescriptor {
                     multiview_mask: None,
+                    // openftgs-xr change (D-58), to bevy_render 0.19.1 (crates.io), file
+                    // src/render_resource/pipeline_cache.rs, MIT OR Apache-2.0: the vendored
+                    // wgpu's pipeline flag for a pass with a fragment density map (§2.3's note
+                    // for D-58), passed unset: Bevy's descriptor has no flag, the layer's
+                    // pipelines being made through wgpu directly. Was: no such field.
+                    fragment_density_map: false,
                     depth_stencil: descriptor.depth_stencil.clone(),
                     label: descriptor.label.as_deref(),
                     layout: layout.as_ref().map(|layout| -> &PipelineLayout { layout }),

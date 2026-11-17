@@ -59,7 +59,10 @@ use semaphore_list::SemaphoreList;
 
 use crate::vulkan::semaphore_list::{SemaphoreListMode, SemaphoreType};
 
-const MAX_TOTAL_ATTACHMENTS: usize = crate::MAX_COLOR_ATTACHMENTS * 2 + 1;
+// openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/vulkan/mod.rs, MIT OR
+// Apache-2.0: one more attachment, the fragment density map (§2.3's note for D-58). Was:
+// `crate::MAX_COLOR_ATTACHMENTS * 2 + 1`.
+const MAX_TOTAL_ATTACHMENTS: usize = crate::MAX_COLOR_ATTACHMENTS * 2 + 2;
 
 #[derive(Clone, Debug)]
 pub struct Api;
@@ -466,6 +469,11 @@ struct RenderPassKey {
     depth_stencil: Option<DepthStencilAttachmentKey>,
     sample_count: u32,
     multiview_mask: Option<NonZeroU32>,
+    // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/vulkan/mod.rs, MIT
+    // OR Apache-2.0: whether the pass has a fragment density map, its last attachment, so a
+    // pass with the map and one without are different passes, and a pipeline flagged for a
+    // map is made against a pass that has it (§2.3's note for D-58). Was: no map.
+    fragment_density_map: bool,
 }
 
 struct DeviceShared {

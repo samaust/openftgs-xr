@@ -45,21 +45,45 @@ Its LICENSE-MIT and LICENSE-APACHE are copied from the upstream repository's mai
 the repository has no 0.6.0 release tag; neither file names a copyright holder.
 
 vendor/bevy_render-0.19.1 is bevy_render 0.19.1 from crates.io (https://github.com/bevyengine/bevy),
-used under the Apache License, Version 2.0 (it is dual-licensed MIT OR Apache-2.0), with one change
-marked in src/view/window/mod.rs (a window surface reconfigured when found out of date or when
-its window's size or present mode changed takes the surface's current extent, not a size the
-window has left).
+used under the Apache License, Version 2.0 (it is dual-licensed MIT OR Apache-2.0), with two
+changes: one marked in src/view/window/mod.rs (a window surface reconfigured when found out of
+date or when its window's size or present mode changed takes the surface's current extent, not a
+size the window has left), and one marked in src/render_resource/pipeline_cache.rs (the vendored
+wgpu's density-map pipeline flag passed unset).
 Its LICENSE-MIT and LICENSE-APACHE are those of the crates.io package; neither file names a
 copyright holder.
 
 vendor/wgpu-core-29.0.4 is wgpu-core 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
-used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two changes:
-one marked in src/instance.rs (an instance made from a Vulkan HAL instance keeps its flags), and
-one marked in src/present.rs and src/track/texture.rs (a surface texture presented with no
-submission having used it is cleared and submitted first).
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with three
+changes: one marked in src/instance.rs (an instance made from a Vulkan HAL instance keeps its
+flags), one marked in src/present.rs and src/track/texture.rs (a surface texture presented with
+no submission having used it is cleared and submitted first), and one marked in
+src/command/{render,bundle,clear,encoder_command,mod}.rs, src/device/{mod,resource,global}.rs,
+src/device/trace/record.rs, src/pipeline.rs and src/conv.rs (a render pass's fragment density
+map tracked and checked against its pipelines' flag, behind the density-map feature).
 Copyright (c) 2025 The gfx-rs developers.
 
 vendor/wgpu-hal-29.0.4 is wgpu-hal 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with two
+changes: one marked in src/vulkan/instance.rs (a public `flags()` getter on the Vulkan instance),
+and one marked in src/lib.rs, src/dynamic/{command,device}.rs and
+src/vulkan/{adapter,command,conv,device,mod}.rs (the fragment density map's device feature, the
+map in the render pass, the framebuffer and their cache keys, and a flagged pipeline made against
+a compatible pass that has the map).
+Copyright (c) 2025 The gfx-rs developers.
+
+vendor/wgpu-29.0.4 is wgpu 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
 used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with one change
-marked in src/vulkan/instance.rs (a public `flags()` getter on the Vulkan instance).
+marked in src/api/{render_pipeline,command_encoder}.rs, src/dispatch.rs,
+src/backend/wgpu_core.rs and src/util/texture_blitter.rs (a density-map flag on the render
+pipeline descriptor and a command-encoder entry point that begins a render pass with a fragment
+density map, the render pass descriptor unchanged).
+Its LICENSE.MIT and LICENSE.APACHE are those of the crates.io package.
+Copyright (c) 2025 The gfx-rs developers.
+
+vendor/wgpu-types-29.0.4 is wgpu-types 29.0.4 from crates.io (https://github.com/gfx-rs/wgpu),
+used under the Apache License, Version 2.0 (it is dual-licensed MIT/Apache-2.0), with one change
+marked in src/features.rs and src/texture.rs (a native-only fragment density map device feature,
+and a density-map texture usage and texture state).
+Its LICENSE.MIT and LICENSE.APACHE are those of the crates.io package.
 Copyright (c) 2025 The gfx-rs developers.

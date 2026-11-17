@@ -131,6 +131,14 @@ pub struct PhysicalDeviceFeatures {
     /// Features provided by `VK_KHR_fragment_shader_barycentric`
     shader_barycentrics: Option<vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR<'static>>,
 
+    // openftgs-xr change (D-58), to wgpu-hal 29.0.4 (crates.io), file src/vulkan/adapter.rs,
+    // MIT OR Apache-2.0: the features of `VK_EXT_fragment_density_map`, queried, reported
+    // as `Features::FRAGMENT_DENSITY_MAP` where both `fragmentDensityMap` and
+    // `fragmentDensityMapNonSubsampledImages` are offered, and chained into the device's
+    // creation when that feature is requested (§2.3's note for D-58). Was: none.
+    /// Features provided by `VK_EXT_fragment_density_map`
+    fragment_density_map: Option<vk::PhysicalDeviceFragmentDensityMapFeaturesEXT<'static>>,
+
     /// Features provided by `VK_KHR_portability_subset`.
     ///
     /// Strictly speaking this tells us what features we *don't* have compared to core.
@@ -218,6 +226,9 @@ impl PhysicalDeviceFeatures {
         }
         if let Some(ref mut feature) = self.shader_barycentrics {
             info = info.push_next(feature);
+        }
+        if let Some(ref mut feature) = self.fragment_density_map {
+            info = info.push_next(feature); // openftgs-xr, D-58
         }
         if let Some(ref mut feature) = self.portability_subset {
             info = info.push_next(feature);
@@ -584,6 +595,17 @@ impl PhysicalDeviceFeatures {
             } else {
                 None
             },
+            // openftgs-xr, D-58
+            fragment_density_map: if enabled_extensions.contains(&ext::fragment_density_map::NAME) {
+                let needed = requested_features.contains(wgt::Features::FRAGMENT_DENSITY_MAP);
+                Some(
+                    vk::PhysicalDeviceFragmentDensityMapFeaturesEXT::default()
+                        .fragment_density_map(needed)
+                        .fragment_density_map_non_subsampled_images(needed),
+                )
+            } else {
+                None
+            },
             portability_subset: if enabled_extensions.contains(&khr::portability_subset::NAME) {
                 let multisample_array_needed =
                     requested_features.intersects(wgt::Features::MULTISAMPLE_ARRAY);
@@ -777,6 +799,15 @@ impl PhysicalDeviceFeatures {
             features.set(
                 F::SHADER_BARYCENTRICS | F::SHADER_PER_VERTEX,
                 shader_barycentrics.fragment_shader_barycentric != 0,
+            );
+        }
+
+        if let Some(ref fdm) = self.fragment_density_map {
+            // openftgs-xr, D-58: the map with non-subsampled attachments
+            features.set(
+                F::FRAGMENT_DENSITY_MAP,
+                fdm.fragment_density_map != 0
+                    && fdm.fragment_density_map_non_subsampled_images != 0,
             );
         }
 
@@ -1375,6 +1406,11 @@ impl PhysicalDeviceProperties {
             .intersects(wgt::Features::SHADER_BARYCENTRICS | wgt::Features::SHADER_PER_VERTEX)
         {
             extensions.push(khr::fragment_shader_barycentric::NAME);
+        }
+
+        // openftgs-xr, D-58: `VK_EXT_fragment_density_map` for its feature
+        if requested_features.contains(wgt::Features::FRAGMENT_DENSITY_MAP) {
+            extensions.push(ext::fragment_density_map::NAME);
         }
 
         // Require `VK_KHR_cooperative_matrix` if the associated feature was requested
@@ -2051,6 +2087,14 @@ impl super::InstanceShared {
                 let next = features
                     .shader_barycentrics
                     .insert(vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR::default());
+                features2 = features2.push_next(next);
+            }
+
+            if capabilities.supports_extension(ext::fragment_density_map::NAME) {
+                // openftgs-xr, D-58
+                let next = features
+                    .fragment_density_map
+                    .insert(vk::PhysicalDeviceFragmentDensityMapFeaturesEXT::default());
                 features2 = features2.push_next(next);
             }
 

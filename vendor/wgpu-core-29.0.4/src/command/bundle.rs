@@ -216,6 +216,11 @@ impl RenderBundleEncoder {
                     sc
                 },
                 multiview_mask: desc.multiview,
+                // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
+                // src/command/bundle.rs, MIT OR Apache-2.0: a render bundle's pass context has no
+                // fragment density map (§2.3's note for D-58). Was: no map field. Each changed line
+                // is marked `openftgs-xr, D-58`.
+                fragment_density_map: false, // openftgs-xr, D-58: bundles have no map
             },
 
             is_depth_read_only,
@@ -237,6 +242,7 @@ impl RenderBundleEncoder {
                 },
                 sample_count: 0,
                 multiview_mask: None,
+                fragment_density_map: false, // openftgs-xr, D-58
             },
             is_depth_read_only: false,
             is_stencil_read_only: false,

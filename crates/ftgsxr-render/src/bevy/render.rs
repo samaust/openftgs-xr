@@ -20,11 +20,12 @@ use ::bevy::core_pipeline::core_3d::{
 use ::bevy::core_pipeline::{Core3d, Core3dSystems};
 use ::bevy::ecs::prelude::*;
 use ::bevy::log::{error, info, warn};
-use ::bevy::math::UVec2;
+use ::bevy::math::{Mat4, UVec2};
 use ::bevy::render::camera::ExtractedCamera;
 use ::bevy::render::render_asset::RenderAssets;
+use ::bevy::render::render_phase::TrackedRenderPass;
 use ::bevy::render::render_resource::{StoreOp, TextureFormat};
-use ::bevy::render::renderer::{RenderContext, ViewQuery};
+use ::bevy::render::renderer::{RenderAdapter, RenderContext, RenderDevice, ViewQuery};
 use ::bevy::render::storage::GpuShaderBuffer;
 use ::bevy::render::sync_world::RenderEntity;
 use ::bevy::render::texture::GpuImage;
@@ -35,20 +36,23 @@ use ftgsxr_core::{Pose, Trim};
 
 use super::camera::view_camera;
 use super::depth_copy::DepthCopy;
+use super::foveation::{SplatFoveation, density_map};
 use super::load::{GpuModels, SplatGpu};
 use super::probe::{ProbeTarget, extract_target};
 use super::{
     DepthFrame, OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOcclusion,
     SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform, SplatTrim,
 };
+use crate::gpu::density_map_support;
 use crate::gpu::device::SplatDevice;
 use crate::gpu::headless::{sort_pose, stereo_sort_pose};
 use crate::gpu::probe::ProbePass;
 // The view target the resolve is compiled for (Q-91).
 use crate::gpu::passes::{ENGINE_NEAR, RESOLVE_TARGET_FORMAT};
 use crate::gpu::{
-    Capacity, ColorTransform, FrameBuffers, FrameStats, GpuModel, ModelDraw, OcclusionInput,
-    Overlays, QualityTier, RenderError, RenderMode, SortMode, SortPose, SplatPasses, ViewParams,
+    Capacity, ColorTransform, Foveation, FrameBuffers, FrameStats, GpuModel, ModelDraw,
+    OcclusionInput, Overlays, QualityTier, RenderError, RenderMode, SortMode, SortPose,
+    SplatPasses, ViewParams,
 };
 
 /// The layer's format (§1.4 stage 5, D-35): 16-bit float RGBA.
@@ -178,6 +182,8 @@ struct Extracted {
     dev: Option<Arc<SplatDevice>>,
     instances: Vec<Instance>,
     cameras: HashMap<Entity, SplatCamera>,
+    /// Each splat camera's `SplatFoveation` level, where it has one (Q-458).
+    foveation: HashMap<Entity, Foveation>,
     /// Each splat camera's order, by render entity.
     orders: HashMap<Entity, isize>,
     /// The governor's render scale (§1.12, E16).
@@ -211,6 +217,18 @@ struct ViewState {
     index: usize,
     /// The view's unit in `Views.units`.
     unit: usize,
+    /// The layer's fragment density map (D-58), while the camera's level is not off on a
+    /// device with the feature (Q-457, Q-458).
+    map: Option<LayerMap>,
+}
+
+/// One view's density map with what it was made for; re-made when its level, its layer's
+/// size or its projection changes (Q-457). wgpu keeps a replaced map alive while a pass
+/// that reads it is in flight (D-58, §2.3's note).
+struct LayerMap {
+    made_for: (Foveation, UVec2, Mat4),
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
 }
 
 /// One prepare unit (Q-399): a per-view camera, or the shared-center group, whose first
@@ -294,6 +312,11 @@ struct Views {
     probe: Option<ProbePass>,
     /// The depth copy's pipeline (Q-164), made on first use.
     depth_copy: Option<Arc<DepthCopy>>,
+    /// The density map's texel size (the device's minimum, Q-460) where the device has
+    /// `FRAGMENT_DENSITY_MAP` (D-58); read once per device.
+    map_texel: Option<UVec2>,
+    /// Maps re-made for a projection change alone (#810's stability check).
+    projection_remakes: u64,
     states: HashMap<Entity, ViewState>,
     /// The frame's prepare units, in their first members' camera order (Q-399).
     units: Vec<Unit>,
@@ -380,6 +403,17 @@ type InstanceQuery<'w, 's> = Query<
     ),
 >;
 
+type CameraQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static RenderEntity,
+        &'static SplatCamera,
+        Option<&'static ::bevy::camera::Camera>,
+        Option<&'static SplatFoveation>,
+    ),
+>;
+
 #[allow(clippy::too_many_arguments)]
 fn extract(
     mut out: ResMut<Extracted>,
@@ -389,7 +423,7 @@ fn extract(
     instances: Extract<InstanceQuery>,
     tier_state: Extract<Res<SplatTierState>>,
     sh_limit: Extract<Option<Res<SplatShLimit>>>,
-    cameras: Extract<Query<(&RenderEntity, &SplatCamera, Option<&::bevy::camera::Camera>)>>,
+    cameras: Extract<CameraQuery>,
 ) {
     // §2.4 Frame loop hooks: a new frame, so no unit has prepared or drawn in it yet.
     shared.frame = shared.frame.wrapping_add(1);
@@ -425,10 +459,15 @@ fn extract(
         .collect();
     found.sort_by_key(|(e, _)| *e);
     out.instances = found.into_iter().map(|(_, i)| i).collect();
-    out.cameras = cameras.iter().map(|(r, c, _)| (r.id(), *c)).collect();
+    out.cameras = cameras.iter().map(|(r, c, ..)| (r.id(), *c)).collect();
     out.orders = cameras
         .iter()
-        .map(|(r, _, cam)| (r.id(), cam.map_or(0, |c| c.order)))
+        .map(|(r, _, cam, _)| (r.id(), cam.map_or(0, |c| c.order)))
+        .collect();
+    // Q-458
+    out.foveation = cameras
+        .iter()
+        .filter_map(|(r, .., f)| f.map(|f| (r.id(), f.0)))
         .collect();
 }
 
@@ -440,6 +479,7 @@ fn prepare_views(
     mut views: ResMut<Views>,
     mut shared: ResMut<SharedFrame>,
     cameras: Query<(&ExtractedView, &ExtractedCamera, Option<&Msaa>)>,
+    adapter: Option<Res<RenderAdapter>>,
 ) {
     let Some(dev) = extracted.dev.clone() else {
         return;
@@ -461,6 +501,7 @@ fn prepare_views(
         *views = Views {
             dev: Some(Arc::clone(&dev)),
             probe,
+            map_texel: map_texel(&dev, adapter.as_deref()),
             ..Views::default()
         };
     }
@@ -475,6 +516,11 @@ fn prepare_views(
             views.states.remove(&entity);
             continue;
         };
+        let level = extracted
+            .foveation
+            .get(&entity)
+            .copied()
+            .unwrap_or(Foveation::Off);
         match prepare_view(
             &mut views,
             &dev,
@@ -482,6 +528,7 @@ fn prepare_views(
             extracted.render_scale,
             entity,
             camera,
+            level,
             view,
             extracted_camera,
             msaa,
@@ -817,6 +864,29 @@ fn log_layer_size(layer: UVec2, view: UVec2, scale: f32) {
     );
 }
 
+/// The density map's texel size on `dev`: the device's minimum (Q-460), where it has
+/// `FRAGMENT_DENSITY_MAP` and reports a texel size (D-58); `None` elsewhere.
+fn map_texel(dev: &SplatDevice, adapter: Option<&RenderAdapter>) -> Option<UVec2> {
+    if !dev
+        .device()
+        .features()
+        .contains(wgpu::Features::FRAGMENT_DENSITY_MAP)
+    {
+        return None;
+    }
+    let support = density_map_support(&adapter?.0, dev.device())?;
+    let [x, y] = support.min_texel;
+    let texel = (x > 0 && y > 0).then(|| UVec2::new(x, y));
+    match texel {
+        Some(t) => info!(
+            "layer foveation: density maps at a {}x{} px texel",
+            t.x, t.y
+        ),
+        None => warn!("layer foveation: the device reports no density texel size; no map"),
+    }
+    texel
+}
+
 /// The splat layer's size at render scale `scale` (§1.12): the view's size times the
 /// scale, rounded, at least one pixel; §1.7 Window: the scale applies to the layer only.
 fn layer_size(view: UVec2, scale: f32) -> UVec2 {
@@ -835,6 +905,7 @@ fn prepare_view(
     render_scale: f32,
     entity: Entity,
     camera: SplatCamera,
+    level: Foveation,
     view: &ExtractedView,
     extracted_camera: &ExtractedCamera,
     msaa: Option<&Msaa>,
@@ -905,6 +976,7 @@ fn prepare_view(
         core_camera,
         index: 0,
         unit: 0,
+        map: None,
     });
     state.camera = camera;
     state.passes = passes;
@@ -961,11 +1033,111 @@ fn prepare_view(
             draw_size,
         ));
     }
+    // D-58, Q-457, Q-458: the layer's map while the level is not off on a device with the
+    // feature, re-made when the level, the layer's size or the projection changes.
+    let made_for = (level, draw_size, view.clip_from_view);
+    match (&state.layer, views.map_texel) {
+        (Some(_), Some(texel)) if level != Foveation::Off && state.passes.has_map_pipelines() => {
+            match remake(state.map.as_ref().map(|m| m.made_for), made_for) {
+                None => {}
+                Some(why) => {
+                    // #810: the device's projection stability, seen in the log.
+                    match why {
+                        Remake::Changed => info!(
+                            "layer foveation: map for {level:?} at a {}x{} layer, view {entity}",
+                            draw_size.x, draw_size.y
+                        ),
+                        Remake::Projection => {
+                            views.projection_remakes += 1;
+                            let n = views.projection_remakes;
+                            if n.is_power_of_two() {
+                                info!(
+                                    "layer foveation: {n} maps re-made for a projection change alone"
+                                );
+                            }
+                        }
+                    }
+                    state.map = make_map(dev, made_for, texel);
+                }
+            }
+        }
+        (Some(_), Some(_)) if level != Foveation::Off => {
+            views.warn_once(entity, "no map pipelines; the layer is drawn unfoveated");
+            state.map = None;
+        }
+        _ => state.map = None,
+    }
     if state.layer_depth.is_some() && views.depth_copy.is_none() {
         views.depth_copy = Some(Arc::new(DepthCopy::new(dev.device(), CORE_3D_DEPTH_FORMAT)));
     }
     views.states.insert(entity, state);
     Ok(())
+}
+
+/// Why a view's map is made again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Remake {
+    /// No map yet, or a new level or layer size.
+    Changed,
+    /// The projection alone changed.
+    Projection,
+}
+
+/// Whether a map made for `old` must be re-made for `new` (Q-457), and why.
+fn remake(old: Option<(Foveation, UVec2, Mat4)>, new: (Foveation, UVec2, Mat4)) -> Option<Remake> {
+    match old {
+        Some(o) if o == new => None,
+        Some(o) if (o.0, o.1) == (new.0, new.1) => Some(Remake::Projection),
+        _ => Some(Remake::Changed),
+    }
+}
+
+/// The layer's density map for `made_for` (level, layer size, projection) at `texel`,
+/// uploaded now, so it is written before the frame's passes read it (D-58:
+/// `fragmentDensityMapDynamic` is false on the Quest 3).
+fn make_map(
+    dev: &SplatDevice,
+    made_for: (Foveation, UVec2, Mat4),
+    texel: UVec2,
+) -> Option<LayerMap> {
+    let (level, layer, projection) = made_for;
+    let map = density_map(level, layer, projection, texel)?;
+    let extent = wgpu::Extent3d {
+        width: map.size.x,
+        height: map.size.y,
+        depth_or_array_layers: 1,
+    };
+    let texture = dev.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("ftgsxr splat layer density map"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rg8Unorm,
+        usage: wgpu::TextureUsages::FRAGMENT_DENSITY_MAP | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    dev.queue().write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &map.texels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(map.size.x * 2),
+            rows_per_image: Some(map.size.y),
+        },
+        extent,
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    Some(LayerMap {
+        made_for,
+        _texture: texture,
+        view,
+    })
 }
 
 /// The instances of a view as `ModelDraw`s, at their drawn degrees.
@@ -1028,6 +1200,7 @@ fn draw_node(
     images: Res<RenderAssets<GpuImage>>,
     probe_target: Res<ProbeTarget>,
     buffers: Res<RenderAssets<GpuShaderBuffer>>,
+    render_device: Res<RenderDevice>,
     mut ctx: RenderContext,
 ) {
     let Some(state) = views.states.get(&view.entity()) else {
@@ -1118,17 +1291,40 @@ fn draw_node(
                         store: wgpu::StoreOp::Store,
                     },
                 })];
-                let mut pass = ctx.begin_tracked_render_pass(wgpu::RenderPassDescriptor {
+                let desc = wgpu::RenderPassDescriptor {
                     label: Some("ftgsxr splats"),
                     color_attachments: &color,
                     depth_stencil_attachment: layer_depth,
                     timestamp_writes,
                     occlusion_query_set: None,
                     multiview_mask: None,
-                });
-                state
-                    .passes
-                    .encode_draw(pass.wgpu_pass(), frame, &state.view, occlusion.as_ref());
+                };
+                match &state.map {
+                    // D-58: the layer pass with the eye's density map, begun through
+                    // the vendored wgpu's entry point and its flagged pipelines.
+                    Some(map) => {
+                        let raw = ctx
+                            .command_encoder()
+                            .begin_render_pass_with_fragment_density_map(&desc, Some(&map.view));
+                        let mut pass = TrackedRenderPass::new(&render_device, raw);
+                        state.passes.encode_draw_in(
+                            pass.wgpu_pass(),
+                            frame,
+                            &state.view,
+                            occlusion.as_ref(),
+                            true,
+                        );
+                    }
+                    _ => {
+                        let mut pass = ctx.begin_tracked_render_pass(desc);
+                        state.passes.encode_draw(
+                            pass.wgpu_pass(),
+                            frame,
+                            &state.view,
+                            occlusion.as_ref(),
+                        );
+                    }
+                }
             }
             // E14's exposure match: the first splat camera's layer (the left eye, Q-125),
             // probed once, into the buffer the main world reads back.
@@ -1202,6 +1398,24 @@ mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remake_names_why_a_map_is_made() {
+        let p = Mat4::IDENTITY;
+        let q = Mat4::from_scale(bevy::math::Vec3::new(1.0, 1.0, 0.5));
+        let a = (Foveation::High, UVec2::new(1680, 1760), p);
+        assert_eq!(remake(None, a), Some(Remake::Changed));
+        assert_eq!(remake(Some(a), a), None);
+        assert_eq!(
+            remake(Some(a), (Foveation::Medium, a.1, p)),
+            Some(Remake::Changed)
+        );
+        assert_eq!(
+            remake(Some(a), (a.0, UVec2::new(1008, 1056), p)),
+            Some(Remake::Changed)
+        );
+        assert_eq!(remake(Some(a), (a.0, a.1, q)), Some(Remake::Projection));
+    }
 
     /// A writer into a shared buffer, for a captured log.
     #[derive(Clone, Default)]

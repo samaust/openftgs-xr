@@ -4,6 +4,19 @@
 //! test counted over its window came at the default 72 Hz. Built on the host too, so its
 //! tests run there (#269).
 
+use std::time::Duration;
+
+/// Dv-2's warm-up: its window opens this long after both eyes draw, past start-up's
+/// first second (owner, 2026-11-16, #810; Q-464).
+// Q-464
+const WARM_UP: Duration = Duration::from_secs(2);
+
+/// How long after both eyes draw Dv-2's window opens: the warm-up, or a level cycle's
+/// length when one runs first (Q-464).
+pub(crate) fn window_lead(cycle: Option<Duration>) -> Duration {
+    cycle.unwrap_or(WARM_UP)
+}
+
 /// The default refresh rate (§1.12).
 const RATE_HZ: f64 = 72.0;
 /// The shares of 72 Hz's frames the window must hold at least and at most: a dropped
@@ -38,6 +51,15 @@ pub(crate) fn at_default_rate(frames: u32, elapsed_s: f64) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_lead_is_a_2_s_warm_up_or_the_cycle() {
+        assert_eq!(window_lead(None), Duration::from_secs(2));
+        assert_eq!(
+            window_lead(Some(Duration::from_secs(10))),
+            Duration::from_secs(10)
+        );
+    }
 
     // Q-138: the band is 95 % to 105 % of 72 Hz × the elapsed time.
 

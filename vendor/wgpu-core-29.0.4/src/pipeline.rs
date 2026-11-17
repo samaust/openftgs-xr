@@ -477,6 +477,12 @@ pub struct RenderPipelineDescriptor<
     /// If the pipeline will be used with a multiview render pass, this indicates how many array
     /// layers the attachments will have.
     pub multiview_mask: Option<NonZeroU32>,
+    // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/pipeline.rs, MIT
+    // OR Apache-2.0: the pipeline flag for a pass with a fragment density map (§2.3's note
+    // for D-58). Was: no such field.
+    /// Whether the pipeline is for render passes with a fragment density map.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub fragment_density_map: bool,
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<PLC>,
 }
@@ -549,6 +555,12 @@ pub struct GeneralRenderPipelineDescriptor<
     /// If the pipeline will be used with a multiview render pass, this indicates how many array
     /// layers the attachments will have.
     pub multiview_mask: Option<NonZeroU32>,
+    // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/pipeline.rs, MIT
+    // OR Apache-2.0: the pipeline flag for a pass with a fragment density map (§2.3's note
+    // for D-58). Was: no such field.
+    /// Whether the pipeline is for render passes with a fragment density map.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub fragment_density_map: bool,
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<PLC>,
 }
@@ -565,6 +577,7 @@ impl<'a, PLL, SM, PLC> From<RenderPipelineDescriptor<'a, PLL, SM, PLC>>
             multisample: value.multisample,
             fragment: value.fragment,
             multiview_mask: value.multiview_mask,
+            fragment_density_map: value.fragment_density_map, // openftgs-xr, D-58
             cache: value.cache,
         }
     }
@@ -582,6 +595,7 @@ impl<'a, PLL, SM, PLC> From<MeshPipelineDescriptor<'a, PLL, SM, PLC>>
             multisample: value.multisample,
             fragment: value.fragment,
             multiview_mask: value.multiview,
+            fragment_density_map: false, // openftgs-xr, D-58: no mesh pipeline flag
             cache: value.cache,
         }
     }

@@ -197,28 +197,32 @@ impl Run {
     /// median <ms> cull <ms> sort <ms> over <n> blocks in <s> s, visible <a>..<b>,
     /// overflow <bool>`.
     fn summary(&self, t: Step, since: Duration) -> String {
-        let b = &self.blocks;
-        let of = |f: fn(&Block) -> f32| b.iter().map(f).collect::<Vec<_>>();
-        let draw = of(|b| b.draw);
-        format!(
-            "{} draw median {} ms, p10 {} p90 {} min {} max {}, total median {} cull {} sort {} \
-             over {} blocks in {:.2} s, visible {}..{}, overflow {}",
-            label(t),
-            quantile(&draw, 0.5),
-            quantile(&draw, 0.1),
-            quantile(&draw, 0.9),
-            quantile(&draw, 0.0),
-            quantile(&draw, 1.0),
-            quantile(&of(|b| b.total), 0.5),
-            quantile(&of(|b| b.cull), 0.5),
-            quantile(&of(|b| b.sort), 0.5),
-            b.len(),
-            since.as_secs_f64(),
-            b.iter().map(|b| b.visible).min().unwrap_or(0),
-            b.iter().map(|b| b.visible).max().unwrap_or(0),
-            b.iter().any(|b| b.overflow),
-        )
+        summary(&label(t), &self.blocks, since)
     }
+}
+
+/// One window's summary line after its name, as [`Run`]'s (Dv-14 reuses it, #810).
+pub(super) fn summary(name: &str, b: &[Block], since: Duration) -> String {
+    let of = |f: fn(&Block) -> f32| b.iter().map(f).collect::<Vec<_>>();
+    let draw = of(|b| b.draw);
+    format!(
+        "{} draw median {} ms, p10 {} p90 {} min {} max {}, total median {} cull {} sort {} \
+             over {} blocks in {:.2} s, visible {}..{}, overflow {}",
+        name,
+        quantile(&draw, 0.5),
+        quantile(&draw, 0.1),
+        quantile(&draw, 0.9),
+        quantile(&draw, 0.0),
+        quantile(&draw, 1.0),
+        quantile(&of(|b| b.total), 0.5),
+        quantile(&of(|b| b.cull), 0.5),
+        quantile(&of(|b| b.sort), 0.5),
+        b.len(),
+        since.as_secs_f64(),
+        b.iter().map(|b| b.visible).min().unwrap_or(0),
+        b.iter().map(|b| b.visible).max().unwrap_or(0),
+        b.iter().any(|b| b.overflow),
+    )
 }
 
 /// The spike's state, inserted when the runner's entity appears.
@@ -322,8 +326,10 @@ fn run(
         g.enabled = false;
         g.budget_override_ms = None;
     }
-    // The scale held every frame, whatever else writes the tier state.
-    if let (Some(s), Some(t)) = (test.run.scale(), tier.as_deref_mut())
+    // The scale held every frame, whatever else writes the tier state; written only
+    // when it differs, since a write marks the tier state changed and `follow_settings`
+    // then turns the governor back on (#810).
+    if let (Some(s), Some(t)) = (test.run.scale(), tier.as_mut())
         && t.render_scale != s
     {
         t.render_scale = s;
@@ -342,7 +348,12 @@ fn run(
         });
     let since = test.since.elapsed();
     let (out, changed) = test.run.frame(since, block);
-    apply(&out, tier.as_deref_mut(), display.as_deref_mut());
+    if out
+        .iter()
+        .any(|o| matches!(o, Out::Scale(_) | Out::Level(_)))
+    {
+        apply(&out, tier.as_deref_mut(), display.as_deref_mut());
+    }
     for o in out {
         match o {
             Out::Log(l) => info!("{l}"),

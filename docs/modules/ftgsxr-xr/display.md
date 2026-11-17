@@ -37,10 +37,21 @@ The first session's swapchain, made before any frame state exists, uses the view
 
 - `refresh_hz`: the runtime's current rate, read once the session has begun and at each refresh-rate change event (XR\_FB\_display\_refresh\_rate); without the extension, the reciprocal of the frame state's predicted display period; `None` while no session runs, a re-creation included.
 - `available_rates`: `DisplaySettings.available_rates`, the runtime's list (empty without the extension), which the Display tab's refresh-rate picker offers (Q-405); the picker writes `[xr] refresh_rate`, which `follow` carries here.
-- `foveation`: whether the runtime offers XR\_FB\_foveation with its swapchain-update companion.
+- `foveation`: whether the splat layer can be foveated, the device's density-map support signal (`display::support`'s `LayerSupport::enabled`: VK\_EXT\_fragment\_density\_map enabled with `fragmentDensityMap` and `fragmentDensityMapNonSubsampledImages`). It no longer reflects XR\_FB\_foveation, which reaches only the swapchain's passes, so the governor's foveation knob is on the headset's ladder exactly where it saves time (Q-456, D-58).
 - `swapchain`: the live swapchain's size per eye.
 
 The rate is mirrored into `HudData.refresh_hz`, the HUD's field on both builds (Q-159), which decides nothing.
+
+## The layer's foveation
+
+The same level that `follow` leaves in `DisplaySettings.foveation` selects each eye layer's own density map (§1.12, D-58). It reaches the layer pass in two ways:
+
+- **The eyes' level.** A private `carry_to_eyes`, chained after `follow` in `Update`, gives every `XrCamera` `ftgsxr_render`'s `SplatFoveation` at that level and keeps it equal each frame, before extraction (Q-458). It runs whatever the device's support: the adapter draws no map where the signal is false, and none at off (Q-457). Its source is the effective level, so the tier's level, an explicit `[xr] foveation`, a governor step and a direct write all reach the eyes. The query is on `XrCamera`, not `SplatCamera`, so the eye has its level before its first drawn frame. The desktop window's camera is no `XrCamera` and never gets it.
+- **The swapchain.** XR\_FB\_foveation's profile is applied through xrUpdateSwapchainFB as before (Q-124, Q-131). It is unchanged.
+
+The device's support is read once at `Startup` by the private `display::support` and logged as `density map support: <report>` (Q-461, Q-463). `plugin` requests nothing itself: bevy\_mod\_openxr asks for every feature the adapter exposes, and the vendored wgpu-hal exposes the feature only where both are offered (§2.3's note).
+
+**The info line** (Q-455). Where the device lacks support, the first time in an OpenXR session the effective level is not off, a private `layer_info` logs at info `layer foveation unavailable: <item>`, with no toast and no warning (§1.13; the condition is not among §1.15's). The item is the first missing of `VK_EXT_fragment_density_map` (not offered, or no Vulkan report), `fragmentDensityMap`, `fragmentDensityMapNonSubsampledImages`, and `VK_EXT_fragment_density_map not enabled`. It runs only while a session exists, and its flag in `Applied` is cleared at each session creation, so a session re-created after a render-scale change may log it once more. The tier's level gets the line too, though Q-421 keeps it silent on the swapchain: the line is about the layer. Monado's device offers no VK\_EXT\_fragment\_density\_map, so the `xr` lane takes the line's path (`tests/xr_layer_foveation.rs`).
 
 ## The runtime's counters and A-10's record
 

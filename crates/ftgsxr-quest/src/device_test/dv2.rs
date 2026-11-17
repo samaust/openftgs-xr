@@ -6,6 +6,14 @@
 //! drawn by both for 10 s; PASS with the frame count when the frames came at the default
 //! 72 Hz, neither fewer nor more (`dv2_rate`, Q-138, #269), and the first eye's
 //! statistics saw the probe. The driver judges the validation layer's messages (Q-123).
+//!
+//! The re-run with the map attached (#810, Q-464): the intent extra
+//! `ftgsxr-foveation` names a level (`Off`, the no-map control, `Low`, `Medium`, `High`, `Dynamic`) held through
+//! `DisplaySettings.foveation` from the start, or `cycle`, which steps high, medium,
+//! off, medium and high, 2 s each, before the 10 s window, drawn at high. Every launch,
+//! with or without the extra, opens its window 2 s after both eyes draw, so start-up's
+//! first second is not counted (owner, 2026-11-16).
+// Q-464
 
 use std::time::{Duration, Instant};
 
@@ -16,7 +24,9 @@ use ftgsxr_app::{SplatCamera, SplatEvent, SplatStats};
 
 use crate::android::splat_load;
 use crate::device_test::{dv_dir, verdict};
-use crate::dv2_rate::at_default_rate;
+use crate::dv2_rate::{at_default_rate, window_lead};
+use crate::jni_calls::intent_extra;
+use ftgsxr_xr::{DisplaySettings, Foveation};
 
 /// The test's name in the intent extra.
 pub(crate) const NAME: &str = "dv2";
@@ -27,9 +37,45 @@ const WINDOW: Duration = Duration::from_secs(10);
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// The probe's distance ahead of the left eye, metres.
 const AHEAD_M: f32 = 1.0;
+/// The intent extra naming the level (Q-464).
+const LEVEL_EXTRA: &str = "ftgsxr-foveation";
+/// The cycle's levels, each held [`CYCLE_STEP`] (Q-464).
+const CYCLE: [Foveation; 5] = [
+    Foveation::High,
+    Foveation::Medium,
+    Foveation::Off,
+    Foveation::Medium,
+    Foveation::High,
+];
+const CYCLE_STEP: Duration = Duration::from_secs(2);
+
+/// What the extra asks for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Levels {
+    Settings,
+    Hold(Foveation),
+    Cycle,
+}
+
+fn levels(extra: Option<&str>) -> Option<Levels> {
+    Some(match extra {
+        None => Levels::Settings,
+        Some("cycle") => Levels::Cycle,
+        // The no-map control (Q-457): off draws without a map.
+        Some("Off") => Levels::Hold(Foveation::Off),
+        Some("Low") => Levels::Hold(Foveation::Low),
+        Some("Medium") => Levels::Hold(Foveation::Medium),
+        Some("High") => Levels::Hold(Foveation::High),
+        Some("Dynamic") => Levels::Hold(Foveation::Dynamic),
+        Some(_) => return None,
+    })
+}
 
 #[derive(Resource)]
 struct Dv2 {
+    levels: Levels,
+    /// When the cycle or the held level's warm-up began, once both eyes draw.
+    cycle: Option<Instant>,
     started: Instant,
     model: Entity,
     uploaded: bool,
@@ -40,6 +86,12 @@ struct Dv2 {
 
 /// Adds the test.
 pub(super) fn add(app: &mut App) {
+    let extra = intent_extra(LEVEL_EXTRA);
+    let Some(levels) = levels(extra.as_deref()) else {
+        verdict(NAME, false, &format!("unknown {LEVEL_EXTRA} {extra:?}"));
+        return;
+    };
+    info!("dv2: levels {levels:?}");
     let path = dv_dir().map(|d| d.join("probe.safetensors"));
     let bytes = match path.as_deref().map(std::fs::read) {
         Some(Ok(b)) => b,
@@ -53,6 +105,8 @@ pub(super) fn add(app: &mut App) {
         .spawn((splat_load(bytes), Transform::IDENTITY))
         .id();
     app.insert_resource(Dv2 {
+        levels,
+        cycle: None,
         started: Instant::now(),
         model,
         uploaded: false,
@@ -83,13 +137,47 @@ fn run(
     eyes: Query<(&XrCamera, &GlobalTransform, Has<SplatCamera>)>,
     mut transforms: Query<&mut Transform>,
     stats: Res<SplatStats>,
+    display: Option<ResMut<DisplaySettings>>,
 ) {
     if test.done {
         return;
     }
     let now = Instant::now();
+    // Q-464: the level the extra asks for now.
+    let want = match test.levels {
+        Levels::Settings => None,
+        Levels::Hold(l) => Some(l),
+        Levels::Cycle => Some(match test.cycle {
+            Some(c) => {
+                let i = (now.duration_since(c).as_secs_f64() / CYCLE_STEP.as_secs_f64()) as usize;
+                CYCLE[i.min(CYCLE.len() - 1)]
+            }
+            None => CYCLE[0],
+        }),
+    };
+    if let (Some(l), Some(mut d)) = (want, display)
+        && d.foveation != l
+    {
+        info!("dv2: foveation {l:?}");
+        d.foveation = l;
+    }
     let Some((start, frames)) = test.window else {
         let ready = eyes.iter().filter(|(_, _, s)| *s).count() == 2;
+        if test.uploaded && ready {
+            // The warm-up, or the cycle, runs before the window, so neither start-up's
+            // first second nor the cycle's re-makes are timed (Q-464).
+            let c = *test.cycle.get_or_insert(now);
+            let lead = window_lead(
+                (test.levels == Levels::Cycle).then(|| CYCLE_STEP * CYCLE.len() as u32),
+            );
+            if now.duration_since(c) < lead {
+                let left = eyes.iter().find(|(c, _, _)| c.0 == 0).map(|(_, g, _)| *g);
+                if let (Some(left), Ok(mut t)) = (left, transforms.get_mut(test.model)) {
+                    t.translation = left.translation() + left.forward() * AHEAD_M;
+                }
+                return;
+            }
+        }
         if test.uploaded && ready {
             info!(
                 "dv2: both eyes are splat cameras; drawing for {} s",

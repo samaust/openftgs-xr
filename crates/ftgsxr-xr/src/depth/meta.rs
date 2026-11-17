@@ -177,6 +177,7 @@ fn full_screen(
             })],
         }),
         multiview_mask: None,
+        fragment_density_map: false, // D-58: no density map (#807)
         cache: None,
     });
     (layout, pipeline)
