@@ -39,7 +39,9 @@ use bevy::ecs::message::MessageWriter;
 use bevy::log::{info, warn};
 use bevy::math::UVec2;
 use bevy::prelude::DetectChangesMut;
-use bevy::prelude::{Commands, IntoScheduleConfigs, Res, ResMut, Resource, resource_exists};
+use bevy::prelude::{
+    Commands, Entity, IntoScheduleConfigs, Query, Res, ResMut, Resource, With, resource_exists,
+};
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::{Render, RenderApp};
 use bevy_mod_openxr::graphics::GraphicsWrap;
@@ -49,6 +51,7 @@ use bevy_mod_openxr::resources::{
     OxrSystemId, OxrViews,
 };
 use bevy_mod_openxr::session::OxrSession;
+use bevy_mod_xr::camera::XrCamera;
 use bevy_mod_xr::session::{
     XrPostSessionBegin, XrPreDestroySession, XrRenderSystems, XrRequestExitMessage,
     XrSessionCreated, XrState,
@@ -56,7 +59,7 @@ use bevy_mod_xr::session::{
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
 use ftgsxr_app::{HudData, SettingsRes, Toast, ToastLevel, XrDisplay};
 use ftgsxr_io::Settings;
-use ftgsxr_render::{Foveation, QualityTier, SplatTierState};
+use ftgsxr_render::{Foveation, QualityTier, SplatFoveation, SplatTierState};
 use openxr::sys;
 use openxr::sys::Handle as _;
 
@@ -196,6 +199,29 @@ fn follow(
     {
         followed.tier_foveation = Some(t.foveation);
         display.foveation = t.foveation;
+    }
+}
+
+/// Carries the effective level to each eye's layer pass (§1.12, D-58): every eye camera
+/// gets `SplatFoveation` at `DisplaySettings.foveation` as `follow` leaves it, kept equal
+/// each frame before extraction, whatever the device's support (the adapter draws no map
+/// where it is false). The desktop window's camera is no `XrCamera` and never gets it.
+// Q-458
+fn carry_to_eyes(
+    settings: Res<DisplaySettings>,
+    mut eyes: Query<(Entity, Option<&mut SplatFoveation>), With<XrCamera>>,
+    mut commands: Commands,
+) {
+    let level = SplatFoveation(settings.foveation);
+    for (eye, current) in &mut eyes {
+        match current {
+            Some(mut c) => {
+                c.set_if_neq(level);
+            }
+            None => {
+                commands.entity(eye).insert(level);
+            }
+        }
     }
 }
 
@@ -395,7 +421,10 @@ impl Plugin for DisplayPlugin {
             .add_systems(XrSessionCreated, on_session_created)
             .add_systems(XrPostSessionBegin, on_session_begun)
             .add_systems(XrPreDestroySession, drop_profile)
-            .add_systems(Update, (follow, apply_changes, publish).chain())
+            .add_systems(
+                Update,
+                (follow, carry_to_eyes, apply_changes, publish).chain(),
+            )
             .add_oxr_event_handler(log_rate_change);
         // #725: the runtime's counters for the device spikes (Q-420).
         metrics::add(app);
@@ -1067,6 +1096,29 @@ mod tests {
                 .resource::<XrDisplay>()
                 .foveation
         );
+    }
+
+    /// Q-458 (#809): each eye carries `SplatFoveation` at `DisplaySettings.foveation` and
+    /// follows it each frame, whatever the device's support; a camera that is not an eye
+    /// (the desktop window's) never gets it.
+    #[test]
+    fn carry_to_eyes_keeps_each_eyes_level_at_the_display_settings() {
+        use bevy::camera::Camera;
+        let mut app = App::new();
+        let mut d = DisplaySettings::from_settings(&Settings::default());
+        d.foveation = Foveation::Medium;
+        app.insert_resource(d).add_systems(Update, carry_to_eyes);
+        let eyes = [0, 1].map(|i| app.world_mut().spawn(XrCamera(i)).id());
+        let window = app.world_mut().spawn(Camera::default()).id();
+        let levels = |app: &App| eyes.map(|e| app.world().get::<SplatFoveation>(e).copied());
+        app.update();
+        assert_eq!(levels(&app), [Some(SplatFoveation(Foveation::Medium)); 2]);
+        for f in [Foveation::High, Foveation::Off, Foveation::Dynamic] {
+            app.world_mut().resource_mut::<DisplaySettings>().foveation = f;
+            app.update();
+            assert_eq!(levels(&app), [Some(SplatFoveation(f)); 2], "{f:?}");
+        }
+        assert!(app.world().get::<SplatFoveation>(window).is_none());
     }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {
