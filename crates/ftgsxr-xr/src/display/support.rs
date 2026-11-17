@@ -18,12 +18,10 @@ use ftgsxr_render::{DensityMapSupport, density_map_support};
 /// The device's support: `None` where there is no render device yet or it is not
 /// Vulkan (no report), else Q-461's report, whose `enabled` is the signal.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct LayerSupport(pub(crate) Option<DensityMapSupport>);
 
 impl LayerSupport {
     /// Whether the device enabled the extension with both features (§1.12).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn enabled(&self) -> bool {
         self.0.as_ref().is_some_and(|s| s.enabled)
     }

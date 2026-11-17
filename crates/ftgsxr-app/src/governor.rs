@@ -65,8 +65,8 @@ pub const HEADSET_LADDER: [Knob; 4] = [
     Knob::SortMode,
 ]; // Q-178
 
-/// `HEADSET_LADDER` without the foveation, while `[xr] foveation` pins it or the runtime
-/// has none (Q-404).
+/// `HEADSET_LADDER` without the foveation, while `[xr] foveation` pins it or the layer
+/// cannot be foveated, `XrDisplay.foveation` false (Q-404, Q-456).
 const HEADSET_LADDER_NO_FOVEATION: [Knob; 3] = [Knob::RenderScale, Knob::ShCap, Knob::SortMode];
 
 /// The two streaks E16 counts (Q-153).
@@ -344,7 +344,8 @@ fn run_governor(
     let Some(frame) = stats.0 else { return };
     // Q-153, Q-404: the ladder follows `XrDisplay`'s presence, read each frame, so the XR
     // crate's plugin may be added after `AppPlugin`. An explicit `[xr] foveation`, which
-    // `display` applies, or a runtime without foveation takes that knob off the ladder.
+    // `display` applies, or a layer that cannot be foveated (`XrDisplay.foveation`, Q-456)
+    // takes that knob off the ladder.
     let pinned = settings.is_some_and(|s| s.0.xr.foveation.is_some());
     let ladder: &[Knob] = match &display {
         None => &DESKTOP_LADDER,

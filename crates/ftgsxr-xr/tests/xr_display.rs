@@ -177,7 +177,7 @@ fn xr_display_a_render_scale_set_before_the_session_runs_is_applied_once_it_runs
 // Q-404 (#729): `XrPlugin` inserts `XrDisplay`, whose rate is `None` until the session
 // runs; while it runs `display` writes the runtime's current rate (the reciprocal of the
 // predicted display period without XR_FB_display_refresh_rate), the runtime's list, the
-// foveation support and the swapchain's size, and mirrors the rate into `HudData`.
+// layer's foveation support (Q-456) and the swapchain's size, and mirrors the rate into `HudData`.
 #[test]
 #[ignore = "xr"]
 fn xr_display_xr_display_carries_the_runtimes_rate_and_list_and_the_hud_mirrors_it() {
@@ -230,7 +230,16 @@ fn xr_display_xr_display_carries_the_runtimes_rate_and_list_and_the_hud_mirrors_
         assert_eq!(rate, c, "the runtime's current rate");
     }
     assert_eq!(d.available_rates, reported, "the runtime's list");
-    assert!(!d.foveation, "Monado offers no XR_FB_foveation");
+    // Q-456 (#809): the layer's foveation, the device's density-map signal.
+    let adapter = app
+        .world()
+        .resource::<bevy::render::renderer::RenderAdapter>();
+    let device = app
+        .world()
+        .resource::<bevy::render::renderer::RenderDevice>();
+    let layer = ftgsxr_render::density_map_support(adapter, device.wgpu_device())
+        .is_some_and(|s| s.enabled);
+    assert_eq!(d.foveation, layer, "the device's density-map support");
     let first = swapchain_sizes()[0];
     assert_eq!(
         (d.swapchain.x, d.swapchain.y),

@@ -169,7 +169,11 @@ fn an_explicit_xr_foveation_takes_the_knob_off_the_ladder() {
     skips_the_foveation(&mut t);
 }
 
-// Q-404
+/// Q-404, Q-456 (#809): `XrDisplay.foveation` is whether the splat layer can be foveated
+/// (the XR device's density-map support). False, the knob is off the headset ladder both
+/// ways; turned true while the app runs, the step after the render scale's four is the
+/// foveation's again.
+// Q-404, Q-456
 #[test]
 fn a_runtime_without_foveation_skips_the_knob() {
     let mut t = headset(
@@ -180,6 +184,8 @@ fn a_runtime_without_foveation_skips_the_knob() {
         },
     );
     skips_the_foveation(&mut t);
+    t.app.world_mut().resource_mut::<XrDisplay>().foveation = true;
+    assert_eq!(run(&mut t, 30.0, 50), each(10, &FULL_DOWN[..5]));
 }
 
 // Q-404
