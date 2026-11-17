@@ -38,6 +38,7 @@ mod u32_hands_to_intents;
 mod u34_xr_error_catalog;
 mod u37_panel_placement;
 mod xr_controllers;
+mod xr_density_map;
 mod xr_display;
 mod xr_hands;
 mod xr_passthrough_unsupported;
