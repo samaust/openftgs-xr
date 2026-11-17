@@ -188,6 +188,38 @@ mod tests {
         }
     }
 
+    /// Q-462's detecting test (two-axis review, PRD #804): a density d is stored as
+    /// round(255 d) in both channels, 1 → 255, ½ → 128, ¼ → 64. A symmetric 90° frustum
+    /// on a 160 × 160 layer has f = c = 80 px, so on the 10 × 10 grid texel (5, 5)'s
+    /// centre (88, 88) is atan(√2 · 0.1) ≈ 8.0° from the axis and texel (0, 0)'s centre
+    /// (8, 8) is atan(√2 · 0.9) ≈ 51.8°.
+    #[test]
+    fn density_map_stores_round_255_d_in_both_channels() {
+        let proj = frustum(-1.0, 1.0, -1.0, 1.0);
+        let layer = UVec2::new(160, 160);
+        let low = density_map(Foveation::Low, layer, proj, TEXEL).expect("a map");
+        assert_eq!(low.size, UVec2::new(10, 10));
+        // Low: 1 within 25°, ½ beyond.
+        assert_eq!(at(&low, 5, 5), [255, 255]);
+        assert_eq!(at(&low, 0, 0), [128, 128]);
+        // Medium: ¼ beyond 25°.
+        let medium = density_map(Foveation::Medium, layer, proj, TEXEL).expect("a map");
+        assert_eq!(at(&medium, 0, 0), [64, 64]);
+    }
+
+    /// Q-462: a texel's angle is taken at its centre. On the grid above, texel (7, 5)
+    /// spans x 112 to 128 px: its inner edge (112, 88) is atan‖(0.4, 0.1)‖ ≈ 22.4° from
+    /// the axis, inside low's 25°, but its centre (120, 88) is atan‖(0.5, 0.1)‖ ≈ 27.0°,
+    /// beyond it, so it is stored at ½; texel (6, 5), centre atan‖(0.3, 0.1)‖ ≈ 17.5°,
+    /// at 1.
+    #[test]
+    fn density_map_takes_a_texels_angle_at_its_centre() {
+        let proj = frustum(-1.0, 1.0, -1.0, 1.0);
+        let low = density_map(Foveation::Low, UVec2::new(160, 160), proj, TEXEL).expect("a map");
+        assert_eq!(at(&low, 7, 5), [128, 128]);
+        assert_eq!(at(&low, 6, 5), [255, 255]);
+    }
+
     /// §1.12's calibrated radii and densities, at hand-picked view angles.
     #[test]
     fn density_at_follows_section_1_12s_pattern() {
