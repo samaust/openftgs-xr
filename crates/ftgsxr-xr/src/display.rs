@@ -22,9 +22,15 @@
 //! - `DisplaySettings` follows `[xr]` and, with `[xr] foveation` unset, the running tier's
 //!   foveation, so a governor step and a live tier switch reach the swapchain (Q-404,
 //!   Q-421).
+//! - Each eye carries `SplatFoveation` at `DisplaySettings.foveation`, kept equal each
+//!   frame before extraction, so the same level selects the layer's own density map
+//!   (D-58, Q-458); the desktop window's camera never has it.
 //! - `XrDisplay` (`ftgsxr_app`, inserted by `XrPlugin`) carries the current refresh rate,
-//!   the runtime's rates, the foveation support and the swapchain's size while a session
-//!   runs; the rate is mirrored into `HudData.refresh_hz` (Q-404).
+//!   the runtime's rates, whether the layer can be foveated (the XR device's density-map
+//!   support, Q-456) and the swapchain's size while a session runs; the rate is mirrored
+//!   into `HudData.refresh_hz` (Q-404).
+//! - Where the device lacks that support, the first time in a session the level is not
+//!   off, an info line names the missing extension or feature, with no toast (Q-455).
 //!
 //! Where an extension is absent, `available_rates` is empty, a request logs
 //! E-XR-UNSUPPORTED (a warning) and the setting is kept for a later runtime (Q-124). A
@@ -225,6 +231,58 @@ fn carry_to_eyes(
     }
 }
 
+/// What the device lacks for a foveated layer, the first in a fixed order; `None` where
+/// it enabled the extension with both features (§1.12).
+// Q-455
+fn layer_missing(support: &support::LayerSupport) -> Option<&'static str> {
+    let Some(s) = &support.0 else {
+        return Some("VK_EXT_fragment_density_map");
+    };
+    if s.enabled {
+        None
+    } else if !s.extension {
+        Some("VK_EXT_fragment_density_map")
+    } else if !s.map {
+        Some("fragmentDensityMap")
+    } else if !s.non_subsampled {
+        Some("fragmentDensityMapNonSubsampledImages")
+    } else {
+        Some("VK_EXT_fragment_density_map not enabled")
+    }
+}
+
+/// The unfoveated layer's info line, the first time in the session the effective level is
+/// not off while the device lacks support (§1.12, §1.13).
+// Q-455
+fn layer_line(
+    applied: &mut Applied,
+    support: &support::LayerSupport,
+    level: Foveation,
+) -> Option<String> {
+    if level == Foveation::Off || applied.layer_line {
+        return None;
+    }
+    let missing = layer_missing(support)?;
+    applied.layer_line = true;
+    Some(format!("layer foveation unavailable: {missing}"))
+}
+
+/// Logs the unfoveated layer's info line, at info and once per OpenXR session, whatever
+/// the level's source (the tier, `[xr] foveation`, a governor step, a direct write); no
+/// toast (§1.12, §1.13). `DisplayPlugin` runs it only while a session exists.
+// Q-455
+fn layer_info(
+    support: Option<Res<support::LayerSupport>>,
+    settings: Res<DisplaySettings>,
+    mut applied: ResMut<Applied>,
+) {
+    let none = support::LayerSupport(None);
+    let support = support.as_deref().unwrap_or(&none);
+    if let Some(line) = layer_line(&mut applied, support, settings.foveation) {
+        info!("{line}");
+    }
+}
+
 /// `off`, `low`, `medium`, `high`, `dynamic` (§1.11, Q-49).
 fn parse_foveation(s: &str) -> Option<Foveation> {
     Some(match s {
@@ -331,6 +389,8 @@ struct Applied {
     /// The runtime's current refresh rate (XR\_FB\_display\_refresh\_rate): read once
     /// the session has begun and at each change event; `None` without the extension.
     rate: Option<f32>,
+    /// Whether the unfoveated layer's info line was logged in this session (Q-455).
+    layer_line: bool,
 }
 
 impl Applied {
@@ -344,6 +404,7 @@ impl Applied {
             foveation_requested,
             toasted: HashSet::new(),
             rate: None,
+            layer_line: false,
         }
     }
 
@@ -374,11 +435,13 @@ impl Applied {
     }
 
     /// Forgets a failed scale at a new session, whose view configuration may answer, so
-    /// the setting is attempted once on it (Q-147), and the extensions toasted (Q-161).
+    /// the setting is attempted once on it (Q-147), the extensions toasted (Q-161) and the
+    /// layer's info line (Q-455).
     fn session_created(&mut self) {
         self.failed_scale = None;
         self.toasted.clear();
         self.rate = None;
+        self.layer_line = false;
     }
 }
 
@@ -423,7 +486,14 @@ impl Plugin for DisplayPlugin {
             .add_systems(XrPreDestroySession, drop_profile)
             .add_systems(
                 Update,
-                (follow, carry_to_eyes, apply_changes, publish).chain(),
+                (
+                    follow,
+                    carry_to_eyes,
+                    layer_info.run_if(resource_exists::<OxrSession>),
+                    apply_changes,
+                    publish,
+                )
+                    .chain(),
             )
             .add_oxr_event_handler(log_rate_change);
         // #725: the runtime's counters for the device spikes (Q-420).
@@ -1119,6 +1189,117 @@ mod tests {
             assert_eq!(levels(&app), [Some(SplatFoveation(f)); 2], "{f:?}");
         }
         assert!(app.world().get::<SplatFoveation>(window).is_none());
+    }
+
+    /// Q-455's detecting test (#809, §1.12): with support false, one info line in a session
+    /// at the first level that is not off, none at off, none for a later level in the same
+    /// session, one more in a new session; the named item is the first missing, in the
+    /// row's order.
+    #[test]
+    fn layer_line_is_once_per_session_while_the_level_is_not_off() {
+        const LINE: &str = "layer foveation unavailable: VK_EXT_fragment_density_map";
+        let none = support::LayerSupport(None);
+        let mut applied = Applied::new(1.0, false);
+        assert_eq!(layer_line(&mut applied, &none, Foveation::Off), None);
+        assert_eq!(layer_line(&mut applied, &none, Foveation::Off), None);
+        assert_eq!(
+            layer_line(&mut applied, &none, Foveation::Low).as_deref(),
+            Some(LINE)
+        );
+        for f in [
+            Foveation::Low,
+            Foveation::High,
+            Foveation::Off,
+            Foveation::Dynamic,
+        ] {
+            assert_eq!(layer_line(&mut applied, &none, f), None, "{f:?}");
+        }
+        applied.session_created();
+        assert_eq!(layer_line(&mut applied, &none, Foveation::Off), None);
+        assert_eq!(
+            layer_line(&mut applied, &none, Foveation::Dynamic).as_deref(),
+            Some(LINE)
+        );
+        // Support true: never a line.
+        let on = support::LayerSupport(Some(DensityMapSupport {
+            extension: true,
+            map: true,
+            non_subsampled: true,
+            enabled: true,
+            ..Default::default()
+        }));
+        let mut fresh = Applied::new(1.0, false);
+        assert_eq!(layer_line(&mut fresh, &on, Foveation::High), None);
+        // The named item, for each missing case.
+        let named = |s: DensityMapSupport| {
+            layer_line(
+                &mut Applied::new(1.0, false),
+                &support::LayerSupport(Some(s)),
+                Foveation::High,
+            )
+        };
+        let all = DensityMapSupport {
+            extension: true,
+            map: true,
+            non_subsampled: true,
+            ..Default::default()
+        };
+        let cases = [
+            (DensityMapSupport::default(), "VK_EXT_fragment_density_map"),
+            (
+                DensityMapSupport {
+                    extension: false,
+                    ..all.clone()
+                },
+                "VK_EXT_fragment_density_map",
+            ),
+            (
+                DensityMapSupport {
+                    map: false,
+                    non_subsampled: false,
+                    ..all.clone()
+                },
+                "fragmentDensityMap",
+            ),
+            (
+                DensityMapSupport {
+                    non_subsampled: false,
+                    ..all.clone()
+                },
+                "fragmentDensityMapNonSubsampledImages",
+            ),
+            (all.clone(), "VK_EXT_fragment_density_map not enabled"),
+        ];
+        for (s, item) in cases {
+            assert_eq!(
+                named(s.clone()),
+                Some(format!("layer foveation unavailable: {item}")),
+                "{s}"
+            );
+        }
+    }
+
+    /// Q-455 (#809): the info line's system triggers no `Toast`, at any level.
+    #[test]
+    fn layer_info_triggers_no_toast() {
+        #[derive(Resource, Default)]
+        struct Toasts(usize);
+        let mut app = App::new();
+        app.insert_resource(DisplaySettings::from_settings(&Settings::default()))
+            .insert_resource(Applied::new(1.0, false))
+            .insert_resource(support::LayerSupport(None))
+            .init_resource::<Toasts>()
+            .add_observer(|_: bevy::prelude::On<Toast>, mut n: ResMut<Toasts>| n.0 += 1)
+            .add_systems(Update, layer_info);
+        for f in [Foveation::Off, Foveation::High, Foveation::Low] {
+            app.world_mut().resource_mut::<DisplaySettings>().foveation = f;
+            app.update();
+        }
+        assert!(
+            app.world().resource::<Applied>().layer_line,
+            "the line was logged"
+        );
+        assert_eq!(app.world().resource::<Toasts>().0, 0);
     }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {
