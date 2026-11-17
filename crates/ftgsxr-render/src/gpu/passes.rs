@@ -112,6 +112,10 @@ pub struct SplatPasses {
     draw_layout: wgpu::BindGroupLayout,
     splat: wgpu::RenderPipeline,
     centers: wgpu::RenderPipeline,
+    /// The twins of `splat` and `centers` made for a pass with a fragment density map,
+    /// where the device has `FRAGMENT_DENSITY_MAP` (D-58, Q-457): a flagged pipeline runs
+    /// only in a pass with a map, an unflagged one only in a pass without.
+    mapped: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     resolve_layout: wgpu::BindGroupLayout,
     resolve: wgpu::RenderPipeline,
     /// The mesh branch of the depth-gated resolve, with a depth format only (Q-101).
@@ -203,6 +207,10 @@ impl SplatPasses {
         }
         let device = dev.device().clone();
         let mode = RecordMode::of(tier);
+        // D-58, Q-457: the map's twin pipelines only where a pass can carry a map.
+        let map = device
+            .features()
+            .contains(wgpu::Features::FRAGMENT_DENSITY_MAP);
         let mut times = CompileTimes::default();
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
@@ -297,13 +305,14 @@ impl SplatPasses {
             let cull_centers = pipeline(&mut times, "cull_centers", &cull_layout, "cull_centers");
             let size = pipeline(&mut times, "size", &size_pipeline_layout, "size");
             let sort = RadixSort::new(&device, tier.sort_key, &mut times);
-            let draw = splat_pipeline(&device, layer_format, depth_format, mode, &mut times);
+            let draw = splat_pipeline(&device, layer_format, depth_format, mode, map, &mut times);
             let centers = centers_pipeline(
                 &device,
                 &draw.0,
                 layer_format,
                 depth_format,
                 mode,
+                map,
                 &mut times,
             );
             let resolves =
@@ -320,7 +329,9 @@ impl SplatPasses {
         let (cull_splats, side_times, side_error) = side;
         // The side thread's time after the shader module's, where it started.
         times.0.splice(1..1, side_times.0);
-        let (draw_layout, splat) = draw;
+        let (draw_layout, splat, splat_mapped) = draw;
+        let (centers, centers_mapped) = centers;
+        let mapped = splat_mapped.zip(centers_mapped);
         let (resolve_layout, resolve, resolve_mesh) = resolves;
         let resolve_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("ftgsxr resolve"),
@@ -368,6 +379,7 @@ impl SplatPasses {
             draw_layout,
             splat,
             centers,
+            mapped,
             resolve_layout,
             resolve,
             resolve_mesh,
@@ -624,6 +636,39 @@ impl SplatPasses {
         view: &ViewParams,
         occlusion: Option<&OcclusionInput>,
     ) {
+        self.encode_draw_in(pass, frame, view, occlusion, false);
+    }
+
+    /// Whether the passes hold the twin pipelines of a pass with a fragment density map
+    /// (D-58): the device has `FRAGMENT_DENSITY_MAP`.
+    pub(crate) fn has_map_pipelines(&self) -> bool {
+        self.mapped.is_some()
+    }
+
+    /// `encode_draw` into a pass begun with a fragment density map when `mapped` (D-58,
+    /// Q-457), with the flagged twins of the splat and centers pipelines.
+    ///
+    /// # Panics
+    ///
+    /// As `encode_draw`, and when `mapped` on passes without the twins
+    /// (`has_map_pipelines`).
+    pub(crate) fn encode_draw_in(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frame: &FrameBuffers,
+        view: &ViewParams,
+        occlusion: Option<&OcclusionInput>,
+        mapped: bool,
+    ) {
+        let (splat, centers) = if mapped {
+            let (s, c) = self
+                .mapped
+                .as_ref()
+                .expect("invariant: a map pass only on passes with the twins (# Panics)");
+            (s, c)
+        } else {
+            (&self.splat, &self.centers)
+        };
         assert_eq!(
             frame.mode, self.mode,
             "the frame buffers' record layout is the passes' tier's"
@@ -667,7 +712,7 @@ impl SplatPasses {
                 env_entries[1].clone(),
             ],
         });
-        pass.set_pipeline(&self.splat);
+        pass.set_pipeline(splat);
         pass.set_bind_group(0, &group, &[]);
         // D-30: the indirect draw is kept, not the full-capacity fallback. On the Quest 3 it
         // draws both eyes at C = 1,000,000 at 71.4 Hz once wgpu's `VALIDATION_INDIRECT_CALL`
@@ -688,7 +733,7 @@ impl SplatPasses {
                 env_entries[1].clone(),
             ],
         });
-        pass.set_pipeline(&self.centers);
+        pass.set_pipeline(centers);
         pass.set_bind_group(0, &group, &[]);
         pass.draw_indirect(&set.indirect, CENTERS_INDIRECT_OFFSET);
     }
@@ -837,8 +882,13 @@ fn splat_pipeline(
     layer_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     mode: RecordMode,
+    map: bool,
     times: &mut CompileTimes,
-) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+) -> (
+    wgpu::BindGroupLayout,
+    wgpu::RenderPipeline,
+    Option<wgpu::RenderPipeline>,
+) {
     let module = times.time("splat.wgsl", || {
         device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ftgsxr splat.wgsl"),
@@ -948,7 +998,18 @@ fn splat_pipeline(
         cache: None,
     };
     let pipeline = times.time("splat", || device.create_render_pipeline(&descriptor));
-    (layout, pipeline)
+    // D-58, Q-457: the twin for a pass with a density map.
+    let mapped = map.then(|| {
+        let descriptor = wgpu::RenderPipelineDescriptor {
+            label: Some("ftgsxr splat (density map)"),
+            fragment_density_map: true,
+            ..descriptor.clone()
+        };
+        times.time("splat (density map)", || {
+            device.create_render_pipeline(&descriptor)
+        })
+    });
+    (layout, pipeline, mapped)
 }
 
 /// Stage 6's pipeline (`centers.wgsl`) on the splat draw's bind group layout: discs written
@@ -959,8 +1020,9 @@ fn centers_pipeline(
     layer_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     mode: RecordMode,
+    map: bool,
     times: &mut CompileTimes,
-) -> wgpu::RenderPipeline {
+) -> (wgpu::RenderPipeline, Option<wgpu::RenderPipeline>) {
     let module = times.time("centers.wgsl", || {
         device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ftgsxr centers.wgsl"),
@@ -1015,7 +1077,19 @@ fn centers_pipeline(
         fragment_density_map: false, // D-58: no density map (#807)
         cache: None,
     };
-    times.time("centers", || device.create_render_pipeline(&descriptor))
+    let pipeline = times.time("centers", || device.create_render_pipeline(&descriptor));
+    // D-58, Q-457: the twin for a pass with a density map.
+    let mapped = map.then(|| {
+        let descriptor = wgpu::RenderPipelineDescriptor {
+            label: Some("ftgsxr centers (density map)"),
+            fragment_density_map: true,
+            ..descriptor.clone()
+        };
+        times.time("centers (density map)", || {
+            device.create_render_pipeline(&descriptor)
+        })
+    });
+    (pipeline, mapped)
 }
 
 /// Stage 7's pipelines (`resolve.wgsl`) and their layout: the layer as a filterable float
