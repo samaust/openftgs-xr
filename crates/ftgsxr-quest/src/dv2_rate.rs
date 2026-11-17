@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Dv-2's refresh-rate judgement (§3.4 Dv-2, §1.12): whether the frames the `dv2` device
-//! test counted over its window came at the default 72 Hz. Built on the host too, so its
-//! tests run there (#269).
+//! test counted over its window came at the default 72 Hz, and the first second after
+//! both eyes draw, counted and reported, never judged (Q-464, #854). Built on the host
+//! too, so its tests run there (#269).
 
 use std::time::{Duration, Instant};
 
@@ -64,6 +65,7 @@ impl FirstSecond {
         FirstSecond {
             start,
             last: start,
+            // A second at 72 Hz holds 71 steps; room for a few more.
             steps: Vec::with_capacity(80),
             done: false,
         }

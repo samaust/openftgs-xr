@@ -36,12 +36,7 @@ fn dv_dv2_two_eyes_draw_a_probe_for_10_s_without_validation_messages() {
     let validation = Validation::read();
     let first = first_second(&lines);
     println!("dv2: {first:?} in the first second after both eyes draw");
-    for l in lines
-        .iter()
-        .filter(|l| l.contains("first second's frame times"))
-    {
-        println!("{l}");
-    }
+    print_first_second(&lines);
     let warnings: Vec<String> = lines
         .into_iter()
         // The adapter's warnings (`W` lines), not dv2's own info lines.
@@ -94,12 +89,7 @@ fn dv_dv2_two_eyes_draw_with_the_map_at_every_level_without_validation_messages(
             "--- dv2 at {level}: {result:?}, {} maps made, first second {first:?} ---",
             maps.len()
         );
-        for l in lines
-            .iter()
-            .filter(|l| l.contains("first second's frame times"))
-        {
-            println!("{l}");
-        }
+        print_first_second(&lines);
         for l in &maps {
             println!("{l}");
         }
@@ -154,6 +144,16 @@ fn first_second(lines: &[String]) -> Result<u32, String> {
             .and_then(|n| n.parse().ok())
             .ok_or_else(|| format!("not a frame count: {rest:?}")),
         other => Err(format!("{} first-second lines, not one", other.len())),
+    }
+}
+
+/// Prints the first second's frame times and, since Q-465, how many view frames the eyes
+/// went without splats while the passes compiled, so a slower compile stays visible.
+fn print_first_second(lines: &[String]) {
+    for l in lines.iter().filter(|l| {
+        l.contains("first second's frame times") || l.contains("view frames without splats")
+    }) {
+        println!("{l}");
     }
 }
 
