@@ -85,16 +85,32 @@ fn dv_dv2_two_eyes_draw_with_the_map_at_every_level_without_validation_messages(
         for l in &maps {
             println!("{l}");
         }
-        println!("{} VALIDATION lines", validation.messages.len());
+        println!(
+            "layer announced {}, {} VALIDATION lines",
+            validation.announced,
+            validation.messages.len()
+        );
         for m in validation.messages.iter().take(12) {
             println!("{m}");
         }
+        // The adapter's warnings (`W` lines) about a splat camera, as Dv-2's.
+        let warnings: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains(" W ") && l.contains("splat camera"))
+            .collect();
         let pass = result.as_ref().is_some_and(|(p, _, _)| *p);
         // Each eye makes its map; the cycle, at each of its four non-off steps.
         let want = if level == "cycle" { 8 } else { 2 };
-        if !pass || !validation.messages.is_empty() || maps.len() < want {
+        if !pass
+            || !validation.announced
+            || !validation.messages.is_empty()
+            || !warnings.is_empty()
+            || maps.len() < want
+        {
             failures.push(format!(
-                "{level}: verdict {result:?}, {} validation lines, {} maps",
+                "{level}: verdict {result:?}, layer announced {}, {} validation lines, \
+                 warnings {warnings:?}, {} maps",
+                validation.announced,
                 validation.messages.len(),
                 maps.len()
             ));
