@@ -62,7 +62,9 @@ fn density_at(level: Foveation, theta: f32) -> Option<f32> {
 /// view angle is taken at its center (clamped into the layer) from the projection's
 /// intrinsics at the layer's size (Q-459; `view_camera`'s mapping): c_x = (1 − P₀₂) W/2,
 /// c_y = (1 + P₁₂) H/2, f_x = P₀₀ W/2, f_y = P₁₁ H/2, θ = atan‖((x − c_x)/f_x, (y − c_y)/f_y)‖.
-/// A density d is stored as round(255 d) on both axes (Q-462).
+/// A density d is stored on both axes as the largest byte b with 255/b ≥ 1/d, ⌊255 d⌋
+/// (1 → 255, ½ → 127, ¼ → 63), so the fragment area it asks for is never below 1/d, which a
+/// device may otherwise shade finer than d (Q-462).
 // Q-462
 pub(crate) fn density_map(
     level: Foveation,
@@ -86,7 +88,7 @@ pub(crate) fn density_map(
             let y = ((j as f32 + 0.5) * texel.y as f32).min(h);
             let theta = ((x - cx) / fx).hypot((y - cy) / fy).atan().to_degrees();
             let d = density_at(level, theta)?;
-            let v = (d * 255.0).round() as u8;
+            let v = (d * 255.0).floor() as u8;
             texels.extend([v, v]);
         }
     }
@@ -188,23 +190,25 @@ mod tests {
         }
     }
 
-    /// Q-462's detecting test (two-axis review, PRD #804): a density d is stored as
-    /// round(255 d) in both channels, 1 → 255, ½ → 128, ¼ → 64. A symmetric 90° frustum
+    /// Q-462's detecting test (two-axis review, PRD #804; changed by #848, #853): a density
+    /// d is stored in both channels as the largest byte b with 255/b ≥ 1/d, 1 → 255,
+    /// ½ → 127 (255/127 ≈ 2.008 ≥ 2, while 255/128 ≈ 1.992 < 2), ¼ → 63 (255/63 ≈ 4.048
+    /// ≥ 4, while 255/64 ≈ 3.984 < 4). A symmetric 90° frustum
     /// on a 160 × 160 layer has f = c = 80 px, so on the 10 × 10 grid texel (5, 5)'s
     /// centre (88, 88) is atan(√2 · 0.1) ≈ 8.0° from the axis and texel (0, 0)'s centre
     /// (8, 8) is atan(√2 · 0.9) ≈ 51.8°.
     #[test]
-    fn density_map_stores_round_255_d_in_both_channels() {
+    fn density_map_stores_the_largest_byte_at_or_below_each_density_in_both_channels() {
         let proj = frustum(-1.0, 1.0, -1.0, 1.0);
         let layer = UVec2::new(160, 160);
         let low = density_map(Foveation::Low, layer, proj, TEXEL).expect("a map");
         assert_eq!(low.size, UVec2::new(10, 10));
         // Low: 1 within 25°, ½ beyond.
         assert_eq!(at(&low, 5, 5), [255, 255]);
-        assert_eq!(at(&low, 0, 0), [128, 128]);
+        assert_eq!(at(&low, 0, 0), [127, 127]);
         // Medium: ¼ beyond 25°.
         let medium = density_map(Foveation::Medium, layer, proj, TEXEL).expect("a map");
-        assert_eq!(at(&medium, 0, 0), [64, 64]);
+        assert_eq!(at(&medium, 0, 0), [63, 63]);
     }
 
     /// Q-462: a texel's angle is taken at its centre. On the grid above, texel (7, 5)
@@ -216,7 +220,7 @@ mod tests {
     fn density_map_takes_a_texels_angle_at_its_centre() {
         let proj = frustum(-1.0, 1.0, -1.0, 1.0);
         let low = density_map(Foveation::Low, UVec2::new(160, 160), proj, TEXEL).expect("a map");
-        assert_eq!(at(&low, 7, 5), [128, 128]);
+        assert_eq!(at(&low, 7, 5), [127, 127]);
         assert_eq!(at(&low, 6, 5), [255, 255]);
     }
 
