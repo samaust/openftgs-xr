@@ -315,6 +315,8 @@ struct Views {
     /// The density map's texel size (the device's minimum, Q-460) where the device has
     /// `FRAGMENT_DENSITY_MAP` (D-58); read once per device.
     map_texel: Option<UVec2>,
+    /// Maps re-made for a projection change alone (#810's stability check).
+    projection_remakes: u64,
     states: HashMap<Entity, ViewState>,
     /// The frame's prepare units, in their first members' camera order (Q-399).
     units: Vec<Unit>,
@@ -1036,9 +1038,32 @@ fn prepare_view(
     let made_for = (level, draw_size, view.clip_from_view);
     match (&state.layer, views.map_texel) {
         (Some(_), Some(texel)) if level != Foveation::Off && state.passes.has_map_pipelines() => {
-            if state.map.as_ref().is_none_or(|m| m.made_for != made_for) {
-                state.map = make_map(dev, made_for, texel);
+            match remake(state.map.as_ref().map(|m| m.made_for), made_for) {
+                None => {}
+                Some(why) => {
+                    // #810: the device's projection stability, seen in the log.
+                    match why {
+                        Remake::Changed => info!(
+                            "layer foveation: map for {level:?} at a {}x{} layer, view {entity}",
+                            draw_size.x, draw_size.y
+                        ),
+                        Remake::Projection => {
+                            views.projection_remakes += 1;
+                            let n = views.projection_remakes;
+                            if n.is_power_of_two() {
+                                info!(
+                                    "layer foveation: {n} maps re-made for a projection change alone"
+                                );
+                            }
+                        }
+                    }
+                    state.map = make_map(dev, made_for, texel);
+                }
             }
+        }
+        (Some(_), Some(_)) if level != Foveation::Off => {
+            views.warn_once(entity, "no map pipelines; the layer is drawn unfoveated");
+            state.map = None;
         }
         _ => state.map = None,
     }
@@ -1047,6 +1072,24 @@ fn prepare_view(
     }
     views.states.insert(entity, state);
     Ok(())
+}
+
+/// Why a view's map is made again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Remake {
+    /// No map yet, or a new level or layer size.
+    Changed,
+    /// The projection alone changed.
+    Projection,
+}
+
+/// Whether a map made for `old` must be re-made for `new` (Q-457), and why.
+fn remake(old: Option<(Foveation, UVec2, Mat4)>, new: (Foveation, UVec2, Mat4)) -> Option<Remake> {
+    match old {
+        Some(o) if o == new => None,
+        Some(o) if (o.0, o.1) == (new.0, new.1) => Some(Remake::Projection),
+        _ => Some(Remake::Changed),
+    }
 }
 
 /// The layer's density map for `made_for` (level, layer size, projection) at `texel`,
@@ -1355,6 +1398,24 @@ mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remake_names_why_a_map_is_made() {
+        let p = Mat4::IDENTITY;
+        let q = Mat4::from_scale(bevy::math::Vec3::new(1.0, 1.0, 0.5));
+        let a = (Foveation::High, UVec2::new(1680, 1760), p);
+        assert_eq!(remake(None, a), Some(Remake::Changed));
+        assert_eq!(remake(Some(a), a), None);
+        assert_eq!(
+            remake(Some(a), (Foveation::Medium, a.1, p)),
+            Some(Remake::Changed)
+        );
+        assert_eq!(
+            remake(Some(a), (a.0, UVec2::new(1008, 1056), p)),
+            Some(Remake::Changed)
+        );
+        assert_eq!(remake(Some(a), (a.0, a.1, q)), Some(Remake::Projection));
+    }
 
     /// A writer into a shared buffer, for a captured log.
     #[derive(Clone, Default)]

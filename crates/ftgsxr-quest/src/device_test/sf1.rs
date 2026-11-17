@@ -7,7 +7,7 @@
 //! are splat cameras and the session runs, the runner spawns `ftgsxr-test: sf1` and
 //! `ftgsxr_xr`'s private `display::sf1` runs the rest and prints the verdict (Q-308): it
 //! writes `SplatTierState.render_scale`, which this crate cannot name (Q-133).
-// Q-454, Q-420, Q-308
+// Q-454, Q-420, Q-308; Dv-14 (#810) reuses it with Q-454's hold
 
 use std::time::{Duration, Instant};
 
@@ -21,10 +21,16 @@ use crate::device_test::{dv_dir, verdict};
 
 /// The test's name in the intent extra.
 pub(crate) const NAME: &str = "sf1";
+/// Dv-14's name in the intent extra: the same runner with Q-454's hold (#810).
+pub(crate) const DV14: &str = "dv14";
 /// The tier the spike runs in (Q-420's default tier, named so the settings cannot move it).
 pub(crate) const TIER: &str = "quest-balanced";
 /// The marker `ftgsxr_xr` waits for (Q-308).
 const TRIGGER: &str = "ftgsxr-test: sf1";
+/// Dv-14's marker (#810).
+const DV14_TRIGGER: &str = "ftgsxr-test: dv14";
+/// Dv-14's distance ahead of the left eye, metres (Q-454).
+const DV14_AHEAD_M: f32 = 1.0;
 /// The pushed model's file name under `dv/` (Q-420's).
 const MODEL: &str = "spike.safetensors";
 /// The model's distance ahead of the left eye, metres (Q-420).
@@ -38,6 +44,9 @@ const TAU: f64 = 0.95;
 
 #[derive(Resource)]
 struct Sf1 {
+    name: &'static str,
+    trigger: &'static str,
+    ahead: f32,
     started: Instant,
     ready: Option<Instant>,
     model: Entity,
@@ -46,17 +55,26 @@ struct Sf1 {
     done: bool,
 }
 
-/// Adds the test.
+/// Adds the spike.
 pub(super) fn add(app: &mut App) {
+    add_as(app, NAME, TRIGGER, AHEAD_M);
+}
+
+/// Adds Dv-14: the spike's runner with Q-454's 1.0 m hold (#810).
+pub(super) fn add_dv14(app: &mut App) {
+    add_as(app, DV14, DV14_TRIGGER, DV14_AHEAD_M);
+}
+
+fn add_as(app: &mut App, name: &'static str, trigger: &'static str, ahead: f32) {
     let path = dv_dir().map(|d| d.join(MODEL));
     let bytes = match path.as_deref().map(std::fs::read) {
         Some(Ok(b)) => b,
         other => {
-            verdict(NAME, false, &format!("no model at {path:?}: {other:?}"));
+            verdict(name, false, &format!("no model at {path:?}: {other:?}"));
             return;
         }
     };
-    info!("sf1: model {} bytes", bytes.len());
+    info!("{name}: model {} bytes, held {ahead} m ahead", bytes.len());
     let model = app
         .world_mut()
         .spawn((
@@ -69,6 +87,9 @@ pub(super) fn add(app: &mut App) {
         ))
         .id();
     app.insert_resource(Sf1 {
+        name,
+        trigger,
+        ahead,
         started: Instant::now(),
         ready: None,
         model,
@@ -83,11 +104,11 @@ pub(super) fn add(app: &mut App) {
 fn on_event(event: On<SplatEvent>, mut test: ResMut<Sf1>) {
     match event.event() {
         SplatEvent::Uploaded { entity, bytes, .. } if *entity == test.model => {
-            info!("sf1: model uploaded, {bytes} bytes");
+            info!("{}: model uploaded, {bytes} bytes", test.name);
             test.uploaded = true;
         }
         SplatEvent::Failed { error, .. } if !test.done => {
-            verdict(NAME, false, &format!("model load failed: {error}"));
+            verdict(test.name, false, &format!("model load failed: {error}"));
             test.done = true;
         }
         _ => {}
@@ -108,7 +129,7 @@ fn run(
     // Head-locked, so the load stays the same wherever the headset looks (Q-420).
     let left = eyes.iter().find(|(c, _, _)| c.0 == 0).map(|(_, g, _)| *g);
     if let (Some(left), Ok(mut t)) = (left, transforms.get_mut(test.model)) {
-        t.translation = left.translation() + left.forward() * AHEAD_M;
+        t.translation = left.translation() + left.forward() * test.ahead;
     }
     // Held off (E16); `display::sf1` holds it too once started.
     if let Some(mut g) = governor
@@ -124,8 +145,11 @@ fn run(
     if test.uploaded && splat_eyes == 2 && running {
         let ready = *test.ready.get_or_insert_with(Instant::now);
         if ready.elapsed() >= WARM_UP {
-            info!("sf1: both eyes are splat cameras in {TIER}; starting");
-            commands.spawn(Name::new(TRIGGER));
+            info!(
+                "{}: both eyes are splat cameras in {TIER}; starting",
+                test.name
+            );
+            commands.spawn(Name::new(test.trigger));
             test.handed_over = true;
         }
     } else if test.started.elapsed() > SETUP_TIMEOUT {
@@ -134,7 +158,7 @@ fn run(
             SETUP_TIMEOUT.as_secs(),
             test.uploaded,
         );
-        verdict(NAME, false, &detail);
+        verdict(test.name, false, &detail);
         test.done = true;
     }
 }
