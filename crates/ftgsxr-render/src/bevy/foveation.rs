@@ -193,10 +193,10 @@ mod tests {
     /// Q-462's detecting test (two-axis review, PRD #804; changed by #848, #853): a density
     /// d is stored in both channels as the largest byte b with 255/b ≥ 1/d, 1 → 255,
     /// ½ → 127 (255/127 ≈ 2.008 ≥ 2, while 255/128 ≈ 1.992 < 2), ¼ → 63 (255/63 ≈ 4.048
-    /// ≥ 4, while 255/64 ≈ 3.984 < 4). A symmetric 90° frustum
-    /// on a 160 × 160 layer has f = c = 80 px, so on the 10 × 10 grid texel (5, 5)'s
-    /// centre (88, 88) is atan(√2 · 0.1) ≈ 8.0° from the axis and texel (0, 0)'s centre
-    /// (8, 8) is atan(√2 · 0.9) ≈ 51.8°.
+    /// ≥ 4, while 255/64 ≈ 3.984 < 4). A symmetric 90° frustum on a 160 × 160 layer has
+    /// f = c = 80 px, so on the 10 × 10 grid texel (5, 5)'s centre (88, 88) is
+    /// atan(√2 · 0.1) ≈ 8.0° from the axis and texel (0, 0)'s centre (8, 8) is
+    /// atan(√2 · 0.9) ≈ 51.8°.
     #[test]
     fn density_map_stores_the_largest_byte_at_or_below_each_density_in_both_channels() {
         let proj = frustum(-1.0, 1.0, -1.0, 1.0);
