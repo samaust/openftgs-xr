@@ -36,7 +36,7 @@ use bevy_mod_xr::spaces::{XrPrimaryReferenceSpace, XrReferenceSpace};
 use ftgsxr_app::{ContentGroup, PlayerRig, SettingsRes};
 use ftgsxr_core::{Pose, Quat, Vec3};
 use ftgsxr_io::Settings;
-use ftgsxr_render::{OutputSpace, SortMode, SplatCamera, SplatTierState};
+use ftgsxr_render::{OutputSpace, SortMode, SplatCamera, SplatNoWarmUpWait, SplatTierState};
 use openxr::ReferenceSpaceType;
 
 use crate::XrError;
@@ -232,7 +232,8 @@ fn is_located(clip_from_view: Mat4) -> bool {
         && (clip_from_view.w_axis.z - EYE_NEAR_M).abs() <= EYE_NEAR_M * 1e-3
 }
 
-/// Makes each eye a `SplatCamera` over the VR-mode background (Q-49) once the camera's
+/// Makes each eye a `SplatCamera` over the VR-mode background (Q-49), with
+/// `SplatNoWarmUpWait` (Q-465), once the camera's
 /// computed clip mapping, which the render world extracts, is the located views' at the
 /// near plane 0.01 m: the crate spawns the eyes with the identity, and Bevy computes the
 /// camera's matrix from the projection in its own PostUpdate system, so the projection
@@ -251,12 +252,16 @@ fn make_splat_eyes(
     );
     for (eye, camera) in &eyes {
         if is_located(camera.clip_from_view()) {
-            commands.entity(eye).insert(SplatCamera {
-                sort: config.sort,
-                output: OutputSpace::LinearOver {
-                    background: Some(background),
+            // Q-465: the eyes never wait for the warm-up's compile; no splats until then.
+            commands.entity(eye).insert((
+                SplatCamera {
+                    sort: config.sort,
+                    output: OutputSpace::LinearOver {
+                        background: Some(background),
+                    },
                 },
-            });
+                SplatNoWarmUpWait,
+            ));
         }
     }
 }
