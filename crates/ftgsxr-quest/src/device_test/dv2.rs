@@ -8,7 +8,7 @@
 //! statistics saw the probe. The driver judges the validation layer's messages (Q-123).
 //!
 //! The re-run with the map attached (#810, Q-T810.1): the intent extra
-//! `ftgsxr-foveation` names a level (`Low`, `Medium`, `High`, `Dynamic`) held through
+//! `ftgsxr-foveation` names a level (`Off`, the no-map control, `Low`, `Medium`, `High`, `Dynamic`) held through
 //! `DisplaySettings.foveation` from the start, or `cycle`, which steps high, medium,
 //! off, medium and high, 2 s each, before the 10 s window, drawn at high. A held level
 //! waits 2 s after both eyes draw before its window, so start-up's first second is not
@@ -63,6 +63,8 @@ fn levels(extra: Option<&str>) -> Option<Levels> {
     Some(match extra {
         None => Levels::Settings,
         Some("cycle") => Levels::Cycle,
+        // The no-map control (Q-457): off draws without a map.
+        Some("Off") => Levels::Hold(Foveation::Off),
         Some("Low") => Levels::Hold(Foveation::Low),
         Some("Medium") => Levels::Hold(Foveation::Medium),
         Some("High") => Levels::Hold(Foveation::High),
