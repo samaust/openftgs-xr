@@ -16,14 +16,18 @@ use bevy::render::renderer::{RenderAdapter, RenderDevice};
 use ftgsxr_render::{DensityMapSupport, density_map_support};
 
 /// The device's support: `None` where there is no render device yet or it is not
-/// Vulkan (no report), else Q-461's report, whose `enabled` is the signal.
+/// Vulkan (no report), else Q-461's report, whose `enabled`, `map` and
+/// `non_subsampled` together are the signal (Q-456).
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LayerSupport(pub(crate) Option<DensityMapSupport>);
 
 impl LayerSupport {
     /// Whether the device enabled the extension with both features (§1.12).
     pub(crate) fn enabled(&self) -> bool {
-        self.0.as_ref().is_some_and(|s| s.enabled)
+        // Q-456
+        self.0
+            .as_ref()
+            .is_some_and(|s| s.enabled && s.map && s.non_subsampled)
     }
 }
 
@@ -62,14 +66,9 @@ mod tests {
         assert!(!s.enabled());
     }
 
-    /// The signal is the report's `enabled`, whatever else it says.
+    /// Both features offered without the extension enabled is no signal.
     #[test]
-    fn layer_support_enabled_is_the_reports() {
-        let on = DensityMapSupport {
-            enabled: true,
-            ..Default::default()
-        };
-        assert!(LayerSupport(Some(on)).enabled());
+    fn layer_support_without_the_extension_enabled_is_off() {
         let off = DensityMapSupport {
             extension: true,
             map: true,
@@ -77,5 +76,30 @@ mod tests {
             ..Default::default()
         };
         assert!(!LayerSupport(Some(off)).enabled());
+    }
+
+    /// Q-456 (two-axis review, PRD #804): the signal needs the extension enabled with
+    /// `fragmentDensityMap` and `fragmentDensityMapNonSubsampledImages`; the extension
+    /// enabled without either feature is no signal.
+    #[test]
+    fn layer_support_enabled_needs_both_features() {
+        let all = DensityMapSupport {
+            enabled: true,
+            extension: true,
+            map: true,
+            non_subsampled: true,
+            ..Default::default()
+        };
+        assert!(LayerSupport(Some(all.clone())).enabled());
+        let no_map = DensityMapSupport {
+            map: false,
+            ..all.clone()
+        };
+        assert!(!LayerSupport(Some(no_map)).enabled());
+        let no_ns = DensityMapSupport {
+            non_subsampled: false,
+            ..all
+        };
+        assert!(!LayerSupport(Some(no_ns)).enabled());
     }
 }

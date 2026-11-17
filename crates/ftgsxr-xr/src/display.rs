@@ -248,7 +248,7 @@ fn layer_missing(support: &support::LayerSupport) -> Option<&'static str> {
     let Some(s) = &support.0 else {
         return Some("VK_EXT_fragment_density_map");
     };
-    if s.enabled {
+    if support.enabled() {
         None
     } else if !s.extension {
         Some("VK_EXT_fragment_density_map")
@@ -1158,6 +1158,9 @@ mod tests {
     fn publish_writes_the_layers_support_into_xr_display_foveation() {
         let on = support::LayerSupport(Some(DensityMapSupport {
             enabled: true,
+            extension: true,
+            map: true,
+            non_subsampled: true,
             ..Default::default()
         }));
         assert!(publishing(on).world().resource::<XrDisplay>().foveation);
