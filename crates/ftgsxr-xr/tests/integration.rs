@@ -11,6 +11,7 @@ mod dv10_storage;
 mod dv11_light;
 mod dv12_display;
 mod dv13_sleep_wake;
+mod dv14_foveation;
 mod dv1_install_launch;
 mod dv2_stereo;
 mod dv3_sort;
