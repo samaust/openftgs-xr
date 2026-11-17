@@ -127,8 +127,9 @@ bevy_render = { path = "vendor/bevy_render-0.19.1" }
 # src/track/texture.rs, a surface texture presented with no submission having used it is
 # cleared and submitted first, #401), approved by the owner. D-58: and a third
 # (src/command/{render,bundle,clear,encoder_command,mod}.rs,
-# src/device/{mod,resource,global}.rs, src/pipeline.rs, src/conv.rs and the trace's records: a render pass's fragment density map tracked and checked against
-# its pipelines' flag, behind `Features::FRAGMENT_DENSITY_MAP`, #807).
+# src/device/{mod,resource,global}.rs, src/pipeline.rs, src/conv.rs and the trace's
+# records: a render pass's fragment density map tracked and checked against its pipelines'
+# flag, behind `Features::FRAGMENT_DENSITY_MAP`, #807).
 wgpu-core = { path = "vendor/wgpu-core-29.0.4" }
 # D-30: wgpu-hal 29.0.4 vendored with one change (src/vulkan/instance.rs, a `flags()`
 # getter on the Vulkan instance). D-58: and a second (src/lib.rs, src/dynamic/*.rs and
@@ -142,7 +143,8 @@ wgpu-hal = { path = "vendor/wgpu-hal-29.0.4" }
 # (src/features.rs, src/texture.rs); wgpu adds `RenderPipelineDescriptor::
 # fragment_density_map` and `CommandEncoder::begin_render_pass_with_fragment_density_map`,
 # its `RenderPassDescriptor` unchanged (src/api/{render_pipeline,command_encoder}.rs,
-# src/dispatch.rs, src/backend/wgpu_core.rs, src/util/texture_blitter.rs). Each change is marked `openftgs-xr change (D-58)` (#807).
+# src/dispatch.rs, src/backend/wgpu_core.rs, src/util/texture_blitter.rs). Each change is
+# marked `openftgs-xr change (D-58)` (#807).
 wgpu = { path = "vendor/wgpu-29.0.4" }
 wgpu-types = { path = "vendor/wgpu-types-29.0.4" }
 

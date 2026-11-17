@@ -263,7 +263,8 @@ bitflags::bitflags! {
         /// The combination of states that a texture must exclusively be in.
         /// cbindgen:ignore
         const EXCLUSIVE = Self::COPY_DST.bits() | Self::COLOR_TARGET.bits() | Self::DEPTH_STENCIL_WRITE.bits() | Self::STORAGE_WRITE_ONLY.bits() | Self::STORAGE_READ_WRITE.bits() | Self::STORAGE_ATOMIC.bits() | Self::PRESENT.bits()
-            | Self::FRAGMENT_DENSITY_MAP.bits(); // openftgs-xr, D-58: its own layout
+            // openftgs-xr, D-58: the map's state is exclusive, in its own layout
+            | Self::FRAGMENT_DENSITY_MAP.bits();
 
         /// Flag used by the wgpu-core texture tracker to say a texture is in different states for every sub-resource
         const COMPLEX = 1 << 13;

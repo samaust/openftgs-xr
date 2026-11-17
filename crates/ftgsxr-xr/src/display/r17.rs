@@ -341,7 +341,9 @@ fn precondition(
     }
     match display {
         None => Some("no XrDisplay: not on the headset's ladder".to_owned()),
-        Some(d) if !d.foveation => Some("the runtime offers no foveation".to_owned()),
+        Some(d) if !d.foveation => {
+            Some("the layer cannot be foveated (XrDisplay.foveation false)".to_owned())
+        }
         Some(_) => None,
     }
 }

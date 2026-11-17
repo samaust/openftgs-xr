@@ -85,7 +85,7 @@ impl super::DeviceShared {
                     ref depth_stencil,
                     sample_count,
                     multiview_mask,
-                    fragment_density_map,
+                    fragment_density_map, // openftgs-xr, D-58
                 } = *e.key();
 
                 let mut vk_attachments = Vec::new();
@@ -230,6 +230,7 @@ impl super::DeviceShared {
                     .attachments(&vk_attachments)
                     .subpasses(&vk_subpasses);
 
+                // openftgs-xr, D-58: the map's reference, chained in only for a pass with a map
                 let mut fdm_info = vk::RenderPassFragmentDensityMapCreateInfoEXT::default()
                     .fragment_density_map_attachment(fdm_ref);
                 if fragment_density_map {

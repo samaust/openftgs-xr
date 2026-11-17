@@ -272,7 +272,7 @@ struct ArcRenderPassDescriptor<'a> {
     /// The multiview array layers that will be used
     pub multiview_mask: Option<NonZeroU32>,
     /// The fragment density map, if any (openftgs-xr, D-58).
-    pub fragment_density_map: Option<Arc<TextureView>>,
+    pub fragment_density_map: Option<Arc<TextureView>>, // openftgs-xr, D-58
 }
 
 pub type RenderBasePass = BasePass<ArcRenderCommand, RenderPassError>;
@@ -318,7 +318,7 @@ impl RenderPass {
             depth_stencil_attachment,
             occlusion_query_set,
             multiview_mask,
-            fragment_density_map,
+            fragment_density_map, // openftgs-xr, D-58
         } = desc;
 
         Self {
@@ -329,7 +329,7 @@ impl RenderPass {
             timestamp_writes,
             occlusion_query_set,
             multiview_mask,
-            fragment_density_map,
+            fragment_density_map, // openftgs-xr, D-58
 
             current_bind_groups: BindGroupStateChange::new(),
             current_pipeline: StateChange::new(),
@@ -1561,7 +1561,7 @@ impl RenderPassInfo {
             extent,
             divergent_discarded_depth_stencil_aspect,
             multiview_mask,
-            fragment_density_map,
+            fragment_density_map, // openftgs-xr, D-58
         })
     }
 
@@ -1980,7 +1980,7 @@ pub(super) fn encode_render_pass(
             &mut pending_discard_init_fixups,
             parent_state.snatch_guard,
             multiview_mask,
-            fragment_density_map,
+            fragment_density_map, // openftgs-xr, D-58
         )
         .map_pass_err(pass_scope)?;
 

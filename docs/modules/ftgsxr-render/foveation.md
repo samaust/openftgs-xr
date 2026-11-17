@@ -6,7 +6,7 @@ How `ftgsxr_render::bevy` draws each eye's layer pass with a fragment density ma
 
 The public component `SplatFoveation(pub Foveation)`, re-exported from `ftgsxr_render`, is the seam that carries a camera's effective level to its layer pass (Q-458). It has no `Default`: its absence is the unfoveated case. A camera without it, or with it at `Off`, draws its layer exactly as without foveation, with no map attached, on every device (Q-457). A camera at any other level draws with its map where the device has `wgpu::Features::FRAGMENT_DENSITY_MAP`, and with no map elsewhere. The adapter extracts it with the `SplatCamera`s each frame.
 
-A later ticket (#809) inserts it: `ftgsxr-xr` puts it on each eye, whatever the device's support, and keeps it equal to `DisplaySettings.foveation` each frame before extraction; the desktop window's camera never has it.
+`ftgsxr_xr::display`'s `carry_to_eyes` inserts it: it puts it on each eye, whatever the device's support, and keeps it equal to `DisplaySettings.foveation` each frame before extraction; the desktop window's camera never has it.
 
 ## The map builder
 

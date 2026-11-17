@@ -215,13 +215,20 @@ fn follow(
 /// gets `SplatFoveation` at `DisplaySettings.foveation` as `follow` leaves it, kept equal
 /// each frame before extraction, whatever the device's support (the adapter draws no map
 /// where it is false). The desktop window's camera is no `XrCamera` and never gets it.
+/// While the running tier is the conformance tier the level is off (D-58, §2.4 rule 3).
 // Q-458
 fn carry_to_eyes(
     settings: Res<DisplaySettings>,
+    tier: Option<Res<SplatTierState>>,
     mut eyes: Query<(Entity, Option<&mut SplatFoveation>), With<XrCamera>>,
     mut commands: Commands,
 ) {
-    let level = SplatFoveation(settings.foveation);
+    let conformance = tier.is_some_and(|t| t.tier.name == QualityTier::conformance().name);
+    let level = SplatFoveation(if conformance {
+        Foveation::Off
+    } else {
+        settings.foveation
+    });
     for (eye, current) in &mut eyes {
         match current {
             Some(mut c) => {
@@ -241,7 +248,7 @@ fn layer_missing(support: &support::LayerSupport) -> Option<&'static str> {
     let Some(s) = &support.0 else {
         return Some("VK_EXT_fragment_density_map");
     };
-    if s.enabled {
+    if support.enabled() {
         None
     } else if !s.extension {
         Some("VK_EXT_fragment_density_map")
@@ -1151,6 +1158,9 @@ mod tests {
     fn publish_writes_the_layers_support_into_xr_display_foveation() {
         let on = support::LayerSupport(Some(DensityMapSupport {
             enabled: true,
+            extension: true,
+            map: true,
+            non_subsampled: true,
             ..Default::default()
         }));
         assert!(publishing(on).world().resource::<XrDisplay>().foveation);
@@ -1195,6 +1205,31 @@ mod tests {
             assert_eq!(levels(&app), [Some(SplatFoveation(f)); 2], "{f:?}");
         }
         assert!(app.world().get::<SplatFoveation>(window).is_none());
+    }
+
+    /// D-58, §2.4 rule 3 (two-axis review, PRD #804): while the running tier is the
+    /// conformance tier, the eyes' layer is never foveated, whatever
+    /// `DisplaySettings.foveation` says; another tier carries it again.
+    #[test]
+    fn carry_to_eyes_is_off_under_the_conformance_tier() {
+        let mut app = App::new();
+        let mut d = DisplaySettings::from_settings(&Settings::default());
+        d.foveation = Foveation::High;
+        app.insert_resource(d)
+            .insert_resource(SplatTierState::of(&QualityTier::conformance()))
+            .add_systems(Update, carry_to_eyes);
+        let eye = app.world_mut().spawn(XrCamera(0)).id();
+        app.update();
+        assert_eq!(
+            app.world().get::<SplatFoveation>(eye).copied(),
+            Some(SplatFoveation(Foveation::Off))
+        );
+        app.insert_resource(SplatTierState::of(&QualityTier::quest_balanced()));
+        app.update();
+        assert_eq!(
+            app.world().get::<SplatFoveation>(eye).copied(),
+            Some(SplatFoveation(Foveation::High))
+        );
     }
 
     /// Q-455's detecting test (#809, §1.12): with support false, one info line in a session
