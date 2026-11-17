@@ -4,7 +4,6 @@
 //! test counted over its window came at the default 72 Hz. Built on the host too, so its
 //! tests run there (#269).
 
-/// The default refresh rate (§1.12).
 use std::time::Duration;
 
 /// Dv-2's warm-up: its window opens this long after both eyes draw, past start-up's
@@ -18,6 +17,7 @@ pub(crate) fn window_lead(cycle: Option<Duration>) -> Duration {
     cycle.unwrap_or(WARM_UP)
 }
 
+/// The default refresh rate (§1.12).
 const RATE_HZ: f64 = 72.0;
 /// The shares of 72 Hz's frames the window must hold at least and at most: a dropped
 /// frame passes, a halved rate or another of the runtime's rates fails.
