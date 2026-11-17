@@ -53,6 +53,57 @@ fn dv_dv2_two_eyes_draw_a_probe_for_10_s_without_validation_messages() {
     }
 }
 
+/// Dv-2's re-run with the map attached at every level that is not off (#810, Q-457,
+/// Q-T810.1): one launch per level through the extra `ftgsxr-foveation`, then one that
+/// steps high, medium, off, medium and high before its window, for the map's lifetime
+/// across level changes. Each launch is judged as Dv-2's, and must show its maps made.
+#[test]
+#[ignore = "dv"]
+fn dv_dv2_two_eyes_draw_with_the_map_at_every_level_without_validation_messages() {
+    let apk = apk();
+    device();
+    install(&apk);
+    let probe = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/probes/P1.safetensors");
+    push(&probe, "probe.safetensors");
+    let layers = DebugLayers::enable();
+    let mut failures = Vec::new();
+    for level in ["Low", "Medium", "High", "Dynamic", "cycle"] {
+        let start = dv_support::launch_with("dv2", "ftgsxr-foveation", level);
+        let result = verdict("dv2", start, Duration::from_secs(60));
+        let lines = log();
+        stop();
+        let validation = Validation::read();
+        let maps: Vec<&String> = lines
+            .iter()
+            .filter(|l| l.contains("layer foveation: map for"))
+            .collect();
+        println!(
+            "--- dv2 at {level}: {result:?}, {} maps made ---",
+            maps.len()
+        );
+        for l in &maps {
+            println!("{l}");
+        }
+        println!("{} VALIDATION lines", validation.messages.len());
+        for m in validation.messages.iter().take(12) {
+            println!("{m}");
+        }
+        let pass = result.as_ref().is_some_and(|(p, _, _)| *p);
+        // Each eye makes its map; the cycle, at each of its four non-off steps.
+        let want = if level == "cycle" { 8 } else { 2 };
+        if !pass || !validation.messages.is_empty() || maps.len() < want {
+            failures.push(format!(
+                "{level}: verdict {result:?}, {} validation lines, {} maps",
+                validation.messages.len(),
+                maps.len()
+            ));
+        }
+    }
+    drop(layers);
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// The pixels each eye's probe must cover in the screenshot. P1's splat (σ 0.08 m,
 /// 1 m ahead) spans some 5° of the eye's field, well above this.
 const MIN_PROBE_PIXELS: usize = 200;

@@ -116,6 +116,27 @@ pub fn launch(test: &str) -> Instant {
     start
 }
 
+/// As [`launch`], with one more string extra `key` = `value` (#810, Q-T810.1).
+pub fn launch_with(test: &str, key: &str, value: &str) -> Instant {
+    adb(&["logcat", "-c"]);
+    let start = Instant::now();
+    adb(&[
+        "shell",
+        "am",
+        "start",
+        "-S",
+        "-n",
+        ACTIVITY,
+        "--es",
+        "ftgsxr-test",
+        test,
+        "--es",
+        key,
+        value,
+    ]);
+    start
+}
+
 /// The device's system property `key` (`adb shell getprop`), trimmed.
 pub fn getprop(key: &str) -> String {
     adb(&["shell", "getprop", key]).trim().to_owned()
