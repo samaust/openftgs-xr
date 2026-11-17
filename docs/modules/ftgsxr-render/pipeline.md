@@ -110,6 +110,10 @@ E13's environment depth reaches stage 5 through `encode_draw`'s `occlusion` argu
 
 **R-12's tier.** No named tier can run R-12 (the conformance and desktop tiers have occlusion off, and the Quest tiers draw no splats before M-8), so R-12 renders with the conformance tier and `occlusion: true` (Q-347), its synthetic depth images written as an OpenXR projection writes them (Q-340), through the display test support's occlusion input.
 
+## The layer's density map (D-58)
+
+On the headset, stages 5 and 6's layer pass of a `LinearOver` camera carries that eye's fragment density map while the camera's `SplatFoveation` level is not off (§1.12 Headset display, §1.4 stages 5 and 6; Q-457, Q-458). The support signal is `wgpu::Features::FRAGMENT_DENSITY_MAP` on the device, the vendored wgpu's feature (§2.3's note for D-58): where it holds, `SplatPasses::new` also makes flagged twins of the splat and centers pipelines, since a flagged pipeline runs only in a pass with a map and an unflagged one only in a pass without, and the draw node begins the layer pass through `begin_render_pass_with_fragment_density_map` with the eye's map and draws with the twins. Without the feature, without the component, at off, or for a `FileEncoded` camera, the pass and its pipelines are today's, untouched, so headless renders, the conformance tier and the desktop window are never foveated (§2.4 rule 3). The resolve, the depth copy (Q-164), the layer probe and Bevy's passes never carry a map. How the map is built and when it is re-made is `foveation.md`'s subject.
+
 ## Where the frame skips stages 1–4
 
 §1.4 and §2.4 rule 2: when nothing that stages 1–4 read has changed, they are skipped and the previous frame's records, sorted payloads, counters and draw constants are drawn again, identical by construction. The adapter compares, per prepare unit, every member's `ViewParams` (E6's camera and the target size) and each drawn instance's GPU model, pose, τ (bit for bit), render mode, color transform and degree with the previous frame's; a new frame buffer set (another capacity, sort mode, first member's layer format or another group) always prepares, while a change of the output alone, such as a `LinearOver` background, keeps the set and does not (§2.4 rule 4, #201). The draw, the resolve and the statistics copy run every frame: stage 3's statistics block holds the skipped frame's counts already. The headless renderer prepares every render.
@@ -120,4 +124,4 @@ E13's environment depth reaches stage 5 through `encode_draw`'s `occlusion` argu
 
 ## What waits on later milestones
 
-The debug overlays are carried but not drawn (PRD #76); the adapter applies no `RenderLayers` or foveation yet (the render scale and the SH cap are applied since M-4, above); shared-center cameras draw their splats (since #720) and their centers (since #721) through the shared-center vertex stages, and prepare once per group (since #722).
+The debug overlays are carried but not drawn (PRD #76); the adapter applies no `RenderLayers` yet; the layer's foveation came with #808 (above) (the render scale and the SH cap are applied since M-4, above); shared-center cameras draw their splats (since #720) and their centers (since #721) through the shared-center vertex stages, and prepare once per group (since #722).

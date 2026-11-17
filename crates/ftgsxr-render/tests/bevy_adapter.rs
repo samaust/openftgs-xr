@@ -43,9 +43,9 @@ use bevy::window::{ExitCondition, WindowPlugin};
 use ftgsxr_core::{Camera as FtgsCamera, DMat3, Pose, RenderImage};
 use ftgsxr_io::ModelBytes;
 use ftgsxr_render::{
-    FrameStats, HeadlessRenderer, LayerProbe, LayerSums, OutputSpace, QualityTier, SortMode,
-    SplatCamera, SplatEvent, SplatLoad, SplatMode, SplatModel, SplatOverlays, SplatPlugin,
-    SplatStats, SplatTime, SplatTransform,
+    Foveation, FrameStats, HeadlessRenderer, LayerProbe, LayerSums, OutputSpace, QualityTier,
+    SortMode, SplatCamera, SplatEvent, SplatFoveation, SplatLoad, SplatMode, SplatModel,
+    SplatOverlays, SplatPlugin, SplatStats, SplatTime, SplatTransform,
 };
 use ftgsxr_testkit::{fixtures_dir, layer_messages, metrics, probe, reference_render};
 
@@ -484,6 +484,60 @@ fn gpu_bevy_adapter_resolves_p1_over_a_background_onto_an_srgb_target() {
     );
     assert_resolved_over(&data, background);
     assert_stats(stats);
+}
+
+/// Q-458's detecting test (D-58, §2.4 rule 3): a camera without `SplatFoveation`, or with
+/// it at `Off`, draws its `LinearOver` layer exactly as today (no map attached, Q-457):
+/// the resolved target is byte-identical either way, and meets R-11's criterion. On a
+/// device without `FRAGMENT_DENSITY_MAP` (the desktop), `High` draws the same bytes too,
+/// unfoveated; on a device with it the map path is the device's to check (Dv-14, #810).
+#[test]
+#[ignore = "gpu"]
+fn gpu_bevy_adapter_draws_unfoveated_without_splat_foveation_or_at_off() {
+    let _layer = layer_messages(); // R-16, Q-105
+    let background = [0.2, 0.4, 0.6];
+    let mut scene = P1Scene::settled(
+        OutputSpace::LinearOver {
+            background: Some(background),
+        },
+        TextureFormat::Rgba8UnormSrgb,
+    );
+    let without = scene.readback(0);
+    assert_resolved_over(&without, background);
+    let camera = scene.camera;
+    scene
+        .app
+        .world_mut()
+        .entity_mut(camera)
+        .insert(SplatFoveation(Foveation::Off));
+    let off = scene.readback(0);
+    assert!(
+        without == off,
+        "at Off the layer draws exactly as without the component"
+    );
+    let supported = scene
+        .app
+        .sub_app(RenderApp)
+        .world()
+        .resource::<RenderDevice>()
+        .features()
+        .contains(WgpuFeatures::FRAGMENT_DENSITY_MAP);
+    if supported {
+        eprintln!(
+            "the device has FRAGMENT_DENSITY_MAP: High's map path is checked on the device (D-58)"
+        );
+        return;
+    }
+    scene
+        .app
+        .world_mut()
+        .entity_mut(camera)
+        .insert(SplatFoveation(Foveation::High));
+    let high = scene.readback(0);
+    assert!(
+        without == high,
+        "without the feature, High draws unfoveated, exactly as without the component"
+    );
 }
 
 /// The read back sRGB target `data` holds P1's reference composited over `background`

@@ -15,6 +15,7 @@ mod asset;
 mod bounds;
 mod camera;
 mod depth_copy;
+mod foveation;
 mod load;
 mod probe;
 mod render;
@@ -30,6 +31,7 @@ use ftgsxr_core::{Camera, GpuLayoutOptions};
 
 pub use asset::{SplatAsset, load_splat_asset};
 pub use bounds::{SplatBounds, SplatTrim};
+pub use foveation::SplatFoveation; // Q-458
 pub use load::{SplatGpu, SplatLoad}; // Q-99; Q-172
 pub use probe::LayerProbe;
 
