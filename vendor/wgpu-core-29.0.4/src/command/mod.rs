@@ -1061,9 +1061,10 @@ impl CommandEncoder {
                         timestamp_writes,
                         occlusion_query_set,
                         multiview_mask,
-                        // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/command/mod.rs, MIT OR
-                        // Apache-2.0: the pass's fragment density map passed to its encoding (§2.3's note for D-58); each changed line is marked
-                        // `openftgs-xr, D-58`.
+                        // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
+                        // src/command/mod.rs, MIT OR Apache-2.0: the pass's fragment density map
+                        // passed to its encoding (§2.3's note for D-58). Was: no map. Each changed
+                        // line is marked `openftgs-xr, D-58`.
                         fragment_density_map, // openftgs-xr, D-58
                     } => {
                         api_log!(

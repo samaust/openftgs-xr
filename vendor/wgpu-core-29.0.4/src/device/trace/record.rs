@@ -256,9 +256,10 @@ impl IntoTrace for ArcCommand {
                 timestamp_writes,
                 occlusion_query_set,
                 multiview_mask,
-                // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file src/device/trace/record.rs, MIT OR
-                // Apache-2.0: the pipeline flag and the pass's map recorded in traces (§2.3's note for D-58); each changed line is marked
-                // `openftgs-xr, D-58`.
+                // openftgs-xr change (D-58), to wgpu-core 29.0.4 (crates.io), file
+                // src/device/trace/record.rs, MIT OR Apache-2.0: the pipeline flag and the pass's
+                // map recorded in traces (§2.3's note for D-58). Was: neither recorded. Each
+                // changed line is marked `openftgs-xr, D-58`.
                 fragment_density_map, // openftgs-xr, D-58
             } => Command::RunRenderPass {
                 pass: pass.into_trace(),
@@ -267,6 +268,7 @@ impl IntoTrace for ArcCommand {
                 timestamp_writes: timestamp_writes.map(|tw| tw.into_trace()),
                 occlusion_query_set: occlusion_query_set.map(|q| q.to_trace()),
                 multiview_mask,
+                // openftgs-xr, D-58: the pass's fragment density map, traced
                 fragment_density_map: fragment_density_map.map(|v| v.to_trace()),
             },
             ArcCommand::BuildAccelerationStructures { blas, tlas } => {
