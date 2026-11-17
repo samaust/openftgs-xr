@@ -24,7 +24,7 @@ use ftgsxr_app::{SplatCamera, SplatEvent, SplatStats};
 
 use crate::android::splat_load;
 use crate::device_test::{dv_dir, verdict};
-use crate::dv2_rate::{at_default_rate, window_lead};
+use crate::dv2_rate::{FirstSecond, at_default_rate, window_lead};
 use crate::jni_calls::intent_extra;
 use ftgsxr_xr::{DisplaySettings, Foveation};
 
@@ -76,6 +76,8 @@ struct Dv2 {
     levels: Levels,
     /// When the cycle or the held level's warm-up began, once both eyes draw.
     cycle: Option<Instant>,
+    /// Start-up's first second after both eyes draw, logged once (Q-464, #854).
+    first_second: Option<FirstSecond>,
     started: Instant,
     model: Entity,
     uploaded: bool,
@@ -107,6 +109,7 @@ pub(super) fn add(app: &mut App) {
     app.insert_resource(Dv2 {
         levels,
         cycle: None,
+        first_second: None,
         started: Instant::now(),
         model,
         uploaded: false,
@@ -161,11 +164,22 @@ fn run(
         info!("dv2: foveation {l:?}");
         d.foveation = l;
     }
+    // Q-464, #854: the frames of the first second after both eyes draw (with the cycle,
+    // its first step's), reported and never judged.
+    if let Some(lines) = test.first_second.as_mut().and_then(|f| f.frame(now)) {
+        for line in lines {
+            info!("{line}");
+        }
+    }
     let Some((start, frames)) = test.window else {
         let ready = eyes.iter().filter(|(_, _, s)| *s).count() == 2;
         if test.uploaded && ready {
             // The warm-up, or the cycle, runs before the window, so neither start-up's
             // first second nor the cycle's re-makes are timed (Q-464).
+            if test.cycle.is_none() {
+                info!("dv2: both eyes draw; the first second begins");
+                test.first_second = Some(FirstSecond::new(now));
+            }
             let c = *test.cycle.get_or_insert(now);
             let lead = window_lead(
                 (test.levels == Levels::Cycle).then(|| CYCLE_STEP * CYCLE.len() as u32),

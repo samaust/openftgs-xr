@@ -4,7 +4,7 @@
 //! test counted over its window came at the default 72 Hz. Built on the host too, so its
 //! tests run there (#269).
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Dv-2's warm-up: its window opens this long after both eyes draw, past start-up's
 /// first second (owner, 2026-11-16, #810; Q-464).
@@ -48,6 +48,61 @@ pub(crate) fn at_default_rate(frames: u32, elapsed_s: f64) -> Result<(), String>
     }
 }
 
+/// Start-up's first second after both eyes draw (Q-464, #854): its frames, counted and
+/// logged once, never judged. With the frame times between them, for #851's measurement.
+// Q-464
+pub(crate) struct FirstSecond {
+    start: Instant,
+    last: Instant,
+    steps: Vec<Duration>,
+    done: bool,
+}
+
+impl FirstSecond {
+    /// The second that begins with the frame at `start`, the first frame counted.
+    pub(crate) fn new(start: Instant) -> FirstSecond {
+        FirstSecond {
+            start,
+            last: start,
+            steps: Vec::with_capacity(80),
+            done: false,
+        }
+    }
+
+    /// Counts the frame at `now`: `None` while the second runs; once, at the first frame
+    /// after it, the lines to log: the frame count, then the times between the frames.
+    pub(crate) fn frame(&mut self, now: Instant) -> Option<[String; 2]> {
+        if self.done {
+            return None;
+        }
+        if now.duration_since(self.start) < Duration::from_secs(1) {
+            if now > self.last {
+                self.steps.push(now - self.last);
+                self.last = now;
+            }
+            return None;
+        }
+        self.done = true;
+        let ms: Vec<String> = self
+            .steps
+            .iter()
+            .map(|d| format!("{:.1}", d.as_secs_f64() * 1e3))
+            .collect();
+        let longest = self.steps.iter().max().copied().unwrap_or_default();
+        Some([
+            format!(
+                "dv2: first second after both eyes draw: {} frames",
+                self.steps.len() + 1
+            ),
+            format!(
+                "dv2: first second's frame times (ms, longest {:.1}): {}",
+                longest.as_secs_f64() * 1e3,
+                ms.join(" ")
+            ),
+        ])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +142,41 @@ mod tests {
             assert!(e.contains("above"), "{hz} Hz: {e}");
         }
         assert!(at_default_rate(757, 10.0).is_err());
+    }
+
+    #[test]
+    fn first_second_counts_the_frames_of_its_second_once() {
+        let t0 = Instant::now();
+        let step = Duration::from_micros(13_889);
+        let mut s = FirstSecond::new(t0);
+        // 72 frames in [0, 1 s): the first at t0, 71 more.
+        for i in 1..72 {
+            assert!(s.frame(t0 + step * i).is_none());
+        }
+        let [count, times] = s.frame(t0 + Duration::from_secs(1)).expect("the lines");
+        assert_eq!(count, "dv2: first second after both eyes draw: 72 frames");
+        let n: u32 = count
+            .strip_prefix("dv2: first second after both eyes draw: ")
+            .and_then(|r| r.strip_suffix(" frames"))
+            .and_then(|n| n.parse().ok())
+            .expect("an integer");
+        assert_eq!(n, 72);
+        assert!(times.starts_with("dv2: first second's frame times (ms, longest 13.9): 13.9 "));
+        assert_eq!(times.rsplit_once("): ").unwrap().1.split(' ').count(), 71);
+        assert!(
+            s.frame(t0 + Duration::from_secs(2)).is_none(),
+            "logged once"
+        );
+    }
+
+    #[test]
+    fn first_second_reports_a_slow_start_with_its_longest_frame() {
+        let t0 = Instant::now();
+        let mut s = FirstSecond::new(t0);
+        assert!(s.frame(t0 + Duration::from_millis(500)).is_none());
+        assert!(s.frame(t0 + Duration::from_millis(600)).is_none());
+        let [count, times] = s.frame(t0 + Duration::from_millis(1200)).unwrap();
+        assert!(count.ends_with(": 3 frames"), "{count}");
+        assert!(times.contains("longest 500.0): 500.0 100.0"), "{times}");
     }
 }
