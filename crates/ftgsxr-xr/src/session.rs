@@ -233,8 +233,7 @@ fn is_located(clip_from_view: Mat4) -> bool {
 }
 
 /// Makes each eye a `SplatCamera` over the VR-mode background (Q-49), with
-/// `SplatNoWarmUpWait` (Q-465), once the camera's
-/// computed clip mapping, which the render world extracts, is the located views' at the
+/// `SplatNoWarmUpWait` (Q-465), once the camera's computed clip mapping, which the render world extracts, is the located views' at the
 /// near plane 0.01 m: the crate spawns the eyes with the identity, and Bevy computes the
 /// camera's matrix from the projection in its own PostUpdate system, so the projection
 /// alone can be a frame ahead of what is extracted (#224's "not a perspective
@@ -252,7 +251,7 @@ fn make_splat_eyes(
     );
     for (eye, camera) in &eyes {
         if is_located(camera.clip_from_view()) {
-            // Q-465: the eyes never wait for the warm-up's compile; no splats until then.
+            // Q-465: the eyes never wait for the passes warm-up; not drawn until it ends.
             commands.entity(eye).insert((
                 SplatCamera {
                     sort: config.sort,
