@@ -347,8 +347,10 @@ pub struct XrDisplay {
     pub refresh_hz: Option<f32>,
     /// The rates the runtime offers, in Hz; empty where it lists none.
     pub available_rates: Vec<f32>,
-    /// Whether the runtime offers fixed foveation (XR_FB_foveation): without it the
-    /// governor skips the foveation knob.
+    /// Whether the splat layer can be foveated: the XR device enabled
+    /// VK_EXT_fragment_density_map with `fragmentDensityMap` and
+    /// `fragmentDensityMapNonSubsampledImages` (§1.12, Q-456). Without it the governor
+    /// skips the foveation knob, which would save no time.
     pub foveation: bool,
     /// The swapchain's size per eye, in pixels.
     pub swapchain: UVec2,

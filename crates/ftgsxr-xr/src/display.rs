@@ -533,13 +533,13 @@ fn reported_rate(current: Option<f32>, period_ns: Option<i64>) -> Option<f32> {
 }
 
 /// Writes `XrDisplay` while a session runs (Q-404): the rate, the runtime's rates, the
-/// foveation support and the swapchain's size; the rate is `None` while no session runs
+/// layer's foveation support (the device's density-map signal, Q-456) and the swapchain's size; the rate is `None` while no session runs
 /// (a re-creation included). The rate is mirrored into `HudData.refresh_hz` (Q-159).
-// Q-404
+// Q-404, Q-456
 #[allow(clippy::too_many_arguments)]
 fn publish(
     state: Option<Res<XrState>>,
-    instance: Option<Res<OxrInstance>>,
+    layer: Option<Res<support::LayerSupport>>,
     frame: Option<Res<OxrFrameState>>,
     current: Option<Res<OxrCurrentSessionConfig>>,
     settings: Res<DisplaySettings>,
@@ -564,7 +564,8 @@ fn publish(
         if xr.available_rates != settings.available_rates {
             xr.available_rates.clone_from(&settings.available_rates);
         }
-        let foveation = Caps::of(instance.as_deref()).foveation;
+        // Q-456: the layer's foveation, where the knob saves time.
+        let foveation = layer.is_some_and(|l| l.enabled());
         if xr.foveation != foveation {
             xr.foveation = foveation;
         }
@@ -852,6 +853,7 @@ fn log_rate_change(event: OxrEventIn, applied: Option<ResMut<Applied>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftgsxr_render::DensityMapSupport;
 
     /// A render scale that fails is attempted (and so logged) once per requested change,
     /// not every frame, and again once the setting moves or a new session is created
@@ -1023,6 +1025,48 @@ mod tests {
         assert!((r - 72.0).abs() < 1e-3, "{r}");
         assert_eq!(reported_rate(None, Some(0)), None);
         assert_eq!(reported_rate(None, None), None);
+    }
+
+    /// An app with `publish` alone while a session runs, over the device's `support`.
+    fn publishing(support: support::LayerSupport) -> App {
+        let mut app = App::new();
+        app.insert_resource(DisplaySettings::from_settings(&Settings::default()))
+            .insert_resource(Applied::new(1.0, false))
+            .insert_resource(XrState::Running)
+            .insert_resource(support)
+            .init_resource::<XrDisplay>()
+            .add_systems(Update, publish);
+        app.update();
+        app
+    }
+
+    /// Q-456 (#809): `XrDisplay.foveation` is the device's density-map signal, not the
+    /// runtime's XR\_FB\_foveation (here absent: no instance).
+    #[test]
+    fn publish_writes_the_layers_support_into_xr_display_foveation() {
+        let on = support::LayerSupport(Some(DensityMapSupport {
+            enabled: true,
+            ..Default::default()
+        }));
+        assert!(publishing(on).world().resource::<XrDisplay>().foveation);
+        let offered = support::LayerSupport(Some(DensityMapSupport {
+            extension: true,
+            map: true,
+            non_subsampled: true,
+            ..Default::default()
+        }));
+        assert!(
+            !publishing(offered)
+                .world()
+                .resource::<XrDisplay>()
+                .foveation
+        );
+        assert!(
+            !publishing(support::LayerSupport(None))
+                .world()
+                .resource::<XrDisplay>()
+                .foveation
+        );
     }
 
     fn wanting(rate: Option<f32>) -> DisplaySettings {
