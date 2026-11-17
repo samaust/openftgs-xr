@@ -10,8 +10,9 @@
 //! The re-run with the map attached (#810, Q-T810.1): the intent extra
 //! `ftgsxr-foveation` names a level (`Low`, `Medium`, `High`, `Dynamic`) held through
 //! `DisplaySettings.foveation` from the start, or `cycle`, which steps high, medium,
-//! off, medium and high, 2 s each, before the 10 s window, drawn at high. Without the
-//! extra the run is as before.
+//! off, medium and high, 2 s each, before the 10 s window, drawn at high. A held level
+//! waits 2 s after both eyes draw before its window, so start-up's first second is not
+//! counted. Without the extra the run is as before.
 // Q-T810.1
 
 use std::time::{Duration, Instant};
@@ -47,6 +48,8 @@ const CYCLE: [Foveation; 5] = [
     Foveation::High,
 ];
 const CYCLE_STEP: Duration = Duration::from_secs(2);
+/// A held level's warm-up before the window, past start-up's first second (Q-T810.1).
+const HOLD_WARM_UP: Duration = Duration::from_secs(2);
 
 /// What the extra asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,7 +74,7 @@ fn levels(extra: Option<&str>) -> Option<Levels> {
 #[derive(Resource)]
 struct Dv2 {
     levels: Levels,
-    /// When the cycle began, once both eyes draw.
+    /// When the cycle or the held level's warm-up began, once both eyes draw.
     cycle: Option<Instant>,
     started: Instant,
     model: Entity,
@@ -160,10 +163,15 @@ fn run(
     }
     let Some((start, frames)) = test.window else {
         let ready = eyes.iter().filter(|(_, _, s)| *s).count() == 2;
-        if test.uploaded && ready && test.levels == Levels::Cycle {
-            // The cycle runs before the window, so its re-makes are not timed.
+        if test.uploaded && ready && test.levels != Levels::Settings {
+            // The cycle, or a held level's warm-up, runs before the window, so neither
+            // its re-makes nor start-up's first second are timed.
             let c = *test.cycle.get_or_insert(now);
-            if now.duration_since(c) < CYCLE_STEP * CYCLE.len() as u32 {
+            let lead = match test.levels {
+                Levels::Cycle => CYCLE_STEP * CYCLE.len() as u32,
+                _ => HOLD_WARM_UP,
+            };
+            if now.duration_since(c) < lead {
                 let left = eyes.iter().find(|(c, _, _)| c.0 == 0).map(|(_, g, _)| *g);
                 if let (Some(left), Ok(mut t)) = (left, transforms.get_mut(test.model)) {
                     t.translation = left.translation() + left.forward() * AHEAD_M;
