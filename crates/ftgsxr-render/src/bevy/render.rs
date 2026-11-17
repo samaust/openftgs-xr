@@ -40,8 +40,9 @@ use super::foveation::{SplatFoveation, density_map};
 use super::load::{GpuModels, SplatGpu};
 use super::probe::{ProbeTarget, extract_target};
 use super::{
-    DepthFrame, OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatOcclusion,
-    SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime, SplatTransform, SplatTrim,
+    DepthFrame, OutputSpace, SplatCamera, SplatEvent, SplatMode, SplatModel, SplatNoWarmUpWait,
+    SplatOcclusion, SplatOverlays, SplatShLimit, SplatStats, SplatTierState, SplatTime,
+    SplatTransform, SplatTrim,
 };
 use crate::gpu::density_map_support;
 use crate::gpu::device::SplatDevice;
@@ -140,11 +141,19 @@ impl Warming {
         self.0.insert(key, handle);
     }
 
-    /// The passes `key`'s thread compiled, waiting for it if it is not done; none when no
-    /// thread compiles `key` or its thread panicked.
-    fn take(&mut self, key: &(TextureFormat, bool)) -> Option<Result<SplatPasses, RenderError>> {
-        let handle = self.0.remove(key)?;
+    /// The passes `key`'s thread compiled, waiting for it if it is not done and `wait`;
+    /// pending, keeping the thread, when it is not done and not `wait` (Q-465); none when
+    /// no thread compiles `key` or its thread panicked.
+    // Q-325, Q-465
+    fn take(&mut self, key: &(TextureFormat, bool), wait: bool) -> Warmed {
+        let Some(handle) = self.0.remove(key) else {
+            return Warmed::None;
+        };
         let ready = handle.is_finished();
+        if !ready && !wait {
+            self.0.insert(*key, handle);
+            return Warmed::Pending;
+        }
         let start = Instant::now();
         let joined = handle.join();
         // #736: how long the first view of `key` waited for its passes.
@@ -154,15 +163,31 @@ impl Warming {
             start.elapsed().as_secs_f64(),
             if ready { " (ready)" } else { "" }
         );
-        joined
-            .inspect_err(|_| {
+        match joined {
+            Ok(passes) => Warmed::Done(passes),
+            Err(_) => {
                 warn!(
                     "the splat passes' warm-up thread ({}) panicked; compiling them now",
                     sort_name(key.1)
                 );
-            })
-            .ok()
+                Warmed::None
+            }
+        }
     }
+}
+
+/// What a view's first prepare of a passes key gets from the warm-up (Q-325, Q-465).
+#[expect(
+    clippy::large_enum_variant,
+    reason = "made once per key and moved straight into an Arc"
+)]
+enum Warmed {
+    /// No thread compiles the key, or it panicked: the prepare compiles it.
+    None,
+    /// The thread still compiles the key and the camera does not wait for it.
+    Pending,
+    /// The thread's compile.
+    Done(Result<SplatPasses, RenderError>),
 }
 
 // Q-381
@@ -184,6 +209,8 @@ struct Extracted {
     cameras: HashMap<Entity, SplatCamera>,
     /// Each splat camera's `SplatFoveation` level, where it has one (Q-458).
     foveation: HashMap<Entity, Foveation>,
+    /// The splat cameras with `SplatNoWarmUpWait` (Q-465).
+    no_wait: HashSet<Entity>,
     /// Each splat camera's order, by render entity.
     orders: HashMap<Entity, isize>,
     /// The governor's render scale (§1.12, E16).
@@ -306,6 +333,8 @@ struct Views {
     /// The `LinearOver` passes compiling ahead on their own threads, by the same key
     /// (Q-325).
     warming: Warming,
+    /// The frames each key's views drew no splats while its warm-up compiled (Q-465).
+    pending: HashMap<(TextureFormat, bool), u32>,
     /// Whether this device's and tier's warm-up has started (Q-325).
     warm_started: bool,
     /// The layer probe's pass (E14's exposure match), compiled with the device's views.
@@ -411,6 +440,7 @@ type CameraQuery<'w, 's> = Query<
         &'static SplatCamera,
         Option<&'static ::bevy::camera::Camera>,
         Option<&'static SplatFoveation>,
+        Has<SplatNoWarmUpWait>,
     ),
 >;
 
@@ -462,12 +492,18 @@ fn extract(
     out.cameras = cameras.iter().map(|(r, c, ..)| (r.id(), *c)).collect();
     out.orders = cameras
         .iter()
-        .map(|(r, _, cam, _)| (r.id(), cam.map_or(0, |c| c.order)))
+        .map(|(r, _, cam, ..)| (r.id(), cam.map_or(0, |c| c.order)))
         .collect();
     // Q-458
     out.foveation = cameras
         .iter()
-        .filter_map(|(r, .., f)| f.map(|f| (r.id(), f.0)))
+        .filter_map(|(r, _, _, f, _)| f.map(|f| (r.id(), f.0)))
+        .collect();
+    // Q-465
+    out.no_wait = cameras
+        .iter()
+        .filter(|(.., no_wait)| *no_wait)
+        .map(|(r, ..)| r.id())
         .collect();
 }
 
@@ -521,6 +557,7 @@ fn prepare_views(
             .get(&entity)
             .copied()
             .unwrap_or(Foveation::Off);
+        let wait = !extracted.no_wait.contains(&entity);
         match prepare_view(
             &mut views,
             &dev,
@@ -529,11 +566,16 @@ fn prepare_views(
             entity,
             camera,
             level,
+            wait,
             view,
             extracted_camera,
             msaa,
         ) {
-            Ok(()) => {}
+            Ok(true) => {}
+            // Q-465: no splats while its passes compile; the frame goes on.
+            Ok(false) => {
+                views.states.remove(&entity);
+            }
             Err(reason) => {
                 views.warn_once(entity, reason);
                 views.states.remove(&entity);
@@ -769,7 +811,8 @@ fn sort_name(shared_center: bool) -> &'static str {
 /// the Quest 3 then run while the session starts, not in the first frame a splat camera
 /// draws, nor in the frame the governor first switches the sort mode, and the passes the
 /// cameras take first do not share the CPU with the others'. `prepare_view` takes a
-/// key's result, waiting for it if it is not ready, so the first frame still draws; a
+/// key's result, waiting for it if it is not ready, so the first frame still draws (a
+/// camera with `SplatNoWarmUpWait` draws no splats until it is ready instead, Q-465); a
 /// thread that cannot start leaves its key to compile there. A thread not taken by then
 /// is joined when `Views` drops or resets (Q-381).
 // Q-325, Q-381, Q-437
@@ -894,6 +937,9 @@ fn layer_size(view: UVec2, scale: f32) -> UVec2 {
     UVec2::new(side(view.x), side(view.y))
 }
 
+/// One view's prepare: `true` when the view is prepared and draws, `false` when it draws
+/// no splats this frame because its passes are still compiling and it does not `wait`
+/// for them (Q-465).
 #[expect(
     clippy::too_many_arguments,
     reason = "one view's inputs, gathered by the system above"
@@ -906,10 +952,11 @@ fn prepare_view(
     entity: Entity,
     camera: SplatCamera,
     level: Foveation,
+    wait: bool,
     view: &ExtractedView,
     extracted_camera: &ExtractedCamera,
     msaa: Option<&Msaa>,
-) -> Result<(), &'static str> {
+) -> Result<bool, &'static str> {
     if msaa.is_some_and(|m| *m != Msaa::Off) {
         return Err("MSAA is on; splat cameras draw without it (D-6)");
     }
@@ -950,10 +997,30 @@ fn prepare_view(
     let passes = match views.passes.get(&key) {
         Some(p) => Arc::clone(p),
         None => {
-            // Q-325: the warm-up's passes when it compiled this key.
-            // A warm-up thread that panicked leaves the key to compile here.
-            let warmed = views.warming.take(&key);
-            let made = warmed.unwrap_or_else(|| compile(dev, layer_format, tier, camera.sort));
+            // Q-325: the warm-up's passes when it compiled this key; a camera that does
+            // not wait draws no splats until they are (Q-465). A warm-up thread that
+            // panicked leaves the key to compile here.
+            let made = match views.warming.take(&key, wait) {
+                Warmed::Pending => {
+                    let n = views.pending.entry(key).or_insert(0);
+                    if *n == 0 {
+                        info!(
+                            "splat passes ({}): a view draws no splats until the warm-up's compile ends",
+                            sort_name(key.1)
+                        );
+                    }
+                    *n += 1;
+                    return Ok(false);
+                }
+                Warmed::Done(passes) => passes,
+                Warmed::None => compile(dev, layer_format, tier, camera.sort),
+            };
+            if let Some(n) = views.pending.remove(&key) {
+                info!(
+                    "splat passes ({}): {n} view frames without splats while the warm-up compiled",
+                    sort_name(key.1)
+                );
+            }
             let p = made.map_err(|e| {
                 error!("splat passes: {}: {}", e.code(), e.user_text());
                 "the splat passes did not compile"
@@ -1071,7 +1138,7 @@ fn prepare_view(
         views.depth_copy = Some(Arc::new(DepthCopy::new(dev.device(), CORE_3D_DEPTH_FORMAT)));
     }
     views.states.insert(entity, state);
-    Ok(())
+    Ok(true)
 }
 
 /// Why a view's map is made again.
@@ -1456,6 +1523,56 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("per_frame=true"), "{text}");
+    }
+
+    // Q-465: a camera that does not wait finds its key pending while the thread
+    // compiles, and the thread kept; once the thread ends, the passes as Q-325 takes
+    // them; a camera that waits joins the thread; a key with no thread compiles here.
+    #[test]
+    fn warming_take_is_pending_while_the_thread_compiles_unless_it_waits() {
+        let key = (LAYER_FORMAT, true);
+        let other = (LAYER_FORMAT, false);
+        let (go, gate) = mpsc::channel::<()>();
+        let mut warming = Warming::default();
+        warming.insert(
+            key,
+            thread::spawn(move || {
+                let _ = gate.recv();
+                Err(RenderError::NonFinite)
+            }),
+        );
+        assert!(matches!(warming.take(&key, false), Warmed::Pending));
+        assert!(matches!(warming.take(&key, false), Warmed::Pending), "kept");
+        assert!(matches!(warming.take(&other, false), Warmed::None));
+        go.send(()).unwrap();
+        let start = Instant::now();
+        while warming.0.get(&key).is_some_and(|h| !h.is_finished()) {
+            assert!(start.elapsed().as_secs() < 10, "the thread ended");
+            thread::yield_now();
+        }
+        assert!(matches!(
+            warming.take(&key, false),
+            Warmed::Done(Err(RenderError::NonFinite))
+        ));
+        assert!(matches!(warming.take(&key, false), Warmed::None), "taken");
+
+        let (go, gate) = mpsc::channel::<()>();
+        warming.insert(
+            key,
+            thread::spawn(move || {
+                let _ = gate.recv();
+                Err(RenderError::DeviceLost)
+            }),
+        );
+        let release = thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(50));
+            go.send(()).unwrap();
+        });
+        assert!(matches!(
+            warming.take(&key, true),
+            Warmed::Done(Err(RenderError::DeviceLost))
+        ));
+        release.join().unwrap();
     }
 
     // Q-437: the running tier's sort mode compiles first, the other after it.
