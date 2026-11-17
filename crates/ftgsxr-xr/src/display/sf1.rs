@@ -326,8 +326,10 @@ fn run(
         g.enabled = false;
         g.budget_override_ms = None;
     }
-    // The scale held every frame, whatever else writes the tier state.
-    if let (Some(s), Some(t)) = (test.run.scale(), tier.as_deref_mut())
+    // The scale held every frame, whatever else writes the tier state; written only
+    // when it differs, since a write marks the tier state changed and `follow_settings`
+    // then turns the governor back on (#810).
+    if let (Some(s), Some(t)) = (test.run.scale(), tier.as_mut())
         && t.render_scale != s
     {
         t.render_scale = s;
@@ -346,7 +348,12 @@ fn run(
         });
     let since = test.since.elapsed();
     let (out, changed) = test.run.frame(since, block);
-    apply(&out, tier.as_deref_mut(), display.as_deref_mut());
+    if out
+        .iter()
+        .any(|o| matches!(o, Out::Scale(_) | Out::Level(_)))
+    {
+        apply(&out, tier.as_deref_mut(), display.as_deref_mut());
+    }
     for o in out {
         match o {
             Out::Log(l) => info!("{l}"),

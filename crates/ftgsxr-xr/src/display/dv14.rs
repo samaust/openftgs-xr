@@ -200,10 +200,14 @@ fn apply(out: &[Out], tier: Option<&mut SplatTierState>, display: Option<&mut Di
         return;
     };
     info!("dv14: render scale {s}, foveation {l:?}");
-    if let Some(t) = tier {
+    if let Some(t) = tier
+        && t.render_scale != s
+    {
         t.render_scale = s;
     }
-    if let Some(d) = display {
+    if let Some(d) = display
+        && d.foveation != l
+    {
         d.foveation = l;
     }
 }
@@ -226,13 +230,15 @@ fn run(
         g.enabled = false;
         g.budget_override_ms = None;
     }
-    // The scale and level held every frame, whatever else writes them.
-    if let Some(t) = tier.as_deref_mut()
+    // The scale and level held every frame, whatever else writes them; written only
+    // when they differ, since a write marks the tier state changed and `follow_settings`
+    // then turns the governor back on (#810).
+    if let Some(t) = tier.as_mut()
         && t.render_scale != w.scale
     {
         t.render_scale = w.scale;
     }
-    if let Some(d) = display.as_deref_mut()
+    if let Some(d) = display.as_mut()
         && d.foveation != w.level
     {
         d.foveation = w.level;
@@ -251,7 +257,9 @@ fn run(
         });
     let since = test.since.elapsed();
     let (out, changed) = test.run.frame(since, block);
-    apply(&out, tier.as_deref_mut(), display.as_deref_mut());
+    if out.iter().any(|o| matches!(o, Out::Set(..))) {
+        apply(&out, tier.as_deref_mut(), display.as_deref_mut());
+    }
     for o in out {
         match o {
             Out::Log(l) => info!("{l}"),
@@ -326,6 +334,51 @@ mod tests {
         );
         assert!(matches!(&last[1], Out::Verdict(true, _)));
         assert_eq!(r.current(), None);
+    }
+
+    /// Frames on which `run` marked the tier state or the display settings changed.
+    #[derive(bevy::prelude::Resource, Default)]
+    struct Marked(u32);
+
+    fn mark(tier: Res<SplatTierState>, display: Res<DisplaySettings>, mut marked: ResMut<Marked>) {
+        if tier.is_changed() || display.is_changed() {
+            marked.0 += 1;
+        }
+    }
+
+    /// Writing the tier state on a frame that changes nothing marks it changed, which
+    /// turns the governor back on through `follow_settings` (#810): `run` must not.
+    #[test]
+    fn run_leaves_the_tier_state_and_display_unchanged_while_holding() {
+        let mut app = App::new();
+        let mut tier = SplatTierState::of(&ftgsxr_render::QualityTier::quest_balanced());
+        tier.render_scale = 1.0;
+        let display = DisplaySettings {
+            refresh_rate: None,
+            available_rates: Vec::new(),
+            foveation: Foveation::Off,
+            render_scale: 1.0,
+        };
+        let (run_state, _) = Run::start();
+        app.insert_resource(tier)
+            .insert_resource(display)
+            .insert_resource(Governor {
+                enabled: false,
+                ..Governor::default()
+            })
+            .init_resource::<SplatStats>()
+            .init_resource::<Marked>()
+            .insert_resource(Dv14 {
+                run: run_state,
+                since: Instant::now(),
+            })
+            .add_systems(Last, (run, mark).chain());
+        app.update();
+        app.world_mut().resource_mut::<Marked>().0 = 0;
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Marked>().0, 0);
     }
 
     #[test]
