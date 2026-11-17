@@ -15,7 +15,7 @@ The private `density_map(level, layer size, clip_from_view, texel)` builds the m
 - **No map at off** (Q-457): it returns none.
 - **The grid** is the device's minimum density texel size, per axis, read once per device through `density_map_support`'s `min_texel` (Q-460, Q-461), and the map is ⌈layer ÷ texel⌉ texels on each axis, which covers the layer and meets Vulkan's minimum-size rule. A device that reports no texel size gets no map.
 - **The optical axis and the view angles** come from the camera's extracted projection, read at the layer's size with the same mapping as `view_camera`'s E6 intrinsics (Q-459): the axis is the pixel the view's forward axis projects to, off center on the Quest's asymmetric eyes, so a map sized to a smaller layer stays centered at every render scale.
-- **The pattern** is §1.12's concentric regions per level, dynamic taking high's. Each texel's angle is taken at its center, clamped into the layer, and a density is stored as round(255 d) on both axes (Q-462).
+- **The pattern** is §1.12's concentric regions per level, dynamic taking high's. Each texel's angle is taken at its center, clamped into the layer, and a density d is stored on both axes as the largest byte b with 255/b ≥ 1/d (1 → 255, ½ → 127, ¼ → 63; Q-462).
 
 ## When a map is re-made
 
